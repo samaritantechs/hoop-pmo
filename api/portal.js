@@ -2,7 +2,7 @@ import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey } from './_lib/time.js';
-import { summaryFor, reportCore, lifeDayOf } from './_lib/call-core.js';
+import { summaryFor, reportCore, lifeDayOf, fuStatusConfig } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -16,6 +16,10 @@ import { summaryFor, reportCore, lifeDayOf } from './_lib/call-core.js';
                 + 1 teams read
      report     3 reads, date-bounded + team-scoped at the database (call-core's own)
      recovery   2 tiny indexed date lookups + 2 day-bounded scoped reads of watu_snapshots
+     customers  2 tiny indexed date lookups + 1 deck read + 1 prev-day snapshot read
+                + 1 register read (imei,agent,team only) + 1 keyed settings read; all scoped
+     portalAddComment  1 stub upsert + 1 comment insert + 1 keyed status update (3 writes)
+     customerComments  1 read, keyed by IMEI, newest 100
      teams      1 read;   saveTeam / newTeamCode: 1 read + 1 write
      officers   1 read;   officerActive: 1 write
      codes      1 read;   saveAccessCode / deleteAccessCode: 1 write
@@ -27,6 +31,7 @@ import { summaryFor, reportCore, lifeDayOf } from './_lib/call-core.js';
 AUDITED.add('newTeamCode');
 AUDITED.add('officerActive');
 AUDITED.add('renameAccessCode');
+AUDITED.add('portalAddComment');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -131,6 +136,100 @@ const FNS = {
       counts: { compared: [...curM.keys()].filter(k => oldM.has(k)).length,
         paidNew, reconnected, deeper, leftList: off },
       rows: rows.slice(0, 500) };
+  },
+
+  /** THE CUSTOMERS BOOK, split the way Hoop reads it: today's deck inside the 45-day
+      window, today's deck beyond it (Hoop's burden has lapsed), and yesterday's (jana).
+      The AGENT rides on every row -- who sold the phone is who to lean on, the same
+      slot the guarantor held in Hope.
+      Budget: 2 tiny indexed date lookups + 1 deck read + 1 prev-day snapshot read +
+      1 register read (imei+agent only), all team-scoped; FU vocabulary is 1 keyed read. */
+  async customers(db, user) {
+    const today = todayKey();
+    const d1 = await db.from('followup_status').select('deck_date').not('deck_date', 'is', null)
+      .order('deck_date', { ascending: false }).limit(1);
+    if (d1.error) throw new Error(d1.error.message);
+    const deckDate = d1.data && d1.data[0] ? String(d1.data[0].deck_date).slice(0, 10) : null;
+    let prevDate = null;
+    if (deckDate) {
+      const d2 = await db.from('watu_snapshots').select('snapshot_date').lt('snapshot_date', deckDate)
+        .order('snapshot_date', { ascending: false }).limit(1);
+      prevDate = d2.data && d2.data[0] ? String(d2.data[0].snapshot_date).slice(0, 10) : null;
+    }
+    const [deck, prev, agents, fu] = await Promise.all([
+      deckDate ? fetchAll(() => scopeQ(user, db.from('followup_status')
+        .select('imei, client_name, contact, team, model, price, disbursed_date, days_offline, locked4, locked7, has_ever_paid, fu_status, comment_by')
+        .eq('deck_date', deckDate))) : [],
+      prevDate ? fetchAll(() => scopeQ(user, db.from('watu_snapshots')
+        .select('imei, client_name, client_mobile, team, model, price, disbursed_date, days_offline, locked4, locked7, has_ever_paid, agent, created_at')
+        .eq('snapshot_date', prevDate))) : [],
+      fetchAll(() => scopeQ(user, db.from('watu_loans').select('imei, agent, team'))),
+      fuStatusConfig(db),
+    ]);
+    const agentOf = {};
+    agents.forEach(r => { agentOf[r.imei] = r.agent || ''; });
+    const mk = (r, contactKey, refDay) => ({
+      imei: r.imei, name: r.client_name || '', phone: r[contactKey] || '',
+      team: r.team || '', model: r.model || '', price: num(r.price),
+      agent: r.agent !== undefined ? (r.agent || '') : (agentOf[r.imei] || ''),
+      daysOff: r.days_offline == null ? null : num(r.days_offline),
+      locked7: r.locked7 === true, locked4: r.locked4 === true, paid: r.has_ever_paid === true,
+      fu: r.fu_status || '', lifeDay: lifeDayOf(r.disbursed_date, refDay),
+    });
+    // jana: a same-date re-upload appends, so the newest row per IMEI within the day wins.
+    const seen = new Map();
+    prev.forEach(r => {
+      const had = seen.get(r.imei);
+      if (!had || String(r.created_at) > String(had.created_at)) seen.set(r.imei, r);
+    });
+    const jana = [...seen.values()].map(r => mk(r, 'client_mobile', prevDate));
+    const leo = deck.map(r => mk(r, 'contact', today));
+    const inWindow = leo.filter(r => r.lifeDay != null && r.lifeDay <= 45);
+    const beyond = leo.filter(r => !(r.lifeDay != null && r.lifeDay <= 45));
+    const bySunk = (a, b) => num(b.daysOff) - num(a.daysOff);
+    inWindow.sort(bySunk); beyond.sort(bySunk); jana.sort(bySunk);
+    return { ok: true, deckDate, prevDate, leo45: inWindow, leo45plus: beyond, jana, ...fu };
+  },
+
+  /** EVERYONE COMMENTS. Any signed-in portal user except a view-only code can log a
+      follow-up on any customer inside their team scope -- same three writes as the
+      phone's addComment, actor = the access code's name. */
+  async portalAddComment(db, user, args) {
+    requireWrite(user);
+    const a = args || {};
+    const ref = String(a.imei || '').trim();
+    if (!ref) throw new Error('IMEI is required.');
+    if (user.teams && a.team && !user.teams.some(t => K(t) === K(a.team))) {
+      throw new Error('Mteja huyu yuko nje ya timu zako. / That customer is outside your teams.');
+    }
+    if (!a.fu && !String(a.comment || '').trim()) throw new Error('Chagua hali au andika maoni. / Pick a status or write a comment.');
+    const now = new Date().toISOString();
+    const { error: sErr } = await db.from('followup_status')
+      .upsert({ imei: ref, team: a.team ? K(a.team) : null, client_name: a.name || null },
+        { onConflict: 'imei', ignoreDuplicates: true });
+    if (sErr) throw new Error(sErr.message);
+    const { error: cErr } = await db.from('followup_comments').insert({
+      imei: ref, team: a.team ? K(a.team) : null, client_name: a.name || null,
+      comment: a.comment || null, fu_status: a.fu || null,
+      promise_date: a.promiseDate || null, promise_amt: a.promiseAmt || null,
+      created_by: user.name, created_at: now });
+    if (cErr) throw new Error(cErr.message);
+    const { error: uErr } = await db.from('followup_status').update({
+      fu_status: a.fu || null, promise_date: a.promiseDate || null, promise_amt: a.promiseAmt || null,
+      last_comment: a.comment || null, comment_by: user.name, comment_at: now, updated_at: now,
+    }).eq('imei', ref);
+    if (uErr) throw new Error(uErr.message);
+    return { ok: true, imei: ref, savedAt: now };
+  },
+
+  async customerComments(db, user, args) {
+    const ref = String((args && args.imei) || '').trim();
+    if (!ref) throw new Error('IMEI is required.');
+    const { data, error } = await db.from('followup_comments')
+      .select('comment, fu_status, promise_date, created_by, created_at')
+      .eq('imei', ref).order('created_at', { ascending: false }).limit(100);
+    if (error) throw new Error(error.message);
+    return { ok: true, items: data || [] };
   },
 
   async saveTeam(db, user, args) {

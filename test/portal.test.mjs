@@ -105,3 +105,108 @@ test('saveRole writes the roles table and accessCodes lists every role', async (
   assert.ok(names.includes('AUDITOR'), 'suggested roles listed');
   await assert.rejects(() => _FNS.saveRole(d, VIEWER, { role: 'X', tabs: [] }), /view-only/);
 });
+
+/* ---------- the customers book ---------- */
+import { todayKey } from '../api/_lib/time.js';
+
+function dayShift(base, days) {
+  const d = new Date(Date.parse(base + 'T00:00:00Z') + days * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+test('customers splits leo at day 45, keeps jana newest-per-imei, and joins the agent', async () => {
+  const today = todayKey();
+  const inWin = dayShift(today, -10);    // lifeDay 11 -- inside the 45-day window
+  const outWin = dayShift(today, -100);  // lifeDay 101 -- Hoop's burden has lapsed
+  const d = fakeDb({
+    followup_status: [
+      { imei: 'A1', client_name: 'Ndani', contact: '0712000001', team: 'KINONDONI', model: 'S23',
+        price: 400000, disbursed_date: inWin, days_offline: 9, locked4: true, locked7: false,
+        has_ever_paid: true, fu_status: null, comment_by: null, deck_date: '2026-08-14' },
+      { imei: 'B2', client_name: 'Nje', contact: '0712000002', team: 'TEMEKE', model: 'A05',
+        price: 300000, disbursed_date: outWin, days_offline: 30, locked4: true, locked7: true,
+        has_ever_paid: false, fu_status: 'HAPATIKANI', comment_by: 'Ainea', deck_date: '2026-08-14' },
+    ],
+    watu_snapshots: [
+      // jana carries the SAME imei twice (a re-upload) -- the newest row must win.
+      { imei: 'A1', client_name: 'Ndani', client_mobile: '0712000001', team: 'KINONDONI',
+        days_offline: 25, agent: 'JUMA', snapshot_date: '2026-08-13', created_at: '2026-08-13T06:00:00Z' },
+      { imei: 'A1', client_name: 'Ndani', client_mobile: '0712000001', team: 'KINONDONI',
+        days_offline: 11, agent: 'JUMA', snapshot_date: '2026-08-13', created_at: '2026-08-13T09:00:00Z' },
+    ],
+    watu_loans: [
+      { imei: 'A1', agent: 'JUMA', team: 'KINONDONI' },
+      { imei: 'B2', agent: 'ASHA', team: 'TEMEKE' },
+    ],
+    settings: [],
+  });
+  const r = await _FNS.customers(d, ADMIN, {});
+  assert.equal(r.deckDate, '2026-08-14');
+  assert.equal(r.prevDate, '2026-08-13');
+  assert.equal(r.leo45.length, 1);
+  assert.equal(r.leo45[0].imei, 'A1');
+  assert.equal(r.leo45[0].agent, 'JUMA', 'the deck has no agent column; the register supplies it');
+  assert.ok(r.leo45[0].lifeDay <= 45);
+  assert.equal(r.leo45plus.length, 1);
+  assert.equal(r.leo45plus[0].imei, 'B2');
+  assert.equal(r.leo45plus[0].agent, 'ASHA');
+  assert.equal(r.leo45plus[0].fu, 'HAPATIKANI');
+  assert.equal(r.jana.length, 1, 'same-imei re-upload rows collapse to one');
+  assert.equal(r.jana[0].daysOff, 11, 'the NEWEST snapshot of the day wins');
+  assert.equal(r.jana[0].agent, 'JUMA', 'snapshots carry the agent themselves');
+  assert.ok(Array.isArray(r.fuStatuses) && r.fuStatuses.length, 'the comment form vocabulary rides along');
+});
+
+test('customers scopes a team-bound code at the database', async () => {
+  const today = todayKey();
+  const d = fakeDb({
+    followup_status: [
+      { imei: 'A1', client_name: 'Yetu', team: 'KINONDONI', disbursed_date: dayShift(today, -5), deck_date: '2026-08-14' },
+      { imei: 'B2', client_name: 'Wao', team: 'TEMEKE', disbursed_date: dayShift(today, -5), deck_date: '2026-08-14' },
+    ],
+    watu_snapshots: [], watu_loans: [], settings: [],
+  });
+  const scoped = { ...ADMIN, teams: ['KINONDONI'] };
+  const r = await _FNS.customers(d, scoped, {});
+  assert.equal(r.leo45.length + r.leo45plus.length, 1);
+  assert.equal(r.leo45[0].imei, 'A1');
+});
+
+test('portalAddComment writes the three follow-up tables as the signed-in name', async () => {
+  const d = fakeDb({
+    followup_status: [{ imei: 'A1', client_name: 'Ndani', team: 'KINONDONI', fu_status: null,
+      last_comment: null, comment_by: null, deck_date: '2026-08-14' }],
+    followup_comments: [],
+  });
+  const r = await _FNS.portalAddComment(d, ADMIN, {
+    imei: 'A1', team: 'KINONDONI', name: 'Ndani', fu: 'AMETOA AHADI',
+    promiseDate: '2026-08-16', promiseAmt: 50000, comment: 'Ameahidi Jumamosi' });
+  assert.equal(r.ok, true);
+  const c = d._dump('followup_comments');
+  assert.equal(c.length, 1);
+  assert.equal(c[0].created_by, 'Peter', 'the access code\'s NAME signs the comment');
+  assert.equal(c[0].fu_status, 'AMETOA AHADI');
+  const s = d._dump('followup_status').find(x => x.imei === 'A1');
+  assert.equal(s.fu_status, 'AMETOA AHADI');
+  assert.equal(s.last_comment, 'Ameahidi Jumamosi');
+  assert.equal(s.comment_by, 'Peter');
+  assert.equal(s.deck_date, '2026-08-14', 'commenting must never move a row on or off a deck');
+});
+
+test('portalAddComment refuses a view-only code and an out-of-scope team', async () => {
+  const d = fakeDb({ followup_status: [], followup_comments: [] });
+  await assert.rejects(() => _FNS.portalAddComment(d, VIEWER, { imei: 'A1', comment: 'x' }), /view-only/);
+  const scoped = { ...ADMIN, teams: ['KINONDONI'] };
+  await assert.rejects(
+    () => _FNS.portalAddComment(d, scoped, { imei: 'B2', team: 'TEMEKE', comment: 'x' }),
+    /nje ya timu|outside your teams/);
+});
+
+test('portalAddComment reaches a customer with no deck row (any customer means ANY)', async () => {
+  const d = fakeDb({ followup_status: [], followup_comments: [] });
+  await _FNS.portalAddComment(d, ADMIN, { imei: 'Z9', team: 'TEMEKE', name: 'Mpya', comment: 'tumempata' });
+  const s = d._dump('followup_status').find(x => x.imei === 'Z9');
+  assert.ok(s, 'a stub row is created so the comment has a parent');
+  assert.equal(s.deck_date == null, true, 'the stub joins no deck -- uploads decide the list');
+  assert.equal(d._dump('followup_comments').length, 1);
+});

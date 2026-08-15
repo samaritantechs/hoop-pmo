@@ -105,6 +105,7 @@ td.r,th.r{text-align:right}
     <aside class="side">
       <div class="tabs" id="tabs">
       <button data-t="dash" class="on">Dashboard</button>
+      <button data-t="cust">Wateja / Customers</button>
       <button data-t="ripoti">Ripoti</button>
       <button data-t="recovery">Recovery</button>
       <button data-t="teams">Teams</button>
@@ -211,6 +212,7 @@ function enter(){
 function draw(){
   var m=$('#main');
   if(TAB==='dash') return drawDash(m);
+  if(TAB==='cust') return drawCust(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
   if(TAB==='teams') return drawTeams(m);
@@ -300,6 +302,144 @@ function drawRecovery(m){
           +'<td>'+(r.paid?'<span class="chip ok">AMELIPA</span>':'<span class="chip">karibu</span>')+'</td></tr>';
       }).join('')+'</tbody></table></div></div>';
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+
+/* ---------- wateja / customers ----------
+   ONE nav, THREE separated lists: jana (yesterday's list), leo ndani ya siku 45, na leo
+   waliopita 45. Kila mstari unabeba AGENT -- aliyemuuzia simu, nafasi ile ile mdhamini
+   aliyoshika Hope. Kila mtumiaji (isipokuwa view-only) anaandika maoni kwa mteja yeyote. */
+var CUST={data:null,list:'leo45',sel:null};
+function drawCust(m){
+  CUST.data=null; CUST.sel=null;
+  m.innerHTML='<div class="card"><h2>Wateja / Customers</h2><div class="mut">Inapakia…</div></div>';
+  srv('customers').then(function(d){ CUST.data=d; custRender(m); })
+    .catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+function custRender(m){
+  var d=CUST.data;
+  var lists={jana:d.jana||[],leo45:d.leo45||[],leo45plus:d.leo45plus||[]};
+  var rows=lists[CUST.list]||[];
+  function pill(k,label){
+    return '<button class="btn sm'+(CUST.list===k?'':' ghost')+'" data-pl="'+k+'">'+label+' · '+money(lists[k].length)+'</button>';
+  }
+  m.innerHTML=
+    '<div class="card"><h2>Wateja / Customers'+(d.deckDate?' — deck '+esc(d.deckDate):'')+'</h2>'
+    +'<div class="row">'
+    +pill('jana','Jana'+(d.prevDate?' ('+esc(d.prevDate)+')':''))
+    +pill('leo45','Leo · siku ≤ 45')
+    +pill('leo45plus','Leo · 45+')
+    +'</div>'
+    +'<div class="row"><input class="inp" id="custQ" placeholder="Tafuta: jina, simu, IMEI, agent, timu… / search"></div>'
+    +'<div class="mut" style="margin-bottom:8px">Bofya mteja kuona historia na kuandika maoni. <b>Agent</b> = aliyemuuzia simu.</div>'
+    +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Timu</th><th>Agent</th><th class="r">OFF</th><th class="r">Siku/45</th><th>Hali</th></tr></thead><tbody id="custRows">'
+    +(rows.length?rows.map(function(r,i){
+      return '<tr data-ci="'+i+'" style="cursor:pointer"><td><b>'+esc(r.name||'—')+'</b><div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td>'
+        +'<td>'+esc(r.team||'')+'</td><td>'+esc(r.agent||'—')+'</td>'
+        +'<td class="r">'+(r.daysOff!=null?money(r.daysOff):'—')+(r.locked7?' <span class="chip bad">7+</span>':(r.locked4?' <span class="chip warn">4+</span>':''))+'</td>'
+        +'<td class="r">'+(r.lifeDay!=null?(r.lifeDay<=45?money(r.lifeDay)+'/45':'<span class="chip">NJE</span>'):'—')+'</td>'
+        +'<td>'+(r.fu?'<span class="chip">'+esc(r.fu)+'</span>':(r.paid?'<span class="chip ok">amelipa</span>':''))+'</td></tr>';
+    }).join(''):'<tr><td colspan="6" class="mut">Hakuna mteja kwenye orodha hii bado.</td></tr>')
+    +'</tbody></table></div></div>'
+    +'<div id="custDetail"></div><div id="custSrch"></div>';
+  $all('[data-pl]',m).forEach(function(b){ b.onclick=function(){ CUST.list=b.getAttribute('data-pl'); CUST.sel=null; custRender(m); }; });
+  $all('#custRows tr[data-ci]',m).forEach(function(tr){
+    tr.onclick=function(){ openCust(rows[parseInt(tr.getAttribute('data-ci'),10)]); };
+  });
+  /* The box filters the visible list instantly; from 3 characters it ALSO asks the whole
+     register -- so "any customer" means any, not just today's deck. One bounded read. */
+  var t=null;
+  $('#custQ').addEventListener('input',function(){
+    var q=this.value.trim();
+    var Q=q.toUpperCase();
+    $all('#custRows tr[data-ci]',m).forEach(function(tr){
+      tr.style.display=!Q||tr.textContent.toUpperCase().indexOf(Q)>=0?'':'none';
+    });
+    clearTimeout(t);
+    var box=$('#custSrch');
+    if(q.length<3){ if(box) box.innerHTML=''; return; }
+    t=setTimeout(function(){
+      srv('customerSearch',{q:q}).then(function(x){
+        if($('#custQ')&&$('#custQ').value.trim()!==q) return;
+        var cs=x.customers||[];
+        if(!box) return;
+        box.innerHTML=!cs.length?'':'<div class="card"><h2>Rejista nzima / Whole register — '+cs.length+'</h2>'
+          +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Timu</th><th>Agent</th><th class="r">OFF</th></tr></thead><tbody>'
+          +cs.map(function(c,i){
+            return '<tr data-si="'+i+'" style="cursor:pointer"><td><b>'+esc(c.name||'—')+'</b><div class="mut" style="font-size:10px">'+esc(c.imei)+'</div></td>'
+              +'<td>'+esc(c.team||'')+'</td><td>'+esc(c.agent||'—')+'</td>'
+              +'<td class="r">'+(c.daysOff!=null?money(c.daysOff):'—')+(c.locked7?' <span class="chip bad">7+</span>':'')+'</td></tr>';
+          }).join('')+'</tbody></table></div></div>';
+        $all('[data-si]',box).forEach(function(tr){
+          tr.onclick=function(){ openCust(cs[parseInt(tr.getAttribute('data-si'),10)]); };
+        });
+      }).catch(function(){});
+    },350);
+  });
+  if(CUST.sel) openCust(CUST.sel);
+}
+function openCust(c){
+  var box=$('#custDetail'); if(!box||!c) return;
+  CUST.sel=c;
+  var d=CUST.data||{};
+  var canW=!BOOT.readOnly;
+  var h=telHref(c.phone);
+  var fus=d.fuStatuses||[];
+  box.innerHTML=
+    '<div class="card" id="custCard"><h2>'+esc(c.name||'—')+' '+(c.team?'<span class="chip">'+esc(c.team)+'</span>':'')+'</h2>'
+    +'<div class="mut" style="margin-bottom:6px">IMEI '+esc(c.imei)+(c.model?' · '+esc(c.model):'')+(c.price?' · TZS '+money(c.price):'')
+    +(c.lifeDay!=null?' · siku '+money(c.lifeDay)+'/45':'')+(c.daysOff!=null?' · OFF siku '+money(c.daysOff):'')+'</div>'
+    +'<div style="font-size:13.5px;margin-bottom:4px"><b>Agent (aliyemuuzia): '+esc(c.agent||'—')+'</b></div>'
+    +'<div style="font-size:13.5px;margin-bottom:10px">Simu: '+(h!=='#'?'<a href="tel:'+h+'">'+esc(c.phone)+'</a>':'—')
+    +' <span class="mut">(namba hii ndiyo ref ya malipo Watu)</span></div>'
+    +'<div id="custHist" class="mut">Inapakia historia…</div>'
+    +(canW?
+      '<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">'
+      +'<div class="row"><select class="inp" id="cmFu"><option value="">— Hali / status —</option>'
+      +fus.map(function(s){ return '<option'+(c.fu===s?' selected':'')+'>'+esc(s)+'</option>'; }).join('')+'</select></div>'
+      +'<div class="row hide" id="cmPromRow"><input class="inp" type="date" id="cmDate"><input class="inp" type="text" id="cmAmt" placeholder="Kiasi / amount (TZS)" inputmode="numeric"></div>'
+      +'<div class="row"><textarea class="inp" id="cmTxt" rows="2" placeholder="Maoni… / comment"></textarea></div>'
+      +'<button class="btn sm" id="cmSave">Hifadhi maoni / Save</button>'
+      +'</div>':'')
+    +'</div>';
+  var el=$('#custCard'); if(el&&el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'nearest'});
+  function hist(){
+    srv('customerComments',{imei:c.imei}).then(function(x){
+      var it=x.items||[];
+      $('#custHist').innerHTML=!it.length?'<div class="mut">Hakuna maoni bado — wa kwanza kuandika.</div>'
+        :'<div style="display:flex;flex-direction:column;gap:8px">'+it.map(function(r){
+          return '<div style="background:var(--b50);border-radius:9px;padding:8px 11px;font-size:13px">'
+            +(r.fu_status?'<span class="chip">'+esc(r.fu_status)+'</span> ':'')
+            +(r.promise_date?'<span class="chip ok">ahadi '+esc(String(r.promise_date).slice(0,10))+'</span> ':'')
+            +esc(r.comment||'')
+            +'<div class="mut" style="font-size:10.5px;margin-top:3px">'+esc(r.created_by||'')+' · '+esc(String(r.created_at||'').slice(0,16).replace('T',' '))+'</div></div>';
+        }).join('')+'</div>';
+    }).catch(function(e){ $('#custHist').innerHTML='<div class="mut">'+esc(String(e.message||e))+'</div>'; });
+  }
+  hist();
+  if(!canW) return;
+  function promToggle(){
+    var need=(d.fuNeedDate||[]).indexOf($('#cmFu').value)>=0;
+    $('#cmPromRow').classList.toggle('hide',!need);
+    if(need&&!$('#cmDate').value) $('#cmDate').value=isoToday(1);
+  }
+  $('#cmFu').onchange=promToggle; promToggle();
+  $('#cmSave').onclick=function(){
+    var fu=$('#cmFu').value, txt=$('#cmTxt').value.trim();
+    if(!fu&&!txt){ toast('Chagua hali au andika maoni.',true); return; }
+    var needP=(d.fuNeedDate||[]).indexOf(fu)>=0;
+    $('#cmSave').disabled=true;
+    srv('portalAddComment',{imei:c.imei,team:c.team||null,name:c.name||null,fu:fu||null,
+      promiseDate:needP?($('#cmDate').value||null):null,
+      promiseAmt:needP?(Number(String($('#cmAmt').value).replace(/\D/g,''))||null):null,
+      comment:txt||null})
+      .then(function(){
+        toast('Imehifadhiwa.');
+        c.fu=fu||c.fu; $('#cmTxt').value='';
+        hist();
+      })
+      .catch(function(e){ toast(String(e.message||e),true); })
+      .then(function(){ var b=$('#cmSave'); if(b) b.disabled=false; });
+  };
 }
 
 /* ---------- teams ---------- */

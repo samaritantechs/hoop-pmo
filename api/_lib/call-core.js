@@ -56,6 +56,11 @@ export function fuStatusShape(list) {
   return { fuStatuses: list, fuNeedDate: keep(FU_NEED_DATE), fuNeedComment: keep(FU_NEED_COMMENT),
     fuNeedNumber: keep(FU_NEED_NUMBER), fuBuiltIn: FU_STATUSES.slice() };
 }
+/** The FU list for this database: the FU_STATUSES setting, defaults otherwise. One read. */
+export async function fuStatusConfig(db) {
+  const raw = await settingGet(db, FU_STATUS_KEY);
+  return fuStatusShape(parseFuStatuses(raw));
+}
 
 /* ---------- small ports, byte-faithful to Hope ---------- */
 export function pnorm(v) {
