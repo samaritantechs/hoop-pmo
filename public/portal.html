@@ -106,7 +106,7 @@ td.r,th.r{text-align:right}
       <div class="tabs" id="tabs">
       <button data-t="dash" class="on">Dashboard</button>
       <button data-t="cust">Wateja / Customers</button>
-      <button data-t="ripoti">Ripoti</button>
+      <button data-t="ripoti">Call reports</button>
       <button data-t="recovery">Recovery</button>
       <button data-t="teams">Teams</button>
       <button data-t="staff">Staff</button>
@@ -244,11 +244,11 @@ function drawDash(m){
 /* ---------- ripoti ---------- */
 var RIP={from:isoToday(-7),to:isoToday(0),team:''};
 function drawRipoti(m){
-  m.innerHTML='<div class="card"><h2>Ripoti ya simu / Call report</h2><div class="mut">Inapakia…</div></div>';
+  m.innerHTML='<div class="card"><h2>Call reports — simu za credit team</h2><div class="mut">Inapakia…</div></div>';
   srv('report',{from:RIP.from,to:RIP.to,team:RIP.team}).then(function(d){
     var t=d.totals||{};
     m.innerHTML=
-      '<div class="card"><h2>Ripoti ya simu / Call report</h2>'
+      '<div class="card"><h2>Call reports — simu za credit team</h2>'
       +'<div class="row"><input class="inp" type="date" id="rF" value="'+RIP.from+'"><input class="inp" type="date" id="rT" value="'+RIP.to+'">'
       +'<select class="inp" id="rTeam"><option value="">Timu zote</option>'
       +(d.teams||[]).map(function(x){return '<option'+(x.team===RIP.team?' selected':'')+'>'+esc(x.team)+'</option>';}).join('')
@@ -536,14 +536,19 @@ function drawCodes(m){
       +'</div>'
       +'<div class="card"><h2>Roles</h2>'
       +'<div class="row" style="flex-wrap:wrap">'+(d.roles||[]).map(function(r){
-          return '<button class="btn sm ghost" data-rl="'+esc(r.role)+'" data-rltabs="'+esc((r.tabs||[]).join(','))+'">'
-            +esc(r.role)+((r.tabs||[]).length?' \u00B7 '+esc((r.tabs||[]).join('+')):'')+'</button>';
+          return '<span style="display:inline-flex;align-items:center;gap:2px">'
+            +'<button class="btn sm ghost" data-rl="'+esc(r.role)+'" data-rltabs="'+esc((r.tabs||[]).join(','))+'">'
+            +esc(r.role)+((r.tabs||[]).length?' \u00B7 '+esc((r.tabs||[]).join('+')):'')
+            +(r.inUse?' \u00B7 <span class="chip">watu '+r.inUse+'</span>':'')+'</button>'
+            +(!r.inUse?'<button class="btn sm ghost" data-rldel="'+esc(r.role)+'" title="Futa role hii" style="color:var(--bad);border-color:#F6CFCB;padding:7px 9px">\u00D7</button>':'')
+            +'</span>';
         }).join('')+'</div>'
       +'<div class="row"><input class="inp" id="rlName" placeholder="Jina la role (mpya au ya kuhariri)">'
       +'<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0"><input type="checkbox" id="rlUp"> Upload</label>'
       +'<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0"><input type="checkbox" id="rlSet"> Settings</label>'
       +'<button class="btn sm" id="rlSave">Hifadhi role</button></div>'
-      +'<div class="mut">Bonyeza role kuijaza; Settings inatoa Teams/Staff/Codes, Upload inatoa kupakia. Bila viwili hivyo ni kuangalia tu (dashboard, ripoti, recovery).</div>'
+      +'<div class="mut">Bonyeza role kuijaza; Settings inatoa Teams/Staff/Codes, Upload inatoa kupakia. Bila viwili hivyo ni kuangalia tu (dashboard, ripoti, recovery). '
+      +'Role isiyo na mtu ina <b>×</b> ya kuifuta; yenye watu haifutiki mpaka uwahamishe.</div>'
       +'</div>';
     $all('[data-rl]',m).forEach(function(b){
       b.onclick=function(){
@@ -551,6 +556,15 @@ function drawCodes(m){
         var t=(b.getAttribute('data-rltabs')||'').split(',');
         $('#rlUp').checked=t.indexOf('upload')>=0;
         $('#rlSet').checked=t.indexOf('settings')>=0;
+      };
+    });
+    $all('[data-rldel]',m).forEach(function(b){
+      b.onclick=function(){
+        var role=b.getAttribute('data-rldel');
+        if(!confirm('Futa role '+role+'? Hakuna mtu anayeitumia sasa.')) return;
+        srv('deleteRole',{role:role})
+          .then(function(){toast('Role '+role+' imefutwa.');drawCodes(m);})
+          .catch(function(e){toast(String(e.message||e),true);});
       };
     });
     $('#rlSave').onclick=function(){

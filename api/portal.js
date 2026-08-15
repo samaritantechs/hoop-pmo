@@ -22,7 +22,9 @@ import { summaryFor, reportCore, lifeDayOf, fuStatusConfig } from './_lib/call-c
      customerComments  1 read, keyed by IMEI, newest 100
      teams      1 read;   saveTeam / newTeamCode: 1 read + 1 write
      officers   1 read;   officerActive: 1 write
-     codes      1 read;   saveAccessCode / deleteAccessCode: 1 write
+     codes      3 parallel reads (codes, roles, 1 keyed setting);
+                saveAccessCode / deleteAccessCode: 1 write
+                deleteRole: 1 bounded codes read + 1 keyed delete + 1 keyed read + 1 write
      settings   1 `in` read; settingSet: 1 write
    Row bounds: recovery reads two DAYS of snapshots, team-scoped; nothing reads the whole
    history; the audit list is capped at 200 newest.
@@ -32,6 +34,7 @@ AUDITED.add('newTeamCode');
 AUDITED.add('officerActive');
 AUDITED.add('renameAccessCode');
 AUDITED.add('portalAddComment');
+AUDITED.add('deleteRole');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -304,23 +307,59 @@ const FNS = {
 
   async accessCodes(db, user) {
     requireSettings(user);
-    const [rows, roleRows] = await Promise.all([
+    const [rows, roleRows, hiddenRow] = await Promise.all([
       fetchAll(() => db.from('access_codes').select('code, name, role, teams, tabs')),
       fetchAll(() => db.from('roles').select('role, tabs')),
+      db.from('settings').select('value').eq('key', 'ROLES_HIDDEN').maybeSingle(),
     ]);
     const mask = isReadOnly(user);
+    let hidden = [];
+    try { hidden = JSON.parse((hiddenRow.data && hiddenRow.data.value) || '[]') || []; } catch (e) { hidden = []; }
+    const hiddenSet = new Set(hidden.map(K));
     // Every role that exists anywhere is offered everywhere: the roles table first (it
-    // carries the tabs), then roles only seen on codes, then the suggested set.
+    // carries the tabs), then roles only seen on codes, then the suggested set -- MINUS
+    // suggested names the owner has deleted, or the delete would quietly undo itself.
     const seen = new Map();
     roleRows.forEach(r => { const k = K(r.role); if (k) seen.set(k, { role: k, tabs: r.tabs || [] }); });
     rows.forEach(r => { const k = K(r.role); if (k && !seen.has(k)) seen.set(k, { role: k, tabs: [] }); });
     ['ADMIN', 'MANAGER', 'FINANCE', 'RSM', 'CREDIT LEAD', 'GENERAL DUTY', 'STORE', 'IT', 'AUDITOR']
-      .forEach(k => { if (!seen.has(k)) seen.set(k, { role: k, tabs: [] }); });
+      .forEach(k => { if (!seen.has(k) && !hiddenSet.has(k)) seen.set(k, { role: k, tabs: [] }); });
+    // How many codes hold each role decides whether the page may offer to delete it.
+    const useCount = {};
+    rows.forEach(r => { const k = K(r.role); if (k) useCount[k] = (useCount[k] || 0) + 1; });
     return { ok: true,
-      roles: [...seen.values()].sort((a, b) => a.role < b.role ? -1 : 1),
+      roles: [...seen.values()].map(r => ({ ...r, inUse: useCount[r.role] || 0 }))
+        .sort((a, b) => a.role < b.role ? -1 : 1),
       codes: rows.map(r => ({
         code: mask ? '••••••' : r.code, name: r.name, role: r.role,
         teams: r.teams || null, tabs: r.tabs || [] })) };
+  },
+
+  /** A role leaves only when NOBODY holds it -- reassign the codes first. A deleted
+      suggested-set name also lands on ROLES_HIDDEN (a settings row this fn alone writes;
+      it sits outside settingSet's whitelist) or the next read would resurrect it.
+      Budget: 1 bounded codes read + 1 keyed delete + 1 keyed read + 1 keyed write. */
+  async deleteRole(db, user, args) {
+    requireWrite(user); requireSettings(user);
+    const role = K(args && args.role);
+    if (!role) throw new Error('Role name is required.');
+    const codes = await fetchAll(() => db.from('access_codes').select('code, name, role'));
+    const holders = codes.filter(c => K(c.role) === role);
+    if (holders.length) {
+      throw new Error('Role hii bado ina watu ' + holders.length + ' ('
+        + holders.slice(0, 5).map(c => c.name || c.code).join(', ')
+        + '). Wahamishie role nyingine kwanza. / Still in use -- reassign those codes first.');
+    }
+    const { error } = await db.from('roles').delete().eq('role', role);
+    if (error) throw new Error(error.message);
+    const { data } = await db.from('settings').select('value').eq('key', 'ROLES_HIDDEN').maybeSingle();
+    let hidden = [];
+    try { hidden = JSON.parse((data && data.value) || '[]') || []; } catch (e) { hidden = []; }
+    if (!hidden.some(h => K(h) === role)) hidden.push(role);
+    const { error: hErr } = await db.from('settings')
+      .upsert({ key: 'ROLES_HIDDEN', value: JSON.stringify(hidden) }, { onConflict: 'key' });
+    if (hErr) throw new Error(hErr.message);
+    return { ok: true, role };
   },
 
   /** A role is a name plus the doors it opens. Tabs come from a fixed vocabulary; every

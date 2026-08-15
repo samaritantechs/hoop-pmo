@@ -210,3 +210,53 @@ test('portalAddComment reaches a customer with no deck row (any customer means A
   assert.equal(s.deck_date == null, true, 'the stub joins no deck -- uploads decide the list');
   assert.equal(d._dump('followup_comments').length, 1);
 });
+
+/* ---------- roles: delete only when nobody holds them ---------- */
+
+test('deleteRole removes an unused role and refuses one still on a code', async () => {
+  const d = fakeDb({
+    access_codes: [{ code: 'X1', name: 'Asha', role: 'MANAGER', teams: null, tabs: [] }],
+    roles: [
+      { role: 'MANAGER', tabs: ['dashboard'] },
+      { role: 'FIELD SUPERVISOR', tabs: [] },
+    ],
+    settings: [],
+  });
+  await assert.rejects(
+    () => _FNS.deleteRole(d, ADMIN, { role: 'Manager' }),
+    /bado ina watu|Still in use/, 'a held role never deletes, whatever the case of the ask');
+  await _FNS.deleteRole(d, ADMIN, { role: 'FIELD SUPERVISOR' });
+  assert.ok(!d._dump('roles').some(r => r.role === 'FIELD SUPERVISOR'));
+  const out = await _FNS.accessCodes(d, ADMIN, {});
+  const names = out.roles.map(r => r.role);
+  assert.ok(!names.includes('FIELD SUPERVISOR'), 'deleted role stays gone from the list');
+  assert.ok(names.includes('MANAGER'), 'the held role is untouched');
+  await assert.rejects(() => _FNS.deleteRole(d, VIEWER, { role: 'STORE' }), /view-only/);
+});
+
+test('deleting a SUGGESTED role does not resurrect on the next read', async () => {
+  const d = fakeDb({ access_codes: [], roles: [], settings: [] });
+  let out = await _FNS.accessCodes(d, ADMIN, {});
+  assert.ok(out.roles.some(r => r.role === 'STORE'), 'suggested set offers STORE');
+  await _FNS.deleteRole(d, ADMIN, { role: 'STORE' });
+  out = await _FNS.accessCodes(d, ADMIN, {});
+  assert.ok(!out.roles.some(r => r.role === 'STORE'), 'ROLES_HIDDEN keeps it deleted');
+  // Re-adding on purpose beats the hidden list: the roles table always shows.
+  await _FNS.saveRole(d, ADMIN, { role: 'STORE', tabs: ['dashboard'] });
+  out = await _FNS.accessCodes(d, ADMIN, {});
+  assert.ok(out.roles.some(r => r.role === 'STORE'), 'an explicit re-add brings it back');
+});
+
+test('accessCodes counts holders so the page knows what is deletable', async () => {
+  const d = fakeDb({
+    access_codes: [
+      { code: 'A', name: 'P', role: 'ADMIN', teams: null, tabs: [] },
+      { code: 'B', name: 'Q', role: 'admin', teams: null, tabs: [] },
+    ],
+    roles: [], settings: [],
+  });
+  const out = await _FNS.accessCodes(d, ADMIN, {});
+  const admin = out.roles.find(r => r.role === 'ADMIN');
+  assert.equal(admin.inUse, 2, 'case-insensitive count');
+  assert.equal(out.roles.find(r => r.role === 'STORE').inUse, 0);
+});

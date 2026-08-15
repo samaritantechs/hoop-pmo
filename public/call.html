@@ -93,6 +93,8 @@ header.top .who span{display:block;font-size:11px;color:var(--b300)}
 .tabs button{flex:1;background:rgba(255,255,255,.08);color:#cfe0ff;border:0;padding:9px 4px;border-radius:9px;
   font-size:12.5px;font-weight:700;white-space:nowrap}
 .tabs button.on{background:#fff;color:var(--b800)}
+/* The chip colors, carried up into the tab row -- the dot says which book you are in. */
+.tabs .tdot{display:inline-block;width:7px;height:7px;border-radius:99px;margin-right:5px;vertical-align:1px}
 /* Five figures on a phone: wrap freely, but never break a label away from its number. */
 .daystrip{display:flex;align-items:center;justify-content:center;gap:4px 7px;margin-top:10px;
   font-size:11.5px;font-weight:600;color:var(--b300);flex-wrap:wrap}
@@ -305,7 +307,10 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
     </div>
     <div class="searchbar" style="margin:10px 0 0"><input id="listQ" placeholder="Tafuta jina / namba&#x2026; (kwenye orodha zote)"></div>
     <div class="tabs" id="tabs">
-      <button data-v="today">Leo &mdash; Orodha ya Watu</button>
+      <button data-v="win45"><i class="tdot" style="background:#35A8E1"></i>Siku &le;45</button>
+      <button data-v="over45"><i class="tdot" style="background:#94A3B8"></i>45+</button>
+      <button data-v="lock4"><i class="tdot" style="background:#F5A623"></i>Lock 4+</button>
+      <button data-v="lock7"><i class="tdot" style="background:#F87171"></i>Lock 7+</button>
       <button data-v="expdf" id="tabExpdf" class="hide" style="display:none">Exp.Def</button>
       <button data-v="reports" id="tabReports" class="hide">Ripoti</button>
     </div>
@@ -468,12 +473,14 @@ function deviceId(){
 
 /* ================= state ================= */
 var DEV = deviceId();
-var S = { boot:null, view:'today', cache:{}, cacheAt:{}, reqId:0, isAdmin:false, rows:[], q:'', curRef:null, comments:[], repData:null, repFrom:weekStartIso_(), repTo:weekEndIso_(), repTeam:'', repLeader:'', syncEverySec:300, permOk:null,
+var S = { boot:null, view:'win45', cache:{}, cacheAt:{}, reqId:0, isAdmin:false, rows:[], q:'', curRef:null, comments:[], repData:null, repFrom:weekStartIso_(), repTo:weekEndIso_(), repTeam:'', repLeader:'', syncEverySec:300, permOk:null,
   /* Which of the three recycling roles the Exp.Def list is narrowed to, remembered across
      restarts the same way the scope and the open/shut summary are. Somebody who works the
      bike officers' book works it every day. */
   expdfRole: (function(){ try { return localStorage.getItem('hcXdRole') || ''; } catch(e){ return ''; } })() };
-var LIST_SOURCE = { today:'today' };
+/* Four tabs, ONE source: the day's book downloads once and every tab narrows it on the
+   phone -- swapping tabs never asks the server another question. */
+var LIST_SOURCE = { win45:'today', over45:'today', lock4:'today', lock7:'today' };
 // Exp.Def is the recycling rotation's own list and is already scoped to the signed-in leader
 // by the server, so it must NOT be re-filtered here by customer status the way def/exp/chr are.
 
@@ -779,7 +786,7 @@ function boot(){
 function doLogout(){
   try { localStorage.setItem('hcLoggedOut', '1'); } catch(e){}
   if (S.syncTimer) { clearInterval(S.syncTimer); S.syncTimer = null; }
-  S.boot = null; S.entered = false; S.cache = {}; S.cacheAt = {}; S.rows = []; S.q = ''; S.view = 'today'; S.repData = null; S.curRef = null;
+  S.boot = null; S.entered = false; S.cache = {}; S.cacheAt = {}; S.rows = []; S.q = ''; S.view = 'win45'; S.repData = null; S.curRef = null;
   /* SIGNING OUT IS THE ONLY THING THAT TAKES THE STRIP AWAY, and it must take the saved copy
      with it -- one team's figures must not be sitting there when the next officer signs in on
      the same handset. */
@@ -945,8 +952,8 @@ function enterApp(d){
   crisisSync_(d);
   if (S.entered) {
     // Tabs can appear or disappear here, and the one they are standing on may have just gone.
-    if (S.view === 'reports' && !d.leader) setView('today');
-    else if (S.view === 'expdf' && !d.expdfLeader) setView('today');
+    if (S.view === 'reports' && !d.leader) setView('win45');
+    else if (S.view === 'expdf' && !d.expdfLeader) setView('win45');
     return;
   }
   S.entered = true;
@@ -957,7 +964,7 @@ function enterApp(d){
   bellRefresh();
 
   $all('#tabs button').forEach(function(b){ b.onclick = function(){ exitSearch_(); setView(b.getAttribute('data-v')); }; });
-  setView('today');
+  setView('win45');
   /* Draw the strip from the handset BEFORE anything is asked of the network, so it is on screen
      the instant the app is -- including on the cheap handsets Android throws away after every
      call. Then ask for fresh figures over the top. */
@@ -1134,11 +1141,13 @@ function classifyStatus_(s){
   return 'def';
 }
 function filterForView_(rows, v){
-  /* "be able to sort manager, bike or gmo customers only per specific day within app"
-     The rows already carry the role the rotation put each customer in, so this is a narrowing
-     of what is on the phone rather than another question for the server -- which matters on a
-     handset on a mobile connection. */
-  // HOOP has ONE book: the day's locked list. Every view is the whole scoped deck.
+  /* The chip colors turned into swappable tabs: the same day's book, narrowed on the phone.
+     Lock 4+ excludes the 7+ rows so the two tabs read the way the chips do -- a customer
+     wears ONE lock chip, and lives in that one lock tab. */
+  if (v === 'win45')  return rows.filter(function(r){ return r.inWindow !== false; });
+  if (v === 'over45') return rows.filter(function(r){ return r.inWindow === false; });
+  if (v === 'lock4')  return rows.filter(function(r){ return r.locked4 && !r.locked7; });
+  if (v === 'lock7')  return rows.filter(function(r){ return !!r.locked7; });
   return rows;
 }
 function segLabel_(src, r){
@@ -1331,7 +1340,14 @@ function staleNote_(){
 }
 
 function emptyWhy_(v){
-  if (v === 'today') return 'Orodha ya Watu ya leo haijapakiwa bado. Mwambie admin apakie orodha ya leo kwenye /upload.';
+  if (LIST_SOURCE[v] === 'today') {
+    if (!(S.cache.today && S.cache.today.length))
+      return 'Orodha ya Watu ya leo haijapakiwa bado. Mwambie admin apakie orodha ya leo kwenye /upload.';
+    if (v === 'win45') return 'Hakuna mteja ndani ya siku 45 kwenye orodha ya leo.';
+    if (v === 'over45') return 'Hakuna mteja nje ya dirisha la siku 45 — wote bado wako ndani.';
+    if (v === 'lock4') return 'Hakuna aliyefungiwa siku 4–6 kwenye orodha ya leo (angalia Lock 7+).';
+    return 'Hakuna aliyefungiwa siku 7+ kwenye orodha ya leo.';
+  }
   // Exp.Def can be empty for four quite different reasons and the officer can only act on
   // one of them. The server says which; the message says what to do about it.
   if (v === 'expdf'){
