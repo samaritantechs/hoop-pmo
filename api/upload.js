@@ -54,12 +54,39 @@ async function writeChunks(db, table, records, onConflict) {
   return written;
 }
 
+/** Trials need an eraser. Deletes ONE day's data: that day's snapshots, the register
+    rows last confirmed that day, and the deck rows it stamped (their comments cascade).
+    Budget: 3 bounded deletes + 1 settings write; every delete is scoped to the date. */
+async function deleteDay(user, day) {
+  const gone = { snapshots: 0, register: 0, deck: 0 };
+  const del = async (table, col) => {
+    const { data, error } = await supabase.from(table).delete().eq(col, day).select(col === 'deck_date' ? 'imei' : 'imei');
+    if (error) throw new Error(table + ': ' + error.message);
+    return (data || []).length;
+  };
+  gone.snapshots = await del('watu_snapshots', 'snapshot_date');
+  gone.register = await del('watu_loans', 'snapshot_date');
+  gone.deck = await del('followup_status', 'deck_date');
+  const { error } = await supabase.from('settings')
+    .upsert({ key: 'DATA_VERSION', value: randomUUID() }, { onConflict: 'key' });
+  if (error) throw new Error('settings: ' + error.message);
+  return { ok: true, deleted: gone, date: day };
+}
+
 export default withApi(async (req) => {
   if (req.method !== 'POST') { const e = new Error('Method not allowed'); e.status = 405; throw e; }
-  const { code, rows, meta, part } = req.body || {};
+  const { code, rows, meta, part, action } = req.body || {};
   const user = await gatedUser(code);
   if (!(await can(user, 'upload'))) {
     const e = new Error('Upload permission is required for your access code.'); e.status = 403; throw e;
+  }
+
+  if (String(action || '') === 'delete') {
+    const day = String((meta && meta.uploadDate) || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      const e = new Error('A date (yyyy-mm-dd) is required to delete a day.'); e.status = 400; throw e;
+    }
+    return deleteDay(user, day);
   }
 
   const p = part && typeof part === 'object' ? part : {};
@@ -74,6 +101,18 @@ export default withApi(async (req) => {
   const { records, teams, dropped } = importWatu(rows || []);
   if (!records.length && !dropped.length) {
     const e = new Error('No data rows could be read from the file.'); e.status = 400; throw e;
+  }
+
+  // REPLACE-BY-DAY, honestly: this upload IS this date's list. Rows the previous upload
+  // of the same date stamped -- and this file no longer carries -- must leave the list,
+  // not linger with the old deck_date. Releasing the stamp (never deleting the row)
+  // keeps every officer comment; the row simply stops being on any day's deck until a
+  // file carries that customer again. First slice only, or slice two would release
+  // what slice one just stamped. One bounded write.
+  if (index === 0) {
+    const { error: relErr } = await supabase.from('followup_status')
+      .update({ deck_date: null }).eq('deck_date', snapshotDate);
+    if (relErr) throw new Error('followup_status: ' + relErr.message);
   }
 
   // 1. Teams first (the register references them). ignoreDuplicates: an existing team's

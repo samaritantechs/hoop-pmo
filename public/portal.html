@@ -32,10 +32,20 @@ header.top{background:var(--b900);color:#fff;padding:12px 16px;position:sticky;t
 .toprow .who b{display:block;font-size:14px}
 .toprow .who span{font-size:11px;color:var(--b300)}
 .toprow .lg{width:52px}
-.tabs{display:flex;gap:6px;max-width:1080px;margin:10px auto 0;overflow-x:auto;padding-bottom:2px}
-.tabs button{background:rgba(255,255,255,.08);color:#cfe0ff;border:0;padding:8px 13px;border-radius:9px;font-size:12.5px;font-weight:700;white-space:nowrap;cursor:pointer}
-.tabs button.on{background:#fff;color:var(--b800)}
-main{max-width:1080px;margin:0 auto;padding:16px}
+/* The nav lives on the LEFT, as in Hope's portal: a column of tabs beside the work. */
+.shell{display:flex;max-width:1120px;margin:0 auto;align-items:flex-start}
+aside.side{flex:0 0 185px;padding:16px 0 16px 14px;position:sticky;top:66px}
+.tabs{display:flex;flex-direction:column;gap:6px}
+.tabs button{background:#fff;color:var(--b800);border:1px solid var(--line);text-align:left;
+  padding:11px 14px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
+.tabs button.on{background:var(--b700);border-color:var(--b700);color:#fff}
+main{flex:1;min-width:0;padding:16px}
+@media(max-width:760px){
+  .shell{display:block}
+  aside.side{position:static;padding:10px 12px 0}
+  .tabs{flex-direction:row;overflow-x:auto;padding-bottom:2px}
+  .tabs button{white-space:nowrap}
+}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px;box-shadow:0 2px 10px -4px rgba(11,42,107,.14)}
 .tile .l{font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
@@ -83,7 +93,10 @@ td.r,th.r{text-align:right}
       <a class="btn sm ghost" href="/call">Calls</a>
       <button class="btn sm ghost" id="outBtn">Toka</button>
     </div>
-    <div class="tabs" id="tabs">
+</header>
+  <div class="shell">
+    <aside class="side">
+      <div class="tabs" id="tabs">
       <button data-t="dash" class="on">Dashboard</button>
       <button data-t="ripoti">Ripoti</button>
       <button data-t="recovery">Recovery</button>
@@ -91,10 +104,10 @@ td.r,th.r{text-align:right}
       <button data-t="staff">Staff</button>
       <button data-t="codes" id="tabCodes">Access codes</button>
       <button data-t="settings" id="tabSettings">Settings</button>
-      <button data-t="road">Roadmap</button>
     </div>
-  </header>
-  <main id="main"></main>
+      </aside>
+    <main id="main"></main>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -159,7 +172,6 @@ function draw(){
   if(TAB==='staff') return drawStaff(m);
   if(TAB==='codes') return drawCodes(m);
   if(TAB==='settings') return drawSettings(m);
-  if(TAB==='road') return drawRoad(m);
 }
 
 /* ---------- dashboard ---------- */
@@ -200,12 +212,14 @@ function drawRipoti(m){
       +'<div class="tile"><div class="l">Portfolio</div><div class="v" style="color:var(--ok)">'+money(t.portfolio)+'</div></div>'
       +'<div class="tile"><div class="l">% pf</div><div class="v">'+(t.calls?pct(t.ratio):'—')+'</div></div>'
       +'</div>'
-      +'<div style="overflow-x:auto"><table><thead><tr><th>Afisa</th><th class="r">Simu</th><th class="r">Muda</th><th class="r">Wateja</th><th class="r">Nje ya pf</th><th class="r">% pf</th><th></th></tr></thead><tbody>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Afisa</th><th class="r">Simu</th><th class="r">Muda</th><th class="r">Wateja</th><th class="r">PF</th><th class="r">Non-PF</th><th class="r">% PF</th><th></th></tr></thead><tbody>'
       +(d.users||[]).map(function(u){
         var h=telHref(u.phone);
         return '<tr><td>'+esc(u.name)+'<div class="mut" style="font-size:10.5px">'+esc(u.team||'')+' '+esc(u.position||'')+'</div></td>'
           +'<td class="r">'+money(u.calls)+'</td><td class="r">'+fmtDur(u.duration)+'</td>'
-          +'<td class="r">'+money(u.uniqCustomers)+'</td><td class="r" style="color:var(--soft)">'+money(u.nonPortfolio)+'</td>'
+          +'<td class="r">'+money(u.uniqCustomers)+'</td>'
+          +'<td class="r" style="color:var(--ok)">'+money(u.portfolio)+'</td>'
+          +'<td class="r" style="color:var(--soft)">'+money(u.nonPortfolio)+'</td>'
           +'<td class="r"'+(u.calls&&u.ratio<0.5?' style="color:var(--bad)"':'')+'>'+(u.calls?pct(u.ratio):'—')+'</td>'
           +'<td class="r">'+(h!=='#'?'<a href="tel:'+h+'" title="'+esc(u.phone)+'">📞</a>':'')+'</td></tr>';
       }).join('')+'</tbody></table></div></div>';
@@ -357,28 +371,6 @@ function drawSettings(m){
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
 
-/* ---------- roadmap ---------- */
-function drawRoad(m){
-  m.innerHTML=
-    '<div class="card"><h2>Iko live leo / Live tonight</h2><ul class="road">'
-    +'<li><b>Watu daily upload</b> — orodha ya kila siku, IMEI kama ufunguo, historia inabaki.</li>'
-    +'<li><b>HOOP Calls</b> — credit team: orodha ya walio-locked, siku ya 45, kupiga + kumbukumbu + ahadi.</li>'
-    +'<li><b>Ripoti</b> — simu kwa kila afisa, portfolio %, na kumpigia afisa mwenyewe.</li>'
-    +'<li><b>Recovery</b> — nani amelipa/amerudi baada ya simu zetu, upload kwa upload.</li>'
-    +'<li><b>Team codes + staff control</b> — usalama uleule wa HOPE tangu siku ya kwanza.</li>'
-    +'</ul></div>'
-    +'<div class="card"><h2>Phase 2 — sales &amp; commissions (designs tayari)</h2><ul class="road">'
-    +'<li><b>Sales audit (watu × hoop)</b> — mauzo ya Hoop ya jana dhidi ya ripoti ya Watu ya asubuhi, IMEI kwa IMEI: MATCHED (lipa commission) / HOOP-ONLY (bendera ya udanganyifu) / WATU-ONLY (haikurekodiwa).</li>'
-    +'<li><b>Commissions engine</b> — kanuni kwa maandishi (agent 75k? RSM 30k+5?), inasubiri rules rasmi.</li>'
-    +'<li><b>Payments</b> — ref ya malipo ya mteja NI namba yake ya simu; matching kwa simu, si IMEI.</li>'
-    +'<li><b>Receipts flow</b> — super-agent → RSM → agent, na receive-confirmation.</li>'
-    +'</ul></div>'
-    +'<div class="card"><h2>Phase 3 — warehouse</h2><ul class="road">'
-    +'<li><b>Stock kwa mmiliki na umri wa KWELI</b> — transfer haifanyi simu kuwa mpya (kasoro ya sasa inarekebishwa).</li>'
-    +'<li><b>Point-in-time stock</b> — stock ya tarehe yoyote, kwa kila ngazi.</li>'
-    +'<li><b>Stock requests</b> — agent → RSM → storekeeper, kwenye mfumo.</li>'
-    +'</ul></div>';
-}
 </script>
 </body>
 </html>
