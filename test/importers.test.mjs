@@ -113,3 +113,69 @@ test('the same IMEI twice in one file is one phone -- last occurrence wins', () 
 test('a file with no IMEI column is refused with the headers named', () => {
   assert.throws(() => importWatu([['Name', 'Phone'], ['x', 'y']]), /no IMEI column/);
 });
+
+/* ---------- phase 2: the three new file kinds through one upload slot ---------- */
+import { importSales, isSalesFile, importAgents, isAgentsFile,
+  importAgedStock, isAgedStockFile } from '../api/_lib/importers.js';
+
+const SALES_HEADERS = ['Date', 'Branch', 'Agent', 'Client_Name', 'Client_Id', 'Client_Phone',
+  'Phone_Model', 'Receipt_Number', 'Imei', 'Commission_Agent', 'Commission_Phone', 'Price'];
+const SALE1 = ['14/08/2026', 'HOOP LIMITED', 'CYPRIAN RENATUS', 'Fredy J Damasi', 'N/A', '0797053513',
+  'SAMSUNG A07-64GB', '9969', '350748531117000', 'Cyprian Dotto Renatus', '0780866571', '503000.00'];
+const SALE2 = ['14/08/2026', 'HOOP LIMITED', 'Anord Sawe', 'Sayuni John Ngogo', 'N/A', '0789631776',
+  'SAMSUNG A07-64GB', '9941', '353451828021079', 'ALOBOGASTI', '0764907295', '503000.00'];
+const TOTAL_ROW = ['Total', '', '', '', '', '', '', '', '', '', '', 12038400];
+
+test('the header row alone says which file kind arrived', () => {
+  assert.equal(isSalesFile(SALES_HEADERS), true);
+  assert.equal(isSalesFile(HEADERS), false, 'the Watu list is not a sales file');
+  assert.equal(isAgentsFile(['JOINED', 'NAME', 'PHONE', 'KIN_NAME', 'ROLE']), true);
+  assert.equal(isAgentsFile(SALES_HEADERS), false);
+  assert.equal(isAgedStockFile(['AGENT', 'ITEM', 'SERIAL', 'RECEIVED', 'AGE']), true);
+  assert.equal(isAgedStockFile(HEADERS), false);
+});
+
+test('importSales reads the real export shape and skips the Total footer silently', () => {
+  const { records, dropped } = importSales([SALES_HEADERS, SALE1, SALE2, TOTAL_ROW]);
+  assert.equal(records.length, 2);
+  assert.equal(dropped.length, 0, 'the footer is arithmetic, not a broken row');
+  const r = records[0];
+  assert.equal(r.sale_date, '2026-08-14', 'dd/mm/yyyy read day-first');
+  assert.equal(r.imei, '350748531117000');
+  assert.equal(r.client_phone, '0797053513', 'phones stay text, leading zero kept');
+  assert.equal(r.price, 503000, 'price text with decimals becomes a number');
+  assert.equal(r.commission_agent, 'Cyprian Dotto Renatus');
+  assert.match(r.sale_key, /^S[0-9a-z]+$/);
+  const again = importSales([SALES_HEADERS, SALE1]);
+  assert.equal(again.records[0].sale_key, r.sale_key, 'sale_key is deterministic -- re-uploads update');
+});
+
+test('importAgents keys on phone, reads status, and names the phoneless row', () => {
+  const H = ['JOINED', 'NAME', 'NATIONAL_ID', 'PHONE', 'EMAIL', 'KIN_NAME', 'KIN_PHONE',
+    'KIN_RELATIONSHIP', 'ROLE', 'BRANCH', 'STATUS'];
+  const { records, dropped } = importAgents([H,
+    ['21/02/2026', 'Anord Sawe', '19950923141260000121', '0658918324', 'sawearnold@gmail.com',
+      'Violet Wilambile', '0682046804', 'Sister', 'Regional_Manager', 'Dar es salaam', 'Active'],
+    ['21/02/2026', 'Ghost Agent', '', '', '', '', '', '', 'Field_Officer', 'ILALA', 'Inactive'],
+  ]);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].phone, '0658918324');
+  assert.equal(records[0].joined_date, '2026-02-21');
+  assert.equal(records[0].kin_name, 'Violet Wilambile');
+  assert.equal(records[0].active, true);
+  assert.equal(dropped.length, 1);
+  assert.equal(dropped[0].name, 'Ghost Agent');
+});
+
+test('importAgedStock keys on the serial and keeps the report date honest', () => {
+  const H = ['AGENT', 'ITEM', 'SERIAL', 'RECEIVED', 'AGE'];
+  const { records, dropped } = importAgedStock([H,
+    ['Anord Sawe', 'SAMSUNG A06-64GB', '350115227805852', '03/07/2026', '43'],
+    ['Anord Sawe', 'SAMSUNG A06-64GB', '(no serial)', '', ''],
+  ]);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].serial, '350115227805852');
+  assert.equal(records[0].received, '2026-07-03');
+  assert.equal(records[0].age_days, 43);
+  assert.equal(dropped.length, 1);
+});

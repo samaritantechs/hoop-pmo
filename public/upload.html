@@ -45,7 +45,7 @@ input[type=text],input[type=password],input[type=date]{width:100%;padding:12px 1
     <input type="password" id="code" placeholder="Access code (needs upload permission)" autocomplete="off">
     <label>Tarehe ya orodha / List date</label>
     <input type="date" id="date">
-    <label class="file-drop" id="drop">Bofya kuchagua faili — Excel (.xlsx) au CSV<input type="file" id="file" accept=".xlsx,.xls,.csv"></label>
+    <label class="file-drop" id="drop">Bofya kuchagua faili — Excel, CSV, au ukurasa wa HTML uliohifadhiwa (SyscoPos)<input type="file" id="file" accept=".xlsx,.xls,.csv,.html,.htm"></label>
     <div id="picked" style="font-size:13px;color:var(--mut);margin-top:8px"></div>
     <button class="btn" id="send" disabled>Pakia / Upload &mdash; inachukua nafasi ya tarehe hii / replaces this date</button>
     <button class="btn" id="wipe" style="background:#fff;color:#B42318;border:1.5px solid #F6CFCB;margin-top:10px">Futa data ya tarehe hii / Delete this date's data</button>
@@ -65,13 +65,75 @@ var SLICE = 2000;   // rows per request, header re-sent every slice; the server 
   try { var c = localStorage.getItem('huCode'); if (c) $('#code').value = c; } catch(e){}
 })();
 
+/* SIPHO'S HTML SAVES: SyscoPos cannot export Excel from every screen, so a saved page
+   is a legal upload. The table is parsed OUT of the HTML right here in the browser,
+   the rows go up like any spreadsheet, and the HTML itself is dumped. The preview shows
+   the columns and sample rows of the page he saved -- including the honest "0 rows"
+   when the page was saved before the table finished loading. */
+function parseHtmlFile(text){
+  var doc = new DOMParser().parseFromString(text, 'text/html');
+  var ths = [].slice.call(doc.querySelectorAll('table thead th')).map(function(t){ return t.textContent.trim(); });
+  var thStr = ths.join('|').toUpperCase();
+  var trs = [].slice.call(doc.querySelectorAll('tbody tr')).filter(function(tr){ return tr.querySelector('td'); });
+  var rows = trs.map(function(tr){
+    return [].slice.call(tr.querySelectorAll('td')).map(function(td){ return td.textContent.replace(/\s+/g,' ').trim(); });
+  }).filter(function(r){ return r.length >= 4; });
+  function pick(src, key, stops){
+    var m = String(src||'').match(new RegExp(key + '\\s*:\\s*(.*?)(?=\\s*(?:' + stops + ')\\s*:|$)'));
+    return m ? m[1].trim() : '';
+  }
+  if (thStr.indexOf('NEXT_OF_KIN') >= 0 || thStr.indexOf('NEXT OF KIN') >= 0){
+    var out = [['JOINED','NAME','NATIONAL_ID','PHONE','EMAIL','KIN_NAME','KIN_PHONE','KIN_RELATIONSHIP','ROLE','BRANCH','STATUS']];
+    rows.forEach(function(c){
+      out.push([c[0]||'', c[1]||'',
+        pick(c[2],'National_Id','Phone|Email'), pick(c[2],'Phone','Email|National_Id'), pick(c[2],'Email','National_Id|Phone'),
+        pick(c[3],'Name','Phone|Relationship'), pick(c[3],'Phone','Relationship|Name'), pick(c[3],'Relationship','Name|Phone'),
+        c[4]||'', c[5]||'', c[6]||'']);
+    });
+    return { kind: 'Agents Register — rejista ya maajenti', aoa: out };
+  }
+  if (thStr.indexOf('SERIAL') >= 0){
+    var out2 = [['AGENT','ITEM','SERIAL','RECEIVED','AGE']];
+    rows.forEach(function(c){ out2.push([c[0]||'', c[1]||'', c[2]||'', c[3]||'', c[4]||'']); });
+    return { kind: 'Aged Stock — stoo iliyokaa', aoa: out2 };
+  }
+  return { kind: null, aoa: null, headers: ths };
+}
+
+function preview(kindNote){
+  var n = Math.max(0, (AOA||[]).length - 1);
+  var head = (AOA && AOA[0]) || [];
+  var html = (kindNote ? '<b>' + kindNote + '</b><br>' : '') + NAME + ' — safu ' + n + ' data rows.';
+  html += '<br>Vichwa: ' + head.slice(0,7).join(', ') + (head.length > 7 ? '…' : '');
+  for (var i = 1; i <= Math.min(2, n); i++){
+    html += '<br><span style="color:#0F172A">• ' + AOA[i].slice(0,5).map(function(c){ return String(c === '' ? '—' : c); }).join(' · ') + '</span>';
+  }
+  $('#picked').innerHTML = html;
+  $('#send').disabled = !n;
+  if (!n && kindNote) show('Safu 0 — ukurasa ulihifadhiwa KABLA orodha haijaonekana. Fungua ukurasa, subiri majina yaonekane, ndipo u-save tena. / 0 rows: save the page AFTER the table is visible.', 'bad');
+  else show('', '');
+}
+
 $('#file').addEventListener('change', function(){
   var f = this.files && this.files[0];
   if (!f) return;
   NAME = f.name;
+  var isHtml = /\.html?$/i.test(f.name);
   var rd = new FileReader();
   rd.onload = function(){
     try {
+      if (isHtml){
+        var got = parseHtmlFile(String(rd.result));
+        if (!got.kind){
+          AOA = null; $('#send').disabled = true;
+          $('#picked').textContent = NAME + ' — ukurasa haujatambuliwa. Vichwa vilivyoonekana: ' + (got.headers || []).join(', ');
+          show('Ukurasa huu wa HTML haufanani na Agents Register wala Aged Stock.', 'bad');
+          return;
+        }
+        AOA = got.aoa;
+        preview(got.kind + ' (data pekee inapakiwa; HTML inatupwa)');
+        return;
+      }
       var wb = XLSX.read(new Uint8Array(rd.result), { type:'array', cellDates:true });
       var sheet = wb.Sheets[wb.SheetNames[0]];
       AOA = XLSX.utils.sheet_to_json(sheet, { header:1, raw:true, defval:'' });
@@ -83,13 +145,10 @@ $('#file').addEventListener('change', function(){
         }
         return c;
       }); });
-      var n = Math.max(0, AOA.length - 1);
-      $('#picked').textContent = NAME + ' — safu ' + n + ' / ' + n + ' data rows. Vichwa: ' + (AOA[0]||[]).slice(0,6).join(', ') + '…';
-      $('#send').disabled = !n;
-      show('', '');
+      preview('');
     } catch(e){ show('Faili halisomeki: ' + e.message, 'bad'); }
   };
-  rd.readAsArrayBuffer(f);
+  if (isHtml) rd.readAsText(f); else rd.readAsArrayBuffer(f);
 });
 
 function show(t, cls){ var m = $('#msg'); m.textContent = t; m.className = 'msg' + (cls ? ' ' + cls : ''); }

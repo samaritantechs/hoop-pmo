@@ -260,3 +260,93 @@ test('accessCodes counts holders so the page knows what is deletable', async () 
   assert.equal(admin.inUse, 2, 'case-insensitive count');
   assert.equal(out.roles.find(r => r.role === 'STORE').inUse, 0);
 });
+
+/* ---------- mauzo: the fraud audit and the scorecards ---------- */
+
+function mauzoDb(today) {
+  return fakeDb({
+    hoop_sales: [
+      // in Watu under the SAME person -> OK
+      { sale_key: 'S0', sale_date: dayShift(today, -4), receipt_number: '9967', client_name: 'Mussa A Iddy',
+        client_phone: '0723120517', imei: '350748531117067', model: 'A07', price: 503000,
+        agent: 'CYPRIAN RENATUS', commission_agent: 'Cyprian Dotto Renatus', commission_phone: '0780866571' },
+      // in Watu under a different agent -> DRIFT (the real 14-Aug pattern)
+      { sale_key: 'S1', sale_date: dayShift(today, -5), receipt_number: '9966', client_name: 'Musiba M Musiba',
+        client_phone: '0688592516', imei: '350748531117109', model: 'A07', price: 503000,
+        agent: 'CYPRIAN RENATUS', commission_agent: 'Cyprian Dotto Renatus', commission_phone: '0780866571' },
+      // in Watu under a DIFFERENT agent -> DRIFT
+      { sale_key: 'S2', sale_date: dayShift(today, -5), receipt_number: '9965', client_name: 'Frank George',
+        client_phone: '0777735977', imei: '351481180297217', model: 'A07', price: 503000,
+        agent: 'NESTORY MKONYI', commission_agent: 'Nestory Joseph', commission_phone: '0687501951' },
+      // NOT in Watu, old -> HAKUNA_WATU, seller resolved from the register
+      { sale_key: 'S3', sale_date: dayShift(today, -5), receipt_number: '9969', client_name: 'Fredy J Damasi',
+        client_phone: '0797053513', imei: '350748531117000', model: 'A07', price: 503000,
+        agent: 'CYPRIAN RENATUS', commission_agent: 'Cyprian Dotto Renatus', commission_phone: '0780866571' },
+      // NOT in Watu, fresh -> PENDING
+      { sale_key: 'S4', sale_date: today, receipt_number: '9970', client_name: 'Mpya Kabisa',
+        client_phone: '0712000009', imei: '350000000000004', model: 'A07', price: 503000,
+        agent: 'X', commission_agent: 'Y', commission_phone: '0700000004' },
+      // NOT in Watu, same buyer thrice -> BULK
+      { sale_key: 'S5', sale_date: dayShift(today, -6), receipt_number: '9951', client_name: 'HOPE MICROCREDIT',
+        client_phone: '0677111882', imei: '351929931547231', model: 'A07', price: 503000,
+        agent: 'E', commission_agent: 'ELIA CHITUZI', commission_phone: '0757578866' },
+      { sale_key: 'S6', sale_date: dayShift(today, -6), receipt_number: '9952', client_name: 'HOPE MICROCREDIT',
+        client_phone: '0677111882', imei: '351929931678127', model: 'A07', price: 503000,
+        agent: 'E', commission_agent: 'ELIA CHITUZI', commission_phone: '0757578866' },
+      { sale_key: 'S7', sale_date: dayShift(today, -6), receipt_number: '9954', client_name: 'HOPE MICROCREDIT',
+        client_phone: '0677111882', imei: '351929939195892', model: 'A07', price: 503000,
+        agent: 'E', commission_agent: 'ELIA CHITUZI', commission_phone: '0757578866' },
+    ],
+    watu_loans: [
+      { imei: '350748531117067', agent: 'Cyprian Dotto Renatus', agent_id: '73963', team: 'KINONDONI',
+        has_ever_paid: true, locked4: false, locked7: false, days_offline: 1, disbursed_date: dayShift(today, -8) },
+      { imei: '350748531117109', agent: 'Vanence Chelehani', agent_id: '128245', team: 'KINONDONI',
+        has_ever_paid: true, locked4: false, locked7: false, days_offline: 2, disbursed_date: dayShift(today, -10) },
+      { imei: '351481180297217', agent: 'Sara Fisoo', agent_id: '143201', team: 'KINONDONI',
+        has_ever_paid: false, locked4: true, locked7: true, days_offline: 12, disbursed_date: dayShift(today, -20) },
+      { imei: '351000000000099', agent: 'Sara Fisoo', agent_id: '143201', team: 'KINONDONI',
+        has_ever_paid: true, locked4: false, locked7: false, days_offline: 0, disbursed_date: dayShift(today, -100) },
+    ],
+    hoop_agents: [
+      { phone: '0780866571', name: 'Cyprian Dotto Renatus', national_id: '111', kin_name: 'Mama Cyprian',
+        kin_phone: '0700111222', role: 'Field_Officer', branch: 'Dar es salaam' },
+    ],
+  });
+}
+
+test('salesAudit judges every sale: OK, DRIFT, PENDING, BULK, HAKUNA_WATU', async () => {
+  const today = todayKey();
+  const d = mauzoDb(today);
+  const r = await _FNS.salesAudit(d, ADMIN, { from: dayShift(today, -30), to: today });
+  assert.equal(r.counts.total, 8);
+  assert.equal(r.counts.ok, 1, 'S0: sale and loan under the same person');
+  assert.equal(r.counts.drift, 2, 'S1 Cyprian-vs-Vanence and S2 Nestory-vs-Sara -- the real 14-Aug pattern');
+  assert.equal(r.counts.pending, 1);
+  assert.equal(r.counts.bulk, 3, 'same buyer phone three times = bulk, labeled not accused');
+  assert.equal(r.counts.candidates, 1);
+  const s3 = r.rows.find(x => x.saleKey === 'S3');
+  assert.equal(s3.status, 'HAKUNA_WATU');
+  assert.equal(s3.reg.name, 'Cyprian Dotto Renatus', 'the flagged sale names its seller from the register');
+  assert.equal(s3.reg.kin, 'Mama Cyprian', 'and the next of kin rides along');
+  assert.equal(r.rows[0].status, 'HAKUNA_WATU', 'worst first');
+  await assert.rejects(() => _FNS.salesAudit(d, { ...VIEWER, tabs: [] }, {}), /upload au settings/);
+});
+
+test('agentScore scores Watu agents by their customers and sellers by their payouts', async () => {
+  const today = todayKey();
+  const d = mauzoDb(today);
+  const r = await _FNS.agentScore(d, ADMIN, { from: dayShift(today, -30), to: today });
+  const sara = r.watuAgents.find(a => a.agentId === '143201');
+  assert.equal(sara.customers, 2);
+  assert.equal(sara.locked7, 1);
+  assert.equal(sara.paidPct, 0.5);
+  assert.equal(sara.over45, 1, 'the 100-day-old loan is past the window');
+  assert.equal(r.watuAgents[0].agentId, '143201', 'most locked7 first -- the one to chase');
+  const cyp = r.sellers.find(s => s.phone === '0780866571');
+  assert.equal(cyp.sales, 3, 'S0 + S1 + S3 all pay the same payout phone');
+  assert.equal(cyp.amount, 1509000);
+  assert.equal(cyp.reg.name, 'Cyprian Dotto Renatus', 'payout phone resolves the identity');
+  const elia = r.sellers.find(s => s.phone === '0757578866');
+  assert.equal(elia.sales, 3);
+  assert.equal(elia.reg, null, 'not in the register yet -- shown as such, never invented');
+});

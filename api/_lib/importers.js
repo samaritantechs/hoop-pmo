@@ -123,6 +123,204 @@ function cellOf(row, h, candidates) {
   return { has: false };
 }
 
+/* =====================================================================================
+   THE SALES IMPORTER -- general duty's hoopltd.shop export (sales_details.xlsx shape):
+
+     Date | Branch | Agent | Client_Name | Client_Id | Client_Phone | Phone_Model |
+     Receipt_Number | Imei | Commission_Agent | Commission_Phone | Price
+
+   Underscored headers are literal -- normalizeHeader keeps them, so both spellings are
+   candidates. The export ends with a "Total" footer row (Date cell says "Total", no
+   IMEI): that row is the file's own arithmetic, skipped SILENTLY -- naming it among the
+   dropped would cry wolf on every upload. Rows with a real name but no readable IMEI
+   are still dropped AND NAMED, the Hope rule.
+   ===================================================================================== */
+const SALES_COLS = [
+  ['sale_date',        v => watuDate(v),   'DATE', 'SALE DATE', 'SALE_DATE'],
+  ['branch',           v => textOrNull(v), 'BRANCH'],
+  ['agent',            v => textOrNull(v), 'AGENT', 'AGENT NAME'],
+  ['client_name',      v => textOrNull(v), 'CLIENT_NAME', 'CLIENT NAME', 'CUSTOMER NAME'],
+  ['client_id',        v => textOrNull(v), 'CLIENT_ID', 'CLIENT ID', 'ID_NO', 'ID NO'],
+  ['client_phone',     v => textOrNull(v), 'CLIENT_PHONE', 'CLIENT PHONE', 'CLIENT MOBILE', 'PHONE_NO', 'PHONE NO'],
+  ['model',            v => textOrNull(v), 'PHONE_MODEL', 'PHONE MODEL', 'MODEL', 'ITEM'],
+  ['receipt_number',   v => textOrNull(v), 'RECEIPT_NUMBER', 'RECEIPT NUMBER', 'RECEIPT NO', 'RCPT_NO', 'RCPT NO'],
+  ['commission_agent', v => textOrNull(v), 'COMMISSION_AGENT', 'COMMISSION AGENT'],
+  ['commission_phone', v => textOrNull(v), 'COMMISSION_PHONE', 'COMMISSION PHONE'],
+  ['price',            v => num(v),        'PRICE', 'TOTAL', 'GROSS_TOTAL'],
+];
+const SALES_IMEI_HEADERS = ['IMEI', 'IMEI NUMBER', 'IMEI NO', 'SERIAL'];
+
+/** A file is a SALES file when it carries the columns only the hoopltd.shop export has.
+    Decided from the header row alone, so /upload takes both file kinds in one slot. */
+export function isSalesFile(headerRow) {
+  const h = buildHeaderMap(headerRow || []);
+  return ['RECEIPT_NUMBER', 'RECEIPT NUMBER', 'COMMISSION_AGENT', 'COMMISSION AGENT']
+    .some(n => h[normalizeHeader(n)] !== undefined);
+}
+
+/** rows = array-of-arrays, first row headers. Returns { records, dropped, headers }.
+    sale_key is deterministic (receipt + imei) so a re-upload UPDATES its own rows --
+    a receipt can hold several phones, so the receipt number alone is not the key. */
+export function importSales(rows) {
+  const all = (rows || []).filter(r => Array.isArray(r) && r.some(c => String(c == null ? '' : c).trim() !== ''));
+  if (all.length < 2) return { records: [], dropped: [], headers: [] };
+  const h = buildHeaderMap(all[0]);
+  const present = SALES_COLS.filter(([, , ...names]) =>
+    names.some(n => h[normalizeHeader(n)] !== undefined));
+  const imeiIdx = SALES_IMEI_HEADERS.map(n => h[normalizeHeader(n)]).find(i => i !== undefined);
+  if (imeiIdx === undefined) {
+    const e = new Error('The sales file has no IMEI column. Headers seen: ' + all[0].join(' | '));
+    e.status = 400;
+    throw e;
+  }
+  const records = [];
+  const dropped = [];
+  const seen = new Set();
+  for (let i = 1; i < all.length; i++) {
+    const row = all[i];
+    const first = String(row[0] == null ? '' : row[0]).trim().toUpperCase();
+    const imei = watuImei(row[imeiIdx]);
+    if (!imei) {
+      if (first === 'TOTAL' || first === 'GRAND TOTAL') continue;   // the footer, silently
+      const name = cellOf(row, h, ['CLIENT_NAME', 'CLIENT NAME', 'CUSTOMER NAME']);
+      dropped.push({ line: i + 1, name: textOrNull(name.value) || '(no name)', imei: textOrNull(row[imeiIdx]) || '(blank)' });
+      continue;
+    }
+    const out = { imei };
+    for (const [key, fn, ...names] of present) {
+      const got = cellOf(row, h, names);
+      if (got.has) out[key] = fn(got.value);
+    }
+    out.sale_key = 'S' + salesH36(String(out.receipt_number || '') + '|' + imei);
+    if (seen.has(out.sale_key)) {
+      const j = records.findIndex(r => r.sale_key === out.sale_key);
+      if (j >= 0) records[j] = out;
+    } else { seen.add(out.sale_key); records.push(out); }
+  }
+  return { records, dropped, headers: present.map(p => p[0]) };
+}
+/* Same djb2-xor as call-core's h36; duplicated here because importers must not import
+   the call stack. Two copies of five lines beat a shared module for two callers. */
+function salesH36(s) {
+  let x = 5381;
+  for (let i = 0; i < s.length; i++) x = ((x * 33) ^ s.charCodeAt(i)) >>> 0;
+  return x.toString(36);
+}
+
+/* =====================================================================================
+   SIPHO'S HTML SAVES -- he cannot export Excel, so the upload page parses his saved
+   SyscoPos pages IN THE BROWSER (DOMParser), turns the rendered table into plain rows,
+   and sends them here like any other file. The HTML itself is never stored -- the rows
+   are extracted, upserted, and the file is dumped. Two page kinds:
+
+     Agents Register -> hoop_agents  (JOINED|NAME|NATIONAL_ID|PHONE|EMAIL|KIN_NAME|
+                                      KIN_PHONE|KIN_RELATIONSHIP|ROLE|BRANCH|STATUS)
+     Aged Stock      -> hoop_aged_stock (AGENT|ITEM|SERIAL|RECEIVED|AGE)
+   ===================================================================================== */
+const AGENTS_COLS = [
+  ['joined_date',      v => watuDate(v),   'JOINED', 'DATE', 'DATE_JOINED', 'DATE JOINED'],
+  ['name',             v => textOrNull(v), 'NAME', 'AGENT NAME'],
+  ['national_id',      v => textOrNull(v), 'NATIONAL_ID', 'NATIONAL ID'],
+  ['email',            v => textOrNull(v), 'EMAIL'],
+  ['kin_name',         v => textOrNull(v), 'KIN_NAME', 'KIN NAME', 'NEXT_OF_KIN', 'NEXT OF KIN'],
+  ['kin_phone',        v => textOrNull(v), 'KIN_PHONE', 'KIN PHONE'],
+  ['kin_relationship', v => textOrNull(v), 'KIN_RELATIONSHIP', 'KIN RELATIONSHIP', 'RELATIONSHIP'],
+  ['role',             v => textOrNull(v), 'ROLE', 'AGENT_TYPE', 'AGENT TYPE'],
+  ['branch',           v => textOrNull(v), 'BRANCH'],
+];
+export function isAgentsFile(headerRow) {
+  const h = buildHeaderMap(headerRow || []);
+  return ['KIN_NAME', 'KIN NAME', 'NEXT_OF_KIN', 'NEXT OF KIN']
+    .some(n => h[normalizeHeader(n)] !== undefined);
+}
+/** Keyed on phone like the hoop_agents table itself; a row with no phone is dropped
+    and named -- phone IS the identity that joins commissions to people. */
+export function importAgents(rows) {
+  const all = (rows || []).filter(r => Array.isArray(r) && r.some(c => String(c == null ? '' : c).trim() !== ''));
+  if (all.length < 2) return { records: [], dropped: [], headers: [] };
+  const h = buildHeaderMap(all[0]);
+  const present = AGENTS_COLS.filter(([, , ...names]) => names.some(n => h[normalizeHeader(n)] !== undefined));
+  const phoneIdx = ['PHONE', 'PHONE_NUMBER', 'PHONE NUMBER'].map(n => h[normalizeHeader(n)]).find(i => i !== undefined);
+  const statusIdx = ['STATUS', 'ACCOUNT_STATUS', 'ACCOUNT STATUS'].map(n => h[normalizeHeader(n)]).find(i => i !== undefined);
+  if (phoneIdx === undefined) {
+    const e = new Error('The agents file has no PHONE column -- hoop_agents is keyed on it. Headers seen: ' + all[0].join(' | '));
+    e.status = 400; throw e;
+  }
+  const records = [];
+  const dropped = [];
+  const seen = new Set();
+  for (let i = 1; i < all.length; i++) {
+    const row = all[i];
+    const phone = String(row[phoneIdx] == null ? '' : row[phoneIdx]).replace(/\s+/g, '').trim();
+    if (!phone || phone.replace(/\D/g, '').length < 9) {
+      const name = cellOf(row, h, ['NAME', 'AGENT NAME']);
+      dropped.push({ line: i + 1, name: textOrNull(name.value) || '(no name)', imei: phone || '(no phone)' });
+      continue;
+    }
+    const out = { phone };
+    for (const [key, fn, ...names] of present) {
+      const got = cellOf(row, h, names);
+      if (got.has) out[key] = fn(got.value);
+    }
+    if (statusIdx !== undefined) {
+      const s = String(row[statusIdx] == null ? '' : row[statusIdx]).trim().toUpperCase();
+      if (s) out.active = s === 'ACTIVE' || s === 'TRUE' || s === '1';
+    }
+    if (seen.has(phone)) {
+      const j = records.findIndex(r => r.phone === phone);
+      if (j >= 0) records[j] = out;
+    } else { seen.add(phone); records.push(out); }
+  }
+  return { records, dropped, headers: present.map(p => p[0]) };
+}
+
+const AGED_COLS = [
+  ['agent',    v => textOrNull(v), 'AGENT', 'AGENT NAME'],
+  ['item',     v => textOrNull(v), 'ITEM', 'PRODUCT'],
+  ['received', v => watuDate(v),   'RECEIVED', 'DATE_RECEIVED', 'DATE RECEIVED'],
+  ['age_days', v => num(v),        'AGE', 'AGE_DAYS', 'AGE DAYS'],
+];
+export function isAgedStockFile(headerRow) {
+  const h = buildHeaderMap(headerRow || []);
+  const has = n => h[normalizeHeader(n)] !== undefined;
+  return has('SERIAL') && (has('AGE') || has('RECEIVED') || has('DATE_RECEIVED'));
+}
+/** Keyed on serial (the IMEI in warehouse clothes). as_of stamps which day's report
+    this was -- age is only true on the day it was read. */
+export function importAgedStock(rows) {
+  const all = (rows || []).filter(r => Array.isArray(r) && r.some(c => String(c == null ? '' : c).trim() !== ''));
+  if (all.length < 2) return { records: [], dropped: [], headers: [] };
+  const h = buildHeaderMap(all[0]);
+  const present = AGED_COLS.filter(([, , ...names]) => names.some(n => h[normalizeHeader(n)] !== undefined));
+  const serialIdx = ['SERIAL', 'IMEI', 'SERIAL NO'].map(n => h[normalizeHeader(n)]).find(i => i !== undefined);
+  if (serialIdx === undefined) {
+    const e = new Error('The aged-stock file has no SERIAL column. Headers seen: ' + all[0].join(' | '));
+    e.status = 400; throw e;
+  }
+  const records = [];
+  const dropped = [];
+  const seen = new Set();
+  for (let i = 1; i < all.length; i++) {
+    const row = all[i];
+    const serial = watuImei(row[serialIdx]);
+    if (!serial) {
+      const name = cellOf(row, h, ['AGENT', 'AGENT NAME']);
+      dropped.push({ line: i + 1, name: textOrNull(name.value) || '(no agent)', imei: textOrNull(row[serialIdx]) || '(blank)' });
+      continue;
+    }
+    const out = { serial };
+    for (const [key, fn, ...names] of present) {
+      const got = cellOf(row, h, names);
+      if (got.has) out[key] = fn(got.value);
+    }
+    if (seen.has(serial)) {
+      const j = records.findIndex(r => r.serial === serial);
+      if (j >= 0) records[j] = out;
+    } else { seen.add(serial); records.push(out); }
+  }
+  return { records, dropped, headers: present.map(p => p[0]) };
+}
+
 /** rows = array-of-arrays, first row headers. Returns { records, teams, dropped, headers }.
     records carry ONLY the columns whose headers are present (the header-presence rule);
     `team` is derived and always present when shop is; `imei` is always present. */

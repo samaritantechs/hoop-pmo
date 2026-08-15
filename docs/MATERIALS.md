@@ -113,7 +113,21 @@ One day of each file. "No Watu loan that day" is not fraud by itself — a loan 
 day late. The real report needs a ±1-day window, i.e. date-RANGE exports of BOTH files
 (already on the chase list).
 
-### When the owner says PROCEED, the fraud report is
+### BUILT 2026-08-15 (the owner said proceed) — phase 2 shipped
+
+- `/upload` now recognizes FOUR file kinds from the header row alone: the Watu daily
+  list, the hoopltd.shop sales export, and Sipho's saved HTML pages (Agents Register →
+  `hoop_agents`, Aged Stock → `hoop_aged_stock`). HTML is parsed in the browser
+  (DOMParser), the rows go up like a spreadsheet, the file itself is dumped; the picker
+  previews the recognized page, its columns and sample rows — and says "0 rows: save
+  the page AFTER the table is visible" when the save raced the AJAX load.
+- Portal "Mauzo / Sales" nav (upload- or settings-holders): **Ukaguzi** = every sale
+  judged OK / DRIFT / PENDING / BULK / HAKUNA WATU with the seller resolved from
+  hoop_agents (kin shown); **Agents** = the two scorecards (Watu-side behavior per
+  Agent ID, sellers per payout phone). Tables: hoop_sales + hoop_aged_stock
+  (db/migrations/RUN-ME-2026-08-16-sales.sql).
+
+### The fraud report design (as shipped)
 
 upload both files → match by IMEI → four buckets (matched-clean, matched-with-field-drift,
 watu-only, hoop-only) → agent-identity drift called out per sale, keyed on Watu Agent ID.

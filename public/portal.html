@@ -108,6 +108,7 @@ td.r,th.r{text-align:right}
       <button data-t="cust">Wateja / Customers</button>
       <button data-t="ripoti">Call reports</button>
       <button data-t="recovery">Recovery</button>
+      <button data-t="mauzo" id="tabMauzo">Mauzo / Sales</button>
       <button data-t="teams">Teams</button>
       <button data-t="staff">Staff</button>
       <button data-t="codes" id="tabCodes">Access codes</button>
@@ -187,8 +188,10 @@ function enter(){
   $('#whoName').textContent=BOOT.name||'—';
   $('#whoRole').textContent=(BOOT.role||'')+(BOOT.readOnly?' · view-only':'');
   var hasSettings=(BOOT.tabs||[]).indexOf('settings')>=0;
+  var hasOps=hasSettings||(BOOT.tabs||[]).indexOf('upload')>=0;
   $('#tabCodes').classList.toggle('hide',!hasSettings);
   $('#tabSettings').classList.toggle('hide',!hasSettings);
+  $('#tabMauzo').classList.toggle('hide',!hasOps);
   function navSet(open){
     document.body.classList.toggle('nav-closed', !open);
     try{ localStorage.setItem('hpNav', open?'1':'0'); }catch(e){}
@@ -213,6 +216,7 @@ function draw(){
   var m=$('#main');
   if(TAB==='dash') return drawDash(m);
   if(TAB==='cust') return drawCust(m);
+  if(TAB==='mauzo') return drawMauzo(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
   if(TAB==='teams') return drawTeams(m);
@@ -440,6 +444,96 @@ function openCust(c){
       .catch(function(e){ toast(String(e.message||e),true); })
       .then(function(){ var b=$('#cmSave'); if(b) b.disabled=false; });
   };
+}
+
+/* ---------- mauzo: fraud audit + agent scorecards ----------
+   The owner's loop: general duty's book vs Watu's records finds the sale nobody
+   financed; Sipho's register names who answers for it; the daily files score how each
+   agent's customers behave. Two pills, one nav. */
+var MZ={list:'audit',from:isoToday(-30),to:isoToday(0)};
+function drawMauzo(m){
+  m.innerHTML='<div class="card"><h2>Mauzo / Sales</h2><div class="mut">Inapakia…</div></div>';
+  if(MZ.list==='audit') drawAudit(m); else drawAgents(m);
+}
+function mzPills(){
+  return '<div class="row">'
+    +'<button class="btn sm'+(MZ.list==='audit'?'':' ghost')+'" data-mz="audit">Ukaguzi / Fraud audit</button>'
+    +'<button class="btn sm'+(MZ.list==='agents'?'':' ghost')+'" data-mz="agents">Agents / Scorecards</button>'
+    +'<input class="inp" type="date" id="mzFrom" value="'+MZ.from+'" style="flex:0 1 150px">'
+    +'<input class="inp" type="date" id="mzTo" value="'+MZ.to+'" style="flex:0 1 150px">'
+    +'<button class="btn sm ghost" id="mzGo">Onyesha</button></div>';
+}
+function mzWire(m){
+  $all('[data-mz]',m).forEach(function(b){ b.onclick=function(){ MZ.list=b.getAttribute('data-mz'); drawMauzo(m); }; });
+  $('#mzGo').onclick=function(){ MZ.from=$('#mzFrom').value||MZ.from; MZ.to=$('#mzTo').value||MZ.to; drawMauzo(m); };
+}
+function mzStatusChip(s){
+  if(s==='OK') return '<span class="chip ok">OK · Watu</span>';
+  if(s==='DRIFT') return '<span class="chip warn">DRIFT · agent tofauti</span>';
+  if(s==='PENDING') return '<span class="chip">PENDING · bado mpya</span>';
+  if(s==='BULK') return '<span class="chip">BULK / CASH?</span>';
+  return '<span class="chip bad">⚠ HAKUNA WATU</span>';
+}
+function drawAudit(m){
+  srv('salesAudit',{from:MZ.from,to:MZ.to}).then(function(d){
+    var c=d.counts||{};
+    m.innerHTML='<div class="card"><h2>Ukaguzi wa mauzo — '+esc(d.from)+' → '+esc(d.to)+'</h2>'
+      +mzPills()
+      +'<div class="tiles">'
+      +'<div class="tile"><div class="l">Mauzo</div><div class="v">'+money(c.total)+'</div></div>'
+      +'<div class="tile"><div class="l">Yapo Watu</div><div class="v" style="color:var(--ok)">'+money(c.ok)+'</div></div>'
+      +'<div class="tile"><div class="l">Agent drift</div><div class="v" style="color:var(--warn)">'+money(c.drift)+'</div><div class="s">watu-agent ≠ commission</div></div>'
+      +'<div class="tile"><div class="l">Hakuna Watu</div><div class="v" style="color:var(--bad)">'+money(c.candidates)+'</div><div class="s">tuhuma — hakiki</div></div>'
+      +'<div class="tile"><div class="l">Bulk/Pending</div><div class="v">'+money((c.bulk||0)+(c.pending||0))+'</div></div>'
+      +'</div>'
+      +'<div class="mut" style="margin-bottom:8px">Mauzo ya general duty yakilinganishwa na rejista ya Watu kwa IMEI. Muuzaji anatambulishwa kwa namba yake ya malipo kwenye rejista ya Sipho (ndugu wa karibu yupo kwenye faili).</div>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Tarehe</th><th>Mteja</th><th>IMEI</th><th class="r">Bei</th><th>Muuzaji</th><th>Watu agent</th><th>Hali</th></tr></thead><tbody>'
+      +(d.rows||[]).map(function(r){
+        var seller='<b>'+esc(r.seller||'—')+'</b>'
+          +(r.reg?'<div class="mut" style="font-size:10px">'+esc(r.reg.name)+' · '+esc(r.reg.role)+(r.reg.kin?' · ndugu: '+esc(r.reg.kin)+' '+esc(r.reg.kinPhone):'')+'</div>'
+                 :(r.sellerPhone?'<div class="mut" style="font-size:10px">'+esc(r.sellerPhone)+' — hayupo rejista ya Sipho</div>':''));
+        return '<tr><td>'+esc(String(r.date||'').slice(0,10))+'<div class="mut" style="font-size:10px">rcpt '+esc(r.receipt||'—')+'</div></td>'
+          +'<td>'+esc(r.client||'—')+'<div class="mut" style="font-size:10px">'+esc(r.phone||'')+'</div></td>'
+          +'<td style="font-size:11px">'+esc(r.imei)+'<div class="mut" style="font-size:10px">'+esc(r.model||'')+'</div></td>'
+          +'<td class="r">'+money(r.price)+'</td><td>'+seller+'</td>'
+          +'<td>'+(r.watuAgent!=null?esc(r.watuAgent)+(r.watuAgentId?' <span class="mut" style="font-size:10px">#'+esc(r.watuAgentId)+'</span>':''):'—')+'</td>'
+          +'<td>'+mzStatusChip(r.status)+'</td></tr>';
+      }).join('')
+      +((d.rows||[]).length?'':'<tr><td colspan="7" class="mut">Hakuna mauzo kwenye kipindi hiki — pakia sales report kwenye /upload (inajitambua yenyewe).</td></tr>')
+      +'</tbody></table></div></div>';
+    mzWire(m);
+  }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+function drawAgents(m){
+  srv('agentScore',{from:MZ.from,to:MZ.to}).then(function(d){
+    m.innerHTML='<div class="card"><h2>Agents — ubora wa mauzo yao (Watu)</h2>'
+      +mzPills()
+      +'<div class="mut" style="margin-bottom:8px">Kwa kila agent wa Watu: wateja wake kwenye orodha za ufuatiliaji wanafanyaje. Wa juu = wa kufuatilia kwanza (locked 7+ nyingi).</div>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Agent (Watu)</th><th class="r">Wateja</th><th class="r">% wamelipa</th><th class="r">Locked 7+</th><th class="r">OFF wastani</th><th class="r">Nje ya 45</th></tr></thead><tbody>'
+      +(d.watuAgents||[]).map(function(a){
+        return '<tr><td><b>'+esc(a.agent||'—')+'</b>'+(a.agentId?' <span class="mut" style="font-size:10px">#'+esc(a.agentId)+'</span>':'')
+          +'<div class="mut" style="font-size:10px">'+esc((a.teams||[]).join(', '))+'</div></td>'
+          +'<td class="r">'+money(a.customers)+'</td>'
+          +'<td class="r">'+pct(a.paidPct)+'</td>'
+          +'<td class="r"'+(a.locked7?' style="color:var(--bad)"':'')+'>'+money(a.locked7)+' ('+pct(a.locked7Pct)+')</td>'
+          +'<td class="r">'+(a.avgOff!=null?money(a.avgOff):'—')+'</td>'
+          +'<td class="r">'+money(a.over45)+'</td></tr>';
+      }).join('')
+      +((d.watuAgents||[]).length?'':'<tr><td colspan="6" class="mut">Hakuna data ya Watu bado.</td></tr>')
+      +'</tbody></table></div></div>'
+      +'<div class="card"><h2>Wauzaji — commission (hoopltd.shop, '+esc(d.from)+' → '+esc(d.to)+')</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Kwa namba ya malipo: mauzo mangapi, kiasi gani, na yeye ni nani kwenye rejista ya Sipho.</div>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Muuzaji</th><th class="r">Mauzo</th><th class="r">TZS</th><th>Rejista ya Sipho</th></tr></thead><tbody>'
+      +(d.sellers||[]).map(function(s){
+        return '<tr><td><b>'+esc(s.name||'—')+'</b><div class="mut" style="font-size:10px">'+esc(s.phone||'')+'</div></td>'
+          +'<td class="r">'+money(s.sales)+'</td><td class="r">'+money(s.amount)+'</td>'
+          +'<td>'+(s.reg?esc(s.reg.name)+' · '+esc(s.reg.role)+(s.reg.kin?'<div class="mut" style="font-size:10px">ndugu: '+esc(s.reg.kin)+' '+esc(s.reg.kinPhone)+'</div>':'')
+                       :'<span class="chip warn">hayupo rejista</span>')+'</td></tr>';
+      }).join('')
+      +((d.sellers||[]).length?'':'<tr><td colspan="4" class="mut">Hakuna sales report bado — pakia kwenye /upload.</td></tr>')
+      +'</tbody></table></div></div>';
+    mzWire(m);
+  }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
 
 /* ---------- teams ---------- */

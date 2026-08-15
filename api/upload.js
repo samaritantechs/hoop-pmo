@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { supabase } from './_lib/supabase.js';
 import { withApi, gatedUser, can } from './_lib/auth.js';
 import { todayKey } from './_lib/time.js';
-import { importWatu, lifetimeDay } from './_lib/importers.js';
+import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
+  importAgedStock, isAgedStockFile, lifetimeDay } from './_lib/importers.js';
 
 /* =====================================================================================
-   POST /api/upload -- the daily Watu list, and nothing else (v1 has one file type).
+   POST /api/upload -- the daily Watu list, AND the hoopltd.shop sales export. The header
+   row decides which one arrived (isSalesFile); the page needs no second button.
 
    Body: { code, rows: [[headers],[...]], meta: { uploadDate? }, part: { id, index, total } }
    The page slices big files; every slice re-sends the header row and carries the same
@@ -97,6 +99,61 @@ export default withApi(async (req) => {
 
   const wantDate = String((meta && meta.uploadDate) || '').trim();
   const snapshotDate = /^\d{4}-\d{2}-\d{2}$/.test(wantDate) ? wantDate : todayKey();
+
+  // ONE upload slot, FOUR file kinds: the header row says which arrived. Sales, agents
+  // and aged stock touch NOTHING the phones read -- no deck release, no DATA_VERSION.
+  // Budget per non-watu slice: 1 auth + 1 gate (cached) + 1 chunked upsert.
+  const header = Array.isArray(rows) && rows.length ? rows[0] : null;
+
+  // Sipho's Agents Register (browser-parsed from his saved HTML) -> hoop_agents.
+  // Upsert on phone: rows he already sent update, new people insert -- "update data
+  // that doesn't exist" is the on-conflict clause doing its job.
+  if (header && isAgentsFile(header)) {
+    const ag = importAgents(rows);
+    if (!ag.records.length && !ag.dropped.length) {
+      const e = new Error('No agent rows could be read.'); e.status = 400; throw e;
+    }
+    await writeChunks(supabase, 'hoop_agents',
+      ag.records.map(r => ({ ...r, updated_at: new Date().toISOString() })), 'phone');
+    return { kind: 'agents', inserted: ag.records.length, batch,
+      dropped: ag.dropped.length, droppedRows: ag.dropped.slice(0, 50),
+      part: { index, total, last: isLast } };
+  }
+
+  // Sipho's Aged Stock -> hoop_aged_stock, stamped with the chosen date (as_of):
+  // age is only true on the day the report was read.
+  if (header && isAgedStockFile(header)) {
+    const st = importAgedStock(rows);
+    if (!st.records.length && !st.dropped.length) {
+      const e = new Error('No stock rows could be read.'); e.status = 400; throw e;
+    }
+    await writeChunks(supabase, 'hoop_aged_stock',
+      st.records.map(r => ({ ...r, as_of: snapshotDate, updated_at: new Date().toISOString() })), 'serial');
+    return { kind: 'agedstock', inserted: st.records.length, date: snapshotDate, batch,
+      dropped: st.dropped.length, droppedRows: st.dropped.slice(0, 50),
+      part: { index, total, last: isLast } };
+  }
+
+  if (header && isSalesFile(header)) {
+    const sales = importSales(rows);
+    if (!sales.records.length && !sales.dropped.length) {
+      const e = new Error('No sales rows could be read from the file.'); e.status = 400; throw e;
+    }
+    const now = new Date().toISOString();
+    await writeChunks(supabase, 'hoop_sales',
+      sales.records.map(r => ({ ...r, sale_date: r.sale_date || snapshotDate,
+        upload_batch: batch, updated_at: now })),
+      'sale_key');
+    return {
+      kind: 'sales',
+      inserted: sales.records.length,
+      date: snapshotDate,
+      batch,
+      dropped: sales.dropped.length,
+      droppedRows: sales.dropped.slice(0, 50),
+      part: { index, total, last: isLast },
+    };
+  }
 
   const { records, teams, dropped } = importWatu(rows || []);
   if (!records.length && !dropped.length) {

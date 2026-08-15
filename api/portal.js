@@ -2,7 +2,7 @@ import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey } from './_lib/time.js';
-import { summaryFor, reportCore, lifeDayOf, fuStatusConfig } from './_lib/call-core.js';
+import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -26,6 +26,9 @@ import { summaryFor, reportCore, lifeDayOf, fuStatusConfig } from './_lib/call-c
                 saveAccessCode / deleteAccessCode: 1 write
                 deleteRole: 1 bounded codes read + 1 keyed delete + 1 keyed read + 1 write
      settings   1 `in` read; settingSet: 1 write
+     salesAudit / agentScore   3 parallel bounded reads each (sales by date range,
+                register imei+agent columns / scoped register, agents ~1k) -- see the
+                fns' own headers; both are reads, nothing audited
    Row bounds: recovery reads two DAYS of snapshots, team-scoped; nothing reads the whole
    history; the audit list is capped at 200 newest.
    ===================================================================================== */
@@ -50,6 +53,18 @@ function requireSettings(user) {
   }
 }
 const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', user.teams.map(K)) : q;
+
+/** The sales audit names people and their kin -- anyone trusted with uploads or
+    settings sees it; a plain viewer role does not. */
+function requireOps(user) {
+  const t = user.tabs || [];
+  if (!(t.includes('upload') || t.includes('settings'))) {
+    const e = new Error('Ukaguzi wa mauzo unahitaji ruhusa ya upload au settings. / The sales audit needs upload or settings permission.');
+    e.status = 403; throw e;
+  }
+}
+const dayShift = (key, days) =>
+  new Date(Date.parse(key + 'T00:00:00Z') + days * 86400000).toISOString().slice(0, 10);
 
 /* Hope's phone-safe alphabet: no 0/O, no 1/I/L -- these get read out loud. */
 const CODE_ALPHA = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
@@ -233,6 +248,129 @@ const FNS = {
       .eq('imei', ref).order('created_at', { ascending: false }).limit(100);
     if (error) throw new Error(error.message);
     return { ok: true, items: data || [] };
+  },
+
+  /* ============ MAUZO: the fraud audit and the agent scorecards (phase 2) ============
+     The owner's loop: general duty's sales book diffed against Watu's records finds
+     the sale nobody financed; Sipho's register names who answers for it; the daily
+     follow-up files say how each agent's customers BEHAVE. */
+
+  /** Every general-duty sale in the window, judged: OK (IMEI in the Watu register),
+      DRIFT (in Watu but under a different agent than the commission claims), PENDING
+      (not in Watu yet, but too fresh to accuse -- a loan can land a day late), BULK
+      (not in Watu, and the buyer phone bought 3+ -- a cash/bulk sale to label, not
+      accuse), HAKUNA WATU (not in Watu, old enough to answer for). Every flagged row
+      resolves its seller against hoop_agents by payout phone.
+      Budget: 3 parallel bounded reads -- sales by date range, the register
+      (imei+agent+agent_id only, the whole portfolio, paged), agents (~1k rows). */
+  async salesAudit(db, user, args) {
+    requireOps(user);
+    const a = args || {};
+    const today = todayKey();
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? a.to : today;
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? a.from : dayShift(today, -30);
+    const [sales, reg, agents] = await Promise.all([
+      fetchAll(() => db.from('hoop_sales')
+        .select('sale_key, sale_date, receipt_number, client_name, client_phone, imei, model, price, agent, commission_agent, commission_phone')
+        .gte('sale_date', from).lte('sale_date', to)),
+      fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id')),
+      fetchAll(() => db.from('hoop_agents').select('phone, name, national_id, kin_name, kin_phone, role, branch')),
+    ]);
+    const regBy = new Map(reg.map(r => [String(r.imei), r]));
+    const agBy = new Map(agents.map(r => [pnorm(r.phone), r]));
+    const freshLine = dayShift(today, -2);          // sale younger than this: too fresh to accuse
+    const words = s => new Set(String(s || '').toUpperCase().split(/\s+/).filter(Boolean));
+    const overlap = (x, y) => { for (const w of words(x)) if (words(y).has(w)) return true; return false; };
+    const notInWatu = sales.filter(s => !regBy.has(String(s.imei)));
+    const buyerCount = {};
+    notInWatu.forEach(s => { const k = pnorm(s.client_phone); if (k) buyerCount[k] = (buyerCount[k] || 0) + 1; });
+    const rows = sales.map(s => {
+      const w = regBy.get(String(s.imei)) || null;
+      let status;
+      if (w) status = (s.commission_agent && w.agent && !overlap(s.commission_agent, w.agent)) ? 'DRIFT' : 'OK';
+      else if ((buyerCount[pnorm(s.client_phone)] || 0) >= 3) status = 'BULK';
+      else if (String(s.sale_date) >= freshLine) status = 'PENDING';
+      else status = 'HAKUNA_WATU';
+      const reg2 = agBy.get(pnorm(s.commission_phone)) || null;
+      return { saleKey: s.sale_key, date: s.sale_date, receipt: s.receipt_number || '',
+        client: s.client_name || '', phone: s.client_phone || '', imei: s.imei,
+        model: s.model || '', price: num(s.price), seller: s.commission_agent || s.agent || '',
+        sellerPhone: s.commission_phone || '', watuAgent: w ? (w.agent || '') : null,
+        watuAgentId: w ? (w.agent_id || '') : null, status,
+        reg: reg2 ? { name: reg2.name, nid: reg2.national_id || '', kin: reg2.kin_name || '',
+          kinPhone: reg2.kin_phone || '', role: reg2.role || '', branch: reg2.branch || '' } : null };
+    });
+    const RANK = { HAKUNA_WATU: 0, DRIFT: 1, BULK: 2, PENDING: 3, OK: 4 };
+    rows.sort((x, y) => (RANK[x.status] - RANK[y.status]) || (x.date < y.date ? 1 : -1));
+    const count = k => rows.filter(r => r.status === k).length;
+    return { ok: true, from, to,
+      counts: { total: rows.length, ok: count('OK'), drift: count('DRIFT'),
+        pending: count('PENDING'), bulk: count('BULK'), candidates: count('HAKUNA_WATU') },
+      rows: rows.slice(0, 500) };
+  },
+
+  /** Two scoreboards, deliberately NOT merged -- the identities live in different
+      systems and a fuzzy merge would lie. WATU side (keyed on Watu's own Agent ID):
+      how each agent's customers behave -- % ever paid, % locked, days offline, past-45
+      count. SALES side (keyed on normalized payout phone): sales counted per
+      commission earner, with the hoop_agents identity attached.
+      Budget: 3 parallel bounded reads -- register (scoped), sales by range, agents. */
+  async agentScore(db, user, args) {
+    requireOps(user);
+    const a = args || {};
+    const today = todayKey();
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? a.to : today;
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? a.from : dayShift(today, -90);
+    const [reg, sales, agents] = await Promise.all([
+      fetchAll(() => scopeQ(user, db.from('watu_loans')
+        .select('imei, agent, agent_id, team, has_ever_paid, locked4, locked7, days_offline, disbursed_date'))),
+      fetchAll(() => db.from('hoop_sales')
+        .select('commission_agent, commission_phone, sale_date, price')
+        .gte('sale_date', from).lte('sale_date', to)),
+      fetchAll(() => db.from('hoop_agents').select('phone, name, role, branch, kin_name, kin_phone')),
+    ]);
+    const byAgent = new Map();
+    for (const r of reg) {
+      const key = String(r.agent_id || K(r.agent) || '?');
+      let g = byAgent.get(key);
+      if (!g) { g = { agent: r.agent || '', agentId: r.agent_id || '', teams: new Set(),
+        customers: 0, paid: 0, locked4: 0, locked7: 0, offSum: 0, offN: 0, over45: 0 }; byAgent.set(key, g); }
+      g.customers++;
+      if (r.team) g.teams.add(r.team);
+      if (r.has_ever_paid === true) g.paid++;
+      if (r.locked4 === true) g.locked4++;
+      if (r.locked7 === true) g.locked7++;
+      if (r.days_offline != null) { g.offSum += num(r.days_offline); g.offN++; }
+      const l = lifeDayOf(r.disbursed_date, today);
+      if (l != null && l > 45) g.over45++;
+    }
+    const watuAgents = [...byAgent.values()].map(g => ({
+      agent: g.agent, agentId: g.agentId, teams: [...g.teams].sort(),
+      customers: g.customers,
+      paidPct: g.customers ? g.paid / g.customers : null,
+      locked4: g.locked4, locked7: g.locked7,
+      locked7Pct: g.customers ? g.locked7 / g.customers : null,
+      avgOff: g.offN ? Math.round(g.offSum / g.offN) : null,
+      over45: g.over45,
+    })).sort((x, y) => (y.locked7Pct || 0) - (x.locked7Pct || 0) || y.customers - x.customers);
+    const bySeller = new Map();
+    for (const s of sales) {
+      const key = pnorm(s.commission_phone) || K(s.commission_agent) || '?';
+      let g = bySeller.get(key);
+      if (!g) { g = { names: {}, phone: s.commission_phone || '', sales: 0, amount: 0 }; bySeller.set(key, g); }
+      g.sales++; g.amount += num(s.price);
+      const n = String(s.commission_agent || '').trim();
+      if (n) g.names[n] = (g.names[n] || 0) + 1;
+    }
+    const agBy = new Map(agents.map(r => [pnorm(r.phone), r]));
+    const sellers = [...bySeller.entries()].map(([key, g]) => {
+      const reg2 = agBy.get(key) || null;
+      const name = Object.entries(g.names).sort((x, y) => y[1] - x[1]).map(e => e[0])[0] || '';
+      return { name, phone: g.phone, sales: g.sales, amount: g.amount,
+        reg: reg2 ? { name: reg2.name, role: reg2.role || '', branch: reg2.branch || '',
+          kin: reg2.kin_name || '', kinPhone: reg2.kin_phone || '' } : null };
+    }).sort((x, y) => y.sales - x.sales);
+    return { ok: true, from, to, watuAgents: watuAgents.slice(0, 300), sellers: sellers.slice(0, 300) };
   },
 
   async saveTeam(db, user, args) {
