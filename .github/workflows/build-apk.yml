@@ -1,0 +1,44 @@
+# Builds the HOOP Calls APK and commits it into public/, where Vercel serves it at
+# /HOOP-Calls.apk -- the URL app-version.json advertises to phones. Runs in Actions
+# because the APK needs the Android toolchain; the web app itself never needs a build.
+name: Build HOOP Calls APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'app-version.json'
+      - '.github/workflows/build-apk.yml'
+permissions:
+  contents: write
+concurrency:
+  group: apk-build
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+      - name: Publish the APK into the site
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk public/HOOP-Calls.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/HOOP-Calls.apk
+          git commit -m "HOOP-Calls.apk built from ${GITHUB_SHA::9}" || exit 0
+          git pull --rebase origin main
+          git push origin main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HOOP-Calls-apk
+          path: public/HOOP-Calls.apk

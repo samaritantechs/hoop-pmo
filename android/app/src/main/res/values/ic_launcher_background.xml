@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher icon's background layer. White, because the HOPE mark is a blue wordmark
+     drawn for a white ground; on a coloured tile it loses the contrast it was built with. -->
+<resources>
+    <color name="ic_launcher_background">#FFFFFFFF</color>
+</resources>

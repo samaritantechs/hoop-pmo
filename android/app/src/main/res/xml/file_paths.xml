@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Where Updater writes the downloaded APK: the app's own external Downloads dir. -->
+    <external-files-path name="downloads" path="Download/" />
+</paths>

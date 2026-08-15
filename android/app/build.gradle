@@ -1,0 +1,74 @@
+plugins {
+    id 'com.android.application'
+}
+
+// ../../app-version.json is the single place the app's version is set; api/app-version.js
+// serves the very same file to the installed app so it can self-update.
+def appVersion = new groovy.json.JsonSlurper().parse(rootProject.file('../app-version.json'))
+
+// The app opens the portal LAUNCHER (site root), not the calls page directly -- that is what
+// lets one install reach Calls, the dashboard and uploads. Overridable per build
+// (-PstartUrl=https://your-domain/) so the same source builds against any deployment;
+// officers can also fix a wrong URL from inside the app (a load failure opens a small
+// built-in screen that saves an override).
+//
+// Default is the git-main domain, which is the one this project actually HAS -- the short
+// <project>.vercel.app alias was never assigned here, and pointing at it gave every phone
+// 'Deployment not found'. This one follows production and is public once Vercel
+// Authentication is disabled in project settings.
+def startUrl = project.hasProperty('startUrl') ? project.property('startUrl') : 'https://hoop-pmo-git-main-samaritantechs.vercel.app/'
+
+android {
+    namespace 'com.samaritantechs.hoopcalls'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.samaritantechs.hoopcalls'
+        minSdk 23
+        targetSdk 35
+        // ONE source of truth for the version, shared with /api/app-version -- the app compares
+        // its own versionCode against what that endpoint reports, so if these two ever drifted
+        // phones would update in a loop (or never notice a release at all).
+        versionCode appVersion.versionCode
+        versionName appVersion.versionName
+        buildConfigField 'String', 'START_URL', "\"${startUrl}\""
+    }
+
+    // Sideload signing: a committed self-signed key so every APK built from this repo can
+    // UPDATE the previous install (Android requires matching signatures to update in place;
+    // losing the key would force every officer to uninstall/re-register). This key asserts
+    // nothing about identity -- before any wide rollout, move it to a CI secret and delete
+    // it from the repo. Generated with:
+    //   keytool -genkeypair -keystore sideload.keystore -alias hopecalls -keyalg RSA \
+    //           -keysize 2048 -validity 10950 -storepass hopecalls -keypass hopecalls
+    signingConfigs {
+        sideload {
+            storeFile rootProject.file('sideload.keystore')
+            storePassword 'hopecalls'
+            keyAlias 'hopecalls'
+            keyPassword 'hopecalls'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.sideload
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // Deliberately empty: the wrapper uses platform APIs only. The update flow hands the
+    // APK URL to the browser, so FileProvider (androidx) is no longer needed -- which is
+    // also what lets restricted environments build this with the platform toolchain alone.
+}

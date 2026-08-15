@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.HopeCalls" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- The status bar stays a real status bar: the app is NOT drawn edge-to-edge, so the
+             clock, battery and signal keep their own strip above the page. Dark blue to match
+             the portal's own header, with the light icons that colour needs. -->
+        <item name="android:statusBarColor">#0B2A6B</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowTranslucentStatus">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowBackground">#F6F8FC</item>
+    </style>
+</resources>

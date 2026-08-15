@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 8+ masks the icon to whatever shape the launcher uses (circle, squircle, teardrop),
+     cropping the outer edge of the foreground away. The wordmark therefore sits well inside
+     the safe zone in ic_launcher_foreground.png; this file pairs it with a white ground. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>
