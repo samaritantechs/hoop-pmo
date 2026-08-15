@@ -17,3 +17,6 @@ jobs:
           echo "=== POST /api/call api_brand ==="
           curl -sS -w "\nHTTP %{http_code}\n" -X POST -H 'Content-Type: application/json' \
             -d '{"fn":"api_brand","args":[]}' "https://hoop-pmo.vercel.app/api/call" | head -c 600
+          echo; echo "=== POST /api/portal customers (bogus code: a clean 4xx JSON proves the module loads) ==="
+          curl -sS -w "\nHTTP %{http_code}\n" -X POST -H 'Content-Type: application/json' \
+            -d '{"code":"PROBE-NOT-A-CODE","fn":"customers","args":{}}' "https://hoop-pmo.vercel.app/api/portal" | head -c 600
