@@ -118,6 +118,63 @@ day late. The real report needs a ±1-day window, i.e. date-RANGE exports of BOT
 upload both files → match by IMEI → four buckets (matched-clean, matched-with-field-drift,
 watu-only, hoop-only) → agent-identity drift called out per sale, keyed on Watu Agent ID.
 
+## 2026-08-15 — from Sipho (warehouse): SyscoPos page saves
+
+Eleven saved HTML pages from hoopltd.shop (SyscoPos by Codverts), logged in as SIPHO:
+AGED_STOCK plus PAGE_1…PAGE_11. **The data did not survive the save**: SyscoPos tables
+are server-side DataTables that fetch rows by AJAX after the page opens, so "Save page
+as" keeps the table skeleton and ZERO rows — PAGE_1…PAGE_11 are ten copies of the SAME
+Agents Register shell (Sipho was paging through the table; every save caught the shell,
+none caught a row). What the shells still teach:
+
+### Aged Stock (AGED_STOCK.html)
+- Report "Aged Stock (5 days)": Agent | Item | Serial (IMEI) | Received | Age, fed by
+  `/stocks/overdue_serials_table/`. The 5-day limit is a setting (Age_Limit in days).
+- **The age-reset flaw, confirmed in the UI**: the Agents page carries per-agent
+  "Reset Stock Age" and a global "Reset_All_Stock_Age" ("not reversible"). Age in
+  SyscoPos is a mutable counter that transfers/resets renew — TRUE age since purchase is
+  lost, exactly the flaw the training notes named. Our stock module (phase 3) computes
+  age from the FIRST receipt of the IMEI (purchases register), immune to transfers and
+  resets. This table HAS export buttons (copy/csv/excel/pdf) — a real CSV is one click.
+
+### Agents Register (PAGE_1…9, all the same page)
+- Row shape: Date joined | Name | Details | Next_Of_Kin | Role | Branch | Status.
+- The add/edit form is the full staff model: Company (**multi-company: HOOP LIMITED,
+  GETRICH VENTURE, Phonehive Stores**), names, email, National_Id, phone (0-format),
+  Branch, **Next of kin (name/phone/relationship)**, password, commission, target,
+  Agent_Type hierarchy **Country_Sales_Manager > RegionalManager > Team_Leader >
+  Field_Officers**, each linked to its manager, Active/In_Active.
+- This is the staff list the chase list wants — but it must arrive as DATA, not a shell.
+  The Agents table has NO export button, so: select-all-copy into Excel after setting
+  "Show All", or screenshots, or ask Codverts for an export.
+- Security note for the owner: SyscoPos's edit endpoint (`/accs/useredit/<id>`) returns
+  the agent's PASSWORD in plain text to the browser. Vendor flaw worth raising with
+  Codverts; nothing for us to build on top of it.
+
+### The full SyscoPos module map (sidebar), for the phase-3 design
+Products Master (register, payment plans, categories, brands, tax, pricing zones) ·
+Stock Levels (agent stocks, role summary, stock summary, assets, aged stock) ·
+Stock Transfer (move, **pending receipt = the receive-confirmation step**, movement
+register) · Stock Deductions · Stock Requests (new/pending/register) · Purchases
+(new/pending/register/suppliers) · POS (phones, accessories, carts, sales register,
+my commission) · Portfolio · Expenses · Reports (sales by company/branch/agent,
+**Incomplete_Sales**, customers, purchases, serials active/sold/**unallocated**,
+Imei_History, commissions register, performance analysis by role) · Administration
+(agents).
+
+## Standing rule 2026-08-15: data goes INTO the database, not just into docs
+
+The owner's words: *"whenever i need that data please insert it directly into db."*
+When a real data file lands, it gets inserted the same day, through one of two channels:
+1. **An existing endpoint when one fits** — Watu-shaped files go through `/upload`
+   (Gilbert's 14-Aug sales CSV is uploadable AS-IS today: same 16 columns; pick date
+   2026-08-14. It seeds snapshots + the register with real customers and agents, and it
+   does NOT displace a deck with a newer date — the phones list the NEWEST deck_date).
+2. **Paste-ready SQL for the Supabase editor when no endpoint fits** (the proven schema
+   channel) — e.g. the staff list into teams/call_users/access_codes the day it arrives.
+The sandbox cannot reach the database directly; these two channels are how "directly"
+happens, and docs/ entries are the memory, never the destination.
+
 ## Standing rule shipped 2026-08-15 (the "nb")
 
 **Locked 7+ but past day 45 is NOT Hoop's responsibility.** The app's Lock 7+ tab and the
