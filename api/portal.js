@@ -219,8 +219,14 @@ const FNS = {
     if (!code || !String(a.name || '').trim() || !String(a.role || '').trim()) {
       throw new Error('code, name and role are all required.');
     }
+    // Empty is NOT quietly "all teams" -- the caller states ALL, or names the teams.
+    const wantsAll = a.allTeams === true;
+    const list = Array.isArray(a.teams) ? a.teams.map(K).filter(Boolean) : [];
+    if (!wantsAll && !list.length) {
+      throw new Error('Chagua ALL au orodhesha timu. / State ALL, or name the teams.');
+    }
     const row = { code, name: String(a.name).trim(), role: K(a.role),
-      teams: Array.isArray(a.teams) && a.teams.length ? a.teams.map(K) : null,
+      teams: wantsAll ? null : list,
       tabs: Array.isArray(a.tabs) ? a.tabs : [] };
     const { error } = await db.from('access_codes').upsert(row, { onConflict: 'code' });
     if (error) throw new Error(error.message);

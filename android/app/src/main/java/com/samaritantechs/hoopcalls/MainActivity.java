@@ -52,6 +52,19 @@ public class MainActivity extends Activity {
         // the app's header. fitsSystemWindows insets the WebView below the system bars.
         web.setFitsSystemWindows(true);
         setContentView(web);
+        // Android 15 (targetSdk 35) forces edge-to-edge and IGNORES fitsSystemWindows, so
+        // the clock, battery and signal sat on top of the app's header. Pad the WebView
+        // below the system bars ourselves; the padded strip is painted the header's navy,
+        // so the status bar reads as part of the app -- the same look older Android gives.
+        if (Build.VERSION.SDK_INT >= 30) {
+            web.setBackgroundColor(0xFF0B2A6B);
+            web.setOnApplyWindowInsetsListener((v, insets) -> {
+                android.graphics.Insets bars =
+                        insets.getInsets(android.view.WindowInsets.Type.systemBars());
+                v.setPadding(0, bars.top, 0, bars.bottom);
+                return insets;
+            });
+        }
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);          // localStorage holds the access code, device id, list cache

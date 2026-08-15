@@ -369,12 +369,12 @@ function drawCodes(m){
       +(d.codes||[]).map(function(c){
         return '<tr><td class="code">'+esc(c.code)+'</td><td>'+esc(c.name)+'</td><td>'+esc(c.role)+'</td>'
           +'<td>'+esc(c.teams?c.teams.join(', '):'ZOTE')+'</td><td class="mut">'+esc((c.tabs||[]).join(', '))+'</td>'
-          +'<td class="r"><button class="btn sm ghost" data-ed="'+esc(c.code)+'" data-name="'+esc(c.name)+'" data-role="'+esc(c.role)+'" data-teams="'+esc(c.teams?c.teams.join(','):'')+'">Hariri</button> '
+          +'<td class="r"><button class="btn sm ghost" data-ed="'+esc(c.code)+'" data-name="'+esc(c.name)+'" data-role="'+esc(c.role)+'" data-teams="'+esc(c.teams&&c.teams.length?c.teams.join(','):'ALL')+'">Hariri</button> '
           +'<button class="btn sm ghost" data-del="'+esc(c.code)+'">Futa</button></td></tr>';
       }).join('')+'</tbody></table></div>'
       +'<div class="row" style="margin-top:14px"><input class="inp" id="acCode" placeholder="Code (siri)"><input class="inp" id="acName" placeholder="Jina">'
       +'<select class="inp" id="acRole"><option>ADMIN</option><option>MANAGER</option><option>RSM</option><option>AUDITOR</option></select>'
-      +'<input class="inp" id="acTeams" placeholder="Timu (tupu = zote), comma"><button class="btn sm" id="acAdd">Ongeza</button></div>'
+      +'<input class="inp" id="acTeams" placeholder="Timu: andika ALL au orodha (comma)"><button class="btn sm" id="acAdd">Ongeza</button></div>'
       +'<div class="mut" style="margin-top:6px">ADMIN inapata kila kitu. AUDITOR ni kuangalia tu. Nyingine: dashboard + ripoti, bila upload/settings. '
       +'Hariri hujaza fomu — badilisha chochote (hata Code yenyewe, hata yako) kisha Hifadhi.</div>'
       +'</div>';
@@ -392,9 +392,12 @@ function drawCodes(m){
     $('#acAdd').onclick=function(){
       var role=$('#acRole').value;
       var tabs=role==='ADMIN'?['upload','settings']:[];
-      var teams=$('#acTeams').value.split(',').map(function(x){return x.trim();}).filter(Boolean);
+      var rawTeams=$('#acTeams').value.trim();
+      var allTeams=rawTeams.toUpperCase()==='ALL'||rawTeams.toUpperCase()==='ZOTE';
+      var teams=allTeams?[]:rawTeams.split(',').map(function(x){return x.trim();}).filter(Boolean);
+      if(!allTeams&&!teams.length){ toast('Andika ALL au orodha ya timu. / State ALL, or name the teams.',true); return; }
       var newCode=$('#acCode').value.trim();
-      var save=function(){ return srv('saveAccessCode',{code:newCode,name:$('#acName').value,role:role,teams:teams,tabs:tabs}); };
+      var save=function(){ return srv('saveAccessCode',{code:newCode,name:$('#acName').value,role:role,teams:teams,allTeams:allTeams,tabs:tabs}); };
       var flow = (EDIT_FROM && EDIT_FROM!==newCode)
         ? srv('renameAccessCode',{from:EDIT_FROM,to:newCode}).then(function(r){
             if(r.self){ CODE=newCode; try{localStorage.setItem('hpCode',newCode);}catch(e){} }
