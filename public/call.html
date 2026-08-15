@@ -1147,7 +1147,10 @@ function filterForView_(rows, v){
   if (v === 'win45')  return rows.filter(function(r){ return r.inWindow !== false; });
   if (v === 'over45') return rows.filter(function(r){ return r.inWindow === false; });
   if (v === 'lock4')  return rows.filter(function(r){ return r.locked4 && !r.locked7; });
-  if (v === 'lock7')  return rows.filter(function(r){ return !!r.locked7; });
+  /* Lock 7+ is HOOP'S burden only: locked a week AND still inside the 45-day window.
+     Past day 45 the customer is Watu's problem (the owner's rule) -- they stay visible
+     on the 45+ tab, they just stop being this team's call list. */
+  if (v === 'lock7')  return rows.filter(function(r){ return !!r.locked7 && r.inWindow !== false; });
   return rows;
 }
 function segLabel_(src, r){
@@ -1346,7 +1349,7 @@ function emptyWhy_(v){
     if (v === 'win45') return 'Hakuna mteja ndani ya siku 45 kwenye orodha ya leo.';
     if (v === 'over45') return 'Hakuna mteja nje ya dirisha la siku 45 — wote bado wako ndani.';
     if (v === 'lock4') return 'Hakuna aliyefungiwa siku 4–6 kwenye orodha ya leo (angalia Lock 7+).';
-    return 'Hakuna aliyefungiwa siku 7+ kwenye orodha ya leo.';
+    return 'Hakuna aliyefungiwa siku 7+ ndani ya siku 45. Waliopita siku 45 hawamo hapa — si jukumu la Hoop; wapo kwenye tab ya 45+.';
   }
   // Exp.Def can be empty for four quite different reasons and the officer can only act on
   // one of them. The server says which; the message says what to do about it.

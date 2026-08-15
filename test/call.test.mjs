@@ -153,3 +153,19 @@ test('pnorm and lifeDayOf ports behave', () => {
   assert.equal(pnorm('0716548153'), '716548153');
   assert.equal(lifeDayOf('2026-07-13', '2026-08-14'), 33);
 });
+
+test('locked 7+ beyond day 45 leaves the count -- not Hoop\'s responsibility', async () => {
+  _clearSummaryCache();
+  const d = db();
+  // Locked a week AND past the 45-day window: disbursed 100 days before the pinned clock.
+  d._dump('followup_status').push({
+    imei: '351999999999999', client_name: 'Nje Ya Dirisha', contact: '255788000111',
+    team: 'KINONDONI', model: 'A07', price: 450000, disbursed_date: '2026-05-06',
+    days_offline: 40, locked4: true, locked7: true, has_ever_paid: false, deck_date: '2026-08-14' });
+  await registerOfficer(d);
+  const s = await callApi(d, 'api_callDailySummary', ['dev-1'], NOW);
+  assert.equal(s.list.num, 3, 'they stay ON the deck (visible in the 45+ tab)');
+  assert.equal(s.locked7.num, 1, 'but the Locked 7+ burden counts only the in-window one');
+  assert.equal(s.inWindow.num, 1);
+  _clearSummaryCache();
+});

@@ -480,8 +480,11 @@ async function summaryCompute(db, user, nowMs) {
     fetchAll(() => scope(db.from('call_logs').select('phone, ref, duration, portfolio').eq('call_date', today))),
     settingGet(db, 'DATA_VERSION'),
   ]);
-  const inWin = deck.filter(r => { const l = lifeDayOf(r.disbursed_date, today); return l != null && l <= 45; }).length;
-  const locked7 = deck.filter(r => r.locked7 === true).length;
+  const inWinOf = r => { const l = lifeDayOf(r.disbursed_date, today); return l != null && l <= 45; };
+  const inWin = deck.filter(inWinOf).length;
+  // Locked 7+ counts Hoop's own burden ONLY: past day 45 the customer is Watu's problem
+  // (the owner's rule). The tile must agree with the app's Lock 7+ tab, which drops them.
+  const locked7 = deck.filter(r => r.locked7 === true && inWinOf(r)).length;
   // Reached = distinct customers on the deck actually spoken to today (dial attempts under
   // the threshold do not count -- same rule as the tick).
   const deckNums = new Set(deck.map(r => pnorm(r.contact)).filter(Boolean));

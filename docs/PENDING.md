@@ -39,7 +39,10 @@ Highest value first; who to lean on is from the starter's people table:
 2. **Full Watu sales report**, every column — the reconciliation anchor for commissions.
    Via **Madam Janeth (accountant)** + Gilbert.
 3. **hoopltd.shop sales export** + screenshots of Pending Upload/Approval and receipts.
-   Via **general duty (Mwinyi)**.
+   Via **general duty (Mwinyi)**. → **RECEIVED 2026-08-15** (one-day export + 5 screenshots;
+   full profile in docs/MATERIALS.md — no guarantor columns, §1 stays armed). Still wanted
+   from the same source: a date-RANGE export (several days) and, when it exists, an export
+   of the Unapproved Commissions grid.
 4. **Commission rules in writing** per role/model, incl. what disqualifies a sale.
    Via **Peter Kisoli** + Janeth.
 5. **Staff list** (names, phones, roles, regions) — feeds Teams & access codes the day it
