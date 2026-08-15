@@ -6,8 +6,8 @@ plugins {
 // serves the very same file to the installed app so it can self-update.
 def appVersion = new groovy.json.JsonSlurper().parse(rootProject.file('../app-version.json'))
 
-// The app opens the portal LAUNCHER (site root), not the calls page directly -- that is what
-// lets one install reach Calls, the dashboard and uploads. Overridable per build
+// The app opens HOOP CALLS directly -- the credit team's whole day lives there, and the
+// switch button inside Calls (shown while SYSTEM_OPEN=YES) crosses to the portal as usual. Overridable per build
 // (-PstartUrl=https://your-domain/) so the same source builds against any deployment;
 // officers can also fix a wrong URL from inside the app (a load failure opens a small
 // built-in screen that saves an override).
@@ -16,7 +16,7 @@ def appVersion = new groovy.json.JsonSlurper().parse(rootProject.file('../app-ve
 // <project>.vercel.app alias was never assigned here, and pointing at it gave every phone
 // 'Deployment not found'. This one follows production and is public once Vercel
 // Authentication is disabled in project settings.
-def startUrl = project.hasProperty('startUrl') ? project.property('startUrl') : 'https://hoop-pmo-git-main-samaritantechs.vercel.app/'
+def startUrl = project.hasProperty('startUrl') ? project.property('startUrl') : 'https://hoop-pmo-git-main-samaritantechs.vercel.app/call'
 
 android {
     namespace 'com.samaritantechs.hoopcalls'
