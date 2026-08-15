@@ -16,7 +16,7 @@ def appVersion = new groovy.json.JsonSlurper().parse(rootProject.file('../app-ve
 // <project>.vercel.app alias was never assigned here, and pointing at it gave every phone
 // 'Deployment not found'. This one follows production and is public once Vercel
 // Authentication is disabled in project settings.
-def startUrl = project.hasProperty('startUrl') ? project.property('startUrl') : 'https://hoop-pmo-git-main-samaritantechs.vercel.app/call'
+def startUrl = project.hasProperty('startUrl') ? project.property('startUrl') : 'https://hoop-pmo.vercel.app/call'
 
 android {
     namespace 'com.samaritantechs.hoopcalls'

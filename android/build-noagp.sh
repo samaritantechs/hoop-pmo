@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 SDK="${ANDROID_HOME:-/opt/android-sdk}"
 BT="$SDK/build-tools/35.0.0"
 PLAT="$SDK/platforms/android-35/android.jar"
-START_URL="${1:-https://hoop-pmo-git-main-samaritantechs.vercel.app/}"
+START_URL="${1:-https://hoop-pmo.vercel.app/call}"
 VC=$(python3 -c "import json;print(json.load(open('../app-version.json'))['versionCode'])")
 VN=$(python3 -c "import json;print(json.load(open('../app-version.json'))['versionName'])")
 OUT=build-noagp; rm -rf $OUT; mkdir -p $OUT/gen/com/samaritantechs/hoopcalls $OUT/classes $OUT/dex
