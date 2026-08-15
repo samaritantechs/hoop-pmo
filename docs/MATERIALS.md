@@ -71,6 +71,53 @@ model is already on the chase list.
 4. **Reconciliation report**: hoopltd.shop sale ↔ Watu register row (IMEI match), naming
    sales that exist in one system and not the other.
 
+## 2026-08-15 — from Gilbert (IT): the Watu sales report, and WHY
+
+`WS_ Dealership Sales II Loans Table 14 AUG.csv` — Watu's own record of loans disbursed on
+14/08/2026, the SAME day as Mwinyi's export. The owner's words: *"Gilbert uses watu sales
+report as of credits and compares to mwinyis report to verify sales.. so as to find
+fraud."* The fraud check = these two files diffed by IMEI.
+
+Columns (16): Shop ("Hoop Limited, Kinondoni" — the region rides after the comma), Agent,
+**Agent ID** (Watu's stable numeric identity — the anchor free-text names lack), Client
+Name, Client Mobile (255-format), Model, Model Details (SM- code), Disbursed Date
+("Aug 14, 2026" format), IMEI, Price, Has Ever Paid, Days Offline, Onboarding Time (Min),
+App Signed Up, Locked 4+ Days, Locked 7+ Days. The last lock/offline columns are EMPTY on
+fresh sales — **this is the same column family as the daily locked list**, so Watu exports
+one loans table under different filters, and our existing watu importer's header
+candidates already understand this file.
+
+### The cross-check, actually run on the two 14-Aug files
+
+- 23 Watu loans, 24 hoopltd.shop sales, **18 match by IMEI** — and on all 18, phone,
+  price and client name agree exactly. The systems describe the same sale when they share
+  an IMEI.
+- **5 Watu loans with NO hoopltd.shop sale**: Yohana Athuman Ongujo (Lucas Mwita),
+  Gertruda Mashaka Magulu + Shabani A Ngarago (Vanence Chelehani), Sayuni John Ngogo
+  (Anord Sawe), Mzawalu J Ibrahim (ALOBOGASTI). Financed by Watu, missing from Hoop's own
+  book — late receipt entry, or an off-book sale.
+- **6 hoopltd.shop sales with NO Watu loan that day**: Fredy J Damasi (rcpt 9969) and
+  Anastela B Dauda (rcpt 9968) by Cyprian; and **four receipts (9951/9952/9954/9955) all
+  sold to "HOPE MICROCREDIT", all phone 0677111882**, by ELIA CHITUZI — reads like a bulk
+  cash/manual sale to the owner's own company, not Watu-financed; owner to confirm.
+- **Agent-identity drift on matched sales**: 6 sales under Watu agent Vanence Chelehani
+  (id 128245) pay commission to "Cyprian dotto renatus" in Hoop's book; Watu's Grace
+  Shirima and Sara Fisoo sales pay "Nestory Joseph". Sales going out under one person's
+  Watu agent account with commission claimed by another — exactly the pattern the fraud
+  report must surface, and why the register keys on **Watu Agent ID**, with hoopltd's
+  Commission_Agent/Commission_Phone as the payout side.
+
+### Honest limits
+
+One day of each file. "No Watu loan that day" is not fraud by itself — a loan can land a
+day late. The real report needs a ±1-day window, i.e. date-RANGE exports of BOTH files
+(already on the chase list).
+
+### When the owner says PROCEED, the fraud report is
+
+upload both files → match by IMEI → four buckets (matched-clean, matched-with-field-drift,
+watu-only, hoop-only) → agent-identity drift called out per sale, keyed on Watu Agent ID.
+
 ## Standing rule shipped 2026-08-15 (the "nb")
 
 **Locked 7+ but past day 45 is NOT Hoop's responsibility.** The app's Lock 7+ tab and the

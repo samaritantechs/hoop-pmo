@@ -36,8 +36,13 @@ Highest value first; who to lean on is from the starter's people table:
 
 1. 2–3 **real daily follow-up files** from Watu (Mon–Sat list) — validates the importer's
    header candidates against reality. Via **Gilbert (IT)**, who liaises with Watu.
+   → Half-answered 2026-08-15: the Watu SALES report (received, see MATERIALS.md) is the
+   same 16-column family, so the daily list very likely is too; still want a real one.
 2. **Full Watu sales report**, every column — the reconciliation anchor for commissions.
-   Via **Madam Janeth (accountant)** + Gilbert.
+   Via **Madam Janeth (accountant)** + Gilbert. → **RECEIVED 2026-08-15** (one day,
+   14 Aug; profile + the fraud cross-check against Mwinyi's export in MATERIALS.md).
+   Still wanted: date-RANGE exports of both files (a loan can land a day late — the
+   fraud report needs a ±1-day window).
 3. **hoopltd.shop sales export** + screenshots of Pending Upload/Approval and receipts.
    Via **general duty (Mwinyi)**. → **RECEIVED 2026-08-15** (one-day export + 5 screenshots;
    full profile in docs/MATERIALS.md — no guarantor columns, §1 stays armed). Still wanted
