@@ -51,7 +51,10 @@ Highest value first; who to lean on is from the starter's people table:
 4. **Commission rules in writing** per role/model, incl. what disqualifies a sale.
    Via **Peter Kisoli** + Janeth.
 5. **Staff list** (names, phones, roles, regions) — feeds Teams & access codes the day it
-   arrives, no code needed.
+   arrives, no code needed. → **PARTIALLY RECEIVED 2026-08-15**: agents 1–100 of 1,046
+   from Sipho's SyscoPos save, inserted via db/migrations/RUN-ME-2026-08-15-agents.sql.
+   The owner says this is Sipho's handover complete — new records happen going forward;
+   if the remaining 946 are ever wanted, the capture steps are in MATERIALS.md.
 6. **Watu payment-progress feed** — formally requested already; keep chasing. When it
    lands, item 2 above (phone-number ref) governs the join.
 7. Later: price history per model, product/stock register (**Mr Sipho**), receipt samples,

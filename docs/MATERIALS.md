@@ -120,12 +120,26 @@ watu-only, hoop-only) → agent-identity drift called out per sale, keyed on Wat
 
 ## 2026-08-15 — from Sipho (warehouse): SyscoPos page saves
 
-Eleven saved HTML pages from hoopltd.shop (SyscoPos by Codverts), logged in as SIPHO:
-AGED_STOCK plus PAGE_1…PAGE_11. **The data did not survive the save**: SyscoPos tables
-are server-side DataTables that fetch rows by AJAX after the page opens, so "Save page
-as" keeps the table skeleton and ZERO rows — PAGE_1…PAGE_11 are ten copies of the SAME
-Agents Register shell (Sipho was paging through the table; every save caught the shell,
-none caught a row). What the shells still teach:
+Twenty-four saved HTML pages from hoopltd.shop (SyscoPos by Codverts), logged in as
+SIPHO: AGED_STOCK, PAGE_1…PAGE_11 (the Agents Register), and 13 per-RSM Aged Stock
+saves (ANORD_SAWE … STANLEY_PHILIPO). SyscoPos tables are server-side DataTables that
+fetch rows by AJAX a moment after the page opens, so a save only captures rows that had
+ALREADY rendered on screen:
+
+- **PAGE_1 captured real data: agents 1–100 of 1,046** ("Showing 1 to 100 of 1,046
+  entries") — parsed, cleaned (0 duplicate phones, 0 duplicate national IDs) and turned
+  into `db/migrations/RUN-ME-2026-08-15-agents.sql` (idempotent upsert on phone).
+  Breakdown: 59 Field_Officers, 35 Team_Leaders, 5 Regional_Managers, 1 CSM; branches
+  Dar es salaam 46, SOUTHERN HIGHLAND 19, Ubungo 14, ILALA 8, BEST SELL 5, GET RICH
+  UP-COUNTRY 5, Shekigenda 2, Head Office 1. **946 agents still to capture.**
+- PAGE_2…PAGE_11 and ALL 13 per-RSM aged-stock saves carry ZERO rows — saved before
+  the AJAX rows rendered.
+- **How to capture reliably**: Aged Stock has export buttons — click **CSV** on the
+  report itself (works filtered per RSM too). For the Agents Register (no export
+  button): set Show → **All**, WAIT until the rows are visible on screen, then save
+  the page — PAGE_1 proves that captures everything rendered.
+
+What the shells teach:
 
 ### Aged Stock (AGED_STOCK.html)
 - Report "Aged Stock (5 days)": Agent | Item | Serial (IMEI) | Received | Age, fed by
