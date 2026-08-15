@@ -205,11 +205,37 @@ const FNS = {
 
   async accessCodes(db, user) {
     requireSettings(user);
-    const rows = await fetchAll(() => db.from('access_codes').select('code, name, role, teams, tabs'));
+    const [rows, roleRows] = await Promise.all([
+      fetchAll(() => db.from('access_codes').select('code, name, role, teams, tabs')),
+      fetchAll(() => db.from('roles').select('role, tabs')),
+    ]);
     const mask = isReadOnly(user);
-    return { ok: true, codes: rows.map(r => ({
-      code: mask ? '••••••' : r.code, name: r.name, role: r.role,
-      teams: r.teams || null, tabs: r.tabs || [] })) };
+    // Every role that exists anywhere is offered everywhere: the roles table first (it
+    // carries the tabs), then roles only seen on codes, then the suggested set.
+    const seen = new Map();
+    roleRows.forEach(r => { const k = K(r.role); if (k) seen.set(k, { role: k, tabs: r.tabs || [] }); });
+    rows.forEach(r => { const k = K(r.role); if (k && !seen.has(k)) seen.set(k, { role: k, tabs: [] }); });
+    ['ADMIN', 'MANAGER', 'FINANCE', 'RSM', 'CREDIT LEAD', 'GENERAL DUTY', 'STORE', 'IT', 'AUDITOR']
+      .forEach(k => { if (!seen.has(k)) seen.set(k, { role: k, tabs: [] }); });
+    return { ok: true,
+      roles: [...seen.values()].sort((a, b) => a.role < b.role ? -1 : 1),
+      codes: rows.map(r => ({
+        code: mask ? '••••••' : r.code, name: r.name, role: r.role,
+        teams: r.teams || null, tabs: r.tabs || [] })) };
+  },
+
+  /** A role is a name plus the doors it opens. Tabs come from a fixed vocabulary; every
+      code carrying the role inherits them at sign-in (auth.js resolveTabs). */
+  async saveRole(db, user, args) {
+    requireWrite(user); requireSettings(user);
+    const role = K(args && args.role);
+    if (!role) throw new Error('Role name is required.');
+    const ALLOWED = new Set(['upload', 'settings', 'dashboard']);
+    const tabs = (Array.isArray(args && args.tabs) ? args.tabs : [])
+      .map(t => String(t).toLowerCase()).filter(t => ALLOWED.has(t));
+    const { error } = await db.from('roles').upsert({ role, tabs }, { onConflict: 'role' });
+    if (error) throw new Error(error.message);
+    return { ok: true, role, tabs };
   },
 
   async saveAccessCode(db, user, args) {

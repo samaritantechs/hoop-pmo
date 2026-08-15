@@ -89,3 +89,19 @@ test('renameAccessCode moves the secret, keeps the row, and flags self-rename', 
   await assert.rejects(() => _FNS.renameAccessCode(d, me, { from: 'OTHER', to: 'HOOP-STRONG-9' }), /taken/);
   await assert.rejects(() => _FNS.renameAccessCode(d, me, { from: 'HOOP-STRONG-9', to: 'abc' }), /4 characters/);
 });
+
+test('saveRole writes the roles table and accessCodes lists every role', async () => {
+  const d = fakeDb({
+    access_codes: [{ code: 'X1', name: 'A', role: 'FIELD SUPERVISOR', teams: null, tabs: [] }],
+    roles: [{ role: 'ADMIN', tabs: ['upload', 'settings', 'dashboard'] }],
+  });
+  await _FNS.saveRole(d, ADMIN, { role: 'Credit Lead', tabs: ['dashboard', 'upload', 'nonsense'] });
+  const row = d._dump('roles').find(r => r.role === 'CREDIT LEAD');
+  assert.deepEqual(row.tabs, ['dashboard', 'upload'], 'unknown tabs are dropped, known ones kept');
+  const out = await _FNS.accessCodes(d, ADMIN, {});
+  const names = out.roles.map(r => r.role);
+  assert.ok(names.includes('CREDIT LEAD'), 'saved role listed');
+  assert.ok(names.includes('FIELD SUPERVISOR'), 'role seen only on a code still listed');
+  assert.ok(names.includes('AUDITOR'), 'suggested roles listed');
+  await assert.rejects(() => _FNS.saveRole(d, VIEWER, { role: 'X', tabs: [] }), /view-only/);
+});

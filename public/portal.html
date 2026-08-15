@@ -373,11 +373,40 @@ function drawCodes(m){
           +'<button class="btn sm ghost" data-del="'+esc(c.code)+'">Futa</button></td></tr>';
       }).join('')+'</tbody></table></div>'
       +'<div class="row" style="margin-top:14px"><input class="inp" id="acCode" placeholder="Code (siri)"><input class="inp" id="acName" placeholder="Jina">'
-      +'<select class="inp" id="acRole"><option>ADMIN</option><option>MANAGER</option><option>RSM</option><option>AUDITOR</option></select>'
+      +'<select class="inp" id="acRole">'+(d.roles||[]).map(function(r){return '<option>'+esc(r.role)+'</option>';}).join('')+'</select>'
       +'<input class="inp" id="acTeams" placeholder="Timu: andika ALL au orodha (comma)"><button class="btn sm" id="acAdd">Ongeza</button></div>'
-      +'<div class="mut" style="margin-top:6px">ADMIN inapata kila kitu. AUDITOR ni kuangalia tu. Nyingine: dashboard + ripoti, bila upload/settings. '
+      +'<div class="mut" style="margin-top:6px">ADMIN inapata kila kitu. AUDITOR ni kuangalia tu. '
       +'Hariri hujaza fomu — badilisha chochote (hata Code yenyewe, hata yako) kisha Hifadhi.</div>'
+      +'</div>'
+      +'<div class="card"><h2>Roles</h2>'
+      +'<div class="row" style="flex-wrap:wrap">'+(d.roles||[]).map(function(r){
+          return '<button class="btn sm ghost" data-rl="'+esc(r.role)+'" data-rltabs="'+esc((r.tabs||[]).join(','))+'">'
+            +esc(r.role)+((r.tabs||[]).length?' \u00B7 '+esc((r.tabs||[]).join('+')):'')+'</button>';
+        }).join('')+'</div>'
+      +'<div class="row"><input class="inp" id="rlName" placeholder="Jina la role (mpya au ya kuhariri)">'
+      +'<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0"><input type="checkbox" id="rlUp"> Upload</label>'
+      +'<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0"><input type="checkbox" id="rlSet"> Settings</label>'
+      +'<button class="btn sm" id="rlSave">Hifadhi role</button></div>'
+      +'<div class="mut">Bonyeza role kuijaza; Settings inatoa Teams/Staff/Codes, Upload inatoa kupakia. Bila viwili hivyo ni kuangalia tu (dashboard, ripoti, recovery).</div>'
       +'</div>';
+    $all('[data-rl]',m).forEach(function(b){
+      b.onclick=function(){
+        $('#rlName').value=b.getAttribute('data-rl');
+        var t=(b.getAttribute('data-rltabs')||'').split(',');
+        $('#rlUp').checked=t.indexOf('upload')>=0;
+        $('#rlSet').checked=t.indexOf('settings')>=0;
+      };
+    });
+    $('#rlSave').onclick=function(){
+      var role=$('#rlName').value.trim();
+      if(!role){ toast('Andika jina la role.',true); return; }
+      var tabs=['dashboard'];
+      if($('#rlUp').checked) tabs.push('upload');
+      if($('#rlSet').checked) tabs.push('settings');
+      srv('saveRole',{role:role,tabs:tabs})
+        .then(function(){toast('Role imehifadhiwa.');drawCodes(m);})
+        .catch(function(e){toast(String(e.message||e),true);});
+    };
     $all('[data-ed]',m).forEach(function(b){
       b.onclick=function(){
         EDIT_FROM=b.getAttribute('data-ed');
