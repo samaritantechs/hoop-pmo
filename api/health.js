@@ -1,9 +1,27 @@
-// GET /api/health -- proves the serverless layer is alive before any real routes exist.
-// Deliberately dependency-free: it must work on the very first deploy, with or without
-// the Supabase environment variables in place. `env` only reports WHETHER the two vars
-// are set (never their values), so a half-finished Vercel setup is visible at a glance.
-export default function handler(req, res) {
+// GET /api/health -- the whole truth in one unauthenticated read.
+// Deliberately keeps its OWN env analysis dependency-free (it must answer even when the
+// supabase module cannot load), then attempts one tiny real read so "configured" and
+// "actually connected" stop being guesses. Never prints a key; the URL host is not a
+// secret (the service key is, and stays server-side).
+export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
+  const rawUrl = String(process.env.SUPABASE_URL || '');
+  let urlValid = false, host = null;
+  try {
+    let s = rawUrl.trim().replace(/^['"]+|['"]+$/g, '');
+    if (s && !/^https?:\/\//i.test(s)) s = 'https://' + s;
+    const u = new URL(s); urlValid = true; host = u.host;
+  } catch (e) { /* stays invalid */ }
+  let db = null;
+  try {
+    const { supabase } = await import('./_lib/supabase.js');
+    const t0 = Date.now();
+    const { error } = await supabase.from('settings').select('key').limit(1);
+    db = { reachable: !error, ms: Date.now() - t0,
+      error: error ? String(error.message || error).slice(0, 200) : null };
+  } catch (e) {
+    db = { reachable: false, error: 'module: ' + String(e && e.message).slice(0, 200) };
+  }
   res.status(200).json({
     ok: true,
     service: 'hoop-pmo',
@@ -12,5 +30,6 @@ export default function handler(req, res) {
       SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
       SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
     },
+    urlValid, host, db,
   });
 }

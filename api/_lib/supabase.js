@@ -4,12 +4,20 @@ import { createClient } from '@supabase/supabase-js';
 // OWN access-code permission logic (below) rather than relying on Postgres RLS policies.
 // This matches how Code.gs works today (auth_() checks a code against the Access sheet,
 // then the rest of the function trusts that check) -- same model, new engine.
-// The placeholders keep `npm test` importable on a machine with no env vars: newer
-// supabase-js versions validate the URL at createClient, and the tests never touch this
-// client -- every core function takes an injected db (the fake) instead.
+// A PASTED VALUE IS A HUMAN VALUE. createClient validates the URL at import time, so a
+// SUPABASE_URL carrying stray quotes, whitespace, or a missing scheme did not fail one
+// request -- it killed EVERY function at invocation (FUNCTION_INVOCATION_FAILED), which
+// reached the phones as "server is not answering". Normalise first; keep the placeholder
+// fallback so `npm test` stays importable with no env at all (tests inject the fake db).
+function normUrl(raw) {
+  let s = String(raw == null ? '' : raw).trim().replace(/^['"]+|['"]+$/g, '').replace(/\/+$/, '');
+  if (s && !/^https?:\/\//i.test(s)) s = 'https://' + s;
+  try { return new URL(s).origin; } catch (e) { return null; }
+}
+export const SUPABASE_URL_NORM = normUrl(process.env.SUPABASE_URL);
 export const supabase = createClient(
-  process.env.SUPABASE_URL || 'https://unset.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || 'unset',
+  SUPABASE_URL_NORM || 'https://unset.supabase.co',
+  String(process.env.SUPABASE_SERVICE_ROLE_KEY || 'unset').trim().replace(/^['"]+|['"]+$/g, ''),
   { auth: { persistSession: false } }
 );
 
