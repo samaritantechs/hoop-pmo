@@ -118,6 +118,28 @@ day late. The real report needs a ±1-day window, i.e. date-RANGE exports of BOT
 upload both files → match by IMEI → four buckets (matched-clean, matched-with-field-drift,
 watu-only, hoop-only) → agent-identity drift called out per sale, keyed on Watu Agent ID.
 
+### The owner's full loop, in his words (2026-08-15) — the phase-2 spec
+
+*"cover agents data per customer and know their conversion rates and performance … when
+we get sales report from general duty we then match it with that of watu credit report …
+auto detect fraud sales in general duty not in [watu] file and match them to
+[fraudsters'] data in sipho daily."*
+
+1. **Agent per customer** — done at the data level already: `agent` rides on
+   `watu_loans`/`watu_snapshots` and shows on every Customers row and detail card.
+2. **Agent scorecards** (conversion + performance): per agent — sales made (denominator,
+   from the sales files), and how their customers BEHAVE (numerator, from the daily
+   follow-up uploads joined by IMEI): % ever paid, % locked 4+/7+, average days offline,
+   % surviving the 45-day window. An agent whose sales keep locking is a quality signal
+   commissions should see before payout.
+3. **Fraud autodetect**: a sale in general duty's book whose IMEI never appears in a
+   Watu file (±1-day window — a loan can register a day late; and a CASH-SALE bucket so
+   bulk non-Watu sales like the HOPE MICROCREDIT receipts are labeled, not accused)
+   → flagged automatically on upload.
+4. **Name the person**: every flagged sale resolves its seller against `hoop_agents` by
+   payout phone (pnorm) — full identity on file: name, phone, national ID, **next of
+   kin**. Fraud report shows the sale AND who answers for it.
+
 ## 2026-08-15 — from Sipho (warehouse): SyscoPos page saves
 
 Twenty-four saved HTML pages from hoopltd.shop (SyscoPos by Codverts), logged in as
