@@ -1,0 +1,1759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>HOOP Calls</title>
+<style>
+:root{
+  --b950:#081C4A; --b900:#0B2A6B; --b800:#10357F; --b700:#1D4ED8; --b600:#2563EB;
+  --b500:#3B82F6; --b300:#93C5FD; --b100:#DBEAFE; --b50:#EFF6FF;
+  --bg:#F6F8FC; --card:#FFFFFF; --ink:#0F172A; --mut:#64748B; --soft:#94A3B8; --line:#E2E8F0;
+  --ok:#067647; --okbg:#E7F6EE; --okline:#CFEADD;
+  --warn:#92400E; --warnbg:#FEF3DC; --warnline:#F6E3BC;
+  --bad:#B42318; --badbg:#FDECEA; --badline:#F6CFCB;
+  --rad:14px; --shadow:0 2px 10px -4px rgba(11,42,107,.18);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);height:100%;
+  font-family:'Inter',Arial,Helvetica,sans-serif;-webkit-tap-highlight-color:transparent;overscroll-behavior-y:contain}
+button,input,select,textarea{font-family:inherit;font-size:15px}
+a{color:var(--b600)}
+.hide{display:none !important}
+.center{display:flex;align-items:center;justify-content:center}
+.sk{width:16px;height:16px;border:2.5px solid var(--b100);border-top-color:var(--b600);border-radius:50%;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* ---- boot ---- */
+#scrBoot{position:fixed;inset:0;flex-direction:column;gap:14px;background:var(--b900)}
+#scrBoot .brand{color:#fff;font-weight:800;font-size:20px;letter-spacing:.02em}
+#scrBoot .sk{border-color:rgba(255,255,255,.25);border-top-color:#fff;width:26px;height:26px;border-width:3px}
+
+/* ---- register ---- */
+#scrRegister{min-height:100%;flex-direction:column;padding:28px 22px;background:linear-gradient(180deg,var(--b900),var(--b800) 220px,var(--bg) 220px)}
+.reg-card{width:100%;max-width:420px;margin:60px auto 0;background:var(--card);border-radius:18px;box-shadow:0 12px 34px -14px rgba(8,28,74,.35);padding:26px 22px}
+.reg-logo{width:52px;height:52px;border-radius:13px;object-fit:cover;background:#fff}
+/* The stand-in mark -- the HOOP wordmark and smile, drawn rather than fetched, so the app has
+   a brand even before CALL_LOGO_URL is set and never shows a broken picture. Same box as the
+   image it replaces, so swapping one for the other never moves the header. */
+.mark{display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden;padding:2px}
+.mark svg{width:100%;height:100%;display:block}
+.reg-title{font-size:19px;font-weight:800;margin-top:14px}
+.reg-sub{font-size:13px;color:var(--mut);margin-top:3px;line-height:1.5}
+.fld{margin-top:16px}
+.fld label{display:block;font-size:12px;font-weight:700;color:var(--mut);margin-bottom:6px}
+.fld input,.fld select{width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:11px;background:#fff;color:var(--ink)}
+.fld input:focus,.fld select:focus{outline:none;border-color:var(--b500);box-shadow:0 0 0 3px var(--b100)}
+.fld .note{font-size:11.5px;color:var(--soft);margin-top:5px}
+.regToggle{display:flex;gap:8px}
+.regToggleBtn{flex:1;padding:11px 6px;border:1.5px solid var(--line);border-radius:11px;background:#fff;color:var(--mut);
+  font-weight:700;font-size:12.5px;text-align:center;line-height:1.5}
+.regToggleBtn span{display:block;font-weight:500;font-size:10.5px;color:var(--soft)}
+.regToggleBtn.on{border-color:var(--b600);background:var(--b50);color:var(--b800)}
+.regToggleBtn.on span{color:var(--b600)}
+.err{background:var(--badbg);border:1px solid var(--badline);color:var(--bad);padding:10px 12px;border-radius:10px;font-size:13px;margin-top:14px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;cursor:pointer;border-radius:11px;
+  padding:14px 18px;font-weight:700;font-size:15px;width:100%}
+.btn-pri{background:var(--b700);color:#fff}
+.btn-pri:disabled{background:var(--b300)}
+.btn-ghost{background:transparent;color:var(--mut);border:1.5px solid var(--line)}
+
+/* ---- app shell ---- */
+#scrApp{display:none;flex-direction:column;height:100%}
+header.top{background:var(--b900);color:#fff;padding:14px 16px 12px;flex:0 0 auto}
+header.top .row1{display:flex;align-items:center;gap:10px}
+header.top .logo{width:30px;height:30px;border-radius:8px;background:#fff;object-fit:cover;display:block}
+header.top a{flex:0 0 auto;line-height:0}
+header.top .who{flex:1;min-width:0}
+header.top .who b{display:block;font-size:14.5px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+header.top .who span{display:block;font-size:11px;color:var(--b300)}
+.pill{display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);cursor:pointer;
+  border-radius:50%;width:30px;height:30px;flex:0 0 auto}
+.pill .dot{width:9px;height:9px;border-radius:50%;background:var(--soft)}
+.pill.ok .dot{background:#4ADE80}
+.pill.err .dot{background:#F87171}
+.pill.syncing .dot{background:#FBBF24;animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.swapBtn{flex:0 0 auto;width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.16);color:#fff;font-size:15px;line-height:1;text-decoration:none;
+  display:flex;align-items:center;justify-content:center}
+.bellBtn{position:relative;flex:0 0 auto;width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.1);
+  border:0;color:#fff;font-size:15px;line-height:1;cursor:pointer}
+/* The dot is the whole point: it has to be visible at arm's length, on a bright phone, outdoors. */
+.bellBtn .bdot{position:absolute;top:2px;right:2px;min-width:15px;height:15px;padding:0 3px;border-radius:999px;
+  background:var(--bad);color:#fff;font-size:9.5px;font-weight:800;line-height:15px;text-align:center}
+.notifItem{padding:10px 0;border-bottom:1px solid var(--line)}
+.notifItem.new{background:var(--b50);margin:0 -14px;padding-left:14px;padding-right:14px}
+.notifItem .nwho{font-weight:700;font-size:13.5px}
+.notifItem .nwhat{font-size:12.5px;color:var(--ink);margin-top:2px}
+.notifItem .nmeta{font-size:11px;color:var(--mut);margin-top:3px}
+.logoutBtn{flex:0 0 auto;width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.16);color:#fff;font-size:15px;line-height:1;
+  display:flex;align-items:center;justify-content:center;padding:0}
+.tabs{display:flex;gap:4px;margin-top:12px;overflow-x:auto}
+.tabs button{flex:1;background:rgba(255,255,255,.08);color:#cfe0ff;border:0;padding:9px 4px;border-radius:9px;
+  font-size:12.5px;font-weight:700;white-space:nowrap}
+.tabs button.on{background:#fff;color:var(--b800)}
+/* Five figures on a phone: wrap freely, but never break a label away from its number. */
+.daystrip{display:flex;align-items:center;justify-content:center;gap:4px 7px;margin-top:10px;
+  font-size:11.5px;font-weight:600;color:var(--b300);flex-wrap:wrap}
+.daystrip span{white-space:nowrap}
+.daystrip b{color:#fff;font-weight:800;margin-left:3px}
+.daystrip .ds-tag{background:rgba(255,255,255,.14);color:#fff;border-radius:999px;padding:1.5px 7px;font-size:10.5px;font-weight:800;letter-spacing:.02em}
+.daystrip .ds-dot{color:rgba(255,255,255,.35)}
+/* Figures kept from an earlier day. Still shown -- they are the last true thing this officer
+   was told -- but visibly not today's, and the tag says "Jana". */
+.daystrip{cursor:pointer}
+/* A refresh that moves no figure is still a refresh. Without this, an officer who taps to
+   check has no way to know the tap did anything. */
+@keyframes dsLit{0%{background:rgba(255,255,255,.20)}100%{background:transparent}}
+.daystrip.lit{animation:dsLit .7s ease-out;border-radius:8px}
+.daystrip.warn .ds-tag{background:rgba(255,190,80,.28);color:#FFE9BF}
+.daystrip.stale{opacity:.62}
+.daystrip.stale .ds-tag{background:rgba(255,255,255,.06)}
+
+main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 12px 90px}
+.searchbar{position:relative;margin-bottom:10px}
+.searchbar input{width:100%;padding:11px 14px;border:1.5px solid var(--line);border-radius:11px;background:#fff}
+.searchbar input:focus{outline:none;border-color:var(--b500)}
+
+.crow{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:13px;
+  padding:12px 12px;margin-bottom:8px;box-shadow:var(--shadow)}
+.crow.called{opacity:.62}
+.crow-main{flex:1;min-width:0}
+.crow-name{font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crow-name .tick{color:var(--ok);font-weight:700;font-size:11px;margin-left:4px}
+.crow-sub{font-size:12px;color:var(--mut);margin-top:3px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.crow-chips{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
+.callbtn{flex:0 0 auto;width:44px;height:44px;border-radius:50%;background:var(--okbg);border:1.5px solid var(--okline);
+  display:flex;align-items:center;justify-content:center;font-size:19px;text-decoration:none}
+.chip{display:inline-block;padding:2.5px 8px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.02em;
+  background:var(--chipbg,var(--b50));color:var(--b600);border:1px solid var(--b100)}
+.chip.ok{background:var(--okbg);color:var(--ok);border-color:var(--okline)}
+.chip.warn{background:var(--warnbg);color:var(--warn);border-color:var(--warnline)}
+.chip.bad{background:var(--badbg);color:var(--bad);border-color:var(--badline)}
+.chip.mut{background:#F1F5F9;color:var(--mut);border-color:var(--line)}
+.empty{text-align:center;padding:50px 20px;color:var(--mut)}
+.empty b{display:block;color:var(--ink);font-size:15px;margin-bottom:4px}
+
+/* ---- bottom sheet ---- */
+.sheet-backdrop{position:fixed;inset:0;background:rgba(8,17,34,.5);display:none;align-items:flex-end;z-index:40}
+.sheet-panel{background:var(--bg);width:100%;max-height:88vh;border-radius:18px 18px 0 0;overflow-y:auto;
+  padding:8px 16px calc(24px + env(safe-area-inset-bottom,0px))}
+.sheet-handle{width:38px;height:4px;background:var(--line);border-radius:99px;margin:6px auto 12px}
+.sheet-card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px;margin-bottom:12px}
+.sheet-title{font-size:17px;font-weight:800}
+.sheet-sub{font-size:12.5px;color:var(--mut);margin-top:2px}
+.factrow{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.factrow:last-child{border-bottom:0}
+.factrow span:first-child{color:var(--mut)}
+.callrow{display:flex;align-items:center;gap:10px;margin-top:8px}
+.callrow .btn{width:auto;flex:1;padding:11px}
+.hist-item{padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+.hist-item:last-child{border-bottom:0}
+.hist-item .h-top{display:flex;justify-content:space-between;color:var(--mut);font-size:11px;margin-bottom:3px}
+.close-sheet{position:absolute;top:10px;right:14px;background:var(--card);border:1px solid var(--line);width:32px;height:32px;
+  border-radius:50%;font-size:15px;color:var(--mut)}
+
+/* ---- KPI + reports ---- */
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px}
+.kpi .k-l{font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
+.kpi .k-v{font-size:18px;font-weight:800;margin-top:3px}
+.rangebar{display:flex;gap:8px;margin-bottom:12px}
+.rangebar input,.rangebar select{flex:1;min-width:0;padding:9px 10px;border:1.5px solid var(--line);border-radius:9px;background:#fff;font-size:13px;-webkit-appearance:none;appearance:none}
+/* Three controls on one narrow phone row: the dates are fixed-width by their own content, so
+   the team name gets whatever is left rather than squeezing the dates into unreadable stubs. */
+.rangebar select{flex:1.2;background-image:linear-gradient(45deg,transparent 50%,var(--soft) 50%),linear-gradient(135deg,var(--soft) 50%,transparent 50%);background-position:calc(100% - 14px) 52%,calc(100% - 9px) 52%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:24px}
+.otable{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.otable th,.otable td{padding:9px 10px;font-size:12.5px;text-align:left;border-bottom:1px solid var(--line)}
+.otable th{background:var(--b50);color:var(--b900);font-size:10.5px;text-transform:uppercase}
+.otable td.r,.otable th.r{text-align:right}
+.otable tr:last-child td{border-bottom:0}
+
+/* ---- follow-up form ---- */
+.toast{position:fixed;left:16px;right:16px;bottom:20px;background:var(--ink);color:#fff;padding:12px 16px;border-radius:11px;
+  font-size:13.5px;box-shadow:0 8px 24px -8px rgba(0,0,0,.4);z-index:60;display:none}
+.toast.bad{background:var(--bad)}
+.banner{background:var(--warnbg);border:1px solid var(--warnline);color:var(--warn);border-radius:11px;padding:10px 12px;
+  font-size:12px;margin-bottom:10px;line-height:1.5}
+
+  .expdfstrip{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:9px 12px;background:var(--card);
+    border-bottom:1px solid var(--line)}
+  .expdfstrip .xstat{display:flex;flex-direction:column;min-width:62px}
+  .expdfstrip .xstat span{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+  .expdfstrip .xstat b{font-size:15px;font-weight:800}
+  .expdfstrip .xstat b.ok{color:var(--ok)}
+  .expdfstrip .xnote{flex-basis:100%;font-size:11px;color:var(--bad)}
+  .expdfstrip .xcyc{flex-basis:100%;display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+  .expdfstrip .xtoggle{flex-basis:100%;text-align:left;background:transparent;border:0;color:var(--mut);font-size:11px;font-weight:700;padding:0 0 2px}
+  .expdfstrip.shut{padding:6px 12px}
+  .expdfstrip .xscope{flex-basis:100%;display:flex;gap:6px;margin-bottom:2px}
+  .expdfstrip .xscope button{flex:1;padding:5px 8px;border:1px solid var(--line);background:transparent;color:var(--mut);border-radius:8px;font-size:11.5px;font-weight:700}
+  .expdfstrip .xscope button.on{background:var(--b600,#2563EB);border-color:var(--b600,#2563EB);color:#fff}
+  .expdfstrip .xrole{flex-basis:100%;display:flex;gap:5px;margin-bottom:4px}
+  .expdfstrip .xrole button{flex:1;padding:5px 4px;border:1px solid var(--line);background:transparent;
+    color:var(--mut);border-radius:8px;font-size:11px;font-weight:700}
+  .expdfstrip .xrole button.on{background:var(--b600,#2563EB);border-color:var(--b600,#2563EB);color:#fff}
+  .expdfstrip .xcyc span{font-size:10.5px;padding:2px 7px;border:1px solid var(--line);border-radius:999px;color:var(--mut)}
+
+/* =====================================================================================
+   GLASS EDGES -- the outline of every card, and nothing else.
+   =====================================================================================
+     "can the app outer widgets margins be like the nowdays iphone glassed-like ones,
+      not distrubing colors but only margins i think , am not sure"
+
+   Three properties: the corner radius, the hairline on cards whose line is the neutral grey,
+   and the shadow that puts a little air under a card. No background and no text colour is
+   touched, and neither is any border that MEANS something -- a green call button, an amber
+   banner, a status chip. Those are read at a glance in the field and their colour is the
+   information.
+
+   The see-through is deliberately NOT applied to the cards. What makes a panel look like a
+   pane on a phone is its edge -- a wider corner, a softer hairline, a faint catch of light
+   along the top and a wide low shadow. Translucency over a white customer card would tint
+   the arrears figure printed on it, and a figure that changes shade with whatever scrolled
+   behind it is worse than a flat card. The blur is used where something genuinely floats
+   over the page -- the sheet backdrop -- because there nothing readable sits behind it.
+
+   Last in the file on purpose, and no selector here is more specific than the rule it
+   softens, so anything carrying its own colour keeps it. */
+:root{
+  --gr:22px;                                            /* the panels that float */
+  --gr-sm:13px;                                         /* cards, tiles and controls */
+  --gline:rgba(15,23,42,.09);
+  --ghi:inset 0 1px 0 rgba(255,255,255,.85);            /* the light along the top edge */
+  --gsh:0 1px 1.5px rgba(8,28,74,.05), 0 8px 22px -14px rgba(8,28,74,.34);
+}
+.crow,.sheet-card,.kpi,.otable{border-color:var(--gline);border-radius:var(--gr-sm);box-shadow:var(--gsh),var(--ghi)}
+.reg-card{border-radius:var(--gr)}
+/* Shape only: the banner's amber edge and the strip's tint both say something. */
+.banner,.expdfstrip{border-radius:var(--gr-sm)}
+.fld input,.fld select,.regToggleBtn,.searchbar input,.btn{border-radius:13px}
+.rangebar input,.rangebar select{border-radius:11px}
+.toast{border-radius:14px}
+.sheet-panel{border-radius:24px 24px 0 0}
+.sheet-backdrop{-webkit-backdrop-filter:blur(14px) saturate(120%);backdrop-filter:blur(14px) saturate(120%)}
+</style>
+</head>
+<body>
+
+<div id="scrBoot" class="center">
+  <div class="brand" id="bootBrand">HOOP Calls</div>
+  <div class="sk" id="bootSpin"></div>
+  <!-- Shown only if the server does not answer. Without it the officer has a blue screen, no
+       message, and nothing to press -- so they restart the app over and over instead. -->
+  <div id="bootErr" class="hide" style="max-width:300px;text-align:center;color:#fff;padding:0 18px">
+    <div style="font-size:14px;line-height:1.5">Mfumo haujajibu kwa sasa. Angalia mtandao, kisha jaribu tena.<br>
+      <span style="color:rgba(255,255,255,.7);font-size:12.5px">The server is not answering. Check your connection, then try again.</span></div>
+    <button class="btn" id="bootRetry" style="margin-top:14px">Jaribu tena / Try again</button>
+  </div>
+</div>
+
+<div id="scrRegister" class="center hide">
+  <div class="reg-card">
+    <span class="reg-logo mark" id="regMark">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><text x="32" y="33" text-anchor="middle" font-size="21" font-weight="800" letter-spacing="-1.4" fill="#2E2B7A">HOOP</text><path d="M18 38 A 14 14 0 0 0 46 38" fill="none" stroke="#35A8E1" stroke-width="5" stroke-linecap="round"/></svg>
+    </span><img class="reg-logo hide" id="regLogo" alt="">
+    <div class="reg-title" id="regTitle">Karibu HOOP Calls</div>
+    <div class="reg-sub">Jaza jina lako na timu ili uanze kupokea orodha za simu. / Enter your name and team to start receiving your call lists.</div>
+    <div id="regErr"></div>
+    <div class="fld">
+      <label>Mimi ni / I am</label>
+      <div class="regToggle">
+        <button type="button" class="regToggleBtn on" data-role="officer">Afisa<span>Field officer</span></button>
+        <button type="button" class="regToggleBtn" data-role="leader">Kiongozi<span>Leader</span></button>
+      </div>
+    </div>
+    <div class="fld"><label>Namba ya simu / Phone number</label><input id="regPhone" placeholder="0712345678" type="tel">
+      <div class="note">Ndiyo unayoingia nayo &#x2014; lazima iwe ile PMO aliyosajili. / This is your login: it must be the number your PMO officer registered.</div>
+    </div>
+    <div class="fld" id="regNameWrap"><label>Jina lako / Your name</label><input id="regName" placeholder="e.g. Juma Issa"></div>
+    <div class="fld" id="regPassWrap"><label>Msimbo wa timu / Team code</label>
+      <input id="regPass" placeholder="XXXXXX" autocomplete="off" data-secret data-upper>
+      <div class="note">Umepewa na afisa wa PMO. Msimbo ndio unaonyesha timu yako &#x2014; hakuna haja ya kuichagua. / Issued by your PMO officer. The code identifies your team, so there is nothing to pick.</div>
+    </div>
+    <div class="fld hide" id="regCodeWrap"><label>Msimbo wa uongozi / Leader access code</label>
+      <input id="regCode" placeholder="Enter your portal access code" data-secret>
+      <div class="note">Your name and teams load automatically from your access code &#x2014; same as the portal. No need to type a name or pick a team.</div>
+    </div>
+    <div class="fld"><button class="btn btn-pri" id="regBtn">Endelea / Continue</button></div>
+  </div>
+</div>
+
+<div id="scrApp">
+  <header class="top">
+    <div class="row1">
+      <!-- The logo doubles as the way back to the launcher: inside the Android app there is
+           no browser chrome, so this is the only route from Calls to the rest of the system. -->
+      <!-- No src until one actually loads. An <img src=""> is a BROKEN-IMAGE icon in every
+           browser, which is what the header showed whenever CALL_LOGO_URL was unset or the
+           URL 404'd -- so the mark below is the default and the image only replaces it once
+           it has loaded successfully. -->
+      <a href="/" title="Menu"><span class="logo mark" id="appMark">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><text x="32" y="33" text-anchor="middle" font-size="21" font-weight="800" letter-spacing="-1.4" fill="#2E2B7A">HOOP</text><path d="M18 38 A 14 14 0 0 0 46 38" fill="none" stroke="#35A8E1" stroke-width="5" stroke-linecap="round"/></svg>
+      </span><img class="logo hide" id="appLogo" alt="Menu"></a>
+      <div class="who"><b id="appName">&#x2014;</b><span id="appTeam">&#x2014;</span></div>
+      <span class="pill" id="syncPill" title="Sync status &#x2014; gusa kusawazisha / tap to sync"><span class="dot"></span></span>
+      <!-- The bell. An officer had no way to learn that a complaint had been raised against a
+           customer on their round, or that a colleague had left a note, except by being
+           telephoned about it. Same updates the portal shows, scoped to this handset's teams. -->
+      <button type="button" class="bellBtn" id="bellBtn" title="Taarifa / Updates">&#128276;<span class="bdot hide" id="bellDot"></span></button>
+      <!-- Swap into the portal. Sits right after the sync pill so the two "mode" controls are
+           together, and before logout so it is never mistaken for one. -->
+      <a class="swapBtn hide" id="swapBtn" href="/dashboard" title="Nenda kwenye mfumo / Switch to the system">&#128260;</a>
+      <button type="button" class="logoutBtn hide" id="logoutBtn" title="Toka / Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg></button>
+    </div>
+    <div class="searchbar" style="margin:10px 0 0"><input id="listQ" placeholder="Tafuta jina / namba&#x2026; (kwenye orodha zote)"></div>
+    <div class="tabs" id="tabs">
+      <button data-v="today">Leo &mdash; Orodha ya Watu</button>
+      <button data-v="expdf" id="tabExpdf" class="hide" style="display:none">Exp.Def</button>
+      <button data-v="reports" id="tabReports" class="hide">Ripoti</button>
+    </div>
+    <!-- The crisis switch. Hidden until the admin's OFFLINE_PACK setting allows it -- a
+         response plan for the days the internet is shut off, not a feature for every day. -->
+    <div class="hide" id="crisisRow" style="margin:8px 0 0">
+      <button type="button" id="crisisBtn" class="pill" style="width:100%;text-align:left"></button>
+    </div>
+    <div class="expdfstrip hide" id="expdfStrip"></div>
+    <div class="daystrip hide" id="dayStrip">
+      <span class="ds-tag" id="dsTag">Leo</span>
+      <span>Orodha <b id="dsList">&mdash;</b></span>
+      <span>Locked 7+ <b id="dsLock7">&mdash;</b></span>
+      <span class="ds-dot">&middot;</span>
+      <span>Ndani ya 45 <b id="dsWin">&mdash;</b></span>
+      <span class="ds-dot">&middot;</span>
+      <span>Simu leo <b id="dsCalls">&mdash;</b></span>
+      <span>Waliofikiwa <b id="dsReach">&mdash;</b></span>
+    </div>
+  </header>
+  <main class="body" id="body"></main>
+</div>
+
+<div class="sheet-backdrop" id="sheet">
+  <div class="sheet-panel">
+    <div class="sheet-handle"></div>
+    <button class="close-sheet" id="sheetClose">&#x2715;</button>
+    <div id="sheetBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Ruhusu kufanya kazi chini chini. Shown by the app itself when it opens, not a banner
+     somebody has to find. The wording is the permission described as what it buys. -->
+<div class="sheet-backdrop" id="bgPrompt" style="align-items:center;justify-content:center">
+  <div class="sheet-card" style="max-width:330px;margin:0 24px;padding:22px;border-radius:16px">
+    <div style="font-size:17px;font-weight:800;line-height:1.35;margin-bottom:8px">🔋 Ruhusu comment kusave automatic</div>
+    <div style="font-size:13.5px;color:var(--mut);line-height:1.5;margin-bottom:18px">
+      Simu yako inazima HOOP Calls ikiwa nyuma. Ukiruhusu, maoni na simu zako zinahifadhika zenyewe
+      bila kusubiri. Bonyeza <b>Ruhusu</b>, kisha kwenye dirisha la simu chagua <b>Allow</b>.
+    </div>
+    <div style="display:flex;gap:10px">
+      <button type="button" class="btn btn-ghost" id="bgLater">Baadaye</button>
+      <button type="button" class="btn btn-pri" id="bgYes">Ruhusu</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-backdrop" id="confirmModal" style="align-items:center;justify-content:center">
+  <div class="sheet-card" style="max-width:320px;margin:0 24px;padding:20px;border-radius:16px">
+    <div id="confirmMsg" style="font-size:15px;font-weight:700;line-height:1.4;margin-bottom:18px"></div>
+    <div style="display:flex;gap:10px">
+      <button type="button" class="btn btn-ghost" id="confirmNo">Ghairi</button>
+      <button type="button" class="btn btn-pri" id="confirmYes">Endelea</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= tiny helpers (self-contained -- call.html is its own HtmlService file) ================= */
+function $(s,r){ return (r||document).querySelector(s); }
+function $all(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function money(n){ n = Number(n)||0; return n.toLocaleString('en-US', {maximumFractionDigits:0}); }
+/* Team names are typed by hand in several places, so 'Kariakoo' and ' KARIAKOO ' are the same
+   team. Compare the tidied-up form, the way the server does, or the dropdown loses its tick. */
+function K_(s){ return String(s==null?'':s).trim().toUpperCase(); }
+function pct(x){ if (x===''||x==null||isNaN(x)||!isFinite(x)) return '\u2014'; return (100*x).toFixed(1)+'%'; }
+function digits_(v){ return String(v==null?'':v).replace(/\D/g,''); }
+function telHref(v){ var d = digits_(v); if (!d) return '#'; return d.indexOf('255')===0 ? '+'+d : '+255'+d.replace(/^0+/,''); }
+function fmtDur(sec){ sec = Math.max(0, Math.round(Number(sec)||0)); var h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
+  function p2(n){ return (n<10?'0':'')+n; } return h>0 ? (h+':'+p2(m)+':'+p2(s)) : (m+':'+p2(s)); }
+function isoToday(off){
+  var d = new Date(); d.setDate(d.getDate() + (off||0));
+  var m = ('0'+(d.getMonth()+1)).slice(-2), dd = ('0'+d.getDate()).slice(-2);
+  return d.getFullYear() + '-' + m + '-' + dd;
+}
+function toast(msg, bad){
+  var t = $('#toast'); t.textContent = msg; t.className = 'toast' + (bad?' bad':'');
+  t.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(function(){ t.style.display='none'; }, 3400);
+}
+/* THE SERVER DID NOT SEND JSON, AND SAYING SO IN JAVASCRIPT'S WORDS HELPS NOBODY.
+   A function that runs out of time or crashes is answered by the host with an HTML page, so
+   r.json() throws  Unexpected token 'A', "An error o"...  -- which reads like a bug in this page
+   and is in fact the server saying it gave up. Told plainly, with the status, it is something
+   somebody can act on instead of paste into a search engine. */
+function readJson_(r){
+  return r.text().then(function(t){
+    try { return { status: r.status, body: JSON.parse(t) }; }
+    catch (e) {
+      var slow = r.status === 504 || r.status === 408 || /timed? ?out|TIMEOUT/i.test(t);
+      throw new Error((slow
+        ? 'Seva imechukua muda mrefu mno / the server took too long'
+        : 'Seva imeshindwa kujibu / the server could not answer')
+        + ' \u2014 HTTP ' + r.status);
+    }
+  });
+}
+function srv(fn){
+  var args = Array.prototype.slice.call(arguments, 1);
+  // v2 transport: same fn names the GAS google.script.run bridge used, POSTed to this
+  // site's own /api/call -- the rest of this file neither knows nor cares which engine
+  // answers. Network failures retry twice; server-side errors reject with the message.
+  function attempt(tries){
+    return new Promise(function(res, rej){
+      // A request with no deadline is how an officer ends up staring at a blue screen for ten
+      // minutes with nothing to press. If the server is not answering, say so and let them
+      // try again -- waiting silently forever is never the right behaviour in the field.
+      var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var timer = setTimeout(function(){ if (ctl) ctl.abort(); }, 25000);
+      fetch((window.HC_API_BASE || '') + '/api/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fn: fn, args: args }),
+        signal: ctl ? ctl.signal : undefined
+      }).then(function(r){ clearTimeout(timer); return readJson_(r); })
+        .then(function(x){
+          if (x.status >= 200 && x.status < 300) res(x.body);
+          else rej((x.body && x.body.error) || ('HTTP ' + x.status));
+        })
+        .catch(function(e){
+          clearTimeout(timer);
+          var aborted = e && (e.name === 'AbortError');
+          if (tries > 0) setTimeout(function(){ attempt(tries-1).then(res, rej); }, 1200);
+          else rej(aborted ? 'Mfumo haujajibu. / The server did not answer.'
+                           : String((e && e.message) || e));
+        });
+    });
+  }
+  return attempt(2);
+}
+function statusChip(s){
+  var raw = String(s||'').trim();
+  if (!raw) return '<span class="chip mut">Haijapigwa</span>';
+  var k = raw.toUpperCase(), cls = 'mut';
+  if (k==='PAID'||k==='OVERPAID'||k==='CLEARED'||k==='ANALIPA LEO') cls = 'ok';
+  else if (k==='UNDERPAID'||k==='AMETOA AHADI'||k==='LOCKED 4+') cls = 'warn';
+  else if (k==='UNPAID'||k==='DEFAULTER'||k==='LOCKED 7+'||k==='HANA USHIRIKIANO') cls = 'bad';
+  return '<span class="chip ' + cls + '">' + esc(raw) + '</span>';
+}
+
+/* ================= native bridge (Android WebView JS interface, absent in a plain browser) =================
+   Contract implemented by com.samaritantechs.hopecalls.HopeCallsBridge:
+     getDeviceId()            -> String, stable per install
+     getCalls(sinceMs, max)   -> JSON string [{ts,dur,dir:"in"|"out",num}, ...] from the Android call log
+     getWatermark()/setWatermark(ms) -> String, last-synced call timestamp (persisted so a JobScheduler
+                                        background sync and this foreground page never double-count)
+   In a plain browser none of this exists -- the page still works for dialing (tel: links) and logging
+   follow-ups, it just can't read the call log, so it shows a small "install the app" banner instead. */
+function nativeBridge(){ return (window.HopeCalls && window.HopeCalls.getCalls) ? window.HopeCalls : null; }
+function deviceId(){
+  var nb = nativeBridge();
+  if (nb && nb.getDeviceId) { try { var id = nb.getDeviceId(); if (id) return id; } catch(e){} }
+  var id = null;
+  try { id = localStorage.getItem('hcDev'); } catch(e){}
+  if (!id) { id = 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2,10); try { localStorage.setItem('hcDev', id); } catch(e){} }
+  return id;
+}
+
+/* ================= state ================= */
+var DEV = deviceId();
+var S = { boot:null, view:'today', cache:{}, cacheAt:{}, reqId:0, isAdmin:false, rows:[], q:'', curRef:null, comments:[], repData:null, repFrom:weekStartIso_(), repTo:weekEndIso_(), repTeam:'', repLeader:'', syncEverySec:300, permOk:null,
+  /* Which of the three recycling roles the Exp.Def list is narrowed to, remembered across
+     restarts the same way the scope and the open/shut summary are. Somebody who works the
+     bike officers' book works it every day. */
+  expdfRole: (function(){ try { return localStorage.getItem('hcXdRole') || ''; } catch(e){ return ''; } })() };
+var LIST_SOURCE = { today:'today' };
+// Exp.Def is the recycling rotation's own list and is already scoped to the signed-in leader
+// by the server, so it must NOT be re-filtered here by customer status the way def/exp/chr are.
+
+/** Monday 00:00 of the current week, local device time. Re-sent every sync (dedup is by
+    deterministic id against what's already in the sheet -- see callSyncCore_ server-side), so
+    there's no fragile "since last watermark" cutoff that can silently drop calls. */
+function startOfWeekMs_(){
+  var d = new Date();
+  var day = d.getDay();                          // 0=Sun .. 6=Sat
+  var diff = (day === 0) ? 6 : day - 1;           // days since the most recent Monday
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate() - diff);
+  return d.getTime();
+}
+function weekStartIso_(){
+  var d = new Date(startOfWeekMs_());
+  var m = ('0'+(d.getMonth()+1)).slice(-2), dd = ('0'+d.getDate()).slice(-2);
+  return d.getFullYear() + '-' + m + '-' + dd;
+}
+function weekEndIso_(){
+  var d = new Date(startOfWeekMs_() + 6*86400000);
+  var m = ('0'+(d.getMonth()+1)).slice(-2), dd = ('0'+d.getDate()).slice(-2);
+  return d.getFullYear() + '-' + m + '-' + dd;
+}
+
+/* ================= sync status pill ================= */
+function setSyncStatus(kind){
+  var p = $('#syncPill');
+  p.className = 'pill' + (kind==='ok'?' ok':kind==='err'?' err':kind==='syncing'?' syncing':(kind==='noperm'?' err':''));
+}
+/* MOST SYNCS NEVER REACH THE SERVER, AND THE STRIP STILL HAS TO KEEP UP.
+   An officer with no new calls, one who has not granted the call-log permission, and anyone on
+   a plain browser all leave doSync early -- which is right, there is nothing to send. But the
+   whole point of the sync loop, for the strip, is asking "has anything been uploaded". So those
+   paths still ping: the server's empty-sync path is two reads by primary key, no lists, no
+   book. It is the cheapest question in the system, and it is the only one that has to be asked
+   often. Fire and forget -- a failure here must never change the sync light. */
+function versionPing_(){
+  srv('api_callSync', DEV, []).then(function(r){ if (r && r.ok) { summaryVersionCheck_(r.dataVersion); listVersionCheck_(r.dataVersion); } })
+    .catch(function(){});
+}
+function doSync(){
+  if (!S.boot) return Promise.resolve({ ok:true, added:0 });
+  var nb = nativeBridge();
+  if (!nb){ setSyncStatus('none'); S.permOk = null; versionPing_(); return Promise.resolve({ ok:true, added:0 }); }
+  try { S.permOk = nb.hasCallLogPermission ? (nb.hasCallLogPermission() === '1') : true; } catch(e){ S.permOk = true; }
+  if (!S.permOk){ setSyncStatus('noperm'); versionPing_(); return Promise.resolve({ ok:true, added:0 }); }
+  setSyncStatus('syncing');
+  var raw = '[]';
+  try { raw = nb.getCalls(startOfWeekMs_(), 2000) || '[]'; } catch(e){}
+  var calls; try { calls = JSON.parse(raw); } catch(e){ calls = []; }
+  if (!calls.length){ setSyncStatus('ok'); versionPing_(); return Promise.resolve({ ok:true, added:0 }); }
+  return srv('api_callSync', DEV, calls).then(function(r){
+    if (r && r.ok){
+      if (nb.setWatermark) { try { nb.setWatermark(String(r.watermark)); } catch(e){} }
+      setSyncStatus('ok');
+      summaryVersionCheck_(r.dataVersion);   // an upload while the officer was working
+      listVersionCheck_(r.dataVersion);      // ...and the lists it changed, dropped at once
+      // No forced list reload here on purpose. Freshness is a per-device rolling cooldown (see
+      // sourceFresh_ / setView) -- a call just made by the officer syncing successfully isn't
+      // reason enough to reload the list they're looking at, especially on unstable connections.
+    } else setSyncStatus('err');
+    return r;
+  }).catch(function(){ setSyncStatus('err'); });
+}
+var syncVisListenerAdded = false;
+function startSyncLoop(){
+  doSync();
+  if (S.syncTimer) clearInterval(S.syncTimer);
+  S.syncTimer = setInterval(function(){ if (!document.hidden) doSync(); }, Math.max(60, S.syncEverySec||300) * 1000);
+  if (!syncVisListenerAdded) {
+    syncVisListenerAdded = true;
+    document.addEventListener('visibilitychange', function(){ if (!document.hidden && S.boot) doSync(); });
+  }
+  $('#syncPill').onclick = doSync;
+}
+/** Xiaomi/Oppo/Vivo/Huawei/Samsung (and others) kill background sync unless the app is
+    specifically exempted -- this is a well-documented OEM-level restriction on top of Android's
+    own permission system, and is the most likely reason calls sync fine on some phones and never
+    on others. Standard battery-optimization exemption is the one part of this with a real API;
+    the rest is OEM-specific settings screens with no API, so we just point at them by name. */
+function batteryGuidanceHtml_(){
+  var nb = nativeBridge();
+  if (!nb || !nb.getManufacturer) return '';
+  var mfr = '';
+  try { mfr = String(nb.getManufacturer() || '').toLowerCase(); } catch(e){}
+  var ignoring = true;
+  try { ignoring = !nb.isIgnoringBatteryOptimizations || nb.isIgnoringBatteryOptimizations() === '1'; } catch(e){}
+  var extra = '';
+  if (mfr.indexOf('xiaomi') >= 0 || mfr.indexOf('redmi') >= 0 || mfr.indexOf('poco') >= 0)
+    extra = ' Kwenye Xiaomi/Redmi/POCO: fungua Settings \u2192 Apps \u2192 HOOP Calls, ruhusu Autostart, na weka Battery saver kuwa "No restrictions".';
+  else if (mfr.indexOf('oppo') >= 0 || mfr.indexOf('realme') >= 0)
+    extra = ' Kwenye Oppo/Realme: Settings \u2192 Battery \u2192 HOOP Calls \u2192 ruhusu "Allow background activity".';
+  else if (mfr.indexOf('vivo') >= 0)
+    extra = ' Kwenye Vivo: Settings \u2192 Battery \u2192 Background power consumption \u2192 ruhusu HOOP Calls.';
+  else if (mfr.indexOf('huawei') >= 0 || mfr.indexOf('honor') >= 0)
+    extra = ' Kwenye Huawei/Honor: Settings \u2192 Battery \u2192 App launch \u2192 HOOP Calls \u2192 chagua "Manage manually" na washa vyote.';
+  else if (mfr.indexOf('samsung') >= 0)
+    extra = ' Kwenye Samsung: Settings \u2192 Battery \u2192 Background usage limits \u2192 toa HOOP Calls kwenye orodha ya "Put unused apps to sleep".';
+  /* THE BUTTON IS GONE FROM HERE ON PURPOSE. Asking is now something the app DOES when it
+     opens (see askBackground_) rather than something an officer has to notice on a list and
+     decide to press -- the same way the call-log permission and the update check have always
+     worked. What is left in this banner is only the part Android has no API for: the OEM's own
+     settings screens, which no dialog can open and which have to be described by name. */
+  if (!extra) return '';
+  return '<div class="banner" id="battBanner">\uD83D\uDD0B Simu yako inaweza kuzima programu ikiwa nyuma, maoni yasihifadhike.' + extra + '</div>';
+}
+
+/* ---------------------------------------------------------------- RUHUSU KUFANYA KAZI CHINI CHINI
+ *
+ * Android stops an app that is not on screen, and on most of the handsets in the field it does
+ * so aggressively. For HOOP Calls that means a comment typed at a customer's door, and the call
+ * that goes with it, may never reach the server -- the officer did their work and the system
+ * does not know it.
+ *
+ * This was a button on a banner. A banner is something an officer has to notice on a list of
+ * customers and decide to press, and almost nobody did, so almost nobody was exempt. The
+ * call-log permission and the update check were never optional in that way: the app asks the
+ * moment it opens. This now does the same, for everybody who has not already allowed it.
+ *
+ * WHAT IT SAYS MATTERS AS MUCH AS WHEN. "Allow background activity" means nothing at a
+ * customer's door. "Ruhusu comment kusave automatic" is the same permission described as the
+ * thing it actually buys, which is the difference between being read and being dismissed.
+ *
+ * ASKED AT MOST ONCE A DAY. Android's own dialog is the second step, so a refusal costs two
+ * taps and re-asking every few minutes would train people to refuse. Once a day, until it is
+ * allowed, then never again -- the check is the granted state itself, not a flag we set, so an
+ * officer who allows it and later has it revoked by a battery-saver sweep is asked again.
+ */
+var BG_ASK_LS_KEY = 'hcBgAsk_v1';
+function backgroundBlocked_(){
+  var nb = nativeBridge();
+  if (!nb || !nb.isIgnoringBatteryOptimizations || !nb.requestIgnoreBatteryOptimizations) return false;
+  try { return nb.isIgnoringBatteryOptimizations() !== '1'; } catch(e){ return false; }
+}
+function askBackground_(force){
+  if (!backgroundBlocked_()) return;
+  if (!force) {
+    var last = '';
+    try { last = localStorage.getItem(BG_ASK_LS_KEY) || ''; } catch(e){}
+    if (last === todayKeyLocal_()) return;                 // already asked today
+  }
+  try { localStorage.setItem(BG_ASK_LS_KEY, todayKeyLocal_()); } catch(e){}
+  $('#bgPrompt').style.display = 'flex';
+}
+function wireBackgroundPrompt_(){
+  var close = function(){ $('#bgPrompt').style.display = 'none'; };
+  $('#bgYes').onclick = function(){
+    close();
+    var nb = nativeBridge();
+    if (nb && nb.requestIgnoreBatteryOptimizations) { try { nb.requestIgnoreBatteryOptimizations(); } catch(e){} }
+    /* Android's dialog takes the officer off this page. When they come back, redraw -- if they
+       allowed it the OEM banner may no longer apply, and if they did not, nothing nags. */
+    setTimeout(function(){ if (S.entered) drawList(); }, 1200);
+  };
+  $('#bgLater').onclick = close;
+  $('#bgPrompt').onclick = function(e){ if (e.target === $('#bgPrompt')) close(); };
+}
+
+/* ================= boot / register ================= */
+/** Data lives on the device now, not tied to a shared wall-clock hour. Each device tracks its
+    OWN last-synced-at per source; a source is trusted for CACHE_COOLDOWN_MS after that device's
+    own last fetch, whenever that was. Persisted to localStorage so reopening the app (even after
+    fully closing it) can render instantly from the last sync -- no network wait, no blank screen
+    -- rather than starting from zero every time the page loads. */
+var CACHE_COOLDOWN_MS = 60 * 60 * 1000;
+var CACHE_LS_KEY = 'hcListCache_v1';
+/* Who this handset belongs to, kept on the handset. Tapping a customer's number hands the
+   phone to the dialler, and Android is free to throw this page away while the officer talks --
+   on the cheap handsets in the field it usually does. Coming back then meant the blue screen
+   again, and a wait on the network, after EVERY call. The lists were already saved here; the
+   only thing standing between the officer and their work was asking the server who they are,
+   which it had already answered that morning. */
+var BOOT_LS_KEY = 'hcBoot_v1';
+function loadCacheFromDevice_(){
+  try {
+    var raw = localStorage.getItem(CACHE_LS_KEY);
+    if (!raw) return;
+    var saved = JSON.parse(raw);
+    // The Exp.Def summary travels WITH its rows. Left out, a restart restored the rows from
+    // the device and left the strip null -- so the tab had no totals and, when the list was
+    // empty, could not say which of the four reasons it was empty for.
+    if (saved && typeof saved === 'object'){ S.cache = saved.cache || {}; S.cacheAt = saved.cacheAt || {}; S.expdf = saved.expdf || null; S.dataVersion = saved.dataVersion || ''; }
+  } catch (e) { /* corrupt or unavailable storage -- start empty, not fatal */ }
+}
+function saveCacheToDevice_(){
+  try { localStorage.setItem(CACHE_LS_KEY, JSON.stringify({ cache: S.cache, cacheAt: S.cacheAt, expdf: S.expdf, dataVersion: S.dataVersion || '' })); }
+  catch (e) { /* quota or storage unavailable -- app still works, just without persistence this session */ }
+}
+function sourceFresh_(src){
+  return !!(S.cache[src] && S.cacheAt[src] && (Date.now() - S.cacheAt[src] < CACHE_COOLDOWN_MS));
+}
+/* AN HOUR IS RIGHT FOR A BAD CONNECTION AND WRONG FOR A CORRECTED BOOK.
+
+   Every list is kept on the device for an hour, in storage that survives closing the app, and
+   shown instantly. That is what makes this usable where the signal is poor, and it is also why
+   an upload that fixes something reaches nobody until the hour is up: the handset never asks.
+
+   "Uploaded, still not there" therefore means two completely different things -- the fix did
+   not work, or the phone has not looked yet -- and telling those apart has cost days of this.
+
+   DATA_VERSION moves the moment anything is uploaded. When the version this device last saw is
+   not the version the server just reported, every cached list is thrown away at once, so the
+   next screen comes from the server. No timer, no pull-to-refresh, nothing for anybody to know:
+   an upload lands and the handsets are current. */
+/** Drop the device's lists when the book behind them has moved, and REDRAW what is on screen
+    -- an officer looking at Def while an upload lands should see it fill in, not be told to go
+    to another tab and come back. */
+function listVersionCheck_(version){
+  if (!dropCacheIfStale_(version)) return;
+  if (!S.entered) return;
+  var src = LIST_SOURCE[S.view];
+  if (src) fetchSource_(src, false);
+}
+function dropCacheIfStale_(version){
+  var v = String(version == null ? '' : version);
+  if (!v) return false;                       // nothing uploaded yet, or an older server
+  if (S.dataVersion === v) return false;
+  var had = Object.keys(S.cache || {}).length > 0;
+  S.dataVersion = v;
+  if (had) { S.cache = {}; S.cacheAt = {}; S.expdf = null; }
+  saveCacheToDevice_();
+  return had;
+}
+/** Puts a logo in both places. `instant` skips the load check, which is safe only for a logo
+    this device has already displayed successfully. */
+function setLogo_(url, instant){
+  [['#regLogo', '#regMark'], ['#appLogo', '#appMark']].forEach(function(p){
+    var img = $(p[0]), mk = $(p[1]);
+    if (!img || img.src === url) return;
+    var show = function(){ img.classList.remove('hide'); if (mk) mk.classList.add('hide');
+      if (window.HOPEBrand) window.HOPEBrand.icon(url); };       // tab + add-to-home-screen icon
+    // Only a logo that actually LOADS replaces the mark -- a 404 or an unset setting leaves
+    // the mark standing rather than putting a broken-image icon in the header.
+    img.onload = show;
+    img.onerror = function(){ img.classList.add('hide'); if (mk) mk.classList.remove('hide'); };
+    img.src = url;
+    if (instant) show();
+  });
+}
+
+function boot(){
+  loadCacheFromDevice_();
+  var loggedOut = false;
+  try { loggedOut = localStorage.getItem('hcLoggedOut') === '1'; } catch(e){}
+  // The logo is painted from the device BEFORE the network is asked. Waiting for boot meant
+  // the drawn stand-in showed first and then visibly swapped a second or two later, on every
+  // single launch -- a flicker that reads like a glitch in an app people open all day.
+  try { var cached = localStorage.getItem('hcLogo'); if (cached) setLogo_(cached, true); } catch(e){}
+
+  // Straight to work on a handset that has already been through this, without waiting for the
+  // network. The server is still asked, behind the screen -- see below for what happens when
+  // it disagrees. A handset that was logged out here is not let back in this way.
+  var warm = null;
+  if (!loggedOut) { try { warm = JSON.parse(localStorage.getItem(BOOT_LS_KEY) || 'null'); } catch(e){} }
+  if (warm && warm.ok) enterApp(warm);
+
+  srv('api_callBoot', DEV).then(function(d){
+    if (d.brand){ $('#bootBrand').textContent = d.brand; $('#regTitle').textContent = 'Karibu ' + d.brand + ' Calls'; }
+    if (d.logo){
+      setLogo_(d.logo, false);
+      try { localStorage.setItem('hcLogo', d.logo); } catch(e){}   // instant on every later launch
+    }
+    if (d.ok && !loggedOut){
+      try { localStorage.setItem(BOOT_LS_KEY, JSON.stringify(d)); } catch(e){}
+      /* BEFORE the app is entered, so a handset that was showing yesterday's list from storage
+         does not paint it first and correct itself afterwards. Opening the app IS the moment
+         somebody expects to see what was uploaded. */
+      dropCacheIfStale_(d.dataVersion);
+      return enterApp(d);                     // fresh name, team and tabs land on the open app
+    }
+    // The server says this handset is no longer signed in -- it was de-registered, or the
+    // officer left. Whatever we let them see a moment ago has to go. Clearing what we remember
+    // and starting over lands them on the sign-in screen by the ordinary path, with no second
+    // way in to keep correct: the next launch finds nothing saved, so this cannot loop.
+    try { localStorage.removeItem(BOOT_LS_KEY); localStorage.removeItem(SUM_LS_KEY); } catch(e){}
+    if (S.entered){ try { localStorage.removeItem(CACHE_LS_KEY); } catch(e2){} location.reload(); return; }
+    // Not registered yet, OR logged out on this device -> show sign-in. The team list is no
+    // longer sent to this screen: publishing every team name to an unauthenticated device was
+    // half of what made self-registration possible.
+
+    $('#scrBoot').classList.add('hide');
+    $('#scrRegister').classList.remove('hide');
+    // Carried over from the launcher, where the officer already typed their team code. Typing
+    // the same code twice in a row is exactly the sort of step that loses people.
+    try {
+      var carried = localStorage.getItem('hcTeamCode');
+      if (carried){ $('#regPass').value = carried; localStorage.removeItem('hcTeamCode'); $('#regName').focus(); }
+    } catch(e2){}
+  }).catch(function(e){
+    // A connection failure is NOT "you are not registered". Sending the officer to the
+    // sign-in screen made them re-enter a team code that was never the problem -- and on a
+    // handset that is already registered, that is a dead end. Stay here, say what happened,
+    // and give them a button.
+    if (window.console) console.error('[hoop] boot failed:', e);
+    // Already working from what is on the handset: a dead connection is not a dead end, and it
+    // is certainly not a reason to throw an officer off a screen full of their own customers.
+    if (S.entered) return;
+    var spin = $('#bootSpin'); if (spin) spin.classList.add('hide');
+    $('#bootErr').classList.remove('hide');
+  });
+}
+function doLogout(){
+  try { localStorage.setItem('hcLoggedOut', '1'); } catch(e){}
+  if (S.syncTimer) { clearInterval(S.syncTimer); S.syncTimer = null; }
+  S.boot = null; S.entered = false; S.cache = {}; S.cacheAt = {}; S.rows = []; S.q = ''; S.view = 'today'; S.repData = null; S.curRef = null;
+  /* SIGNING OUT IS THE ONLY THING THAT TAKES THE STRIP AWAY, and it must take the saved copy
+     with it -- one team's figures must not be sitting there when the next officer signs in on
+     the same handset. */
+  _sumAt = 0; _sumVer = null;
+  var _ds = $('#dayStrip'); if (_ds) { _ds.classList.add('hide'); _ds.classList.remove('stale'); }
+  ['#dsList','#dsLock7','#dsWin','#dsCalls','#dsReach'].forEach(function(id){ var el = $(id); if (el) el.textContent = '\u2014'; });
+  var _dt = $('#dsTag'); if (_dt) _dt.textContent = 'Leo';
+  try { localStorage.removeItem(CACHE_LS_KEY); localStorage.removeItem(BOOT_LS_KEY); localStorage.removeItem(SUM_LS_KEY); } catch(e){}
+  sheetHide();
+  $('#confirmModal').style.display = 'none';
+  $('#bgPrompt').style.display = 'none';
+  var q = $('#listQ'); if (q) q.value = '';
+  $('#regPhone').value = ''; $('#regCode').value = ''; $('#regPass').value = ''; $('#regName').value = '';
+  regRole = 'officer';
+  $all('.regToggleBtn').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-role')==='officer'); });
+  $('#regNameWrap').classList.remove('hide');
+  $('#regPassWrap').classList.remove('hide');
+  $('#regCodeWrap').classList.add('hide');
+  $('#regErr').innerHTML = '';
+  $('#regBtn').disabled = false; $('#regBtn').textContent = 'Endelea / Continue';
+  $('#scrApp').style.display = 'none';
+  $('#scrBoot').classList.add('hide');
+  $('#scrRegister').classList.remove('hide');
+}
+function showConfirm_(msg, onYes){
+  $('#confirmMsg').textContent = msg;
+  $('#confirmModal').style.display = 'flex';
+  $('#confirmYes').onclick = function(){ $('#confirmModal').style.display = 'none'; onYes(); };
+  $('#confirmNo').onclick = function(){ $('#confirmModal').style.display = 'none'; };
+}
+var regRole = 'officer';
+$all('.regToggleBtn').forEach(function(b){
+  b.onclick = function(){
+    regRole = b.getAttribute('data-role');
+    $all('.regToggleBtn').forEach(function(x){ x.classList.toggle('on', x===b); });
+    // Leaders never type their own name or pick a team -- both come from their access code,
+    // same as the portal itself (Leaders sheet / access code owns that identity, not a form field).
+    $('#regNameWrap').classList.toggle('hide', regRole==='leader');
+    $('#regPassWrap').classList.toggle('hide', regRole==='leader');
+    $('#regCodeWrap').classList.toggle('hide', regRole==='officer');
+  };
+});
+$('#regBtn').onclick = function(){
+  // Name and team are no longer typed by the officer -- they come from the account the PMO
+  // created. Typing them was how anyone with the APK gave themselves a team's portfolio.
+  var phone = $('#regPhone').value.trim();
+  var name = regRole === 'officer' ? $('#regName').value.trim() : '';
+  var pass = regRole === 'officer' ? $('#regPass').value.trim() : '';
+  var code = regRole === 'leader' ? $('#regCode').value.trim() : '';
+  if (!phone){ $('#regErr').innerHTML = '<div class="err">Andika namba yako ya simu.</div>'; return; }
+  if (regRole === 'officer' && !name){ $('#regErr').innerHTML = '<div class="err">Andika jina lako.</div>'; return; }
+  if (regRole === 'officer' && !pass){ $('#regErr').innerHTML = '<div class="err">Weka msimbo wa timu yako.</div>'; return; }
+  if (regRole === 'leader' && !code){ $('#regErr').innerHTML = '<div class="err">Weka msimbo wako wa uongozi.</div>'; return; }
+  $('#regBtn').disabled = true; $('#regBtn').textContent = 'Inajiunga\u2026';
+  srv('api_callRegister', DEV, name, '', code, phone, pass).then(function(){
+    return srv('api_callBoot', DEV);
+  }).then(function(d){
+    if (d.ok) {
+      // Remember who this handset is from the very first sign-in, so the NEXT launch -- and
+      // every return from a phone call -- goes straight in instead of waiting on the network.
+      try { localStorage.removeItem('hcLoggedOut'); localStorage.setItem(BOOT_LS_KEY, JSON.stringify(d)); } catch(e){}
+      return enterApp(d);
+    }
+    throw new Error('Registration did not complete. Try again.');
+  }).catch(function(e){
+    $('#regBtn').disabled = false; $('#regBtn').textContent = 'Endelea / Continue';
+    $('#regErr').innerHTML = '<div class="err">' + esc(String(e)) + '</div>';
+  });
+};
+/** Called twice on a warm start: once from what the handset remembers, so the officer is
+    working immediately, and again when the server answers. The second time must only correct
+    the name, team and tabs -- re-running the rest would re-wire every button, restart the sync
+    loop and throw away whatever list they had already started reading. */
+/* =====================================================================================
+   CRISIS PREPAREDNESS -- the offline pack.
+
+     "national challenges of oct 29th 2025 when internet was shut down. Here we should have
+      a hidden switch to download offline data that when I allow it and one presses it then
+      the app saves all the customer columns to be accessed offline: and the app itself,
+      until one switches that off or I switch off for all in system"
+
+   Three parties hold a switch, in strict order:
+
+     the ADMIN         Settings -> OFFLINE_PACK = YES. Until then no handset shows anything.
+     the OFFICER       presses the row that appears; the app fetches EVERY list they hold and
+                       pins it, and a service worker keeps the PAGE itself, so a shutdown
+                       finds both the data and the app to read it with.
+     either of them    the officer presses again, or the admin sets it off -- the next
+                       successful boot tears the pack down on every handset at once.
+
+   The lists were already surviving restarts (localStorage) and boot already enters from the
+   warm copy when the network is dead; what a shutdown could still take away was the page.
+   The worker (sw.js) closes exactly that gap and never touches /api/. */
+var CRISIS_LS = 'hcCrisis';
+function crisisOn_(){ try { return localStorage.getItem(CRISIS_LS) === '1'; } catch(e){ return false; } }
+function crisisDraw_(){
+  var b = $('#crisisBtn'); if (!b) return;
+  b.innerHTML = crisisOn_()
+    ? '✅ Nakala ya dharura IPO kwenye simu hii — gusa kuiondoa. / Crisis copy SAVED on this phone — tap to remove.'
+    : '⬇ Hifadhi nakala ya dharura — orodha zote + app, bila mtandao. / Save a crisis copy — every list + the app, for offline.';
+  b.onclick = function(){
+    if (crisisOn_()) { crisisOff_(); toast('Nakala ya dharura imeondolewa. / Crisis copy removed.'); }
+    else crisisSave_();
+  };
+}
+function crisisSync_(d){
+  var row = $('#crisisRow'); if (!row) return;
+  var allowed = d && d.offlinePack === true;
+  row.classList.toggle('hide', !allowed);
+  if (!allowed && crisisOn_()) crisisOff_();          // the admin switched it off for all
+  if (allowed) crisisDraw_();
+}
+function crisisOff_(){
+  try { localStorage.removeItem(CRISIS_LS); } catch(e){}
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistration('/').then(function(reg){
+      if (!reg) return;
+      if (reg.active) reg.active.postMessage('hoop-crisis-off');
+      // Belt and braces: unregister even if the message never lands.
+      setTimeout(function(){ reg.unregister(); }, 2000);
+    }).catch(function(){});
+  }
+  crisisDraw_();
+}
+function crisisSave_(){
+  var b = $('#crisisBtn'); b.disabled = true; b.textContent = 'Inahifadhi… / Saving…';
+  // Every list this officer holds, fetched fresh and pinned to the device store the app
+  // already reads first. The Exp.Def strip travels with its rows, as always.
+  var jobs = ['today'].map(function(s){
+    return srv('api_callList', DEV, s).then(function(x){ S.cache[s] = x.rows || []; S.cacheAt[s] = Date.now(); });
+  });
+  Promise.all(jobs).then(function(){
+    saveCacheToDevice_();
+    try { localStorage.setItem(CRISIS_LS, '1'); } catch(e){}
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function(){});
+    b.disabled = false; crisisDraw_();
+    toast('Imehifadhiwa — simu hii itafanya kazi bila mtandao. / Saved — this phone now works offline.');
+  }).catch(function(e){
+    b.disabled = false; crisisDraw_();
+    alert('Imeshindikana kupakua — jaribu tena ukiwa na mtandao. / Could not download — try again with a connection.\n' + String((e && e.message) || e));
+  });
+}
+
+function enterApp(d){
+  S.boot = d; S.syncEverySec = d.syncEverySec || 300;
+  $('#scrBoot').classList.add('hide'); $('#scrRegister').classList.add('hide');
+  $('#scrApp').style.display = 'flex';
+  $('#appName').textContent = d.name || '\u2014';
+  $('#appTeam').textContent = d.leader ? ((d.role||'Leader') + ' \u00B7 ' + (d.leaderTeams==='ALL' || !d.leaderTeams ? 'All teams' : d.leaderTeams.split(',').length + ' teams')) : d.team;
+  // A leader demoted overnight must LOSE the tab, not merely fail to gain it -- so these are
+  // set both ways round rather than only ever revealed.
+  $('#tabReports').classList.toggle('hide', !d.leader);
+  // The rotation list belongs to whoever the teams table names as a GMO, MANAGER or BIKE
+  // officer. Showing the tab to everyone would just hand most officers an empty screen.
+  $('#tabExpdf').classList.toggle('hide', !d.expdfLeader);
+  $('#logoutBtn').classList.toggle('hide', d.logoutEnabled === false);
+  /* The way across to the system, shown only while the admin has the system open. Hidden by
+     default in the markup and revealed here, so a phone that cannot reach the server, or one
+     running an older app than the server, shows no door rather than a dead one. Set both ways
+     round: a system closed at lunchtime has to take the button away, not merely stop adding
+     it. */
+  $('#swapBtn').classList.toggle('hide', d.systemOpen !== true);
+  crisisSync_(d);
+  if (S.entered) {
+    // Tabs can appear or disappear here, and the one they are standing on may have just gone.
+    if (S.view === 'reports' && !d.leader) setView('today');
+    else if (S.view === 'expdf' && !d.expdfLeader) setView('today');
+    return;
+  }
+  S.entered = true;
+  $('#logoutBtn').onclick = function(){
+    showConfirm_('Toka kwenye akaunti hii? / Log out of this account?', doLogout);
+  };
+  $('#bellBtn').onclick = bellOpen;
+  bellRefresh();
+
+  $all('#tabs button').forEach(function(b){ b.onclick = function(){ exitSearch_(); setView(b.getAttribute('data-v')); }; });
+  setView('today');
+  /* Draw the strip from the handset BEFORE anything is asked of the network, so it is on screen
+     the instant the app is -- including on the cheap handsets Android throws away after every
+     call. Then ask for fresh figures over the top. */
+  restoreSummary_();
+  /* Ask for background permission the way the app asks for everything else -- on its own, when
+     it opens. Behind the first draw so the officer sees their customers underneath it and knows
+     what the app is, rather than being met by a dialog on a blank screen. */
+  setTimeout(function(){ if (S.entered) askBackground_(false); }, 900);
+  startSyncLoop();
+  loadDaySummary(true);                                     // team % strip -- load once on entry
+  $('#syncPill').onclick = function(){ doSync(); loadDaySummary(true); };   // manual sync refreshes the strip too
+  /* AND TAPPING THE FIGURES REFRESHES THEM. The one thing an officer can do when they doubt a
+     number is ask for it again, and there was no way to. */
+  $('#dayStrip').onclick = function(){
+    // A failure that cannot be read is a failure nobody can report. Say it, then try again.
+    if (_sumErr) toast('Takwimu hazikupatikana / could not load the figures: ' + _sumErr, true);
+    loadDaySummary(true);
+  };
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden || !S.boot) return;
+    /* ASK THE CHEAP QUESTION, NOT THE THROTTLED ONE. This used to call loadDaySummary(false),
+       which does nothing for a quarter of an hour after the last refresh -- so an officer who
+       put the phone down, waited for an upload and came back saw the same figures and had no
+       way to tell whether anything had happened. The version ping is two lookups by key and
+       fetches new figures only if something really was uploaded. */
+    versionPing_();
+    bellRefresh();           // and the count, at the moment the officer is looking again
+  });
+}
+/** Top-of-app team % strip -- Col leo / Kesho / Col wiki / Sales (month-to-date) / Exp.Def / Rec
+    for the officer's own team(s). Numbers come
+    from api_callDailySummary, which reuses the portal dashboard's own formulas so this reconciles
+    with app.html. Kept off the sync interval on purpose -- refreshed only on entry, a manual sync
+    tap, or a throttled foreground return -- so it never adds to per-officer sync load. A failure
+    just leaves the strip hidden; it never surfaces an error into the header. */
+/* THE STRIP STAYS ON THE SCREEN.
+ *
+ * "It gets lost so much that I am even not sure if it'll get back."
+ *
+ * It was hidden until a fetch succeeded and hidden again on every restart, so on a handset
+ * Android throws away after each call -- which is most of them -- an officer saw it only in the
+ * seconds after opening the app, and a single failed request took it away with nothing to say
+ * why. A figure that comes and goes is worse than no figure: nobody can tell whether the number
+ * is bad or the app is.
+ *
+ * So the last figures live on the handset beside the lists, are drawn before anything is asked
+ * of the network, and are NEVER taken away by a failure. The only thing that removes the strip
+ * is signing out.
+ *
+ * What it shows is always true of some moment -- and when that moment is not today, it says so
+ * rather than passing yesterday's morning off as this one.
+ */
+var SUM_LS_KEY = 'hcDaySummary_v1';
+var _sumAt = 0;
+var _sumVer = null;                      // which upload the figures on screen came from
+var _sumErr = null;                      // why the last attempt failed, in the server's own words
+/** The strip could not be refreshed. Leave every figure where it is -- an old number beats no
+    number -- and put a warning where the clock goes, so "it shows dashes" and "it cannot reach
+    the server" stop looking identical. */
+function summaryFailed_(why){
+  _sumErr = why || 'Imeshindikana / failed';
+  var el = $('#dayStrip');
+  el.classList.remove('hide');
+  el.classList.add('warn');
+  $('#dsTag').textContent = '\u26A0 Bonyeza';
+}
+function saveSummary_(d, atMs){
+  /* WHOSE figures these are is stored with them. Handsets get handed on and officers get moved
+     between teams; restoring a saved strip without checking would put one team's numbers in
+     front of the next person to sign in, looking exactly as authoritative as their own. */
+  try { localStorage.setItem(SUM_LS_KEY, JSON.stringify({
+    d: d, at: atMs, day: todayKeyLocal_(), who: (S.boot && S.boot.userId) || '' })); } catch(e){}
+}
+/** The officer's own calendar day, only ever compared against itself -- this decides whether to
+    say "jana", never what any figure means. */
+function todayKeyLocal_(){
+  // Padded the long way round on purpose: this file runs in whatever WebView is on a
+  // five-year-old handset, and nothing else in it assumes padStart.
+  var t = new Date(), p = function(n){ return ('0' + n).slice(-2); };
+  return t.getFullYear() + '-' + p(t.getMonth()+1) + '-' + p(t.getDate());
+}
+function restoreSummary_(){
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(SUM_LS_KEY) || 'null'); } catch(e){}
+  var me = (S.boot && S.boot.userId) || '';
+  if (!saved || !saved.d || (saved.who || '') !== me) {
+    $('#dayStrip').classList.remove('hide');       // dashes, but present -- never a missing strip
+    return;
+  }
+  drawSummary_(saved.d, saved.day !== todayKeyLocal_(), saved.at);
+  _sumVer = saved.d.dataVersion || null;
+}
+/** HH:MM on the officer's own clock. */
+function hhmm_(ms){
+  var t = new Date(ms), p = function(n){ return ('0' + n).slice(-2); };
+  return p(t.getHours()) + ':' + p(t.getMinutes());
+}
+function drawSummary_(d, stale, atMs){
+  /* THE TAG SAYS WHEN. "I don't know if it even does" is a fair thing to say about a row of
+     percentages that never visibly changes -- most uploads move none of them by a whole point,
+     so there is nothing on screen to tell an officer the app is keeping up. A clock beside the
+     figures answers it without them having to trust anything. */
+  $('#dsTag').textContent = 'Leo' + (atMs ? ' ' + hhmm_(atMs) : '');
+  var n_ = function(x){ return (x && x.num != null) ? money(x.num) : '\u2014'; };
+  $('#dsList').textContent = n_(d.list);
+  $('#dsLock7').textContent = n_(d.locked7);
+  $('#dsWin').textContent = n_(d.inWindow);
+  $('#dsCalls').textContent = n_(d.calls);
+  // Reached carries the fraction beside the percentage: 12/40 is the number chased at the door.
+  $('#dsReach').textContent = (d.reached && d.reached.pct != null)
+    ? (pctW_(d.reached.pct) + ' \u00B7 ' + d.reached.num + '/' + d.reached.den) : '\u2014';
+  /* Figures kept from another day are still shown -- they are the last true thing the officer
+     was told -- but never as today's. The tag is the only honest place to say so. */
+  $('#dayStrip').classList.toggle('stale', !!stale);
+  if (stale) $('#dsTag').textContent = 'Jana' + (atMs ? ' ' + hhmm_(atMs) : '');
+  $('#dayStrip').classList.remove('hide');
+}
+// Which DAY each list actually came from. An officer working yesterday's customers while the
+// screen says Leo is the worst kind of wrong: silently plausible.
+S.asOf = S.asOf || {};
+function pctW_(x){ return (x==null||isNaN(x)||!isFinite(x)) ? '\u2014' : Math.round(100*x) + '%'; }
+/** Money at a glance: 10k, 210k, 1.4m. A percentage says how well the day is going; the
+    SHILLINGS say how much has actually come in, which is the number people talk about. */
+function mc_(n){ n = Number(n)||0;
+  if (n >= 1e6) return (n/1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/,'') + 'm';
+  if (n >= 1e3) return Math.round(n/1e3) + 'k';
+  return String(Math.round(n)); }
+function loadDaySummary(force){
+  if (!S.boot) return;
+  if (!force && _sumAt && (Date.now() - _sumAt < 15*60*1000)) return;   // light cooldown, mirrors the list-cache feel
+  srv('api_callDailySummary', DEV).then(function(d){
+    if (!d || !d.ok) { summaryFailed_(d && d.error ? d.error : 'Jibu tupu / empty answer'); return; }
+    _sumErr = null;
+    _sumAt = Date.now();
+    _sumVer = d.dataVersion || null;
+    // Sat/Sun the server returns week-to-date; drawSummary_ reads d.period for the tag.
+    $('#dayStrip').classList.remove('warn');
+    drawSummary_(d, false, _sumAt);
+    saveSummary_(d, _sumAt);
+    // A brief flash, so a refresh that moves no figure is still visibly a refresh.
+    var el = $('#dayStrip');
+    el.classList.remove('lit'); void el.offsetWidth; el.classList.add('lit');
+  }).catch(function(e){
+    /* NEVER TAKE THE STRIP AWAY -- but never hide the reason either. What is on screen stays on
+       screen; the tag says a warning instead of a clock, and tapping it says WHY in words.
+       Swallowing this in silence is what turned "the bar shows dashes" into three rounds of
+       guessing at figures that were never the problem: the request was failing. */
+    summaryFailed_(String((e && e.message) || e || 'Mtandao / network'));
+  });
+}
+/** Called by the sync loop. The strip is far too expensive to recompute on a timer, so it is
+    recomputed on the only event that can actually change it: somebody uploading a report. */
+function summaryVersionCheck_(ver){
+  if (!ver || ver === _sumVer) return;
+  _sumVer = ver;
+  loadDaySummary(true);
+}
+
+/* ================= tabs / list =================
+   Def/Exp/Chr are three VIEWS over one SOURCE fetch (the full defaulters list) -- split
+   client-side by customer status, same "CHRON"/"EXPIR" substring rule the portal's own
+   assignment engine uses, so switching between them never needs a second round trip. */
+function pageVersion_(){
+  var d = new Date(document.lastModified);
+  if (isNaN(d.getTime())) return '';
+  var p = function(n){ return ('0' + n).slice(-2); };
+  return 'Toleo la app / App version: ' + d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function classifyStatus_(s){
+  var k = String(s||'').toUpperCase();
+  if (k.indexOf('CHRON') >= 0) return 'chr';
+  if (k.indexOf('EXPIR') >= 0) return 'exp';
+  return 'def';
+}
+function filterForView_(rows, v){
+  /* "be able to sort manager, bike or gmo customers only per specific day within app"
+     The rows already carry the role the rotation put each customer in, so this is a narrowing
+     of what is on the phone rather than another question for the server -- which matters on a
+     handset on a mobile connection. */
+  // HOOP has ONE book: the day's locked list. Every view is the whole scoped deck.
+  return rows;
+}
+function segLabel_(src, r){
+  return 'Leo';
+  if (src === 'tomorrow') return 'Kesho';
+  // On the rotation list the useful badge is the CYCLE the customer is in (D3, E-W2, C-W1),
+  // not the word "Defaulter" again -- it is the only thing that changes week to week.
+  if (src === 'expdf') return r.fuStatus || 'Exp.Def';
+  var v = classifyStatus_(r.custStatus);
+  return v === 'chr' ? 'Chr' : (v === 'exp' ? 'Exp' : 'Def');
+}
+function cloneRow_(r){ var o = {}; for (var k in r) { if (r.hasOwnProperty(k)) o[k] = r[k]; } return o; }
+/** Loads whichever of today/tomorrow/defaulters aren't cached yet -- used so a search can look
+    across every segment the officer has, not just whichever tab happens to be open. */
+function ensureAllSources_(){
+  var need = ['today'].filter(function(s){ return !sourceFresh_(s); });
+  if (!need.length) return Promise.resolve();
+  return Promise.all(need.map(function(s){
+    return srv('api_callList', DEV, s).then(function(d){ S.cache[s] = d.rows || []; S.cacheAt[s] = Date.now(); saveCacheToDevice_(); }).catch(function(){ S.cache[s] = S.cache[s] || []; });
+  }));
+}
+function globalSearchRows_(q){
+  q = q.trim().toUpperCase();
+  var out = [];
+  ['today'].forEach(function(src){
+    (S.cache[src] || []).forEach(function(r){
+      var hay = (String(r.name)+' '+r.contact+' '+r.gName+' '+r.gContact+' '+r.ref).toUpperCase();
+      if (hay.indexOf(q) < 0) return;
+      var c = cloneRow_(r); c._seg = segLabel_(src, r);
+      out.push(c);
+    });
+  });
+  return out;
+}
+/* What the leader is owed on this list and what has come back. Sums first, because the
+   question at the door is "how much is on me today", and the cycle split under it because
+   D-buckets, E-W and C-W are worked differently. */
+/* The server's own sums, re-added on the handset over whichever rows are showing. Identical
+   arithmetic to sumExpdf in api/_lib/expdf.js on purpose -- including Rec % being recovered
+   over INITIAL rather than over arrears -- so the pill narrows the summary without changing
+   what any of its five numbers mean. */
+function xdNum_(v){ return Number(v) || 0; }
+function xdSum_(list){
+  var rec = 0, ini = 0, arr = 0;
+  list.forEach(function(r){ rec += xdNum_(r.recovered); ini += xdNum_(r.initial); arr += xdNum_(r.amt); });
+  return { customers: list.length, arrears: arr, initial: ini, recovered: rec,
+    pct: ini > 0 ? Math.round((rec / ini) * 1000) / 10 : null };
+}
+function xdGroup_(list, keyFn, label){
+  var by = {};
+  list.forEach(function(r){
+    var k = keyFn(r);
+    if (!by[k]) by[k] = { key: k, rows: [] };
+    by[k].rows.push(r);
+  });
+  return Object.keys(by).map(function(k){
+    var s = xdSum_(by[k].rows), o = { customers: s.customers, arrears: s.arrears,
+      initial: s.initial, recovered: s.recovered, pct: s.pct };
+    o[label] = k;
+    return o;
+  }).sort(function(a, b){ return b.arrears - a.arrears; });
+}
+function drawExpdfStrip_(){
+  var el = $('#expdfStrip');
+  if (!el) return;
+  if (S.view !== 'expdf' || !S.expdf){ el.classList.add('hide'); return; }
+  /* THE SUMMARY DESCRIBES THE LIST UNDERNEATH IT, whichever role pill is pressed.
+     The server sends totals for the whole scope. Leaving them there while Bike narrows the
+     list below would print the GMO's money over the bike officer's customers -- the summary
+     and the list would be two different answers stacked on top of each other, and the one in
+     bigger type would be the wrong one. So when a role is selected every figure here is
+     re-added from the rows actually showing. With no role selected the server's own totals
+     are used untouched, so nothing moves for anyone who does not press a pill. */
+  var rShown = S.expdfRole ? filterForView_(S.cache.expdf || [], 'expdf') : null;
+  var t = rShown ? xdSum_(rShown) : (S.expdf.totals || {});
+  var byCycle = rShown ? xdGroup_(rShown, function(r){ return r.fuStatus || '—'; }, 'cycle')
+    : (S.expdf.byCycle || []);
+  var byLeader = rShown ? xdGroup_(rShown, function(r){
+      return (r.leader || '(unassigned)') + ' · ' + (r.role || ''); }, 'leader')
+    : (S.expdf.byLeader || []);
+  var m = mc_;
+  el.classList.remove('hide');
+  if (S.expdfOpen == null) { try { S.expdfOpen = localStorage.getItem('hcXdOpen') !== '0'; } catch(e){ S.expdfOpen = true; } }
+  el.classList.toggle('shut', !S.expdfOpen);
+  el.innerHTML =
+    '<button class="xtoggle" data-xtog="1">' + (S.expdfOpen ? '\u25B4' : '\u25BE') + ' Muhtasari'
+      + (S.expdfOpen ? '' : ' \u00B7 ' + (t.customers||0) + ' \u00B7 ' + m(t.arrears)) + '</button>'
+    + (!S.expdfOpen ? '' :
+    (S.expdf.canSwitch
+      ? '<div class="xscope">'
+        + '<button data-xs="mine"' + (S.expdf.scope==='mine'?' class="on"':'') + '>Zangu</button>'
+        + '<button data-xs="team"' + (S.expdf.scope==='team'?' class="on"':'') + '>Timu yote</button>'
+        + '</div>'
+      : '')
+    + '<div class="xrole">'
+      + [['', 'Wote'], ['GMO', 'GMO'], ['MANAGER', 'Manager'], ['BIKE', 'Bike']].map(function(o){
+          return '<button data-xr="' + o[0] + '"' + ((S.expdfRole||'') === o[0] ? ' class="on"' : '')
+            + '>' + o[1] + '</button>'; }).join('')
+      + '</div>'
+    + '<div class="xstat"><span>Wateja</span><b>' + (t.customers||0) + '</b></div>'
+    + '<div class="xstat"><span>Deni</span><b>' + m(t.arrears) + '</b></div>'
+    + '<div class="xstat"><span>Marejesho</span><b class="ok">' + m(t.recovered) + '</b></div>'
+    + '<div class="xstat"><span>Rec %</span><b>' + (t.pct == null ? '\u2014' : t.pct + '%') + '</b></div>'
+    + (S.expdf.hasBaseline ? '' : '<div class="xnote">Orodha ya awali haijapakiwa \u2014 marejesho yanaonyesha 0.</div>')
+    + ((S.expdf.diag && S.expdf.diag.noCycleDates) ? '<div class="xnote">Deki haina DISB DATE \u2014 mzunguko wa siku 2 hauwezi kuhesabiwa, kwa hiyo orodha nzima inaonyeshwa.</div>' : '')
+    + (byCycle.length
+        ? '<div class="xcyc">' + byCycle.map(function(c){
+            return '<span>' + esc(c.cycle) + ' \u00B7 ' + c.customers + ' \u00B7 ' + m(c.arrears) + '</span>'; }).join('') + '</div>'
+        : '')
+    // Who is carrying what, so anyone on the list can see the split without leaving it.
+    + ((S.expdf.scope==='team' && byLeader.length)
+        ? '<div class="xcyc">' + byLeader.map(function(x){
+            return '<span>' + esc(x.leader) + ' \u00B7 ' + x.customers + ' \u00B7 ' + m(x.recovered)
+              + (x.pct==null?'':' \u00B7 '+x.pct+'%') + '</span>'; }).join('') + '</div>'
+        : ''));
+  $all('#expdfStrip [data-xtog]').forEach(function(b){
+    b.onclick = function(){
+      S.expdfOpen = !S.expdfOpen;
+      try { localStorage.setItem('hcXdOpen', S.expdfOpen ? '1' : '0'); } catch(e){}
+      drawExpdfStrip_();
+    };
+  });
+  $all('#expdfStrip [data-xr]').forEach(function(b){
+    b.onclick = function(){
+      S.expdfRole = b.getAttribute('data-xr') || '';
+      try { localStorage.setItem('hcXdRole', S.expdfRole); } catch(e){}
+      /* "switching bike, gmo or manager at the muhtasari should also switch the whole expdf
+         customer list to be of the selected role only"
+
+         It did not. This set S.expdfRole and redrew -- but drawList paints S.rows, and S.rows
+         was only ever rebuilt in setView and fetchSource_. So the pill lit up, the summary
+         above it moved, and the list underneath stayed exactly as it was. Pressing Bike showed
+         you the GMO's customers with the word Bike highlighted.
+
+         S.rows is now rebuilt from the cached deck through the SAME filterForView_ every other
+         path uses, so the list, the pill and the summary are one answer. Still no re-fetch --
+         every row is already on the handset, which is the whole reason this is a pill and not
+         a query. A search in progress keeps its own result set, or pressing a role would
+         silently throw the search away. */
+      S.rows = S.q.trim() ? globalSearchRows_(S.q) : filterForView_(S.cache.expdf || [], 'expdf');
+      drawList(); drawExpdfStrip_();
+    };
+  });
+  $all('#expdfStrip [data-xs]').forEach(function(b){
+    b.onclick = function(){
+      S.expdfScope = b.getAttribute('data-xs');
+      delete S.cache.expdf; delete S.cacheAt.expdf;   // a different scope is different data
+      fetchSource_('expdf', true);
+    };
+  });
+}
+/* "Orodha hii iko wazi" told an officer nothing they could act on. Each list is empty for a
+   specific reason -- almost always a report nobody has uploaded yet -- so say which one. */
+/** WHY THIS LIST IS SHORTER THAN THE BOOK.
+    Credit analysts, expected officers and collection officers are shown only the part of the
+    book they are chased on. That is what was asked for -- but a list that is quietly shorter
+    than the one on the next desk is a list somebody stops trusting, and then works around. It
+    says what was applied and how many it left out, so the narrowing is a decision somebody can
+    see rather than a discrepancy they have to explain. */
+function narrowNote_(){
+  var src = LIST_SOURCE[S.view], n = S.narrowed && S.narrowed[src];
+  if (!n || !n.of) return '';
+  var label = n.role === 'CREDIT' ? 'hawajavuka awamu ya 5 / not past the 5th instalment'
+    : 'wako nyuma kidogo tu / only slightly behind';
+  return '<div class="hint" style="color:var(--mut);font-size:11.5px;margin-bottom:8px">'
+    + 'Orodha yako imechujwa: ' + n.shown + ' kati ya ' + n.of + ' \u00B7 ' + esc(label) + '</div>';
+}
+
+/** Says so, loudly, when the list on screen is not the day it claims to be. */
+function staleNote_(){
+  var src = LIST_SOURCE[S.view], a = src && S.asOf[src];
+  if (!a || !a.stale || !a.date) return '';
+  var box = function(html){ return '<div class="empty" style="background:#FEF3C7;border:1px solid #FCD34D;'
+    + 'color:#92400E;text-align:left;padding:10px 12px;margin-bottom:8px;border-radius:10px">' + html + '</div>'; };
+  /* The defaulter list ages differently from the Expected ones. A customer stays on it until
+     THEIR weekday's deck is uploaded again without them, so a deck nobody has re-sent for a
+     fortnight leaves people on the list who may already have cleared. Saying so is the
+     difference between an officer trusting the list and an officer ringing somebody who has
+     paid. */
+  if (false)
+    return box('<b>Angalia / Note:</b> takwimu hizi zilisasishwa mara ya mwisho tarehe <b>'
+      + esc(a.date) + '</b>.<br><span style="font-size:11.5px">These figures were last refreshed on '
+      + esc(a.date) + '. A customer stays on this list until their weekday\u2019s deck is uploaded '
+      + 'again without them, so somebody here may already have cleared.</span>');
+  var what = 'LEO';
+  return box('<b>Angalia / Note:</b> orodha ya ' + what + ' haijapakiwa leo. '
+    + 'Hii ni ya <b>' + esc(a.date) + '</b>.<br>'
+    + '<span style="font-size:11.5px">This list was not uploaded for today — you are seeing '
+    + esc(a.date) + '. Tell your PMO officer before working it.</span>');
+}
+
+function emptyWhy_(v){
+  if (v === 'today') return 'Orodha ya Watu ya leo haijapakiwa bado. Mwambie admin apakie orodha ya leo kwenye /upload.';
+  // Exp.Def can be empty for four quite different reasons and the officer can only act on
+  // one of them. The server says which; the message says what to do about it.
+  if (v === 'expdf'){
+    var g = (S.expdf && S.expdf.diag) || {};
+    if (!g.deck) return 'Deki ya wadaiwa ya ' + (g.deckWeekday || 'leo') + ' haijapakiwa. '
+      + 'Mwambie afisa wa PMO apakie "Defaulters — Current" akichagua siku ya LEO.';
+    if (!g.assigned) return 'Wadaiwa wapo (' + g.deck + '), lakini hakuna aliyepangwa kwa GMO / MANAGER / BIKE. '
+      + 'Angalia mgawanyo (ASSIGN_ACTIVE / EXPIRED / CHRONIC) kwenye Settings.';
+    if (!g.mine) return 'Hakuna aliyepangwa kwako. Bonyeza "Timu yote" kuona wa timu nzima (' + g.assigned + ').';
+    return 'Hakuna anayeangukia leo — wateja wako ' + g.mine + ' wapo kwenye siku nyingine za mzunguko. '
+      + 'Bonyeza "Timu yote" au subiri siku yao.';
+  }
+  if (v === 'def' || v === 'exp' || v === 'chr')
+    return 'Orodha ya wadaiwa haijapakiwa bado. Mwambie afisa wa PMO apakie "Defaulters \u2014 Current".';
+  return 'Orodha hii iko wazi.';
+}
+function exitSearch_(){
+  if (!S.q) return;
+  S.q = '';
+  var el = $('#listQ'); if (el) el.value = '';
+}
+function setView(v){
+  S.view = v;
+  $all('#tabs button').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-v')===v); });
+  if (v === 'reports') { renderReports(); return; }
+  var src = LIST_SOURCE[v];
+  if (!src) return;
+  // An EMPTY cached source is not data, it is the absence of it -- and it was being served
+  // back from the device under the cooldown, so a tab that had once been empty stayed empty
+  // even after the missing report was uploaded. Empty always goes back to the server.
+  if (S.cache[src] && S.cache[src].length) {
+    S.rows = filterForView_(S.cache[src], v);
+    drawList(); drawExpdfStrip_();                 // instant -- already have this source's data, no spinner, no wait
+    if (!sourceFresh_(src)) fetchSource_(src, false);   // only refresh once this device's own cooldown has actually elapsed, not on every tab switch
+  } else {
+    fetchSource_(src, true);    // nothing worth showing yet -> spinner, and ask the server
+  }
+}
+/** myId + the S.view check together mean a slow response from a tab you've since swapped away
+    from gets thrown away instead of rendering on top of whatever tab you're actually looking at
+    now -- that swap-and-overlap glitch was two in-flight fetches racing to paint #body last. */
+function fetchSource_(src, showSpinner){
+  var myId = ++S.reqId;
+  if (showSpinner) {
+    $('#body').innerHTML = '<div class="center" style="padding:60px 0"><div class="sk"></div></div>';
+  }
+  srv('api_callList', DEV, src, src === 'expdf' ? (S.expdfScope || 'auto') : '').then(function(d){
+    if (myId !== S.reqId) return;
+    S.cache[src] = d.rows || [];
+    S.asOf[src] = { date: d.asOf || null, stale: !!d.stale };
+    S.narrowed = S.narrowed || {};
+    S.narrowed[src] = d.narrowed || null;
+    if (src === 'expdf') S.expdf = d.expdf || null;
+    S.cacheAt[src] = Date.now();
+    saveCacheToDevice_();
+    if (S.q.trim()) { S.rows = globalSearchRows_(S.q); drawList(); return; }
+    if (LIST_SOURCE[S.view] !== src) return;   // user moved to a tab backed by a different source while this was loading
+    S.rows = filterForView_(S.cache[src], S.view);
+    drawList();
+    drawExpdfStrip_();
+  }).catch(function(e){
+    if (myId !== S.reqId || LIST_SOURCE[S.view] !== src) return;
+    if (showSpinner) $('#body').innerHTML = '<div class="empty"><b>Imeshindikana kupakia.</b>' + esc(String(e)) + '</div>';
+  });
+}
+$('#listQ').addEventListener('input', function(){
+  S.q = this.value;
+  if (!S.q.trim()) { setView(S.view); return; }
+  var haveAny = S.cache.today || S.cache.tomorrow || S.cache.defaulters;
+  if (!haveAny) $('#body').innerHTML = '<div class="center" style="padding:60px 0"><div class="sk"></div></div>';
+  ensureAllSources_().then(function(){
+    if ($('#listQ').value !== S.q) return;   // query changed again while sources were loading
+    S.rows = globalSearchRows_(S.q);
+    drawList();
+  });
+});
+function isIOS_(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
+}
+/* WHERE THE OFFICER WAS. Redrawing the list replaces #body wholesale, and the browser puts a
+   replaced page back at the top -- so returning from a call landed them at customer 1 of 300
+   every time, and they scrolled back down looking for the name they had just rung.
+
+   A sync arriving in the background does the same thing, which is worse: the list jumps under
+   somebody's thumb while they are reading it.
+
+   The position is only put back when it is the SAME list -- same tab, same search. Changing
+   tab or typing a search is asking for a different list, and that one starts at the top, which
+   is what anybody would expect. Two property reads and a scroll; nothing is fetched and nothing
+   is computed, so this cannot make the app heavy. */
+var LAST_DRAW = null;
+/* ---------------------------------------------------------------- the bell */
+/* Counted quietly on entry and again whenever the app comes back to the foreground -- the same
+   moment the list already syncs, so this adds no new habit of waking the network. The number
+   is what matters: the list itself is only fetched when somebody actually taps. */
+/* THE SHEET HAS TO BE REDRAWN WHEN THE ANSWER ARRIVES.
+   This updated S.notif and the little red dot and stopped there -- so tapping the bell before
+   the first count had landed drew a spinner that nothing ever replaced. And the failure path
+   was swallowed in silence, so a bell that could not reach the server ALSO spun for ever.
+   Both roads led to the same stuck screen with no way to know which had happened. */
+var BELL_OPEN = false;
+function bellRefresh(){
+  return srv('api_callNotifications', DEV).then(function(d){
+    if (!d || d.ok === false) throw new Error(d && d.error === 'DEVICE_NOT_REGISTERED'
+      ? 'Simu hii haijasajiliwa. / This handset is not registered.'
+      : 'Imeshindikana kupakia. / Could not load.');
+    S.notif = d; S.notifErr = null;
+    var dot = $('#bellDot');
+    dot.classList.toggle('hide', !d.unseen);
+    dot.textContent = d.unseen > 9 ? '9+' : String(d.unseen || '');
+    if (BELL_OPEN) bellDraw();
+    return d;
+  }).catch(function(e){
+    // The count quietly failing is fine. A person waiting at an open sheet is not.
+    S.notifErr = String((e && e.message) || e);
+    if (BELL_OPEN) bellDraw();
+  });
+}
+function bellOpen(){
+  BELL_OPEN = true;
+  bellDraw();
+  sheetShow();
+  // Always ask again on opening: the count may be minutes old, and this is the moment somebody
+  // actually wants it to be right.
+  bellRefresh();
+}
+function bellDraw(){
+  var d = S.notif;
+  $('#sheetBody').innerHTML = '<h3 style="margin:0 0 2px">Taarifa / Updates</h3>'
+    + '<div style="font-size:12px;color:var(--mut);margin-bottom:10px">'
+    + 'Malalamiko na maoni ya timu zako / complaints and comments on your teams</div>'
+    + (!d && S.notifErr ? '<div class="empty"><b>' + esc(S.notifErr) + '</b>'
+        + 'Funga na ugusa kengele tena. / Close this and tap the bell again.</div>'
+      : !d ? '<div class="center" style="padding:30px 0"><div class="sk"></div></div>'
+      : !d.items.length ? '<div class="empty"><b>Hakuna taarifa mpya.</b>Nothing new yet.</div>'
+      : d.items.map(function(x){
+          return '<div class="notifItem' + (x.unseen ? ' new' : '') + '">'
+            + '<div class="nwho">' + (x.kind === 'complaint' ? '\u26A0 ' : '\uD83D\uDCAC ')
+              + esc(x.who || x.ref || '') + '</div>'
+            + '<div class="nwhat">' + esc(x.what) + '</div>'
+            + '<div class="nmeta">' + esc(x.by || '') + (x.team ? ' \u00B7 ' + esc(x.team) : '')
+              + ' \u00B7 ' + esc(String(x.at).slice(0, 16).replace('T', ' ')) + '</div></div>'; }).join(''))
+    + (d && d.unseen ? '<button class="btn btn-pri" id="notifSeen" style="width:100%;margin-top:12px">'
+        + 'Nimesoma zote / Mark all read</button>' : '');
+  var b = $('#notifSeen');
+  if (b) b.onclick = function(){
+    b.disabled = true;
+    srv('api_callNotifSeen', DEV).then(function(){
+      sheetHide();
+      bellRefresh();
+    }).catch(function(e){ b.disabled = false; toast(String(e.message || e), true); });
+  };
+}
+
+function drawList(){
+  var body = $('#body');
+  var drawKey = S.view + '|' + S.q;
+  var sameList = (drawKey === LAST_DRAW);
+  var keepY = sameList ? (window.scrollY || document.documentElement.scrollTop || 0) : 0;
+  var nb = nativeBridge();
+  var banner = !nb ? (isIOS_()
+      ? '<div class="banner">\uD83D\uDCF1 iPhone haiwezi kusoma kumbukumbu za simu moja kwa moja (kizuizi cha Apple, si tatizo la programu hii). Bofya "Piga" hapa chini kupiga \u2014 orodha na maoni yanafanya kazi kama kawaida, lakini muda wa simu hautarekodiwa kiotomatiki.</div>'
+      : '<div class="banner">\uD83D\uDCF1 Sakinisha programu ya HOOP Calls (APK) ili simu zako zirekodiwe kiotomatiki. Bofya "Piga" hapa chini bado kinafanya kazi.</div>')
+    : (S.permOk === false ? '<div class="banner" style="background:var(--badbg);border-color:var(--badline);color:var(--bad)">\u26A0 Taarifa zinachelewa kuupdate. Nenda Settings \u2192 Apps \u2192 HOOP Calls \u2192 Permissions kuwasha ruhusa ili ziupdate zenyewe.</div>'
+       : batteryGuidanceHtml_());
+  var searching = !!S.q.trim();
+  body.innerHTML = banner
+    + (searching ? '<div class="hint" style="color:var(--mut);font-size:12px;margin-bottom:8px">Matokeo ya utafutaji \u2014 orodha zote / results across every list</div>' : '')
+    + staleNote_()
+    + narrowNote_()
+    + '<div id="listRows">' + (S.rows.length ? S.rows.map(function(r){ return rowHtml(r, searching); }).join('') : '<div class="empty"><b>Hakuna wateja.</b>' + (searching ? 'Hakuna aliyepatikana.' : emptyWhy_(S.view)) + '</div>') + '</div>'
+    /* HOW OLD IS THE APP YOU ARE HOLDING? Three rounds of "it still isn't fixed" could each
+       have been the phone running yesterday's page, and there was no way for anybody -- in the
+       field or here -- to tell. document.lastModified is the browser's own record of when it
+       fetched this file, so a stale page cannot lie about it the way a number printed into the
+       page would. */
+    + '<div style="text-align:center;color:var(--soft);font-size:10.5px;padding:14px 0 4px">'
+      + esc(pageVersion_()) + '</div>';
+  $all('.crow').forEach(function(row){
+    row.addEventListener('click', function(e){
+      if (e.target.closest('.callbtn')) return;
+      openSheet(row.getAttribute('data-ref'));
+    });
+  });
+  /* After the rows exist, or there is nothing tall enough to scroll to yet. The browser clamps
+     this on its own if the list came back shorter, so a vanished customer cannot strand
+     somebody in blank space below the end. */
+  LAST_DRAW = drawKey;
+  if (keepY) window.scrollTo(0, keepY);
+}
+function rowHtml(r, showSeg){
+  var href = telHref(r.contact);
+  var subBits = [esc(r.team)];
+  if (r.model) subBits.push(esc(r.model));
+  if (r.amt) subBits.push('TZS ' + money(r.amt));
+  if (r.daysOff != null && r.daysOff !== '') subBits.push('OFF siku ' + esc(r.daysOff));
+  /* THE FOURTH CHIP: WHOSE CUSTOMER THIS IS.
+     Status, cycle and D.S say what the customer is; none of them said who is supposed to be
+     following them up. The rotation moves every defaulter between a GMO, a MANAGER and a BIKE
+     officer on a clock, so on any given day the answer is genuinely not guessable -- and an
+     officer holding the phone needs to know who to ask before they call. */
+  var chips = (r.custStatus ? statusChip(r.custStatus) : '') + (r.fuStatus ? statusChip(r.fuStatus) : '')
+    + (r.ds ? '<span class="chip' + (r.inWindow === false ? ' mut' : '') + '">Siku ' + esc(r.ds) + '</span>' : '')
+    + (r.inWindow === false ? '<span class="chip mut">NJE YA 45</span>' : '');
+  return '<div class="crow' + (r.called?' called':'') + '" data-ref="' + esc(r.ref) + '">'
+    + '<div class="crow-main">'
+    + '<div class="crow-name">' + esc(r.name) + (r.called ? ' <span class="tick">\u2713 Amepigiwa leo</span>' : '') + '</div>'
+    + '<div class="crow-sub">' + subBits.join(' \u00B7 ') + '</div>'
+    + (chips ? '<div class="crow-chips">' + chips + '</div>' : '')
+    + '</div>'
+    + (href!=='#' ? '<a class="callbtn" href="tel:' + href + '" data-ref="' + esc(r.ref) + '">\uD83D\uDCDE</a>' : '<span class="callbtn" style="opacity:.3">\uD83D\uDCDE</span>')
+    + '</div>';
+}
+
+/* ================= bottom sheet: customer detail + follow-up =================
+   ONE PLACE THAT OPENS AND CLOSES IT, WIRED ONCE AT STARTUP.
+
+   The close handlers used to be bound inside wireSheetForm, which only the customer sheet
+   calls -- so the bell, which uses the same panel, opened a sheet with NO way out. Tapping the
+   X or the dark area did nothing, and the only escape was the Back button, which left the app
+   altogether and landed the officer back on the launcher.
+
+   Back now closes the sheet and stays put. Opening the sheet pushes a history entry so the
+   phone's own Back gesture has something to consume; closing it by hand takes that entry away
+   again, so Back never has to be pressed twice to leave a screen. */
+var SHEET_STATE = false;
+function sheetShow(){
+  $('#sheet').style.display = 'flex';
+  if (!SHEET_STATE){ SHEET_STATE = true; try { history.pushState({ hopeSheet: 1 }, ''); } catch(e){} }
+}
+function sheetHide(fromBack){
+  $('#sheet').style.display = 'none';
+  BELL_OPEN = false;            // stop the bell redrawing into a sheet nobody is looking at
+  if (SHEET_STATE && !fromBack){ SHEET_STATE = false; try { history.back(); } catch(e){} }
+  else SHEET_STATE = false;
+}
+window.addEventListener('popstate', function(){ if (SHEET_STATE) sheetHide(true); });
+/* Bound at LOAD, not at sign-in. The sheet is part of the page from the first byte, so its way
+   out should be too -- bound inside enterApp, a sheet opened before or after a sign-in bounce
+   had no working X at all. */
+$('#sheetClose').onclick = function(){ sheetHide(); };
+$('#sheet').onclick = function(e){ if (e.target.id === 'sheet') sheetHide(); };
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape' && $('#sheet').style.display === 'flex') sheetHide();
+});
+
+function openSheet(ref){
+  var r = null;
+  for (var i=0;i<S.rows.length;i++){ if (String(S.rows[i].ref)===String(ref)) { r = S.rows[i]; break; } }
+  if (!r) return;
+  S.curRef = ref;
+  var sb = $('#sheetBody');
+  sb.innerHTML = sheetSkeleton(r) ;
+  sheetShow();
+  wireSheetForm(r);
+  srv('api_callComments', DEV, r.ref).then(function(d){
+    S.comments = (d && d.items) || [];
+    var h = $('#histBox'); if (h) h.innerHTML = historyHtml(S.comments);
+    /* The customer's registered complaints, ABOVE the history -- the officer must see an
+       open complaint before dialling, not discover it mid-call. */
+    var cx = (d && d.complaints) || [];
+    if (cx.length && h) {
+      h.innerHTML = cx.map(function(c){
+        var open = String(c.status || '').toUpperCase() !== 'RESOLVED';
+        return '<div class="hist" style="border-left:3px solid ' + (open ? 'var(--bad)' : 'var(--soft)') + ';padding-left:8px">'
+          + '<div class="t"><span>⚠ Malalamiko / Complaint' + (c.status ? ' · ' + esc(c.status) : '') + '</span>'
+          + '<span>' + esc(c.at || '') + '</span></div>'
+          + (c.who ? '<b style="font-size:12px">' + esc(c.who) + '</b> ' : '') + esc(c.what || '') + '</div>';
+      }).join('') + h.innerHTML;
+    }
+  }).catch(function(){});
+}
+function sheetSkeleton(r){
+  var cHref = telHref(r.contact);
+  return '<div class="sheet-card">'
+    + '<div class="sheet-title">' + esc(r.name) + '</div>'
+    + '<div class="sheet-sub">' + esc(r.team) + ' \u00B7 IMEI ' + esc(r.ref) + '</div>'
+    + (r.model ? '<div class="factrow"><span>Simu / Model</span><span>' + esc(r.model) + '</span></div>' : '')
+    + (r.amt ? '<div class="factrow"><span>Bei / Watu price</span><b>TZS ' + money(r.amt) + '</b></div>' : '')
+    + (r.ds ? '<div class="factrow"><span>Siku ya mkopo / Day of 45</span><span>' + esc(r.ds)
+        + (r.inWindow === false ? ' \u00B7 nje ya dirisha' : '') + '</span></div>' : '')
+    + (r.daysOff != null && r.daysOff !== '' ? '<div class="factrow"><span>Siku bila kulipa / Days offline</span><b>' + esc(r.daysOff) + '</b></div>' : '')
+    + (r.custStatus ? '<div class="factrow"><span>Hali / Lock status</span>' + statusChip(r.custStatus) + '</div>' : '')
+    + (r.paid === false ? '<div class="factrow"><span>Malipo / Payments</span>' + statusChip('UNPAID') + '</div>' : '')
+    + (r.fuStatus ? '<div class="factrow"><span>Ufuatiliaji wa mwisho / Last follow-up</span>' + statusChip(r.fuStatus) + '</div>' : '')
+    + '<div class="callrow">'
+    + (cHref!=='#' ? '<a class="btn btn-pri" href="tel:'+cHref+'" data-ref="' + esc(r.ref) + '">\uD83D\uDCDE Mteja \u00B7 ' + esc(r.contact) + '</a>' : '<span class="btn btn-ghost">Hana namba</span>')
+    + '</div>'
+    + '</div>'
+    + '<div class="sheet-card"><div class="sheet-title" style="font-size:14px">Historia / History</div>'
+    + '<div id="histBox" style="margin-top:6px"><div class="center" style="padding:16px"><div class="sk"></div></div></div></div>'
+    + '<div class="sheet-card">'
+    + '<div class="sheet-title" style="font-size:14px">Fuatilia / Log a follow-up</div>'
+    + '<div class="fld"><label>Hali ya ufuatiliaji / Follow-up status</label>'
+    + '<select id="fuStatus"><option value="">\u2014</option>' + (S.boot.fuStatuses||[]).map(function(s){ return '<option>'+esc(s)+'</option>'; }).join('') + '</select></div>'
+    + '<div class="fld hide" id="fuDateWrap"><label>Tarehe ya ahadi / Promise date</label><input type="date" id="fuDate"></div>'
+    + '<div class="fld hide" id="fuNoWrap"><label>Namba mpya / New number</label><input id="fuNo" placeholder="0712345678"></div>'
+    + '<div class="fld"><label>Maoni / Comment</label><textarea id="fuComment" rows="3" style="width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:11px"></textarea></div>'
+    + '<div class="fld"><button class="btn btn-pri" id="fuSave">Hifadhi / Save</button></div>'
+    + '</div>';
+}
+function historyHtml(items){
+  if (!items.length) return '<div class="hint" style="color:var(--soft);font-size:12.5px">Hakuna historia bado.</div>';
+  return items.map(function(c){
+    return '<div class="hist-item"><div class="h-top"><span>' + esc(c.by||'') + '</span><span>' + esc(c.at||'') + '</span></div>'
+      + (c.fu ? statusChip(c.fu) + ' ' : '') + esc(c.comment||'') + '</div>';
+  }).join('');
+}
+/** Updates fuStatus on the matching row wherever it's cached (a customer can appear in more than
+    one tab) and repaints from local state -- avoids a round trip just to reflect a save we
+    already know the result of, and sidesteps any server-side read-after-write lag entirely. */
+function applyLocalFuUpdate_(ref, fu){
+  Object.keys(S.cache).forEach(function(v){
+    (S.cache[v] || []).forEach(function(row){ if (String(row.ref) === String(ref)) row.fuStatus = fu; });
+  });
+  S.rows.forEach(function(row){ if (String(row.ref) === String(ref)) row.fuStatus = fu; });
+  drawList();
+}
+function wireSheetForm(r){
+  $('#fuStatus').addEventListener('change', function(){
+    var v = this.value;
+    $('#fuDateWrap').classList.toggle('hide', (S.boot.fuNeedDate||[]).indexOf(v) < 0);
+    $('#fuNoWrap').classList.toggle('hide', (S.boot.fuNeedNumber||[]).indexOf(v) < 0);
+  });
+  $('#fuSave').onclick = function(){
+    var fu = $('#fuStatus').value, comment = $('#fuComment').value.trim(), pd = $('#fuDate').value, newNo = $('#fuNo').value.trim();
+    if (!fu && !comment){ toast('Chagua hali au andika maoni.', true); return; }
+    if ((S.boot.fuNeedDate||[]).indexOf(fu) >= 0 && !pd){ toast('Weka tarehe ya ahadi.', true); return; }
+    if ((S.boot.fuNeedNumber||[]).indexOf(fu) >= 0 && !newNo){ toast('Weka namba mpya.', true); return; }
+    $('#fuSave').disabled = true; $('#fuSave').textContent = 'Inahifadhi\u2026';
+    srv('api_callAddComment', DEV, { ref:r.ref, team:r.team, name:r.name, fu:fu, comment:comment, promiseDate:pd, newNo:newNo }).then(function(){
+      toast('Imehifadhiwa.');
+      sheetHide();
+      applyLocalFuUpdate_(r.ref, fu);
+    }).catch(function(e){
+      $('#fuSave').disabled = false; $('#fuSave').textContent = 'Hifadhi / Save';
+      toast(String(e), true);
+    });
+  };
+}
+
+/* ================= leader reports ================= */
+function renderReports(){
+  var body = $('#body');
+  body.innerHTML = '<div class="center" style="padding:60px 0"><div class="sk"></div></div>';
+  srv('api_callReport', DEV, S.repFrom, S.repTo, S.repTeam, S.repLeader).then(function(d){
+    S.repData = d;
+    drawReports();
+  }).catch(function(e){ body.innerHTML = '<div class="empty"><b>Imeshindikana kupakia.</b>' + esc(String(e)) + '</div>'; });
+}
+var CALL_CAT_LABEL_ = { EXPECTED:'Expected', DEFAULTER:'Defaulter', UNCATEGORIZED:'Uncategorized', OTHER:'Nje ya portfolio' };
+function drawReports(){
+  var d = S.repData, t = d.totals || {calls:0,duration:0,portfolio:0,nonPortfolio:0,ratio:0};
+  var body = $('#body');
+  var scopeTxt = d.debugScope === 'ALL' ? 'Timu zote / All teams' : (Array.isArray(d.debugScope) ? d.debugScope.join(', ') : String(d.debugScope||''));
+  var cats = (d.byCategory || []).filter(function(c){ return c.category === 'EXPECTED' || c.category === 'DEFAULTER'; });
+  body.innerHTML =
+    '<div class="hint" style="color:var(--soft);font-size:11px;margin-bottom:8px">Wigo / Scope: ' + esc(scopeTxt) + ' \u00B7 Timu yako / Your team: ' + esc(d.debugHomeTeam||'\u2014') + '</div>'
+    + '<div class="rangebar"><input type="date" id="repFrom" value="' + S.repFrom + '"><input type="date" id="repTo" value="' + S.repTo + '">'
+    + '<select id="repTeam"><option value="">Timu zote</option>'
+    + (d.teamChoices || []).map(function(tm){
+        return '<option value="' + esc(tm) + '"' + (K_(tm) === K_(d.team) ? ' selected' : '') + '>' + esc(tm) + '</option>';
+      }).join('') + '</select>'
+    /* THE LEADER PICKER, AFTER THE TEAM ONE.
+       "if I choose leader from a dropdown of present system leaders eg Catherine then the below
+        calls appear of catherine's teams and leaders too"
+       A leader holds several teams, so naming one answers "how is this person's book doing"
+       without picking their teams out of the list one at a time. The count beside each name is
+       how many teams they hold, because two people can share a first name and the number is the
+       fastest way to tell which book you are about to open. */
+    + '<select id="repLeader"><option value="">Viongozi wote / All leaders</option>'
+    + (d.leaderChoices || []).map(function(L){
+        return '<option value="' + esc(L.name) + '"' + (K_(L.name) === K_(d.leader) ? ' selected' : '') + '>'
+          + esc(L.name) + (L.position ? ' \u00B7 ' + esc(L.position) : '')
+          + ' (' + money(L.teams) + ')</option>';
+      }).join('') + '</select></div>'
+    + '<div class="kpis">'
+    + '<div class="kpi"><div class="k-l">Simu / Calls</div><div class="k-v">' + money(t.calls) + '</div></div>'
+    + '<div class="kpi"><div class="k-l">Muda / Talk time</div><div class="k-v">' + fmtDur(t.duration) + '</div></div>'
+    + '<div class="kpi"><div class="k-l">Portfolio</div><div class="k-v" style="color:var(--ok)">' + money(t.portfolio) + '</div></div>'
+    + '<div class="kpi"><div class="k-l">Nje ya portfolio</div><div class="k-v">' + money(t.nonPortfolio) + '</div></div>'
+    + '<div class="kpi"><div class="k-l">% ya portfolio</div><div class="k-v">' + (t.calls ? pct(t.ratio) : '—') + '</div></div>'
+    + '</div>'
+    + (cats.length ? '<div style="display:flex;gap:8px;margin:2px 0 12px;flex-wrap:wrap">' + cats.map(function(c){
+        return '<span class="chip" style="font-size:11.5px">' + esc(CALL_CAT_LABEL_[c.category] || c.category) + ': ' + money(c.calls) + ' \u00B7 ' + pct(c.connectRatio) + ' walipatikana</span>';
+      }).join('') + '</div>' : '')
+    /* The two columns asked for by name: non-portfolio AFTER defaulter, and the share of
+       portfolio calls among ALL calls -- the number the whole categorisation exists to
+       produce, and the server has computed per officer all along (u.ratio). */
+    /* COL and REC, as asked -- the calls made to the collection (expected) list and to the
+       recovery (defaulter) book. And after % pf, the officer themselves is one tap away: the
+       number is the one they REGISTERED with, so the supervisor reading a zero can ring it
+       right here. */
+    + '<table class="otable"><thead><tr><th>Afisa</th><th class="r">Simu</th><th class="r">Muda</th><th class="r">Nje ya pf</th><th class="r">% pf</th><th></th></tr></thead><tbody>'
+    + (d.users||[]).map(function(u){
+        var oHref = telHref(u.phone);
+        return '<tr><td>' + esc(u.name) + '<div style="color:var(--soft);font-size:10.5px">' + esc(u.team) + (u.position ? ' - ' + esc(u.position) : '') + '</div></td>'
+          + '<td class="r">' + money(u.calls) + '</td><td class="r">' + fmtDur(u.duration) + '</td>'
+          + '<td class="r" style="color:var(--soft)">' + money(u.nonPortfolio) + '</td>'
+          + '<td class="r"' + (u.calls && u.ratio < 0.5 ? ' style="color:var(--bad)"' : '') + '>' + (u.calls ? pct(u.ratio) : '—') + '</td>'
+          + '<td class="r">' + (oHref !== '#' ? '<a class="callbtn" href="tel:' + oHref + '" title="' + esc(u.phone) + '">\uD83D\uDCDE</a>' : '<span class="callbtn" style="opacity:.3">\uD83D\uDCDE</span>') + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  $('#repFrom').onchange = function(){ S.repFrom = this.value; renderReports(); };
+  $('#repTo').onchange = function(){ S.repTo = this.value; renderReports(); };
+  $('#repTeam').onchange = function(){ S.repTeam = this.value; renderReports(); };
+  /* Choosing a leader clears the team, because a team from the previous leader's list is either
+     already inside the new one -- in which case nothing is lost -- or outside it, where keeping
+     it would silently answer for a team the chosen leader does not hold. */
+  $('#repLeader').onchange = function(){ S.repLeader = this.value; S.repTeam = ''; renderReports(); };
+}
+
+$('#bootRetry').onclick = function(){
+  $('#bootErr').classList.add('hide');
+  var spin = $('#bootSpin'); if (spin) spin.classList.remove('hide');
+  boot();
+};
+/* Bound at page load, not inside whichever screen happens to open first. Binding a dialog's own
+   close buttons somewhere else is exactly how the bell once opened with no way out of it. */
+wireBackgroundPrompt_();
+boot();
+</script>
+<script>window.HOPE_NO_BRAND_FETCH = true;</script>
+<script src="/brand.js"></script>
+</body>
+</html>

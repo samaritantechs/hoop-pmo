@@ -1,47 +1,49 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HOOP PMO</title>
 <style>
-  :root { color-scheme: dark; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     min-height: 100vh;
     display: flex; align-items: center; justify-content: center;
-    background: #0e1420; color: #e8edf5;
+    background: linear-gradient(180deg, #0B2A6B, #10357F);
+    color: #EFF6FF;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     padding: 24px;
   }
   main { max-width: 520px; text-align: center; }
-  .mark {
-    font-size: 44px; font-weight: 800; letter-spacing: 2px;
-    color: #ffb648;
+  .mark { width: 120px; margin: 0 auto 6px; }
+  .mark svg { width: 100%; display: block; }
+  p.tag { margin-top: 10px; font-size: 15px; color: #93C5FD; line-height: 1.6; }
+  .links { margin-top: 26px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .links a {
+    text-decoration: none; font-size: 14px; font-weight: 700;
+    padding: 11px 18px; border-radius: 11px;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.18); color: #fff;
   }
-  .mark span { color: #e8edf5; font-weight: 300; }
-  p.tag { margin-top: 10px; font-size: 15px; color: #9aa7ba; line-height: 1.6; }
-  .pills { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-  .pill {
-    font-size: 12px; padding: 6px 12px; border-radius: 999px;
-    border: 1px solid #2a3648; color: #9aa7ba; background: #141c2b;
-  }
-  footer { margin-top: 36px; font-size: 12px; color: #5c6a7f; }
+  .links a.pri { background: #35A8E1; border-color: #35A8E1; color: #06263F; }
+  footer { margin-top: 36px; font-size: 12px; color: #7A93C4; }
 </style>
 </head>
 <body>
 <main>
-  <div class="mark">HOOP <span>PMO</span></div>
-  <p class="tag">Watu follow-up &mdash; the daily locked list, the calls, the recovery.<br>
-     The system is being set up; the working screens land here.</p>
-  <div class="pills">
-    <span class="pill">HOOP Calls</span>
-    <span class="pill">Daily Watu upload</span>
-    <span class="pill">45-day window</span>
-    <span class="pill">Ripoti</span>
-    <span class="pill">Recovery</span>
+  <div class="mark">
+    <svg viewBox="0 0 64 40" aria-hidden="true">
+      <rect width="64" height="40" rx="9" fill="#fff"/>
+      <text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial,Helvetica,sans-serif">HOOP</text>
+      <path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/>
+    </svg>
   </div>
-  <footer>Hoop Ltd &middot; watu simu follow-up</footer>
+  <p class="tag">Watu simu follow-up &mdash; the daily locked list, the calls, the recovery.</p>
+  <div class="links">
+    <a class="pri" href="/call">HOOP Calls</a>
+    <a href="/portal">Mfumo / Portal</a>
+    <a href="/upload">Upload</a>
+  </div>
+  <footer>Hoop Ltd &middot; 45-day window &middot; built beside HOPE</footer>
 </main>
 </body>
 </html>

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>HOOP PMO — Upload</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{ --b900:#0B2A6B; --b800:#10357F; --b700:#1D4ED8; --b600:#2563EB; --b300:#93C5FD; --b100:#DBEAFE; --b50:#EFF6FF;
+  --bg:#F6F8FC; --card:#fff; --ink:#0F172A; --mut:#64748B; --line:#E2E8F0;
+  --ok:#067647; --okbg:#E7F6EE; --bad:#B42318; --badbg:#FDECEA; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Arial,Helvetica,sans-serif}
+.wrap{max-width:640px;margin:0 auto;padding:22px 16px 80px}
+.head{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.head .mark{width:54px;height:36px;border-radius:9px;background:#fff;box-shadow:0 1px 3px rgba(16,24,40,.12)}
+.head h1{font-size:19px;margin:0}
+.head p{margin:2px 0 0;font-size:12.5px;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:14px;
+  box-shadow:0 2px 10px -4px rgba(11,42,107,.14)}
+label{display:block;font-size:12px;font-weight:700;color:var(--mut);margin:14px 0 6px}
+input[type=text],input[type=password],input[type=date]{width:100%;padding:12px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:15px}
+.file-drop{display:block;border:2px dashed var(--b300);background:var(--b50);color:var(--b800);border-radius:12px;
+  padding:26px 16px;text-align:center;font-weight:700;cursor:pointer;margin-top:14px}
+.file-drop input{display:none}
+.btn{width:100%;margin-top:16px;padding:14px;border:0;border-radius:11px;background:var(--b700);color:#fff;
+  font-size:15px;font-weight:700;cursor:pointer}
+.btn:disabled{background:var(--b300)}
+.msg{margin-top:14px;padding:12px 14px;border-radius:10px;font-size:13.5px;display:none;line-height:1.55}
+.msg.ok{display:block;background:var(--okbg);color:var(--ok)}
+.msg.bad{display:block;background:var(--badbg);color:var(--bad)}
+.bar{height:8px;background:var(--b100);border-radius:99px;overflow:hidden;margin-top:14px;display:none}
+.bar i{display:block;height:100%;width:0;background:var(--b600);transition:width .3s}
+.links{margin-top:18px;font-size:13.5px}
+.links a{color:var(--b600);margin-right:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <svg class="mark" viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#fff"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
+    <div><h1>Watu daily list</h1><p>Pakia orodha ya Watu ya leo — Excel au CSV, safu 16 za kawaida.</p></div>
+  </div>
+  <div class="card">
+    <label>Msimbo wa mfumo / Access code</label>
+    <input type="password" id="code" placeholder="Access code (needs upload permission)" autocomplete="off">
+    <label>Tarehe ya orodha / List date</label>
+    <input type="date" id="date">
+    <label class="file-drop" id="drop">Bofya kuchagua faili — Excel (.xlsx) au CSV<input type="file" id="file" accept=".xlsx,.xls,.csv"></label>
+    <div id="picked" style="font-size:13px;color:var(--mut);margin-top:8px"></div>
+    <button class="btn" id="send" disabled>Pakia / Upload</button>
+    <div class="bar" id="bar"><i id="barFill"></i></div>
+    <div class="msg" id="msg"></div>
+  </div>
+  <div class="links"><a href="/call">HOOP Calls →</a><a href="/portal">Portal →</a></div>
+</div>
+<script>
+function $(s){ return document.querySelector(s); }
+var AOA = null, NAME = '';
+var SLICE = 2000;   // rows per request, header re-sent every slice; the server is stateless
+
+(function init(){
+  var d = new Date(); var p = function(n){ return ('0'+n).slice(-2); };
+  $('#date').value = d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate());
+  try { var c = localStorage.getItem('huCode'); if (c) $('#code').value = c; } catch(e){}
+})();
+
+$('#file').addEventListener('change', function(){
+  var f = this.files && this.files[0];
+  if (!f) return;
+  NAME = f.name;
+  var rd = new FileReader();
+  rd.onload = function(){
+    try {
+      var wb = XLSX.read(new Uint8Array(rd.result), { type:'array', cellDates:true });
+      var sheet = wb.Sheets[wb.SheetNames[0]];
+      AOA = XLSX.utils.sheet_to_json(sheet, { header:1, raw:true, defval:'' });
+      // Date objects -> the text shape the server parses everywhere else.
+      AOA = AOA.map(function(row){ return row.map(function(c){
+        if (c instanceof Date && !isNaN(c)) {
+          var p = function(n){ return ('0'+n).slice(-2); };
+          return c.getFullYear() + '-' + p(c.getMonth()+1) + '-' + p(c.getDate());
+        }
+        return c;
+      }); });
+      var n = Math.max(0, AOA.length - 1);
+      $('#picked').textContent = NAME + ' — safu ' + n + ' / ' + n + ' data rows. Vichwa: ' + (AOA[0]||[]).slice(0,6).join(', ') + '…';
+      $('#send').disabled = !n;
+      show('', '');
+    } catch(e){ show('Faili halisomeki: ' + e.message, 'bad'); }
+  };
+  rd.readAsArrayBuffer(f);
+});
+
+function show(t, cls){ var m = $('#msg'); m.textContent = t; m.className = 'msg' + (cls ? ' ' + cls : ''); }
+function uuid_(){
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c){
+    var r = Math.random()*16|0, v = c==='x'?r:(r&0x3|0x8); return v.toString(16); });
+}
+
+$('#send').onclick = function(){
+  var code = $('#code').value.trim();
+  if (!code){ show('Weka msimbo wako / enter your access code.', 'bad'); return; }
+  if (!AOA || AOA.length < 2){ show('Chagua faili kwanza.', 'bad'); return; }
+  try { localStorage.setItem('huCode', code); } catch(e){}
+  var header = AOA[0], data = AOA.slice(1);
+  var total = Math.max(1, Math.ceil(data.length / SLICE));
+  var batch = uuid_();
+  var sent = 0, inserted = 0, droppedAll = [];
+  $('#send').disabled = true;
+  $('#bar').style.display = 'block'; $('#barFill').style.width = '2%';
+  show('Inapakia… / uploading…', 'ok');
+  function part(i){
+    var rows = [header].concat(data.slice(i*SLICE, (i+1)*SLICE));
+    return fetch('/api/upload', {
+      method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ code: code, rows: rows,
+        meta: { uploadDate: $('#date').value },
+        part: { id: batch, index: i, total: total } })
+    }).then(function(r){ return r.json().then(function(b){ return { s:r.status, b:b }; }); })
+      .then(function(x){
+        if (x.s < 200 || x.s >= 300 || x.b.ok === false) throw new Error((x.b && x.b.error) || ('HTTP ' + x.s));
+        sent++; inserted += x.b.inserted || 0;
+        (x.b.droppedRows || []).forEach(function(d){ droppedAll.push(d); });
+        $('#barFill').style.width = Math.round(100*sent/total) + '%';
+        if (sent < total) return part(sent);
+        var t = 'Imepakiwa: safu ' + inserted + ' · tarehe ' + (x.b.date || $('#date').value)
+          + '. Simu zitajipakia zenyewe (DATA_VERSION imesogezwa).';
+        if (droppedAll.length) t += '\nZilizokataliwa (' + droppedAll.length + '): '
+          + droppedAll.slice(0,10).map(function(d){ return d.name + ' (' + d.imei + ')'; }).join('; ')
+          + (droppedAll.length > 10 ? ' …' : '');
+        show(t, 'ok');
+        $('#send').disabled = false;
+      });
+  }
+  part(0).catch(function(e){
+    show('Imeshindikana: ' + (e.message || e) + ' — jaribu tena; upakiaji mpya unapata batch mpya, hakuna kitakachorudiwa mara mbili.', 'bad');
+    $('#send').disabled = false;
+  });
+};
+</script>
+</body>
+</html>

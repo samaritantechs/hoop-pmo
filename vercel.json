@@ -1,4 +1,11 @@
 {
+  "rewrites": [
+    { "source": "/", "destination": "/index.html" },
+    { "source": "/call", "destination": "/call.html" },
+    { "source": "/upload", "destination": "/upload.html" },
+    { "source": "/portal", "destination": "/portal.html" },
+    { "source": "/dashboard", "destination": "/portal.html" }
+  ],
   "functions": {
     "api/**/*.js": {
       "maxDuration": 60
@@ -7,21 +14,19 @@
   "headers": [
     {
       "source": "/",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-cache, must-revalidate"
-        }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, must-revalidate" }]
+    },
+    {
+      "source": "/(call|upload|portal|dashboard)",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, must-revalidate" }]
     },
     {
       "source": "/(.*).html",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-cache, must-revalidate"
-        }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, must-revalidate" }]
+    },
+    {
+      "source": "/brand.js",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, must-revalidate" }]
     }
   ]
 }

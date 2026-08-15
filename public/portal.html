@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HOOP PMO — Portal</title>
+<style>
+:root{ --b950:#081C4A; --b900:#0B2A6B; --b800:#10357F; --b700:#1D4ED8; --b600:#2563EB; --b300:#93C5FD; --b100:#DBEAFE; --b50:#EFF6FF;
+  --bg:#F6F8FC; --card:#fff; --ink:#0F172A; --mut:#64748B; --soft:#94A3B8; --line:#E2E8F0;
+  --ok:#067647; --okbg:#E7F6EE; --warn:#92400E; --warnbg:#FEF3DC; --bad:#B42318; --badbg:#FDECEA; --sky:#35A8E1; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Arial,Helvetica,sans-serif}
+.hide{display:none!important}
+/* sign-in */
+#scrIn{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,var(--b900),var(--b800))}
+.incard{background:#fff;border-radius:18px;padding:28px 24px;width:100%;max-width:380px;margin:16px;box-shadow:0 12px 34px -14px rgba(8,28,74,.45)}
+.mark{width:76px;display:block;margin-bottom:10px}
+.incard h1{font-size:18px;margin:0 0 4px}
+.incard p{font-size:13px;color:var(--mut);margin:0 0 14px}
+input,select,textarea{font-family:inherit}
+.inp{width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:11px;font-size:15px}
+.btn{display:inline-flex;align-items:center;justify-content:center;border:0;cursor:pointer;border-radius:10px;padding:11px 16px;font-weight:700;font-size:14px;background:var(--b700);color:#fff}
+.btn.w{width:100%;margin-top:12px;padding:14px}
+.btn.ghost{background:#fff;color:var(--b700);border:1.5px solid var(--b100)}
+.btn.sm{padding:7px 12px;font-size:12.5px}
+.btn:disabled{background:var(--b300)}
+.err{background:var(--badbg);color:var(--bad);border-radius:9px;padding:9px 12px;font-size:13px;margin-top:10px;display:none}
+/* shell */
+header.top{background:var(--b900);color:#fff;padding:12px 16px;position:sticky;top:0;z-index:5}
+.toprow{display:flex;align-items:center;gap:10px;max-width:1080px;margin:0 auto}
+.toprow .who{flex:1;min-width:0}
+.toprow .who b{display:block;font-size:14px}
+.toprow .who span{font-size:11px;color:var(--b300)}
+.toprow .lg{width:52px}
+.tabs{display:flex;gap:6px;max-width:1080px;margin:10px auto 0;overflow-x:auto;padding-bottom:2px}
+.tabs button{background:rgba(255,255,255,.08);color:#cfe0ff;border:0;padding:8px 13px;border-radius:9px;font-size:12.5px;font-weight:700;white-space:nowrap;cursor:pointer}
+.tabs button.on{background:#fff;color:var(--b800)}
+main{max-width:1080px;margin:0 auto;padding:16px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px;box-shadow:0 2px 10px -4px rgba(11,42,107,.14)}
+.tile .l{font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.tile .v{font-size:24px;font-weight:800;margin-top:4px}
+.tile .s{font-size:11px;color:var(--soft);margin-top:2px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px;margin-bottom:14px;box-shadow:0 2px 10px -4px rgba(11,42,107,.12)}
+.card h2{font-size:15px;margin:0 0 10px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 9px;text-align:left;border-bottom:1px solid var(--line)}
+th{background:var(--b50);color:var(--b900);font-size:10.5px;text-transform:uppercase}
+td.r,th.r{text-align:right}
+.chip{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;background:var(--b50);color:var(--b600)}
+.chip.ok{background:var(--okbg);color:var(--ok)}
+.chip.bad{background:var(--badbg);color:var(--bad)}
+.chip.warn{background:var(--warnbg);color:var(--warn)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.row .inp{width:auto;flex:1;min-width:120px}
+.mut{color:var(--mut);font-size:12.5px}
+.code{font-family:ui-monospace,Menlo,monospace;font-weight:700;letter-spacing:.08em}
+.toast{position:fixed;left:16px;right:16px;bottom:18px;background:var(--ink);color:#fff;padding:12px 16px;border-radius:11px;font-size:13.5px;display:none;z-index:9}
+.toast.bad{background:var(--bad)}
+.road li{margin-bottom:8px;line-height:1.5}
+@media(max-width:640px){ th,td{padding:7px 6px} }
+</style>
+</head>
+<body>
+
+<div id="scrIn">
+  <div class="incard">
+    <svg class="mark" viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#EFF6FF"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
+    <h1>HOOP PMO</h1>
+    <p>Mfumo wa ufuatiliaji — watu simu. Ingia na msimbo wako. / Sign in with your access code.</p>
+    <input class="inp" type="password" id="inCode" placeholder="Access code" autocomplete="off">
+    <div class="err" id="inErr"></div>
+    <button class="btn w" id="inBtn">Ingia / Sign in</button>
+  </div>
+</div>
+
+<div id="scrApp" class="hide">
+  <header class="top">
+    <div class="toprow">
+      <svg class="lg" viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#fff"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
+      <div class="who"><b id="whoName">—</b><span id="whoRole">—</span></div>
+      <a class="btn sm ghost" href="/upload">Upload</a>
+      <a class="btn sm ghost" href="/call">Calls</a>
+      <button class="btn sm ghost" id="outBtn">Toka</button>
+    </div>
+    <div class="tabs" id="tabs">
+      <button data-t="dash" class="on">Dashboard</button>
+      <button data-t="ripoti">Ripoti</button>
+      <button data-t="recovery">Recovery</button>
+      <button data-t="teams">Teams</button>
+      <button data-t="staff">Staff</button>
+      <button data-t="codes" id="tabCodes">Access codes</button>
+      <button data-t="settings" id="tabSettings">Settings</button>
+      <button data-t="road">Roadmap</button>
+    </div>
+  </header>
+  <main id="main"></main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+function $(s,r){ return (r||document).querySelector(s); }
+function $all(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function money(n){ n=Number(n)||0; return n.toLocaleString('en-US',{maximumFractionDigits:0}); }
+function pct(x){ return (x==null||isNaN(x))?'—':Math.round(100*x)+'%'; }
+function fmtDur(sec){ sec=Math.max(0,Math.round(Number(sec)||0)); var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60,p=function(n){return(n<10?'0':'')+n;}; return h>0?(h+':'+p(m)+':'+p(s)):(m+':'+p(s)); }
+function telHref(v){ var d=String(v==null?'':v).replace(/\D/g,''); if(!d) return '#'; return d.indexOf('255')===0?'+'+d:'+255'+d.replace(/^0+/,''); }
+function toast(m,bad){ var t=$('#toast'); t.textContent=m; t.className='toast'+(bad?' bad':''); t.style.display='block'; clearTimeout(toast._t); toast._t=setTimeout(function(){t.style.display='none';},3500); }
+function isoToday(off){ var d=new Date(); d.setDate(d.getDate()+(off||0)); var p=function(n){return('0'+n).slice(-2);}; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+
+var CODE='', BOOT=null, TAB='dash';
+function srv(fn,args){
+  return fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({code:CODE,fn:fn,args:args||{}})})
+  .then(function(r){ return r.text().then(function(t){ var b; try{b=JSON.parse(t);}catch(e){throw new Error('Server error HTTP '+r.status);}
+    if(r.status<200||r.status>=300||b.ok===false) throw new Error(b.error||('HTTP '+r.status)); return b; }); });
+}
+
+$('#inBtn').onclick=function(){
+  CODE=$('#inCode').value.trim();
+  if(!CODE) return;
+  $('#inBtn').disabled=true; $('#inErr').style.display='none';
+  srv('boot').then(function(d){
+    BOOT=d;
+    try{ localStorage.setItem('hpCode',CODE); }catch(e){}
+    enter();
+  }).catch(function(e){
+    $('#inBtn').disabled=false;
+    $('#inErr').textContent=String(e.message||e); $('#inErr').style.display='block';
+  });
+};
+$('#inCode').addEventListener('keydown',function(e){ if(e.key==='Enter') $('#inBtn').onclick(); });
+
+function enter(){
+  $('#scrIn').classList.add('hide'); $('#scrApp').classList.remove('hide');
+  $('#whoName').textContent=BOOT.name||'—';
+  $('#whoRole').textContent=(BOOT.role||'')+(BOOT.readOnly?' · view-only':'');
+  var hasSettings=(BOOT.tabs||[]).indexOf('settings')>=0;
+  $('#tabCodes').classList.toggle('hide',!hasSettings);
+  $('#tabSettings').classList.toggle('hide',!hasSettings);
+  $all('#tabs button').forEach(function(b){ b.onclick=function(){
+    TAB=b.getAttribute('data-t');
+    $all('#tabs button').forEach(function(x){x.classList.toggle('on',x===b);});
+    draw();
+  };});
+  $('#outBtn').onclick=function(){ try{localStorage.removeItem('hpCode');}catch(e){} location.reload(); };
+  $('#inBtn').disabled=false;
+  draw();
+}
+(function(){ try{ var c=localStorage.getItem('hpCode'); if(c){ $('#inCode').value=c; $('#inBtn').onclick(); } }catch(e){} })();
+
+function draw(){
+  var m=$('#main');
+  if(TAB==='dash') return drawDash(m);
+  if(TAB==='ripoti') return drawRipoti(m);
+  if(TAB==='recovery') return drawRecovery(m);
+  if(TAB==='teams') return drawTeams(m);
+  if(TAB==='staff') return drawStaff(m);
+  if(TAB==='codes') return drawCodes(m);
+  if(TAB==='settings') return drawSettings(m);
+  if(TAB==='road') return drawRoad(m);
+}
+
+/* ---------- dashboard ---------- */
+function drawDash(m){
+  var s=BOOT.summary||{};
+  var n=function(x){ return x&&x.num!=null?money(x.num):'—'; };
+  m.innerHTML=
+    '<div class="tiles">'
+    +'<div class="tile"><div class="l">Orodha ya leo</div><div class="v">'+n(s.list)+'</div><div class="s">'+(s.deckDate?('deck '+esc(s.deckDate)):'hakuna upload bado')+'</div></div>'
+    +'<div class="tile"><div class="l">Locked 7+</div><div class="v" style="color:var(--bad)">'+n(s.locked7)+'</div><div class="s">wamefungiwa wiki+</div></div>'
+    +'<div class="tile"><div class="l">Ndani ya siku 45</div><div class="v">'+n(s.inWindow)+'</div><div class="s">dirisha la Hoop</div></div>'
+    +'<div class="tile"><div class="l">Simu leo</div><div class="v">'+n(s.calls)+'</div><div class="s">credit team</div></div>'
+    +'<div class="tile"><div class="l">Waliofikiwa</div><div class="v" style="color:var(--ok)">'+(s.reached&&s.reached.pct!=null?pct(s.reached.pct):'—')+'</div><div class="s">'+(s.reached?money(s.reached.num)+' / '+money(s.reached.den):'')+'</div></div>'
+    +'</div>'
+    +'<div class="card"><h2>Leo unafanyaje / Today’s path</h2>'
+    +'<ol class="road" style="margin:0;padding-left:20px">'
+    +'<li><a href="/upload">Pakia orodha ya Watu ya leo</a> — Excel kutoka Watu, kama ilivyo.</li>'
+    +'<li>Credit team wanafungua <a href="/call">HOOP Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
+    +'<li>Kesho asubuhi: pakia ya kesho, kisha angalia <b>Recovery</b> — nani amelipa baada ya simu zetu.</li>'
+    +'</ol></div>';
+}
+
+/* ---------- ripoti ---------- */
+var RIP={from:isoToday(-7),to:isoToday(0),team:''};
+function drawRipoti(m){
+  m.innerHTML='<div class="card"><h2>Ripoti ya simu / Call report</h2><div class="mut">Inapakia…</div></div>';
+  srv('report',{from:RIP.from,to:RIP.to,team:RIP.team}).then(function(d){
+    var t=d.totals||{};
+    m.innerHTML=
+      '<div class="card"><h2>Ripoti ya simu / Call report</h2>'
+      +'<div class="row"><input class="inp" type="date" id="rF" value="'+RIP.from+'"><input class="inp" type="date" id="rT" value="'+RIP.to+'">'
+      +'<select class="inp" id="rTeam"><option value="">Timu zote</option>'
+      +(d.teams||[]).map(function(x){return '<option'+(x.team===RIP.team?' selected':'')+'>'+esc(x.team)+'</option>';}).join('')
+      +'</select></div>'
+      +'<div class="tiles">'
+      +'<div class="tile"><div class="l">Simu</div><div class="v">'+money(t.calls)+'</div></div>'
+      +'<div class="tile"><div class="l">Muda</div><div class="v">'+fmtDur(t.duration)+'</div></div>'
+      +'<div class="tile"><div class="l">Portfolio</div><div class="v" style="color:var(--ok)">'+money(t.portfolio)+'</div></div>'
+      +'<div class="tile"><div class="l">% pf</div><div class="v">'+(t.calls?pct(t.ratio):'—')+'</div></div>'
+      +'</div>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Afisa</th><th class="r">Simu</th><th class="r">Muda</th><th class="r">Wateja</th><th class="r">Nje ya pf</th><th class="r">% pf</th><th></th></tr></thead><tbody>'
+      +(d.users||[]).map(function(u){
+        var h=telHref(u.phone);
+        return '<tr><td>'+esc(u.name)+'<div class="mut" style="font-size:10.5px">'+esc(u.team||'')+' '+esc(u.position||'')+'</div></td>'
+          +'<td class="r">'+money(u.calls)+'</td><td class="r">'+fmtDur(u.duration)+'</td>'
+          +'<td class="r">'+money(u.uniqCustomers)+'</td><td class="r" style="color:var(--soft)">'+money(u.nonPortfolio)+'</td>'
+          +'<td class="r"'+(u.calls&&u.ratio<0.5?' style="color:var(--bad)"':'')+'>'+(u.calls?pct(u.ratio):'—')+'</td>'
+          +'<td class="r">'+(h!=='#'?'<a href="tel:'+h+'" title="'+esc(u.phone)+'">📞</a>':'')+'</td></tr>';
+      }).join('')+'</tbody></table></div></div>';
+    $('#rF').onchange=function(){RIP.from=this.value;drawRipoti(m);};
+    $('#rT').onchange=function(){RIP.to=this.value;drawRipoti(m);};
+    $('#rTeam').onchange=function(){RIP.team=this.value;drawRipoti(m);};
+  }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+
+/* ---------- recovery ---------- */
+function drawRecovery(m){
+  m.innerHTML='<div class="card"><h2>Recovery</h2><div class="mut">Inapakia…</div></div>';
+  srv('recovery').then(function(d){
+    if(!d.prev){
+      m.innerHTML='<div class="card"><h2>Recovery</h2><div class="mut">'+esc(d.note||'Hakuna data bado — pakia orodha ya kwanza.')+'</div></div>';
+      return;
+    }
+    var c=d.counts||{};
+    m.innerHTML=
+      '<div class="card"><h2>Recovery — '+esc(d.prev)+' → '+esc(d.latest)+'</h2>'
+      +'<div class="mut" style="margin-bottom:10px">Nani amerudi baada ya simu zetu: tunalinganisha upload mbili za mwisho, mteja kwa mteja (IMEI).</div>'
+      +'<div class="tiles">'
+      +'<div class="tile"><div class="l">Wamelinganishwa</div><div class="v">'+money(c.compared)+'</div></div>'
+      +'<div class="tile"><div class="l">Wamelipa mara ya kwanza</div><div class="v" style="color:var(--ok)">'+money(c.paidNew)+'</div></div>'
+      +'<div class="tile"><div class="l">Siku-offline zimepungua</div><div class="v" style="color:var(--ok)">'+money(c.reconnected)+'</div></div>'
+      +'<div class="tile"><div class="l">Wamezidi kuzama</div><div class="v" style="color:var(--bad)">'+money(c.deeper)+'</div></div>'
+      +'<div class="tile"><div class="l">Wametoka kwenye orodha</div><div class="v">'+money(c.leftList)+'</div><div class="s">hawakuwepo leo</div></div>'
+      +'</div>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Timu</th><th class="r">OFF jana</th><th class="r">OFF leo</th><th></th></tr></thead><tbody>'
+      +(d.rows||[]).map(function(r){
+        return '<tr><td>'+esc(r.name)+'<div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td><td>'+esc(r.team||'')+'</td>'
+          +'<td class="r">'+money(r.was)+'</td><td class="r" style="color:var(--ok)">'+money(r.now)+'</td>'
+          +'<td>'+(r.paid?'<span class="chip ok">AMELIPA</span>':'<span class="chip">karibu</span>')+'</td></tr>';
+      }).join('')+'</tbody></table></div></div>';
+  }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+
+/* ---------- teams ---------- */
+function drawTeams(m){
+  var canW=(BOOT.tabs||[]).indexOf('settings')>=0&&!BOOT.readOnly;
+  m.innerHTML=
+    '<div class="card"><h2>Timu / RSM regions</h2>'
+    +'<div class="mut" style="margin-bottom:10px">Msimbo wa timu ndio sign-in ya credit team kwenye Calls. Kubadilisha msimbo kunatoa kila simu ya timu hiyo — ndicho kinachotakiwa mtu akiondoka.</div>'
+    +'<div style="overflow-x:auto"><table><thead><tr><th>Timu</th><th>Team code</th><th>RSM</th><th>Simu ya RSM</th>'+(canW?'<th></th>':'')+'</tr></thead><tbody>'
+    +(BOOT.teams||[]).map(function(t){
+      return '<tr><td><b>'+esc(t.team)+'</b></td><td class="code">'+esc(t.code||'—')+'</td>'
+        +'<td>'+esc(t.rsm||'')+'</td><td>'+esc(t.rsmNo||'')+'</td>'
+        +(canW?'<td class="r"><button class="btn sm ghost" data-nc="'+esc(t.team)+'">Msimbo mpya</button></td>':'')+'</tr>';
+    }).join('')+'</tbody></table></div>'
+    +(canW?'<div class="row" style="margin-top:14px"><input class="inp" id="ntName" placeholder="Timu mpya (mkoa/eneo)"><input class="inp" id="ntRsm" placeholder="Jina la RSM"><input class="inp" id="ntNo" placeholder="Simu ya RSM"><button class="btn sm" id="ntAdd">Ongeza</button></div>':'')
+    +'</div>';
+  if(!canW) return;
+  $all('[data-nc]',m).forEach(function(b){
+    b.onclick=function(){
+      if(!confirm('Msimbo mpya wa '+b.getAttribute('data-nc')+'? Kila simu ya timu hii itatakiwa kuingia upya.')) return;
+      srv('newTeamCode',{team:b.getAttribute('data-nc')}).then(function(d){
+        toast('Msimbo mpya wa '+d.team+': '+d.code);
+        return srv('boot').then(function(x){BOOT=x;drawTeams(m);});
+      }).catch(function(e){toast(String(e.message||e),true);});
+    };
+  });
+  $('#ntAdd').onclick=function(){
+    var t=$('#ntName').value.trim(); if(!t) return;
+    srv('saveTeam',{team:t,rsm:$('#ntRsm').value,rsmNo:$('#ntNo').value})
+      .then(function(){ return srv('newTeamCode',{team:t.toUpperCase()}); })
+      .then(function(d){ toast('Timu '+d.team+' · msimbo '+d.code);
+        return srv('boot').then(function(x){BOOT=x;drawTeams(m);}); })
+      .catch(function(e){toast(String(e.message||e),true);});
+  };
+}
+
+/* ---------- staff ---------- */
+function drawStaff(m){
+  m.innerHTML='<div class="card"><h2>Watumiaji wa Calls / Staff</h2><div class="mut">Inapakia…</div></div>';
+  var canW=(BOOT.tabs||[]).indexOf('settings')>=0&&!BOOT.readOnly;
+  srv('officers').then(function(d){
+    m.innerHTML='<div class="card"><h2>Watumiaji wa Calls / Staff</h2>'
+      +'<div class="mut" style="margin-bottom:10px">Kumzima mtu mmoja hakubadilishi msimbo wa timu — akaunti yake tu ndiyo inafungwa.</div>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Jina</th><th>Timu</th><th>Simu</th><th>Sync ya mwisho</th><th>Hali</th>'+(canW?'<th></th>':'')+'</tr></thead><tbody>'
+      +(d.officers||[]).map(function(o){
+        return '<tr><td><b>'+esc(o.name)+'</b>'+(o.leader?' <span class="chip">kiongozi</span>':'')+'</td>'
+          +'<td>'+esc(o.team||'')+'</td><td>'+esc(o.phone||'')+'</td>'
+          +'<td class="mut">'+(o.lastSync?esc(String(o.lastSync).slice(0,16).replace('T',' ')):'—')+'</td>'
+          +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td>'
+          +(canW?'<td class="r"><button class="btn sm ghost" data-tg="'+esc(o.userId)+'" data-on="'+(o.active?1:0)+'">'+(o.active?'Zima':'Washa')+'</button></td>':'')
+          +'</tr>';
+      }).join('')+'</tbody></table></div></div>';
+    if(!canW) return;
+    $all('[data-tg]',m).forEach(function(b){
+      b.onclick=function(){
+        srv('officerActive',{userId:b.getAttribute('data-tg'),active:b.getAttribute('data-on')!=='1'})
+          .then(function(){drawStaff(m);}).catch(function(e){toast(String(e.message||e),true);});
+      };
+    });
+  }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+
+/* ---------- access codes ---------- */
+function drawCodes(m){
+  m.innerHTML='<div class="card"><h2>Access codes</h2><div class="mut">Inapakia…</div></div>';
+  srv('accessCodes').then(function(d){
+    m.innerHTML='<div class="card"><h2>Access codes — mfumo (portal)</h2>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Timu</th><th>Tabs</th><th></th></tr></thead><tbody>'
+      +(d.codes||[]).map(function(c){
+        return '<tr><td class="code">'+esc(c.code)+'</td><td>'+esc(c.name)+'</td><td>'+esc(c.role)+'</td>'
+          +'<td>'+esc(c.teams?c.teams.join(', '):'ZOTE')+'</td><td class="mut">'+esc((c.tabs||[]).join(', '))+'</td>'
+          +'<td class="r"><button class="btn sm ghost" data-del="'+esc(c.code)+'">Futa</button></td></tr>';
+      }).join('')+'</tbody></table></div>'
+      +'<div class="row" style="margin-top:14px"><input class="inp" id="acCode" placeholder="Code (siri)"><input class="inp" id="acName" placeholder="Jina">'
+      +'<select class="inp" id="acRole"><option>ADMIN</option><option>MANAGER</option><option>RSM</option><option>AUDITOR</option></select>'
+      +'<input class="inp" id="acTeams" placeholder="Timu (tupu = zote), comma"><button class="btn sm" id="acAdd">Ongeza</button></div>'
+      +'<div class="mut" style="margin-top:6px">ADMIN inapata kila kitu. AUDITOR ni kuangalia tu. Nyingine: dashboard + ripoti, bila upload/settings.</div>'
+      +'</div>';
+    $('#acAdd').onclick=function(){
+      var role=$('#acRole').value;
+      var tabs=role==='ADMIN'?['upload','settings']:[];
+      var teams=$('#acTeams').value.split(',').map(function(x){return x.trim();}).filter(Boolean);
+      srv('saveAccessCode',{code:$('#acCode').value,name:$('#acName').value,role:role,teams:teams,tabs:tabs})
+        .then(function(){toast('Imehifadhiwa.');drawCodes(m);}).catch(function(e){toast(String(e.message||e),true);});
+    };
+    $all('[data-del]',m).forEach(function(b){
+      b.onclick=function(){
+        if(!confirm('Futa code hii?')) return;
+        srv('deleteAccessCode',{code:b.getAttribute('data-del')})
+          .then(function(){drawCodes(m);}).catch(function(e){toast(String(e.message||e),true);});
+      };
+    });
+  }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+
+/* ---------- settings ---------- */
+function drawSettings(m){
+  m.innerHTML='<div class="card"><h2>Settings</h2><div class="mut">Inapakia…</div></div>';
+  srv('settings').then(function(d){
+    m.innerHTML='<div class="card"><h2>Settings</h2>'
+      +(d.settings||[]).map(function(s,i){
+        return '<div class="row"><div style="min-width:170px;font-size:12.5px;font-weight:700">'+esc(s.key)+'</div>'
+          +'<input class="inp" id="st'+i+'" value="'+esc(s.value)+'">'
+          +'<button class="btn sm" data-sv="'+esc(s.key)+'" data-i="'+i+'">Save</button></div>';
+      }).join('')
+      +'<div class="mut">SYSTEM_OPEN=YES hufungua mfumo. CALL_BRAND ni jina kwenye app. FU_STATUSES: hali za ufuatiliaji, moja kwa mstari.</div>'
+      +'</div>';
+    $all('[data-sv]',m).forEach(function(b){
+      b.onclick=function(){
+        srv('settingSet',{key:b.getAttribute('data-sv'),value:$('#st'+b.getAttribute('data-i')).value})
+          .then(function(){toast('Imehifadhiwa.');}).catch(function(e){toast(String(e.message||e),true);});
+      };
+    });
+  }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+
+/* ---------- roadmap ---------- */
+function drawRoad(m){
+  m.innerHTML=
+    '<div class="card"><h2>Iko live leo / Live tonight</h2><ul class="road">'
+    +'<li><b>Watu daily upload</b> — orodha ya kila siku, IMEI kama ufunguo, historia inabaki.</li>'
+    +'<li><b>HOOP Calls</b> — credit team: orodha ya walio-locked, siku ya 45, kupiga + kumbukumbu + ahadi.</li>'
+    +'<li><b>Ripoti</b> — simu kwa kila afisa, portfolio %, na kumpigia afisa mwenyewe.</li>'
+    +'<li><b>Recovery</b> — nani amelipa/amerudi baada ya simu zetu, upload kwa upload.</li>'
+    +'<li><b>Team codes + staff control</b> — usalama uleule wa HOPE tangu siku ya kwanza.</li>'
+    +'</ul></div>'
+    +'<div class="card"><h2>Phase 2 — sales &amp; commissions (designs tayari)</h2><ul class="road">'
+    +'<li><b>Sales audit (watu × hoop)</b> — mauzo ya Hoop ya jana dhidi ya ripoti ya Watu ya asubuhi, IMEI kwa IMEI: MATCHED (lipa commission) / HOOP-ONLY (bendera ya udanganyifu) / WATU-ONLY (haikurekodiwa).</li>'
+    +'<li><b>Commissions engine</b> — kanuni kwa maandishi (agent 75k? RSM 30k+5?), inasubiri rules rasmi.</li>'
+    +'<li><b>Payments</b> — ref ya malipo ya mteja NI namba yake ya simu; matching kwa simu, si IMEI.</li>'
+    +'<li><b>Receipts flow</b> — super-agent → RSM → agent, na receive-confirmation.</li>'
+    +'</ul></div>'
+    +'<div class="card"><h2>Phase 3 — warehouse</h2><ul class="road">'
+    +'<li><b>Stock kwa mmiliki na umri wa KWELI</b> — transfer haifanyi simu kuwa mpya (kasoro ya sasa inarekebishwa).</li>'
+    +'<li><b>Point-in-time stock</b> — stock ya tarehe yoyote, kwa kila ngazi.</li>'
+    +'<li><b>Stock requests</b> — agent → RSM → storekeeper, kwenye mfumo.</li>'
+    +'</ul></div>';
+}
+</script>
+</body>
+</html>
