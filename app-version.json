@@ -1,6 +1,6 @@
 {
-  "versionCode": 1,
-  "versionName": "1.0.0",
-  "notes": "HOOP Calls ya kwanza -- orodha ya Watu ya leo, kupiga na kufuatilia. / First HOOP Calls build: the daily Watu list, calling and follow-up.",
+  "versionCode": 2,
+  "versionName": "1.0.1",
+  "notes": "Inaelekeza kwenye anwani sahihi (hoop-pmo.vercel.app) na inasahau anwani ya zamani iliyokuwa na ukuta wa Vercel. / Points at the correct address and forgets the old Vercel-walled one.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOP-Calls.apk"
 }

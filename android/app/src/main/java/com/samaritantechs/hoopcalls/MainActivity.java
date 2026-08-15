@@ -156,10 +156,13 @@ public class MainActivity extends Activity {
         String saved = prefs.getString("startUrl", null);
         if (saved == null) return BuildConfig.START_URL;
         if (prefs.getInt("startUrlVersion", 0) >= BuildConfig.VERSION_CODE) return saved;
-        String migrated = saved.replaceAll("/call/?$", "/");
-        prefs.edit().putString("startUrl", migrated)
+        // A new build's default WINS over anything an older build saved. HOOP's v1 pointed
+        // at a Vercel-protected address, and carrying a saved copy of it forward would keep
+        // a phone on the login wall through every reinstall. Anyone who genuinely runs a
+        // different domain types it once more into the fallback screen.
+        prefs.edit().remove("startUrl")
                     .putInt("startUrlVersion", BuildConfig.VERSION_CODE).apply();
-        return migrated;
+        return BuildConfig.START_URL;
     }
 
     /**
