@@ -159,6 +159,27 @@ const FNS = {
     return { ok: true, team, code };
   },
 
+  /** One box, four keys: name, phone, IMEI, agent. Team-scoped at the database.
+      Budget: ONE read, or()-filtered and capped at 30 rows. */
+  async customerSearch(db, user, args) {
+    const q = String((args && args.q) || '').trim().replace(/[%,()]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (q.length < 3) return { ok: true, customers: [] };
+    const pat = '*' + q + '*';
+    let query = db.from('watu_loans')
+      .select('imei, client_name, client_mobile, team, agent, model, days_offline, locked7, snapshot_date')
+      .or(['client_name.ilike.' + pat, 'client_mobile.ilike.' + pat,
+           'imei.ilike.' + pat, 'agent.ilike.' + pat].join(','))
+      .limit(30);
+    if (user.teams && user.teams.length) query = query.in('team', user.teams.map(K));
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return { ok: true, customers: (data || []).map(r => ({
+      imei: r.imei, name: r.client_name || '', phone: r.client_mobile || '',
+      team: r.team || '', agent: r.agent || '', model: r.model || '',
+      daysOff: r.days_offline, locked7: r.locked7 === true,
+      asOf: r.snapshot_date ? String(r.snapshot_date).slice(0, 10) : null })) };
+  },
+
   async officers(db, user) {
     const rows = await fetchAll(() => db.from('call_users')
       .select('user_id, name, team, role, phone, is_leader, active, last_sync'));

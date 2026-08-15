@@ -40,11 +40,11 @@ aside.side{flex:0 0 185px;padding:16px 0 16px 14px;position:sticky;top:66px}
   padding:11px 14px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
 .tabs button.on{background:var(--b700);border-color:var(--b700);color:#fff}
 main{flex:1;min-width:0;padding:16px}
+/* On a phone the nav STAYS a left column, as asked -- just a slimmer one. */
 @media(max-width:760px){
-  .shell{display:block}
-  aside.side{position:static;padding:10px 12px 0}
-  .tabs{flex-direction:row;overflow-x:auto;padding-bottom:2px}
-  .tabs button{white-space:nowrap}
+  aside.side{flex:0 0 108px;padding:10px 0 10px 8px}
+  .tabs button{padding:9px 8px;font-size:11px;border-radius:8px}
+  main{padding:10px 8px 10px 10px}
 }
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px;box-shadow:0 2px 10px -4px rgba(11,42,107,.14)}
@@ -123,6 +123,35 @@ function toast(m,bad){ var t=$('#toast'); t.textContent=m; t.className='toast'+(
 function isoToday(off){ var d=new Date(); d.setDate(d.getDate()+(off||0)); var p=function(n){return('0'+n).slice(-2);}; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 
 var CODE='', BOOT=null, TAB='dash';
+/* One search box, two jobs: filter the table rows on the page instantly, and (from three
+   characters) ask the register for customers by name / phone / IMEI / agent. */
+function custRow_(c){
+  var h=telHref(c.phone);
+  return '<tr><td><b>'+esc(c.name)+'</b><div class="mut" style="font-size:10px">IMEI '+esc(c.imei)+'</div></td>'
+    +'<td>'+esc(c.team)+'</td><td>'+esc(c.agent)+'</td>'
+    +'<td class="r">'+(c.daysOff!=null?money(c.daysOff):'—')+(c.locked7?' <span class="chip bad">7+</span>':'')+'</td>'
+    +'<td class="r">'+(h!=='#'?'<a href="tel:'+h+'" title="'+esc(c.phone)+'">📞</a>':'')+'</td></tr>';
+}
+function wireSearch_(inputSel, boxSel, filterFn){
+  var t=null;
+  $(inputSel).addEventListener('input', function(){
+    var q=this.value.trim();
+    filterFn(q.toUpperCase());
+    clearTimeout(t);
+    var box=$(boxSel);
+    if(q.length<3){ if(box) box.innerHTML=''; return; }
+    t=setTimeout(function(){
+      srv('customerSearch',{q:q}).then(function(d){
+        if($(inputSel).value.trim()!==q) return;
+        var cs=d.customers||[];
+        if(!box) return;
+        box.innerHTML=!cs.length?'':'<div class="card"><h2>Wateja / Customers — '+cs.length+'</h2>'
+          +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Timu</th><th>Agent</th><th class="r">OFF</th><th></th></tr></thead><tbody>'
+          +cs.map(custRow_).join('')+'</tbody></table></div></div>';
+      }).catch(function(){});
+    },350);
+  });
+}
 function srv(fn,args){
   return fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({code:CODE,fn:fn,args:args||{}})})
@@ -262,6 +291,7 @@ function drawTeams(m){
   var canW=(BOOT.tabs||[]).indexOf('settings')>=0&&!BOOT.readOnly;
   m.innerHTML=
     '<div class="card"><h2>Timu / RSM regions</h2>'
+    +'<div class="row"><input class="inp" id="teamQ" placeholder="Tafuta: jina, simu, IMEI, RSM, agent… / search"></div>'
     +'<div class="mut" style="margin-bottom:10px">Msimbo wa timu ndio sign-in ya credit team kwenye Calls. Kubadilisha msimbo kunatoa kila simu ya timu hiyo — ndicho kinachotakiwa mtu akiondoka.</div>'
     +'<div style="overflow-x:auto"><table><thead><tr><th>Timu</th><th>Team code</th><th>RSM</th><th>Simu ya RSM</th>'+(canW?'<th></th>':'')+'</tr></thead><tbody>'
     +(BOOT.teams||[]).map(function(t){
@@ -270,7 +300,12 @@ function drawTeams(m){
         +(canW?'<td class="r"><button class="btn sm ghost" data-nc="'+esc(t.team)+'">Msimbo mpya</button></td>':'')+'</tr>';
     }).join('')+'</tbody></table></div>'
     +(canW?'<div class="row" style="margin-top:14px"><input class="inp" id="ntName" placeholder="Timu mpya (mkoa/eneo)"><input class="inp" id="ntRsm" placeholder="Jina la RSM"><input class="inp" id="ntNo" placeholder="Simu ya RSM"><button class="btn sm" id="ntAdd">Ongeza</button></div>':'')
-    +'</div>';
+    +'</div><div id="teamCust"></div>';
+  wireSearch_('#teamQ','#teamCust',function(q){
+    $all('tbody tr', $('#main')).forEach(function(tr){
+      tr.style.display = !q || tr.textContent.toUpperCase().indexOf(q)>=0 ? '' : 'none';
+    });
+  });
   if(!canW) return;
   $all('[data-nc]',m).forEach(function(b){
     b.onclick=function(){
@@ -298,6 +333,7 @@ function drawStaff(m){
   srv('officers').then(function(d){
     m.innerHTML='<div class="card"><h2>Watumiaji wa Calls / Staff</h2>'
       +'<div class="mut" style="margin-bottom:10px">Kumzima mtu mmoja hakubadilishi msimbo wa timu — akaunti yake tu ndiyo inafungwa.</div>'
+      +'<div class="row"><input class="inp" id="staffQ" placeholder="Tafuta: jina, simu, timu, IMEI, agent… / search"></div>'
       +'<div style="overflow-x:auto"><table><thead><tr><th>Jina</th><th>Timu</th><th>Simu</th><th>Sync ya mwisho</th><th>Hali</th>'+(canW?'<th></th>':'')+'</tr></thead><tbody>'
       +(d.officers||[]).map(function(o){
         return '<tr><td><b>'+esc(o.name)+'</b>'+(o.leader?' <span class="chip">kiongozi</span>':'')+'</td>'
@@ -306,7 +342,12 @@ function drawStaff(m){
           +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td>'
           +(canW?'<td class="r"><button class="btn sm ghost" data-tg="'+esc(o.userId)+'" data-on="'+(o.active?1:0)+'">'+(o.active?'Zima':'Washa')+'</button></td>':'')
           +'</tr>';
-      }).join('')+'</tbody></table></div></div>';
+      }).join('')+'</tbody></table></div></div><div id="staffCust"></div>';
+    wireSearch_('#staffQ','#staffCust',function(q){
+      $all('tbody tr', $('#main')).forEach(function(tr){
+        tr.style.display = !q || tr.textContent.toUpperCase().indexOf(q)>=0 ? '' : 'none';
+      });
+    });
     if(!canW) return;
     $all('[data-tg]',m).forEach(function(b){
       b.onclick=function(){
