@@ -9,12 +9,29 @@ import { createClient } from '@supabase/supabase-js';
 // request -- it killed EVERY function at invocation (FUNCTION_INVOCATION_FAILED), which
 // reached the phones as "server is not answering". Normalise first; keep the placeholder
 // fallback so `npm test` stays importable with no env at all (tests inject the fake db).
+/** A Supabase API key is a JWT whose payload names the PROJECT REF -- so even when a key
+    is pasted where the URL belongs (which is exactly what happened on the first setup
+    night), the right URL is recoverable from the paste itself. */
+function refUrlFromJwt(raw) {
+  const m = String(raw == null ? '' : raw).trim().match(/^eyJ[\w-]+\.([\w-]+)\.[\w-]+$/);
+  if (!m) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(m[1], 'base64url').toString('utf8'));
+    const ref = payload && payload.ref ? String(payload.ref) : '';
+    return /^[a-z0-9]{16,24}$/.test(ref) ? 'https://' + ref + '.supabase.co' : null;
+  } catch (e) { return null; }
+}
 function normUrl(raw) {
   let s = String(raw == null ? '' : raw).trim().replace(/^['"]+|['"]+$/g, '').replace(/\/+$/, '');
-  if (s && !/^https?:\/\//i.test(s)) s = 'https://' + s;
+  if (!s) return null;
+  if (/^eyJ/.test(s)) return null;               // that is a KEY, not a URL -- see refUrlFromJwt
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
   try { return new URL(s).origin; } catch (e) { return null; }
 }
-export const SUPABASE_URL_NORM = normUrl(process.env.SUPABASE_URL);
+export const SUPABASE_URL_NORM =
+  normUrl(process.env.SUPABASE_URL)
+  || refUrlFromJwt(process.env.SUPABASE_URL)                  // a key in the URL slot
+  || refUrlFromJwt(process.env.SUPABASE_SERVICE_ROLE_KEY);    // last resort: the key itself names the project
 export const supabase = createClient(
   SUPABASE_URL_NORM || 'https://unset.supabase.co',
   String(process.env.SUPABASE_SERVICE_ROLE_KEY || 'unset').trim().replace(/^['"]+|['"]+$/g, ''),

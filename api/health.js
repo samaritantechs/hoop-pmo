@@ -6,15 +6,12 @@
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   const rawUrl = String(process.env.SUPABASE_URL || '');
+  const looksLikeKey = /^eyJ/.test(rawUrl.trim());
   let urlValid = false, host = null;
-  try {
-    let s = rawUrl.trim().replace(/^['"]+|['"]+$/g, '');
-    if (s && !/^https?:\/\//i.test(s)) s = 'https://' + s;
-    const u = new URL(s); urlValid = true; host = u.host;
-  } catch (e) { /* stays invalid */ }
   let db = null;
   try {
-    const { supabase } = await import('./_lib/supabase.js');
+    const { supabase, SUPABASE_URL_NORM } = await import('./_lib/supabase.js');
+    if (SUPABASE_URL_NORM) { urlValid = true; host = new URL(SUPABASE_URL_NORM).host; }
     const t0 = Date.now();
     const { error } = await supabase.from('settings').select('key').limit(1);
     db = { reachable: !error, ms: Date.now() - t0,
@@ -30,6 +27,6 @@ export default async function handler(req, res) {
       SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
       SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
     },
-    urlValid, host, db,
+    urlValid, host, keyPastedAsUrl: looksLikeKey, db,
   });
 }
