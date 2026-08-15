@@ -359,27 +359,49 @@ function drawStaff(m){
 }
 
 /* ---------- access codes ---------- */
+var EDIT_FROM='';
 function drawCodes(m){
   m.innerHTML='<div class="card"><h2>Access codes</h2><div class="mut">Inapakia…</div></div>';
+  EDIT_FROM='';
   srv('accessCodes').then(function(d){
     m.innerHTML='<div class="card"><h2>Access codes — mfumo (portal)</h2>'
       +'<div style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Timu</th><th>Tabs</th><th></th></tr></thead><tbody>'
       +(d.codes||[]).map(function(c){
         return '<tr><td class="code">'+esc(c.code)+'</td><td>'+esc(c.name)+'</td><td>'+esc(c.role)+'</td>'
           +'<td>'+esc(c.teams?c.teams.join(', '):'ZOTE')+'</td><td class="mut">'+esc((c.tabs||[]).join(', '))+'</td>'
-          +'<td class="r"><button class="btn sm ghost" data-del="'+esc(c.code)+'">Futa</button></td></tr>';
+          +'<td class="r"><button class="btn sm ghost" data-ed="'+esc(c.code)+'" data-name="'+esc(c.name)+'" data-role="'+esc(c.role)+'" data-teams="'+esc(c.teams?c.teams.join(','):'')+'">Hariri</button> '
+          +'<button class="btn sm ghost" data-del="'+esc(c.code)+'">Futa</button></td></tr>';
       }).join('')+'</tbody></table></div>'
       +'<div class="row" style="margin-top:14px"><input class="inp" id="acCode" placeholder="Code (siri)"><input class="inp" id="acName" placeholder="Jina">'
       +'<select class="inp" id="acRole"><option>ADMIN</option><option>MANAGER</option><option>RSM</option><option>AUDITOR</option></select>'
       +'<input class="inp" id="acTeams" placeholder="Timu (tupu = zote), comma"><button class="btn sm" id="acAdd">Ongeza</button></div>'
-      +'<div class="mut" style="margin-top:6px">ADMIN inapata kila kitu. AUDITOR ni kuangalia tu. Nyingine: dashboard + ripoti, bila upload/settings.</div>'
+      +'<div class="mut" style="margin-top:6px">ADMIN inapata kila kitu. AUDITOR ni kuangalia tu. Nyingine: dashboard + ripoti, bila upload/settings. '
+      +'Hariri hujaza fomu — badilisha chochote (hata Code yenyewe, hata yako) kisha Hifadhi.</div>'
       +'</div>';
+    $all('[data-ed]',m).forEach(function(b){
+      b.onclick=function(){
+        EDIT_FROM=b.getAttribute('data-ed');
+        $('#acCode').value=EDIT_FROM;
+        $('#acName').value=b.getAttribute('data-name')||'';
+        $('#acRole').value=b.getAttribute('data-role')||'ADMIN';
+        $('#acTeams').value=b.getAttribute('data-teams')||'';
+        $('#acAdd').textContent='Hifadhi / Save';
+        $('#acCode').focus();
+      };
+    });
     $('#acAdd').onclick=function(){
       var role=$('#acRole').value;
       var tabs=role==='ADMIN'?['upload','settings']:[];
       var teams=$('#acTeams').value.split(',').map(function(x){return x.trim();}).filter(Boolean);
-      srv('saveAccessCode',{code:$('#acCode').value,name:$('#acName').value,role:role,teams:teams,tabs:tabs})
-        .then(function(){toast('Imehifadhiwa.');drawCodes(m);}).catch(function(e){toast(String(e.message||e),true);});
+      var newCode=$('#acCode').value.trim();
+      var save=function(){ return srv('saveAccessCode',{code:newCode,name:$('#acName').value,role:role,teams:teams,tabs:tabs}); };
+      var flow = (EDIT_FROM && EDIT_FROM!==newCode)
+        ? srv('renameAccessCode',{from:EDIT_FROM,to:newCode}).then(function(r){
+            if(r.self){ CODE=newCode; try{localStorage.setItem('hpCode',newCode);}catch(e){} }
+            return save();
+          })
+        : save();
+      flow.then(function(){toast('Imehifadhiwa.');drawCodes(m);}).catch(function(e){toast(String(e.message||e),true);});
     };
     $all('[data-del]',m).forEach(function(b){
       b.onclick=function(){

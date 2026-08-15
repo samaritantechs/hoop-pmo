@@ -26,6 +26,7 @@ import { summaryFor, reportCore, lifeDayOf } from './_lib/call-core.js';
 
 AUDITED.add('newTeamCode');
 AUDITED.add('officerActive');
+AUDITED.add('renameAccessCode');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -224,6 +225,24 @@ const FNS = {
     const { error } = await db.from('access_codes').upsert(row, { onConflict: 'code' });
     if (error) throw new Error(error.message);
     return { ok: true, code };
+  },
+
+  /** Change a code's VALUE -- your own included: the row keeps its name, role, teams
+      and tabs, only the secret moves. The caller renaming themselves gets self:true so
+      the page can re-sign them in with the new code instead of locking them out. */
+  async renameAccessCode(db, user, args) {
+    requireWrite(user); requireSettings(user);
+    const from = String((args && args.from) || '').trim();
+    const to = String((args && args.to) || '').trim();
+    if (!from || !to) throw new Error('Both the old and the new code are required.');
+    if (to.length < 4) throw new Error('The new code needs at least 4 characters.');
+    if (from === to) return { ok: true, from, to, self: from === user.code };
+    const { data: clash } = await db.from('access_codes').select('code').eq('code', to).maybeSingle();
+    if (clash) throw new Error('That code is already taken.');
+    const { data, error } = await db.from('access_codes').update({ code: to }).eq('code', from).select('code');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) throw new Error('Unknown code: ' + from);
+    return { ok: true, from, to, self: from === user.code };
   },
 
   async deleteAccessCode(db, user, args) {

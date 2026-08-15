@@ -74,3 +74,18 @@ test('settingSet refuses keys outside the whitelist', async () => {
   assert.equal(d._dump('settings')[0].value, 'YES');
   await assert.rejects(() => _FNS.settingSet(d, ADMIN, { key: 'DATA_VERSION', value: 'x' }), /not editable/);
 });
+
+test('renameAccessCode moves the secret, keeps the row, and flags self-rename', async () => {
+  const d = fakeDb({ access_codes: [
+    { code: '2802', name: 'MARKII', role: 'ADMIN', teams: null, tabs: ['upload', 'settings'] },
+    { code: 'OTHER', name: 'X', role: 'MANAGER', teams: null, tabs: [] },
+  ] });
+  const me = { ...ADMIN, code: '2802' };
+  const r = await _FNS.renameAccessCode(d, me, { from: '2802', to: 'HOOP-STRONG-9' });
+  assert.equal(r.self, true, 'renaming your own code must say so, so the page re-signs you in');
+  const rows = d._dump('access_codes');
+  assert.ok(rows.some(x => x.code === 'HOOP-STRONG-9' && x.name === 'MARKII'));
+  assert.ok(!rows.some(x => x.code === '2802'));
+  await assert.rejects(() => _FNS.renameAccessCode(d, me, { from: 'OTHER', to: 'HOOP-STRONG-9' }), /taken/);
+  await assert.rejects(() => _FNS.renameAccessCode(d, me, { from: 'HOOP-STRONG-9', to: 'abc' }), /4 characters/);
+});
