@@ -3,5 +3,5 @@
     <!-- The app now opens the whole portal (Calls + dashboard + uploads), so it is named for
          the system rather than just the calls half. Package id is unchanged, so this installs
          as an UPDATE over the earlier "HOOP Calls" build. -->
-    <string name="app_name">HOPE PMO</string>
+    <string name="app_name">HOOP Calls</string>
 </resources>

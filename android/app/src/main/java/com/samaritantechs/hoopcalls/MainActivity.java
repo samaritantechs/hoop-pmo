@@ -23,7 +23,7 @@ import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 /**
- * HOPE PMO in one app: a WebView around the portal launcher, so a leader signs in once and
+ * HOOP PMO in one app: a WebView around the portal launcher, so a leader signs in once and
  * chooses Calls or the system (dashboard, uploads) from the same place -- plus the two things
  * a plain browser tab cannot do here:
  *   1. read the device call log, so officers' calls sync automatically (HopeCallsBridge);
@@ -174,7 +174,7 @@ public class MainActivity extends Activity {
         String current = startUrl();
         String html = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
                 + "<body style='font-family:sans-serif;background:#0B2A6B;color:#fff;padding:28px'>"
-                + "<h2 style='margin:0 0 6px'>HOPE PMO</h2>"
+                + "<h2 style='margin:0 0 6px'>HOOP Calls</h2>"
                 + "<p style='color:#93C5FD'>Imeshindikana kufungua mfumo. Angalia mtandao wako, kisha jaribu tena.<br>"
                 + "<small>" + android.text.TextUtils.htmlEncode(why == null ? "" : why) + "</small></p>"
                 + "<button onclick='HopeCalls.retry()' style='width:100%;padding:14px;border:0;border-radius:10px;font-weight:700'>Jaribu tena / Retry</button>"
