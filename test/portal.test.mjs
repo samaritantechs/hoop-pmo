@@ -329,7 +329,9 @@ test('salesAudit judges every sale: OK, DRIFT, PENDING, BULK, HAKUNA_WATU', asyn
   assert.equal(s3.reg.name, 'Cyprian Dotto Renatus', 'the flagged sale names its seller from the register');
   assert.equal(s3.reg.kin, 'Mama Cyprian', 'and the next of kin rides along');
   assert.equal(r.rows[0].status, 'HAKUNA_WATU', 'worst first');
-  await assert.rejects(() => _FNS.salesAudit(d, { ...VIEWER, tabs: [] }, {}), /upload or settings/);
+  await assert.rejects(
+    () => _FNS.salesAudit(d, { ...VIEWER, readOnly: false, role: 'FINANCE', tabs: [] }, {}),
+    /upload or settings/, 'a blank non-viewer is refused; the AUDITOR itself sees every pane');
 });
 
 test('agentScore scores Watu agents by their customers and sellers by their payouts', async () => {
@@ -398,7 +400,32 @@ test('staffDirectory lists the whole office, seniors first, kin only for setting
   assert.equal(r.total, 2);
   assert.equal(r.staff[0].name, 'Anord Sawe', 'RSM ranks above field officer');
   assert.equal(r.staff[0].kin, 'Violet', 'settings holders see the kin');
-  const plain = { code: 'P', name: 'P', role: 'FINANCE', teams: null, tabs: ['dashboard'], readOnly: false };
+  const plain = { code: 'P', name: 'P', role: 'FINANCE', teams: null, tabs: ['dashboard', 'staff'], readOnly: false };
   const r2 = await _FNS.staffDirectory(d, plain, {});
   assert.equal(r2.staff[0].kin, undefined, 'no settings, no kin');
+});
+
+test('per-role navs: granted panes open, ungranted refuse, legacy roles keep the old doors', async () => {
+  const d = fakeDb({
+    watu_snapshots: [], followup_status: [], watu_loans: [], settings: [],
+    roles: [], access_codes: [], hoop_agents: [],
+  });
+  const custOnly = { code: 'C1', name: 'Neema', role: 'CREDIT LEAD', teams: null,
+    tabs: ['customers'], readOnly: false };
+  const r = await _FNS.customers(d, custOnly, {});
+  assert.equal(r.ok, true, 'the granted pane answers');
+  await assert.rejects(() => _FNS.recovery(d, custOnly, {}), /no access to the recovery pane/);
+  await assert.rejects(() => _FNS.staffDirectory(d, custOnly, {}), /no access to the staff pane/);
+  const legacy = { code: 'L1', name: 'Old', role: 'MANAGER', teams: null,
+    tabs: ['upload', 'settings'], readOnly: false };
+  assert.equal((await _FNS.customers(d, legacy, {})).ok, true, 'legacy tabs keep the old defaults');
+  assert.equal((await _FNS.recovery(d, legacy, {})).ok, true);
+  assert.equal((await _FNS.salesAudit(d, legacy, {})).ok, true, 'upload/settings still grant sales');
+  assert.equal((await _FNS.customers(d, VIEWER, {})).ok, true, 'AUDITOR sees every pane');
+  const out = await _FNS.accessCodes(d, ADMIN, {});
+  assert.ok(Array.isArray(out.navTabs) && out.navTabs.includes('customers'),
+    'the editor learns the pane list from the server');
+  await _FNS.saveRole(d, ADMIN, { role: 'FINANCE', tabs: ['customers', 'sales', 'upload'] });
+  const row = d._dump('roles').find(x => x.role === 'FINANCE');
+  assert.deepEqual(row.tabs, ['customers', 'sales', 'upload'], 'nav keys are grantable tabs now');
 });

@@ -29,6 +29,9 @@ import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm } from './_lib
      salesAudit / agentScore   3 parallel bounded reads each (sales by date range,
                 register imei+agent columns / scoped register, agents ~1k) -- see the
                 fns' own headers; both are reads, nothing audited
+     staffDirectory  1 bounded read (~1k agents);  stockView  2 parallel bounded reads
+     navsFor / requireNav  ZERO reads -- pure functions over the already-resolved tabs
+                (the permanent postgres rule: a permission check must never buy a trip)
    Row bounds: recovery reads two DAYS of snapshots, team-scoped; nothing reads the whole
    history; the audit list is capped at 200 newest.
    ===================================================================================== */
@@ -59,15 +62,43 @@ function requireSettings(user) {
 }
 const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', user.teams.map(K)) : q;
 
-/** The sales audit names people and their kin -- anyone trusted with uploads or
-    settings sees it; a plain viewer role does not. */
-function requireOps(user) {
-  if (isAdminRole(user)) return;
-  const t = user.tabs || [];
-  if (!(t.includes('upload') || t.includes('settings'))) {
-    const e = new Error('The sales audit needs upload or settings permission.');
+/* ---------- PER-ROLE NAVIGATION -- the owner decides every pane ----------
+   ONE list is the source of truth for which panes exist. A future nav is added HERE
+   and nowhere else: the roles editor renders its checkbox from this list via
+   accessCodes.navTabs, boot hands each user their allowed set, and requireNav
+   enforces it -- UI and enforcement read the same rule.
+   ADMIN holds everything; a read-only code (AUDITOR) SEES everything and changes
+   nothing; a role whose tabs never chose any nav keeps the old defaults so existing
+   codes do not go dark the day this shipped. */
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'sales', 'teams', 'staff', 'codes', 'settings'];
+const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'teams', 'staff'];
+function navsFor(user) {
+  if (isAdminRole(user) || isReadOnly(user)) return NAV_TABS.slice();
+  const t = (user.tabs || []).map(x => String(x).toLowerCase());
+  const chosen = NAV_TABS.filter(k => t.includes(k));
+  // 'dashboard' and 'settings' were the OLD vocabulary too -- a role carrying only
+  // those was saved before panes were choosable and must keep the old defaults, or
+  // yesterday's codes go dark today. Any OTHER nav key means the owner chose deliberately.
+  if (chosen.some(k => k !== 'dashboard' && k !== 'settings')) return chosen;
+  const base = LEGACY_NAVS.slice();
+  if (t.includes('settings')) base.push('codes', 'settings');
+  if (t.includes('settings') || t.includes('upload')) base.push('sales');
+  return base;
+}
+function requireNav(user, k) {
+  if (!navsFor(user).includes(k)) {
+    const e = new Error('Your role has no access to the ' + k + ' pane.');
     e.status = 403; throw e;
   }
+}
+
+/** The sales audit names people and their kin -- it opens only to roles holding the
+    sales pane (upload/settings grant it to legacy roles; ADMIN and AUDITOR see all). */
+function requireOps(user) {
+  if (isAdminRole(user)) return;
+  if (navsFor(user).includes('sales')) return;
+  const e = new Error('The sales audit needs upload or settings permission.');
+  e.status = 403; throw e;
 }
 const dayShift = (key, days) =>
   new Date(Date.parse(key + 'T00:00:00Z') + days * 86400000).toISOString().slice(0, 10);
@@ -92,6 +123,7 @@ const FNS = {
     const showCodes = (user.tabs || []).includes('settings') && !isReadOnly(user);
     return {
       name: user.name, role: user.role, tabs: user.tabs, readOnly: !!user.readOnly,
+      navs: navsFor(user),
       teams: teams.filter(t => !user.teams || user.teams.some(x => K(x) === K(t.team)))
         .map(t => ({ team: t.team, code: showCodes ? (t.team_code || '') : (t.team_code ? '••••••' : ''),
           rsm: t.rsm || '', rsmNo: t.rsm_no || '' }))
@@ -102,6 +134,7 @@ const FNS = {
   },
 
   async report(db, user, args) {
+    requireNav(user, 'reports');
     const a = args || {};
     let scope = user.teams;
     const want = String(a.team || '').trim();
@@ -114,6 +147,7 @@ const FNS = {
   /* RECOVERY -- who came back after our calls. The newest two uploads, diffed per IMEI:
      paid for the first time, reconnected (days_offline fell), or sank deeper. */
   async recovery(db, user) {
+    requireNav(user, 'recovery');
     const one = await db.from('watu_snapshots').select('snapshot_date')
       .order('snapshot_date', { ascending: false }).limit(1);
     if (one.error) throw new Error(one.error.message);
@@ -170,6 +204,7 @@ const FNS = {
       Budget: 2 tiny indexed date lookups + 1 deck read + 1 prev-day snapshot read +
       1 register read (imei+agent only), all team-scoped; FU vocabulary is 1 keyed read. */
   async customers(db, user) {
+    requireNav(user, 'customers');
     const today = todayKey();
     const d1 = await db.from('followup_status').select('deck_date').not('deck_date', 'is', null)
       .order('deck_date', { ascending: false }).limit(1);
@@ -472,6 +507,7 @@ const FNS = {
       live under Access codes. Next of kin shows only to settings holders / ADMIN.
       Budget: 1 bounded read (~1k rows). */
   async staffDirectory(db, user) {
+    requireNav(user, 'staff');
     const rows = await fetchAll(() => db.from('hoop_agents')
       .select('name, phone, role, branch, active, joined_date, kin_name, kin_phone'));
     const RANK = { COUNTRY_SALES_MANAGER: 0, REGIONAL_MANAGER: 1, TEAM_LEADER: 2, FIELD_OFFICER: 3, FIELD_OFFICERS: 3 };
@@ -534,6 +570,7 @@ const FNS = {
     const useCount = {};
     rows.forEach(r => { const k = K(r.role); if (k) useCount[k] = (useCount[k] || 0) + 1; });
     return { ok: true,
+      navTabs: NAV_TABS,
       roles: [...seen.values()].map(r => ({ ...r, inUse: useCount[r.role] || 0 }))
         .sort((a, b) => a.role < b.role ? -1 : 1),
       codes: rows.map(r => ({
@@ -574,7 +611,9 @@ const FNS = {
     requireWrite(user); requireSettings(user);
     const role = K(args && args.role);
     if (!role) throw new Error('Role name is required.');
-    const ALLOWED = new Set(['upload', 'settings', 'dashboard']);
+    // Every nav pane is a grantable tab, plus the two ACTIONS (upload, audit). A pane
+    // added to NAV_TABS later is automatically grantable here -- one list, everywhere.
+    const ALLOWED = new Set([...NAV_TABS, 'upload', 'audit']);
     const tabs = (Array.isArray(args && args.tabs) ? args.tabs : [])
       .map(t => String(t).toLowerCase()).filter(t => ALLOWED.has(t));
     const { error } = await db.from('roles').upsert({ role, tabs }, { onConflict: 'role' });

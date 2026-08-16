@@ -194,12 +194,21 @@ function enter(){
   $('#scrIn').classList.add('hide'); $('#scrApp').classList.remove('hide');
   $('#whoName').textContent=BOOT.name||'—';
   $('#whoRole').textContent=(BOOT.role||'')+(BOOT.readOnly?' · view-only':'');
-  var isAdmin=String(BOOT.role||'').toUpperCase()==='ADMIN';
-  var hasSettings=isAdmin||(BOOT.tabs||[]).indexOf('settings')>=0;
-  var hasOps=hasSettings||(BOOT.tabs||[]).indexOf('upload')>=0;
-  $('#tabCodes').classList.toggle('hide',!hasSettings);
-  $('#tabSettings').classList.toggle('hide',!hasSettings);
-  $('#tabMauzo').classList.toggle('hide',!hasOps);
+  /* WHICH PANES: the server's navs list (per role, ADMIN all, AUDITOR view-all) decides
+     every button -- the same rule the endpoints enforce. A pane added later shows up
+     here the moment the server lists it. */
+  var NAVKEY={dash:'dashboard',cust:'customers',ripoti:'reports',recovery:'recovery',
+    mauzo:'sales',teams:'teams',staff:'staff',codes:'codes',settings:'settings'};
+  var NAVS=BOOT.navs||[];
+  $all('#tabs button').forEach(function(b){
+    var k=NAVKEY[b.getAttribute('data-t')];
+    if(k) b.classList.toggle('hide',NAVS.indexOf(k)<0);
+  });
+  if(NAVS.indexOf(NAVKEY[TAB])<0){
+    var first=$all('#tabs button').filter(function(b){return !b.classList.contains('hide');})[0];
+    if(first){ TAB=first.getAttribute('data-t');
+      $all('#tabs button').forEach(function(x){x.classList.toggle('on',x===first);}); }
+  }
   function navSet(open){
     document.body.classList.toggle('nav-closed', !open);
     try{ localStorage.setItem('hpNav', open?'1':'0'); }catch(e){}
@@ -679,12 +688,19 @@ function drawCodes(m){
             +(!r.inUse?'<button class="btn sm ghost" data-rldel="'+esc(r.role)+'" title="Futa role hii" style="color:var(--bad);border-color:#F6CFCB;padding:7px 9px">\u00D7</button>':'')
             +'</span>';
         }).join('')+'</div>'
-      +'<div class="row"><input class="inp" id="rlName" placeholder="Jina la role (mpya au ya kuhariri)">'
-      +'<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0"><input type="checkbox" id="rlUp"> Upload</label>'
-      +'<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0"><input type="checkbox" id="rlSet"> Settings</label>'
-      +'<button class="btn sm" id="rlSave">Hifadhi role</button></div>'
-      +'<div class="mut">Bonyeza role kuijaza; Settings inatoa Teams/Staff/Codes, Upload inatoa kupakia. Bila viwili hivyo ni kuangalia tu (dashboard, ripoti, recovery). '
-      +'Role isiyo na mtu ina <b>×</b> ya kuifuta; yenye watu haifutiki mpaka uwahamishe.</div>'
+      +'<div class="row"><input class="inp" id="rlName" placeholder="Role name (new, or click a chip to edit)">'
+      +'<button class="btn sm" id="rlSave">Save role</button></div>'
+      +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
+      +((d.navTabs||[]).concat(['upload'])).map(function(k){
+          var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',recovery:'Recovery',
+            sales:'Sales',teams:'Teams',staff:'Staff',codes:'Access codes',settings:'Settings',
+            upload:'Upload (action)'}[k]||k;
+          return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
+            +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';
+        }).join('')+'</div>'
+      +'<div class="mut">Tick exactly the panes this role opens — every pane is yours to grant, including any added later. '
+      +'"Upload (action)" is permission to send files at /upload. ADMIN always holds everything; AUDITOR sees all, changes nothing. '
+      +'A role nobody holds carries <b>×</b> to delete it.</div>'
       +'</div>'
       +'<div class="card"><h2>App users — HOOP Calls logins</h2>'
       +'<div class="mut" style="margin-bottom:10px">Who is signed in on the phones. Switching one person off does not touch the team code — only their account.</div>'
@@ -707,8 +723,7 @@ function drawCodes(m){
       b.onclick=function(){
         $('#rlName').value=b.getAttribute('data-rl');
         var t=(b.getAttribute('data-rltabs')||'').split(',');
-        $('#rlUp').checked=t.indexOf('upload')>=0;
-        $('#rlSet').checked=t.indexOf('settings')>=0;
+        $all('.rlT',m).forEach(function(c){ c.checked=t.indexOf(c.value)>=0; });
       };
     });
     $all('[data-rldel]',m).forEach(function(b){
@@ -722,12 +737,11 @@ function drawCodes(m){
     });
     $('#rlSave').onclick=function(){
       var role=$('#rlName').value.trim();
-      if(!role){ toast('Andika jina la role.',true); return; }
-      var tabs=['dashboard'];
-      if($('#rlUp').checked) tabs.push('upload');
-      if($('#rlSet').checked) tabs.push('settings');
+      if(!role){ toast('Enter a role name.',true); return; }
+      var tabs=$all('.rlT',m).filter(function(c){return c.checked;}).map(function(c){return c.value;});
+      if(!tabs.length){ toast('Tick at least one pane for this role.',true); return; }
       srv('saveRole',{role:role,tabs:tabs})
-        .then(function(){toast('Role imehifadhiwa.');drawCodes(m);})
+        .then(function(){toast('Role saved.');drawCodes(m);})
         .catch(function(e){toast(String(e.message||e),true);});
     };
     $all('[data-ed]',m).forEach(function(b){
