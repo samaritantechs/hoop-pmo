@@ -39,6 +39,10 @@ aside.side{flex:0 0 185px;padding:16px 0 16px 14px;position:sticky;top:66px}
 .tabs button{background:#fff;color:var(--b800);border:1px solid var(--line);text-align:left;
   padding:11px 14px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
 .tabs button.on{background:var(--b700);border-color:var(--b700);color:#fff}
+/* The two doors that leave the portal ride at the bottom of the same left nav. */
+.tabs .sep{height:1px;background:var(--line);margin:5px 2px}
+.tabs .lnk{display:block;background:#fff;color:var(--b800);border:1px solid var(--line);text-align:left;
+  padding:11px 14px;border-radius:10px;font-size:13px;font-weight:700;text-decoration:none}
 main{flex:1;min-width:0;padding:16px}
 /* The three lines open and close it -- everywhere. Closed, the work takes the width. */
 #navBtn{flex:0 0 auto;font-size:17px;line-height:1;padding:7px 11px}
@@ -113,6 +117,9 @@ td.r,th.r{text-align:right}
       <button data-t="staff">Staff</button>
       <button data-t="codes" id="tabCodes">Access codes</button>
       <button data-t="settings" id="tabSettings">Settings</button>
+      <div class="sep"></div>
+      <a class="lnk" href="/upload">Upload &nearr;</a>
+      <a class="lnk" href="/call">HOOP Calls &nearr;</a>
     </div>
       </aside>
     <main id="main"></main>
