@@ -386,3 +386,19 @@ test('stockView groups the aged stock by holder and joins the register', async (
   const empty = await _FNS.stockView(fakeDb({ hoop_aged_stock: [], hoop_agents: [] }), ADMIN, {});
   assert.equal(empty.total, 0);
 });
+
+test('staffDirectory lists the whole office, seniors first, kin only for settings holders', async () => {
+  const d = fakeDb({ hoop_agents: [
+    { name: 'RISHADI CHELANGWA', phone: '0712657140', role: 'Field_Officer', branch: 'Dar es salaam',
+      active: true, joined_date: '2026-02-21', kin_name: 'BALHATUN', kin_phone: '0715655601' },
+    { name: 'Anord Sawe', phone: '0658918324', role: 'Regional_Manager', branch: 'Dar es salaam',
+      active: true, joined_date: '2026-02-21', kin_name: 'Violet', kin_phone: '0682046804' },
+  ] });
+  const r = await _FNS.staffDirectory(d, ADMIN, {});
+  assert.equal(r.total, 2);
+  assert.equal(r.staff[0].name, 'Anord Sawe', 'RSM ranks above field officer');
+  assert.equal(r.staff[0].kin, 'Violet', 'settings holders see the kin');
+  const plain = { code: 'P', name: 'P', role: 'FINANCE', teams: null, tabs: ['dashboard'], readOnly: false };
+  const r2 = await _FNS.staffDirectory(d, plain, {});
+  assert.equal(r2.staff[0].kin, undefined, 'no settings, no kin');
+});

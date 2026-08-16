@@ -500,7 +500,7 @@ async function histFor(db, nowMs) {
   const yDate = one.data && one.data[0] ? String(one.data[0].snapshot_date).slice(0, 10) : null;
   const from = yDate && yDate < weekStart ? yDate : weekStart;
   const [snaps, logs, minRaw] = await Promise.all([
-    fetchAll(() => db.from('watu_snapshots').select('imei, contact, snapshot_date, created_at')
+    fetchAll(() => db.from('watu_snapshots').select('imei, client_mobile, snapshot_date, created_at')
       .gte('snapshot_date', from).lte('snapshot_date', yEnd)),
     fetchAll(() => db.from('call_logs').select('user_id, phone, duration, call_date')
       .gte('call_date', from).lte('call_date', yEnd)),
@@ -536,7 +536,7 @@ function reachedOn(date, hist, uid, roster) {
   const all = [...deckMap.values()];
   const pool = uid == null ? all : myShare(all, r => r.imei, roster, uid);
   if (!pool.length) return null;
-  const phones = new Set(pool.map(r => pnorm(r.contact)).filter(Boolean));
+  const phones = new Set(pool.map(r => pnorm(r.client_mobile)).filter(Boolean));
   const got = new Set();
   for (const l of (hist.logsByDate.get(date) || [])) {
     if (uid != null && String(l.user_id) !== String(uid)) continue;

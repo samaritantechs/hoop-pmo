@@ -624,34 +624,27 @@ function drawTeams(m){
   };
 }
 
-/* ---------- staff ---------- */
+/* ---------- staff: THE OFFICE, from Sipho's register ---------- */
 function drawStaff(m){
-  m.innerHTML='<div class="card"><h2>Watumiaji wa Calls / Staff</h2><div class="mut">Inapakia…</div></div>';
-  var canW=(BOOT.tabs||[]).indexOf('settings')>=0&&!BOOT.readOnly;
-  srv('officers').then(function(d){
-    m.innerHTML='<div class="card"><h2>Watumiaji wa Calls / Staff</h2>'
-      +'<div class="mut" style="margin-bottom:10px">Kumzima mtu mmoja hakubadilishi msimbo wa timu — akaunti yake tu ndiyo inafungwa.</div>'
-      +'<div class="row"><input class="inp" id="staffQ" placeholder="Tafuta: jina, simu, timu, IMEI, agent… / search"></div>'
-      +'<div style="overflow-x:auto"><table><thead><tr><th>Jina</th><th>Timu</th><th>Simu</th><th>Sync ya mwisho</th><th>Hali</th>'+(canW?'<th></th>':'')+'</tr></thead><tbody>'
-      +(d.officers||[]).map(function(o){
-        return '<tr><td><b>'+esc(o.name)+'</b>'+(o.leader?' <span class="chip">kiongozi</span>':'')+'</td>'
-          +'<td>'+esc(o.team||'')+'</td><td>'+esc(o.phone||'')+'</td>'
-          +'<td class="mut">'+(o.lastSync?esc(String(o.lastSync).slice(0,16).replace('T',' ')):'—')+'</td>'
-          +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td>'
-          +(canW?'<td class="r"><button class="btn sm ghost" data-tg="'+esc(o.userId)+'" data-on="'+(o.active?1:0)+'">'+(o.active?'Zima':'Washa')+'</button></td>':'')
-          +'</tr>';
-      }).join('')+'</tbody></table></div></div><div id="staffCust"></div>';
+  m.innerHTML='<div class="card"><h2>Staff</h2><div class="mut">Loading…</div></div>';
+  srv('staffDirectory').then(function(d){
+    var canKin=(d.staff||[]).length&&d.staff[0].kin!==undefined;
+    m.innerHTML='<div class="card"><h2>Staff — the whole office ('+money(d.total)+')</h2>'
+      +'<div class="mut" style="margin-bottom:8px">From the agents register: agents, team leaders, RSMs. System logins (portal codes, app users) live under Access codes.</div>'
+      +'<div class="row"><input class="inp" id="staffQ" placeholder="Search: name, phone, role, branch, IMEI, agent…"></div>'
+      +'<div class="row" style="gap:6px">'+Object.keys(d.byRole||{}).map(function(k){return '<span class="chip">'+esc(k)+' · '+money(d.byRole[k])+'</span>';}).join('')+'</div>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Phone</th>'+(canKin?'<th>Next of kin</th>':'')+'<th>Status</th></tr></thead><tbody>'
+      +((d.staff||[]).length?(d.staff||[]).map(function(o){
+        return '<tr><td><b>'+esc(o.name)+'</b>'+(o.joined?'<div class="mut" style="font-size:10px">since '+esc(o.joined)+'</div>':'')+'</td>'
+          +'<td>'+esc(o.role||'—')+'</td><td>'+esc(o.branch||'—')+'</td><td>'+esc(o.phone||'')+'</td>'
+          +(canKin?'<td class="mut" style="font-size:11px">'+esc(o.kin||'—')+(o.kinPhone?' · '+esc(o.kinPhone):'')+'</td>':'')
+          +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td></tr>';
+      }).join(''):'<tr><td colspan="6" class="mut">No staff yet — upload the Agents Register page (saved HTML) at /upload.</td></tr>')
+      +'</tbody></table></div></div><div id="staffCust"></div>';
     wireSearch_('#staffQ','#staffCust',function(q){
       $all('tbody tr', $('#main')).forEach(function(tr){
         tr.style.display = !q || tr.textContent.toUpperCase().indexOf(q)>=0 ? '' : 'none';
       });
-    });
-    if(!canW) return;
-    $all('[data-tg]',m).forEach(function(b){
-      b.onclick=function(){
-        srv('officerActive',{userId:b.getAttribute('data-tg'),active:b.getAttribute('data-on')!=='1'})
-          .then(function(){drawStaff(m);}).catch(function(e){toast(String(e.message||e),true);});
-      };
     });
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
@@ -659,9 +652,10 @@ function drawStaff(m){
 /* ---------- access codes ---------- */
 var EDIT_FROM='';
 function drawCodes(m){
-  m.innerHTML='<div class="card"><h2>Access codes</h2><div class="mut">Inapakia…</div></div>';
+  m.innerHTML='<div class="card"><h2>Access codes</h2><div class="mut">Loading…</div></div>';
   EDIT_FROM='';
-  srv('accessCodes').then(function(d){
+  Promise.all([srv('accessCodes'),srv('officers')]).then(function(res){
+    var d=res[0], off=res[1];
     m.innerHTML='<div class="card"><h2>Access codes — mfumo (portal)</h2>'
       +'<div style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Timu</th><th>Tabs</th><th></th></tr></thead><tbody>'
       +(d.codes||[]).map(function(c){
@@ -691,7 +685,24 @@ function drawCodes(m){
       +'<button class="btn sm" id="rlSave">Hifadhi role</button></div>'
       +'<div class="mut">Bonyeza role kuijaza; Settings inatoa Teams/Staff/Codes, Upload inatoa kupakia. Bila viwili hivyo ni kuangalia tu (dashboard, ripoti, recovery). '
       +'Role isiyo na mtu ina <b>×</b> ya kuifuta; yenye watu haifutiki mpaka uwahamishe.</div>'
-      +'</div>';
+      +'</div>'
+      +'<div class="card"><h2>App users — HOOP Calls logins</h2>'
+      +'<div class="mut" style="margin-bottom:10px">Who is signed in on the phones. Switching one person off does not touch the team code — only their account.</div>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Branch</th><th>Phone</th><th>Last sync</th><th>Status</th><th></th></tr></thead><tbody>'
+      +((off.officers||[]).length?(off.officers||[]).map(function(o){
+        return '<tr><td><b>'+esc(o.name)+'</b>'+(o.leader?' <span class="chip">leader</span>':'')+'</td>'
+          +'<td>'+esc(o.team||'')+'</td><td>'+esc(o.phone||'')+'</td>'
+          +'<td class="mut">'+(o.lastSync?esc(String(o.lastSync).slice(0,16).replace('T',' ')):'—')+'</td>'
+          +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td>'
+          +'<td class="r"><button class="btn sm ghost" data-tg="'+esc(o.userId)+'" data-on="'+(o.active?1:0)+'">'+(o.active?'Zima':'Washa')+'</button></td></tr>';
+      }).join(''):'<tr><td colspan="6" class="mut">No app users yet — the credit team registers from the app with a team code.</td></tr>')
+      +'</tbody></table></div></div>';
+    $all('[data-tg]',m).forEach(function(b){
+      b.onclick=function(){
+        srv('officerActive',{userId:b.getAttribute('data-tg'),active:b.getAttribute('data-on')!=='1'})
+          .then(function(){drawCodes(m);}).catch(function(e){toast(String(e.message||e),true);});
+      };
+    });
     $all('[data-rl]',m).forEach(function(b){
       b.onclick=function(){
         $('#rlName').value=b.getAttribute('data-rl');

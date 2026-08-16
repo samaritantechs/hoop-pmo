@@ -205,10 +205,10 @@ test('the bar: own yesterday % and last-week average for a credit user; company 
     ],
     // Yesterday's book: two customers. Sorted by IMEI, X1 deals to U1, X2 to U2.
     watu_snapshots: [
-      { imei: 'X1', contact: '255716111111', snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
-      { imei: 'X2', contact: '255716222222', snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
+      { imei: 'X1', client_mobile: '255716111111', snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
+      { imei: 'X2', client_mobile: '255716222222', snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
       // One day of last week, one customer -- dealt to U1 (index 0).
-      { imei: 'W1', contact: '255716333333', snapshot_date: '2026-08-05', created_at: '2026-08-05T08:00:00Z' },
+      { imei: 'W1', client_mobile: '255716333333', snapshot_date: '2026-08-05', created_at: '2026-08-05T08:00:00Z' },
     ],
     call_logs: [
       // U1 reached their yesterday customer; U2 called NOBODY.

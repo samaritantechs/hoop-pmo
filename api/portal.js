@@ -124,7 +124,8 @@ const FNS = {
     const prev = two.data && two.data[0] && String(two.data[0].snapshot_date).slice(0, 10);
     if (!prev) return { ok: true, latest, prev: null, rows: [], counts: null,
       note: 'Upload mbili zinahitajika kupima recovery — hii ni ya kwanza. / Recovery needs two uploads; this is the first.' };
-    const COLS = 'imei, client_name, contact, team, days_offline, has_ever_paid, price, created_at';
+    // client_mobile, NOT contact -- snapshots carry the importer's own column names.
+    const COLS = 'imei, client_name, client_mobile, team, days_offline, has_ever_paid, price, created_at';
     const [cur, old] = await Promise.all([
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', latest))),
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', prev))),
@@ -464,6 +465,28 @@ const FNS = {
       team: r.team || '', agent: r.agent || '', model: r.model || '',
       daysOff: r.days_offline, locked7: r.locked7 === true,
       asOf: r.snapshot_date ? String(r.snapshot_date).slice(0, 10) : null })) };
+  },
+
+  /** THE OFFICE, not the logins: everyone on Sipho's register -- agents, team leaders,
+      RSMs, the CSM -- ranked seniority-first. System logins (portal codes, app users)
+      live under Access codes. Next of kin shows only to settings holders / ADMIN.
+      Budget: 1 bounded read (~1k rows). */
+  async staffDirectory(db, user) {
+    const rows = await fetchAll(() => db.from('hoop_agents')
+      .select('name, phone, role, branch, active, joined_date, kin_name, kin_phone'));
+    const RANK = { COUNTRY_SALES_MANAGER: 0, REGIONAL_MANAGER: 1, TEAM_LEADER: 2, FIELD_OFFICER: 3, FIELD_OFFICERS: 3 };
+    const showKin = isAdminRole(user) || (user.tabs || []).includes('settings');
+    const rank = r => { const k = K(r).replace(/\s+/g, '_'); return RANK[k] === undefined ? 9 : RANK[k]; };
+    const staff = rows.map(r => {
+      const o = { name: r.name || '', phone: r.phone || '', role: r.role || '',
+        branch: r.branch || '', active: r.active !== false,
+        joined: r.joined_date ? String(r.joined_date).slice(0, 10) : '' };
+      if (showKin) { o.kin = r.kin_name || ''; o.kinPhone = r.kin_phone || ''; }
+      return o;
+    }).sort((a, b) => rank(a.role) - rank(b.role) || (a.name < b.name ? -1 : 1));
+    const byRole = {};
+    staff.forEach(r => { const k = r.role || '—'; byRole[k] = (byRole[k] || 0) + 1; });
+    return { ok: true, total: staff.length, byRole, staff: staff.slice(0, 1500) };
   },
 
   async officers(db, user) {
