@@ -1,6 +1,6 @@
 import { fetchAll } from './supabase.js';
 import { teamAllowed } from './auth.js';
-import { TZ_OFFSET_MS, todayKey, addDaysKey } from './time.js';
+import { TZ_OFFSET_MS, todayKey, addDaysKey, weekMondayKey } from './time.js';
 import { isSystemOpen } from './system-gate.js';
 
 /* =====================================================================================
@@ -268,6 +268,25 @@ async function calledTodaySet(db, nowMs) {
   return set;
 }
 
+/* ---------- THE WORKLOAD DEAL ----------
+   "Kinondoni is company location, not customers." The team on a row is the BRANCH that
+   sold the phone, never a fence around who calls whom. The deck is ONE company pool,
+   dealt like cards: customers sorted by IMEI, active credit users sorted by user_id,
+   customer i belongs to officer i % n. Nothing is stored, so registering another credit
+   user changes n and the deal rebalances ITSELF on the next refresh -- the owner's
+   "automatic distribution continues". Leaders are dealt a share like everyone; their
+   oversight lives in Ripoti. */
+async function activeRoster(db) {
+  const rows = await fetchAll(() => db.from('call_users').select('user_id, active'));
+  return rows.filter(r => r.active !== false).map(r => String(r.user_id)).sort();
+}
+function myShare(items, keyFn, roster, uid) {
+  const k = roster.indexOf(String(uid));
+  if (k < 0 || !roster.length) return items;   // a device outside the roster peeks at the whole book
+  const sorted = [...items].sort((a, b) => (String(keyFn(a)) < String(keyFn(b)) ? -1 : 1));
+  return sorted.filter((_, i) => i % roster.length === k);
+}
+
 /* ---------- the list: the newest Watu deck ---------- */
 const DECK_COLS = 'imei, client_name, contact, team, model, price, disbursed_date, '
   + 'days_offline, locked4, locked7, has_ever_paid, fu_status, deck_date, updated_at';
@@ -285,17 +304,17 @@ async function latestDeckDate(db) {
 async function list(db, [dev], nowMs) {
   const cu = await userByDeviceSoft(db, dev);
   if (!cu) return { ok: false, error: 'DEVICE_NOT_REGISTERED' };
-  const user = pseudoUser(cu);
-  const [called, deckDate] = await Promise.all([calledTodaySet(db, nowMs), latestDeckDate(db)]);
+  const [called, deckDate, roster] = await Promise.all([
+    calledTodaySet(db, nowMs), latestDeckDate(db), activeRoster(db)]);
   if (!deckDate) return { ok: true, rows: [], asOf: null, stale: false, narrowed: null };
-  const fu = await fetchAll(() => {
-    let q = db.from('followup_status').select(DECK_COLS).eq('deck_date', deckDate);
-    if (user.teams && user.teams.length) q = q.in('team', user.teams.map(K));
-    return q;
-  });
+  // The WHOLE deck -- no team fence (the team column is the selling branch) -- then this
+  // officer's dealt share of it. Budget: the deck read is the same one as before; the
+  // roster is one extra bounded read.
+  const fu = await fetchAll(() => db.from('followup_status').select(DECK_COLS).eq('deck_date', deckDate));
+  const mine = myShare(fu, r => r.imei, roster, cu.user_id);
   const today = todayKey(nowMs);
   const hit = c => !!called[pnorm(c)];
-  const rows = fu.filter(r => teamAllowed(user, r.team)).map(r => {
+  const rows = mine.map(r => {
     const life = lifeDayOf(r.disbursed_date, today);
     return {
       // Hope-shaped keys so the page machinery carries over; ref IS the IMEI.
@@ -461,7 +480,80 @@ async function addComment(db, [dev, p], nowMs) {
    today's team-scoped logs, and the newest deck date. */
 const SUMMARY_TTL_MS = 120000;
 const summaryCache = new Map();
-export function _clearSummaryCache() { summaryCache.clear(); }
+export function _clearSummaryCache() { summaryCache.clear(); histStore.clear(); }
+
+/* ---------- yesterday + last week, read ONCE per day per instance ----------
+   The performance bar is always YESTERDAY's reached %, plus last week's average so
+   Monday knows what was what (the owner's rule). Historical deck membership comes from
+   watu_snapshots (append-only); the current deck table only remembers a row's newest
+   stamp. Budget: on the day's first ask -- 1 tiny date lookup + 1 ranged snapshot read
+   + 1 ranged logs read; every later ask is memory. */
+const histStore = new Map();
+async function histFor(db, nowMs) {
+  const today = todayKey(nowMs);
+  const hit = histStore.get('h');
+  if (hit && hit.day === today) return hit;
+  const weekStart = addDaysKey(weekMondayKey(nowMs), -7);       // last week's Monday
+  const yEnd = addDaysKey(today, -1);
+  const one = await db.from('watu_snapshots').select('snapshot_date')
+    .lt('snapshot_date', today).order('snapshot_date', { ascending: false }).limit(1);
+  const yDate = one.data && one.data[0] ? String(one.data[0].snapshot_date).slice(0, 10) : null;
+  const from = yDate && yDate < weekStart ? yDate : weekStart;
+  const [snaps, logs, minRaw] = await Promise.all([
+    fetchAll(() => db.from('watu_snapshots').select('imei, contact, snapshot_date, created_at')
+      .gte('snapshot_date', from).lte('snapshot_date', yEnd)),
+    fetchAll(() => db.from('call_logs').select('user_id, phone, duration, call_date')
+      .gte('call_date', from).lte('call_date', yEnd)),
+    settingGet(db, 'CALL_MIN_SECS'),
+  ]);
+  const min = (() => { const n = parseInt(String(minRaw || '').replace(/[^0-9]/g, ''), 10);
+    return (isNaN(n) || n < 0) ? CALL_MIN_SECS_DEFAULT : n; })();
+  const deckByDate = new Map();
+  for (const r of snaps) {
+    const d = String(r.snapshot_date).slice(0, 10);
+    let m = deckByDate.get(d);
+    if (!m) { m = new Map(); deckByDate.set(d, m); }
+    const had = m.get(String(r.imei));
+    if (!had || String(r.created_at) > String(had.created_at)) m.set(String(r.imei), r);
+  }
+  const logsByDate = new Map();
+  for (const l of logs) {
+    const d = String(l.call_date).slice(0, 10);
+    if (!logsByDate.has(d)) logsByDate.set(d, []);
+    logsByDate.get(d).push(l);
+  }
+  const value = { day: today, yDate, weekStart, min, deckByDate, logsByDate };
+  histStore.set('h', value);
+  return value;
+}
+/** Reached % for one date: the dealt share when uid is given, the whole company when
+    null. Yesterday's share is dealt with TODAY's roster -- a person added since then
+    shifts it slightly, which is the honest cost of "nothing is stored". */
+function reachedOn(date, hist, uid, roster) {
+  if (!date) return null;
+  const deckMap = hist.deckByDate.get(date);
+  if (!deckMap || !deckMap.size) return null;
+  const all = [...deckMap.values()];
+  const pool = uid == null ? all : myShare(all, r => r.imei, roster, uid);
+  if (!pool.length) return null;
+  const phones = new Set(pool.map(r => pnorm(r.contact)).filter(Boolean));
+  const got = new Set();
+  for (const l of (hist.logsByDate.get(date) || [])) {
+    if (uid != null && String(l.user_id) !== String(uid)) continue;
+    if (num(l.duration) <= hist.min) continue;
+    const d = pnorm(l.phone);
+    if (d && phones.has(d)) got.add(d);
+  }
+  return { pct: phones.size ? got.size / phones.size : null, num: got.size, den: phones.size };
+}
+function weekAvgFor(hist, uid, roster) {
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const r = reachedOn(addDaysKey(hist.weekStart, i), hist, uid, roster);
+    if (r && r.pct != null) days.push(r.pct);
+  }
+  return days.length ? { pct: days.reduce((a, b) => a + b, 0) / days.length, days: days.length } : { pct: null, days: 0 };
+}
 export async function summaryFor(db, user, nowMs) {
   const key = user.teams ? user.teams.map(K).slice().sort().join(',') : 'ALL';
   const hit = summaryCache.get(key);
@@ -485,15 +577,10 @@ async function summaryCompute(db, user, nowMs) {
   // Locked 7+ counts Hoop's own burden ONLY: past day 45 the customer is Watu's problem
   // (the owner's rule). The tile must agree with the app's Lock 7+ tab, which drops them.
   const locked7 = deck.filter(r => r.locked7 === true && inWinOf(r)).length;
-  // Reached = distinct customers on the deck actually spoken to today (dial attempts under
-  // the threshold do not count -- same rule as the tick).
-  const deckNums = new Set(deck.map(r => pnorm(r.contact)).filter(Boolean));
-  const reachedSet = new Set();
-  for (const l of logs) {
-    if (num(l.duration) <= CALL_MIN_SECS_DEFAULT) continue;
-    const d = pnorm(l.phone);
-    if (d && deckNums.has(d)) reachedSet.add(d);
-  }
+  // The performance bar is always YESTERDAY (a finished day), never today's half-story,
+  // plus last week's average -- company-wide here ("other roles get average of all
+  // company"; the per-person cut lives in dailySummary and in Ripoti).
+  const hist = await histFor(db, nowMs);
   const den = deck.length;
   return {
     ok: true,
@@ -502,14 +589,55 @@ async function summaryCompute(db, user, nowMs) {
     locked7: { num: locked7 },
     inWindow: { num: inWin },
     calls: { num: logs.length },
-    reached: { pct: den ? reachedSet.size / den : null, num: reachedSet.size, den },
+    reached: reachedOn(hist.yDate, hist, null, []) || { pct: null, num: 0, den: 0 },
+    weekAvg: weekAvgFor(hist, null, []),
+    asOfReached: hist.yDate,
     dataVersion: dataVersion || '',
   };
+}
+
+/** The credit user's OWN strip: their dealt share of today's deck, their own calls
+    today, their own yesterday %, their own last-week average. Cached per user.
+    Budget on a cache miss: 1 deck read + 1 roster read + 1 own-logs-today read
+    (indexed user_id+date) + the day's shared history (memory after the first ask). */
+async function summaryForOfficer(db, cu, nowMs) {
+  const key = 'U:' + String(cu.user_id);
+  const hit = summaryCache.get(key);
+  if (hit && (nowMs - hit.at) < SUMMARY_TTL_MS && hit.at <= nowMs) return { ...hit.value, cached: true };
+  const today = todayKey(nowMs);
+  const deckDate = await latestDeckDate(db);
+  const [deck, roster, myLogs, hist] = await Promise.all([
+    deckDate ? fetchAll(() => db.from('followup_status')
+      .select('imei, contact, disbursed_date, locked4, locked7, days_offline').eq('deck_date', deckDate)) : [],
+    activeRoster(db),
+    fetchAll(() => db.from('call_logs').select('id, duration')
+      .eq('call_date', today).eq('user_id', String(cu.user_id))),
+    histFor(db, nowMs),
+  ]);
+  const mine = myShare(deck, r => r.imei, roster, cu.user_id);
+  const inWinOf = r => { const l = lifeDayOf(r.disbursed_date, today); return l != null && l <= 45; };
+  const value = {
+    ok: true,
+    deckDate,
+    list: { num: mine.length },
+    locked7: { num: mine.filter(r => r.locked7 === true && inWinOf(r)).length },
+    inWindow: { num: mine.filter(inWinOf).length },
+    calls: { num: myLogs.length },
+    reached: reachedOn(hist.yDate, hist, cu.user_id, roster) || { pct: null, num: 0, den: 0 },
+    weekAvg: weekAvgFor(hist, cu.user_id, roster),
+    asOfReached: hist.yDate,
+    dataVersion: (await settingGet(db, 'DATA_VERSION')) || '',
+  };
+  summaryCache.set(key, { at: nowMs, value });
+  return { ...value, cached: false };
 }
 async function dailySummary(db, [dev], nowMs) {
   const cu = await userByDeviceSoft(db, dev);
   if (!cu) return { ok: false, error: 'DEVICE_NOT_REGISTERED' };
-  return summaryFor(db, pseudoUser(cu), nowMs);
+  // A credit user sees THEIR portion and THEIR numbers; a leader (any oversight role)
+  // sees the whole company's average -- the detail lives in Ripoti.
+  if (!cu.is_leader) return summaryForOfficer(db, cu, nowMs);
+  return summaryFor(db, { name: cu.name, role: cu.role, teams: null }, nowMs);
 }
 
 /* ---------- leader report (Ripoti) ---------- */

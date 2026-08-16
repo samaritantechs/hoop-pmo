@@ -328,7 +328,9 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
       <span>Ndani ya 45 <b id="dsWin">&mdash;</b></span>
       <span class="ds-dot">&middot;</span>
       <span>Simu leo <b id="dsCalls">&mdash;</b></span>
-      <span>Waliofikiwa <b id="dsReach">&mdash;</b></span>
+      <span>Jana <b id="dsReach">&mdash;</b></span>
+      <span class="ds-dot">&middot;</span>
+      <span>Wiki iliyopita <b id="dsWeek">&mdash;</b></span>
     </div>
   </header>
   <main class="body" id="body"></main>
@@ -792,7 +794,7 @@ function doLogout(){
      the same handset. */
   _sumAt = 0; _sumVer = null;
   var _ds = $('#dayStrip'); if (_ds) { _ds.classList.add('hide'); _ds.classList.remove('stale'); }
-  ['#dsList','#dsLock7','#dsWin','#dsCalls','#dsReach'].forEach(function(id){ var el = $(id); if (el) el.textContent = '\u2014'; });
+  ['#dsList','#dsLock7','#dsWin','#dsCalls','#dsReach','#dsWeek'].forEach(function(id){ var el = $(id); if (el) el.textContent = '\u2014'; });
   var _dt = $('#dsTag'); if (_dt) _dt.textContent = 'Leo';
   try { localStorage.removeItem(CACHE_LS_KEY); localStorage.removeItem(BOOT_LS_KEY); localStorage.removeItem(SUM_LS_KEY); } catch(e){}
   sheetHide();
@@ -1073,9 +1075,13 @@ function drawSummary_(d, stale, atMs){
   $('#dsLock7').textContent = n_(d.locked7);
   $('#dsWin').textContent = n_(d.inWindow);
   $('#dsCalls').textContent = n_(d.calls);
-  // Reached carries the fraction beside the percentage: 12/40 is the number chased at the door.
+  /* THE PERFORMANCE BAR IS ALWAYS YESTERDAY -- a finished day, never today's half-story
+     -- with last week's average beside it so Monday knows what was what. A credit user
+     sees THEIR OWN numbers (their dealt share); a leader sees the company's. */
   $('#dsReach').textContent = (d.reached && d.reached.pct != null)
     ? (pctW_(d.reached.pct) + ' \u00B7 ' + d.reached.num + '/' + d.reached.den) : '\u2014';
+  var wk = $('#dsWeek');
+  if (wk) wk.textContent = (d.weekAvg && d.weekAvg.pct != null) ? pctW_(d.weekAvg.pct) : '\u2014';
   /* Figures kept from another day are still shown -- they are the last true thing the officer
      was told -- but never as today's. The tag is the only honest place to say so. */
   $('#dayStrip').classList.toggle('stale', !!stale);

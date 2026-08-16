@@ -29,7 +29,11 @@ yenyewe; simu zinarekodiwa kiotomatiki (Android).
 ## Kila mtu na kazi yake / Who does what
 
 - **Credit team (mf. Ainea):** app tu. Msimbo wa TIMU mara moja. Tabs nne + Ripoti kwa
-  kiongozi.
+  kiongozi. **Orodha ni ya kampuni nzima, inagawanywa yenyewe** kwa zamu (round-robin)
+  kati ya credit users wote — kila mtu anaona FUNGU LAKE tu. Ukisajili credit user
+  mpya, mgawanyo unajipanga upya wenyewe. Kipimo cha kazi (performance bar): % ya
+  **JANA** + wastani wa **wiki iliyopita** — yako mwenyewe. Kiongozi anaona wastani wa
+  kampuni; ripoti za mtu mmoja mmoja zipo Call reports.
 - **Data/IT (Gilbert):** faili la Watu kila asubuhi, kama lilivyotoka Watu. Kupakia
   mara mbili siku ileile = inachukua nafasi, haiongezi mara mbili.
 - **General duty (Mwinyi):** sales_details kwenye /upload — mfumo unaitambua. Kisha
@@ -51,6 +55,8 @@ yenyewe; simu zinarekodiwa kiotomatiki (Android).
 
 - **Dirisha la siku 45:** ndani yake mteja ni jukumu la Hoop. Locked 7+ aliyepita
   siku 45 si jukumu letu — tab ya 45+ tu.
+- **Timu = TAWI la kampuni (Kinondoni ni location),** si fungu la wateja. Msimbo wa
+  timu ni wa kuingia tu; orodha ya kupiga ni ya kampuni nzima, inagawanywa kwa zamu.
 - **Ref ya malipo Watu = namba ya simu ya mteja.** Kamwe si IMEI.
 - **Upload inachukua nafasi ya tarehe ile ile; maoni hayafutwi.**
 - **Kila mtu anaandika maoni kwa mteja yeyote** (Portal → Wateja; view-only hawaandiki).
