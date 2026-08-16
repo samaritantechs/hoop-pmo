@@ -70,8 +70,10 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    ADMIN holds everything; a read-only code (AUDITOR) SEES everything and changes
    nothing; a role whose tabs never chose any nav keeps the old defaults so existing
    codes do not go dark the day this shipped. */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'sales', 'teams', 'staff', 'codes', 'settings'];
-const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'teams', 'staff'];
+/* No 'teams' pane: Hoop has no teams model -- branches and their app sign-in codes are
+   login machinery and live under Access codes (the owner's call). */
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'sales', 'staff', 'codes', 'settings'];
+const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 function navsFor(user) {
   if (isAdminRole(user) || isReadOnly(user)) return NAV_TABS.slice();
   const t = (user.tabs || []).map(x => String(x).toLowerCase());

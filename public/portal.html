@@ -113,7 +113,6 @@ td.r,th.r{text-align:right}
       <button data-t="ripoti">Call reports</button>
       <button data-t="recovery">Recovery</button>
       <button data-t="mauzo" id="tabMauzo">Sales</button>
-      <button data-t="teams">Teams</button>
       <button data-t="staff">Staff</button>
       <button data-t="codes" id="tabCodes">Access codes</button>
       <button data-t="settings" id="tabSettings">Settings</button>
@@ -198,7 +197,7 @@ function enter(){
      every button -- the same rule the endpoints enforce. A pane added later shows up
      here the moment the server lists it. */
   var NAVKEY={dash:'dashboard',cust:'customers',ripoti:'reports',recovery:'recovery',
-    mauzo:'sales',teams:'teams',staff:'staff',codes:'codes',settings:'settings'};
+    mauzo:'sales',staff:'staff',codes:'codes',settings:'settings'};
   var NAVS=BOOT.navs||[];
   $all('#tabs button').forEach(function(b){
     var k=NAVKEY[b.getAttribute('data-t')];
@@ -236,7 +235,6 @@ function draw(){
   if(TAB==='mauzo') return drawMauzo(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
-  if(TAB==='teams') return drawTeams(m);
   if(TAB==='staff') return drawStaff(m);
   if(TAB==='codes') return drawCodes(m);
   if(TAB==='settings') return drawSettings(m);
@@ -593,46 +591,6 @@ function drawAgents(m){
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
 
-/* ---------- teams ---------- */
-function drawTeams(m){
-  var canW=(BOOT.tabs||[]).indexOf('settings')>=0&&!BOOT.readOnly;
-  m.innerHTML=
-    '<div class="card"><h2>Timu / RSM regions</h2>'
-    +'<div class="row"><input class="inp" id="teamQ" placeholder="Tafuta: jina, simu, IMEI, RSM, agent… / search"></div>'
-    +'<div class="mut" style="margin-bottom:10px">Msimbo wa timu ndio sign-in ya credit team kwenye Calls. Kubadilisha msimbo kunatoa kila simu ya timu hiyo — ndicho kinachotakiwa mtu akiondoka.</div>'
-    +'<div style="overflow-x:auto"><table><thead><tr><th>Timu</th><th>Team code</th><th>RSM</th><th>Simu ya RSM</th>'+(canW?'<th></th>':'')+'</tr></thead><tbody>'
-    +(BOOT.teams||[]).map(function(t){
-      return '<tr><td><b>'+esc(t.team)+'</b></td><td class="code">'+esc(t.code||'—')+'</td>'
-        +'<td>'+esc(t.rsm||'')+'</td><td>'+esc(t.rsmNo||'')+'</td>'
-        +(canW?'<td class="r"><button class="btn sm ghost" data-nc="'+esc(t.team)+'">Msimbo mpya</button></td>':'')+'</tr>';
-    }).join('')+'</tbody></table></div>'
-    +(canW?'<div class="row" style="margin-top:14px"><input class="inp" id="ntName" placeholder="Timu mpya (mkoa/eneo)"><input class="inp" id="ntRsm" placeholder="Jina la RSM"><input class="inp" id="ntNo" placeholder="Simu ya RSM"><button class="btn sm" id="ntAdd">Ongeza</button></div>':'')
-    +'</div><div id="teamCust"></div>';
-  wireSearch_('#teamQ','#teamCust',function(q){
-    $all('tbody tr', $('#main')).forEach(function(tr){
-      tr.style.display = !q || tr.textContent.toUpperCase().indexOf(q)>=0 ? '' : 'none';
-    });
-  });
-  if(!canW) return;
-  $all('[data-nc]',m).forEach(function(b){
-    b.onclick=function(){
-      if(!confirm('Msimbo mpya wa '+b.getAttribute('data-nc')+'? Kila simu ya timu hii itatakiwa kuingia upya.')) return;
-      srv('newTeamCode',{team:b.getAttribute('data-nc')}).then(function(d){
-        toast('Msimbo mpya wa '+d.team+': '+d.code);
-        return srv('boot').then(function(x){BOOT=x;drawTeams(m);});
-      }).catch(function(e){toast(String(e.message||e),true);});
-    };
-  });
-  $('#ntAdd').onclick=function(){
-    var t=$('#ntName').value.trim(); if(!t) return;
-    srv('saveTeam',{team:t,rsm:$('#ntRsm').value,rsmNo:$('#ntNo').value})
-      .then(function(){ return srv('newTeamCode',{team:t.toUpperCase()}); })
-      .then(function(d){ toast('Timu '+d.team+' · msimbo '+d.code);
-        return srv('boot').then(function(x){BOOT=x;drawTeams(m);}); })
-      .catch(function(e){toast(String(e.message||e),true);});
-  };
-}
-
 /* ---------- staff: THE OFFICE, from Sipho's register ---------- */
 function drawStaff(m){
   m.innerHTML='<div class="card"><h2>Staff</h2><div class="mut">Loading…</div></div>';
@@ -712,7 +670,34 @@ function drawCodes(m){
           +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td>'
           +'<td class="r"><button class="btn sm ghost" data-tg="'+esc(o.userId)+'" data-on="'+(o.active?1:0)+'">'+(o.active?'Zima':'Washa')+'</button></td></tr>';
       }).join(''):'<tr><td colspan="6" class="mut">No app users yet — the credit team registers from the app with a team code.</td></tr>')
-      +'</tbody></table></div></div>';
+      +'</tbody></table></div></div>'
+      +'<div class="card"><h2>Branches &amp; app sign-in codes</h2>'
+      +'<div class="mut" style="margin-bottom:10px">The branch code is what the credit team signs in with on the phones. Rotating it signs out every phone using it — the right move when somebody leaves. Hoop has no teams model: branches are locations and login machinery only.</div>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Branch</th><th>Code</th><th>RSM</th><th>RSM phone</th><th></th></tr></thead><tbody>'
+      +(BOOT.teams||[]).map(function(t){
+        return '<tr><td><b>'+esc(t.team)+'</b></td><td class="code">'+esc(t.code||'—')+'</td>'
+          +'<td>'+esc(t.rsm||'')+'</td><td>'+esc(t.rsmNo||'')+'</td>'
+          +'<td class="r"><button class="btn sm ghost" data-nc="'+esc(t.team)+'">New code</button></td></tr>';
+      }).join('')+'</tbody></table></div>'
+      +'<div class="row" style="margin-top:14px"><input class="inp" id="ntName" placeholder="New branch (location)"><input class="inp" id="ntRsm" placeholder="RSM name"><input class="inp" id="ntNo" placeholder="RSM phone"><button class="btn sm" id="ntAdd">Add</button></div>'
+      +'</div>';
+    $all('[data-nc]',m).forEach(function(b){
+      b.onclick=function(){
+        if(!confirm('New code for '+b.getAttribute('data-nc')+'? Every phone signed in with the old one must sign in again.')) return;
+        srv('newTeamCode',{team:b.getAttribute('data-nc')}).then(function(d2){
+          toast('New code for '+d2.team+': '+d2.code);
+          return srv('boot').then(function(x){BOOT=x;drawCodes(m);});
+        }).catch(function(e){toast(String(e.message||e),true);});
+      };
+    });
+    $('#ntAdd').onclick=function(){
+      var t=$('#ntName').value.trim(); if(!t) return;
+      srv('saveTeam',{team:t,rsm:$('#ntRsm').value,rsmNo:$('#ntNo').value})
+        .then(function(){ return srv('newTeamCode',{team:t.toUpperCase()}); })
+        .then(function(d2){ toast('Branch '+d2.team+' · code '+d2.code);
+          return srv('boot').then(function(x){BOOT=x;drawCodes(m);}); })
+        .catch(function(e){toast(String(e.message||e),true);});
+    };
     $all('[data-tg]',m).forEach(function(b){
       b.onclick=function(){
         srv('officerActive',{userId:b.getAttribute('data-tg'),active:b.getAttribute('data-on')!=='1'})
