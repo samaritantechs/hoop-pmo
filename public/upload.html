@@ -63,6 +63,7 @@ details summary i{color:var(--mut);font-size:12px}
       <button type="button" class="kchip" data-k="agents">Agents</button>
       <button type="button" class="kchip" data-k="agedstock">Aged stock</button>
     </div>
+    <div id="kindSample" style="display:none;margin-top:10px;font-size:13px"></div>
     <label class="file-drop" id="drop">Bofya kuchagua faili — Excel, CSV, au ukurasa wa HTML uliohifadhiwa (SyscoPos)<input type="file" id="file" accept=".xlsx,.xls,.csv,.html,.htm"></label>
     <div id="picked" style="font-size:13px;color:var(--mut);margin-top:8px"></div>
     <button class="btn" id="send" disabled>Pakia / Upload &mdash; inachukua nafasi ya tarehe hii / replaces this date</button>
@@ -72,7 +73,7 @@ details summary i{color:var(--mut);font-size:12px}
   </div>
   <div class="card">
     <h2 style="font-size:15px;margin:0 0 4px">Mifano ya mafaili / What each file looks like</h2>
-    <p style="font-size:12.5px;color:var(--mut);margin:0 0 10px">Mfumo unatambua faili kwa VICHWA vyake — hivi ndivyo kila aina inavyotakiwa kuonekana.</p>
+    <p style="font-size:12.5px;color:var(--mut);margin:0 0 10px">Mfumo unatambua faili kwa VICHWA vyake — hivi ndivyo kila aina inavyotakiwa kuonekana. <b>Mwenye ruhusa ya upload anapakia aina ZOTE nne.</b></p>
     <details>
       <summary><b>1 · Watu daily list (deck)</b> — Excel/CSV kutoka Watu, kila asubuhi. <i>Inachukua nafasi ya tarehe yake.</i></summary>
       <div class="samp">Shop | Agent | Agent ID | Client Name | Client Mobile | Model | Model Details | Disbursed Date | IMEI | Price | Has Ever Paid | Days Offline | Onboarding Time (Min) | App Signed Up | Locked 4+ Days | Locked 7+ Days</div>
@@ -149,14 +150,37 @@ var DETECTED = null;   // what the file's own headers say it is
 var PICK = 'auto';     // what the person chose -- 'auto' trusts the headers
 var KINDS = {
   watu:      { label: 'Watu daily list — orodha ya ufuatiliaji (deck)',
-               btn: 'Pakia / Upload — inachukua nafasi ya tarehe hii / replaces this date' },
+               btn: 'Pakia / Upload — inachukua nafasi ya tarehe hii / replaces this date',
+               note: 'Excel/CSV kutoka Watu, kila asubuhi. Inachukua nafasi ya tarehe yake.',
+               head: 'Shop | Agent | Agent ID | Client Name | Client Mobile | Model | Model Details | Disbursed Date | IMEI | Price | Has Ever Paid | Days Offline | Onboarding Time (Min) | App Signed Up | Locked 4+ Days | Locked 7+ Days',
+               ex: '"Hoop Limited, Kinondoni" | Denis John | 120405 | Alafati K Selemani | 255716548153 | A07 | A07 (SM-A075F/DS) | 13-Jul-26 | 351929937378664 | 450000 | FALSE | 21 | 375 | TRUE | TRUE | TRUE' },
   sales:     { label: 'Sales report — mauzo ya hoopltd.shop',
-               btn: 'Pakia / Upload — inaongeza na kusasisha mauzo / adds & updates' },
+               btn: 'Pakia / Upload — inaongeza na kusasisha mauzo / adds & updates',
+               note: 'Export ya hoopltd.shop (Mwinyi). Safu ya "Total" inarukwa yenyewe.',
+               head: 'Date | Branch | Agent | Client_Name | Client_Id | Client_Phone | Phone_Model | Receipt_Number | Imei | Commission_Agent | Commission_Phone | Price',
+               ex: '14/08/2026 | HOOP LIMITED | CYPRIAN RENATUS | Fredy J Damasi | N/A | 0797053513 | SAMSUNG A07-64GB | 9969 | 350748531117000 | Cyprian Dotto Renatus | 0780866571 | 503000.00' },
   agents:    { label: 'Agents Register — rejista ya maajenti',
-               btn: 'Pakia / Upload — inaongeza na kusasisha maajenti / adds & updates' },
+               btn: 'Pakia / Upload — inaongeza na kusasisha maajenti / adds & updates',
+               note: 'Ukurasa wa SyscoPos ULIOHIFADHIWA (HTML) — hifadhi BAADA ya orodha kuonekana skrini, pakia ukurasa wenyewe.',
+               head: 'Date | Name | Details (National_Id / Phone / Email) | Next_Of_Kin | Role | Branch | Status',
+               ex: '' },
   agedstock: { label: 'Aged Stock — stoo iliyokaa',
-               btn: 'Pakia / Upload — inaongeza na kusasisha stoo / adds & updates' },
+               btn: 'Pakia / Upload — inaongeza na kusasisha stoo / adds & updates',
+               note: 'CSV kutoka kitufe cha ripoti, au ukurasa uliohifadhiwa.',
+               head: 'Agent | Item | Serial | Received | Age',
+               ex: 'Anord Sawe | SAMSUNG A06-64GB | 350115227805852 | 03/07/2026 | 43' },
 };
+/* Choosing a type SHOWS its format on the spot -- headers, an example row, and how it
+   behaves -- so nobody uploads on faith. Auto hides it (the file will say for itself). */
+function showKindSample(){
+  var box = $('#kindSample');
+  if (PICK === 'auto' || !KINDS[PICK]){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  var k = KINDS[PICK];
+  box.style.display = 'block';
+  box.innerHTML = '<b>' + k.label + '</b><br><span style="color:var(--mut)">' + k.note + '</span>'
+    + '<div class="samp">' + k.head + '</div>'
+    + (k.ex ? '<div class="samp ex">' + k.ex + '</div>' : '');
+}
 function kindOf(head){
   var H = (head||[]).map(function(x){ return String(x==null?'':x).trim().toUpperCase().replace(/\s+/g,' '); });
   var has = function(){ for (var i=0;i<arguments.length;i++) if (H.indexOf(arguments[i])>=0) return true; return false; };
@@ -189,6 +213,7 @@ document.querySelectorAll('#kinds .kchip').forEach(function(b){
   b.onclick = function(){
     PICK = b.getAttribute('data-k');
     document.querySelectorAll('#kinds .kchip').forEach(function(x){ x.classList.toggle('on', x === b); });
+    showKindSample();
     applyKind('');
   };
 });

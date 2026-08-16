@@ -362,3 +362,27 @@ test('ADMIN role passes every portal gate even with a blank tabs cell', async ()
   await assert.rejects(() => _FNS.salesAudit(d, nonAdmin, {}), /upload au settings/,
     'a blank-tabs non-admin is still refused');
 });
+
+test('stockView groups the aged stock by holder and joins the register', async () => {
+  const d = fakeDb({
+    hoop_aged_stock: [
+      { serial: '350115227805852', agent: 'Anord Sawe', item: 'SAMSUNG A06-64GB', received: '2026-07-03', age_days: 43, as_of: '2026-08-15' },
+      { serial: '350748532603081', agent: 'Anord Sawe', item: 'SAMSUNG A07-64GB', received: '2026-08-07', age_days: 8, as_of: '2026-08-15' },
+      { serial: '351929931651587', agent: 'Dariasy bakolick', item: 'SAMSUNG A07-64GB', received: '2026-08-11', age_days: 4, as_of: '2026-08-15' },
+    ],
+    hoop_agents: [
+      { name: 'Anord Sawe', role: 'Regional_Manager', branch: 'Dar es salaam' },
+    ],
+  });
+  const r = await _FNS.stockView(d, ADMIN, {});
+  assert.equal(r.total, 3);
+  assert.equal(r.asOf, '2026-08-15');
+  assert.equal(r.holders[0].agent, 'Anord Sawe', 'oldest burden first');
+  assert.equal(r.holders[0].pieces, 2);
+  assert.equal(r.holders[0].maxAge, 43);
+  assert.equal(r.holders[0].role, 'Regional_Manager', 'the register names the holder');
+  assert.equal(r.holders[1].role, '', 'a holder not in the register is shown, never invented');
+  assert.equal(r.serials[0].serial, '350115227805852', 'oldest serial first');
+  const empty = await _FNS.stockView(fakeDb({ hoop_aged_stock: [], hoop_agents: [] }), ADMIN, {});
+  assert.equal(empty.total, 0);
+});

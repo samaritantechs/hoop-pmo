@@ -461,19 +461,59 @@ function openCust(c){
 var MZ={list:'audit',from:isoToday(-30),to:isoToday(0)};
 function drawMauzo(m){
   m.innerHTML='<div class="card"><h2>Mauzo / Sales</h2><div class="mut">Inapakia…</div></div>';
-  if(MZ.list==='audit') drawAudit(m); else drawAgents(m);
+  if(MZ.list==='audit') drawAudit(m);
+  else if(MZ.list==='stock') drawStock(m);
+  else drawAgents(m);
 }
 function mzPills(){
   return '<div class="row">'
     +'<button class="btn sm'+(MZ.list==='audit'?'':' ghost')+'" data-mz="audit">Ukaguzi / Fraud audit</button>'
     +'<button class="btn sm'+(MZ.list==='agents'?'':' ghost')+'" data-mz="agents">Agents / Scorecards</button>'
-    +'<input class="inp" type="date" id="mzFrom" value="'+MZ.from+'" style="flex:0 1 150px">'
-    +'<input class="inp" type="date" id="mzTo" value="'+MZ.to+'" style="flex:0 1 150px">'
-    +'<button class="btn sm ghost" id="mzGo">Onyesha</button></div>';
+    +'<button class="btn sm'+(MZ.list==='stock'?'':' ghost')+'" data-mz="stock">Stoo / Stock</button>'
+    +(MZ.list==='stock'?'':'<input class="inp" type="date" id="mzFrom" value="'+MZ.from+'" style="flex:0 1 150px">'
+      +'<input class="inp" type="date" id="mzTo" value="'+MZ.to+'" style="flex:0 1 150px">'
+      +'<button class="btn sm ghost" id="mzGo">Onyesha</button>')
+    +'</div>';
 }
 function mzWire(m){
   $all('[data-mz]',m).forEach(function(b){ b.onclick=function(){ MZ.list=b.getAttribute('data-mz'); drawMauzo(m); }; });
-  $('#mzGo').onclick=function(){ MZ.from=$('#mzFrom').value||MZ.from; MZ.to=$('#mzTo').value||MZ.to; drawMauzo(m); };
+  var go=$('#mzGo'); if(go) go.onclick=function(){ MZ.from=$('#mzFrom').value||MZ.from; MZ.to=$('#mzTo').value||MZ.to; drawMauzo(m); };
+}
+function drawStock(m){
+  srv('stockView').then(function(d){
+    var filt='<div class="row"><input class="inp" id="stQ" placeholder="Chuja: agent, IMEI, simu… / filter"></div>';
+    m.innerHTML='<div class="card"><h2>Stoo iliyokaa — kwa RSM na maajenti'+(d.asOf?' <span class="mut" style="font-weight:400;font-size:12px">(ripoti ya '+esc(d.asOf)+')</span>':'')+'</h2>'
+      +mzPills()
+      +(d.total?
+        '<div class="tiles">'
+        +'<div class="tile"><div class="l">Simu zilizokaa</div><div class="v">'+money(d.total)+'</div><div class="s">zaidi ya ukomo wa siku</div></div>'
+        +'<div class="tile"><div class="l">Wenye stoo</div><div class="v">'+money((d.holders||[]).length)+'</div></div>'
+        +'<div class="tile"><div class="l">Ya zamani zaidi</div><div class="v" style="color:var(--bad)">'+money((d.holders[0]||{}).maxAge||0)+'</div><div class="s">siku</div></div>'
+        +'</div>'
+        +'<div class="mut" style="margin-bottom:8px">Umri huu ni wa SyscoPos (unaweza ku-resetiwa huko). Wa juu = mzigo wa zamani zaidi.</div>'
+        +'<div style="overflow-x:auto"><table><thead><tr><th>Mwenye stoo</th><th>Role</th><th class="r">Simu</th><th class="r">Umri wastani</th><th class="r">Zamani zaidi</th><th>Bidhaa</th></tr></thead><tbody>'
+        +(d.holders||[]).map(function(h){
+          return '<tr><td><b>'+esc(h.agent)+'</b>'+(h.branch?'<div class="mut" style="font-size:10px">'+esc(h.branch)+'</div>':'')+'</td>'
+            +'<td>'+esc(h.role||'—')+'</td><td class="r">'+money(h.pieces)+'</td>'
+            +'<td class="r">'+(h.avgAge!=null?money(h.avgAge):'—')+'</td>'
+            +'<td class="r"'+(h.maxAge>=14?' style="color:var(--bad)"':'')+'>'+money(h.maxAge)+'</td>'
+            +'<td class="mut" style="font-size:11px">'+esc(h.items)+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        +'<h2 style="margin-top:16px">Kwa simu moja moja</h2>'+filt
+        +'<div style="overflow-x:auto"><table><thead><tr><th>Serial / IMEI</th><th>Mwenye stoo</th><th>Bidhaa</th><th>Imepokelewa</th><th class="r">Umri (siku)</th></tr></thead><tbody id="stRows">'
+        +(d.serials||[]).map(function(s){
+          return '<tr><td style="font-size:11px">'+esc(s.serial)+'</td><td>'+esc(s.agent)+'</td><td>'+esc(s.item)+'</td>'
+            +'<td>'+esc(s.received||'—')+'</td><td class="r"'+(s.age>=14?' style="color:var(--bad)"':'')+'>'+(s.age!=null?money(s.age):'—')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+      :'<div class="mut">Hakuna stoo iliyopakiwa bado. Sipho: fungua Aged Stock kwenye SyscoPos → bofya kitufe cha <b>CSV</b> → pakia faili hiyo kwenye <a href="/upload">/upload</a> (au hifadhi ukurasa BAADA ya orodha kuonekana, upakie HTML yake).</div>')
+      +'</div>';
+    mzWire(m);
+    var q=$('#stQ');
+    if(q) q.addEventListener('input',function(){
+      var Q=this.value.trim().toUpperCase();
+      $all('#stRows tr',m).forEach(function(tr){ tr.style.display=!Q||tr.textContent.toUpperCase().indexOf(Q)>=0?'':'none'; });
+    });
+  }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
 function mzStatusChip(s){
   if(s==='OK') return '<span class="chip ok">OK · Watu</span>';

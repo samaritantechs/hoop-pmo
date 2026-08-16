@@ -379,6 +379,45 @@ const FNS = {
     return { ok: true, from, to, watuAgents: watuAgents.slice(0, 300), sellers: sellers.slice(0, 300) };
   },
 
+  /** STOO BY HOLDER -- Sipho's aged-stock report grouped per RSM / agent: pieces held,
+      how old, and who they are in the register. The rows are the AGED subset SyscoPos
+      reports (past its age limit), stamped as_of the day the report was read.
+      Budget: 2 parallel bounded reads -- the aged table and the agents register. */
+  async stockView(db, user) {
+    requireOps(user);
+    const [rows, agents] = await Promise.all([
+      fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, item, received, age_days, as_of')),
+      fetchAll(() => db.from('hoop_agents').select('name, role, branch')),
+    ]);
+    const regBy = new Map(agents.map(a => [K(a.name), a]));
+    const by = new Map();
+    let asOf = null;
+    for (const r of rows) {
+      if (r.as_of && (!asOf || String(r.as_of) > String(asOf))) asOf = String(r.as_of).slice(0, 10);
+      const k = K(r.agent) || '?';
+      let g = by.get(k);
+      if (!g) { g = { agent: r.agent || '—', pieces: 0, ageSum: 0, ageN: 0, maxAge: 0, items: {} }; by.set(k, g); }
+      g.pieces++;
+      if (r.age_days != null) {
+        g.ageSum += num(r.age_days); g.ageN++;
+        if (num(r.age_days) > g.maxAge) g.maxAge = num(r.age_days);
+      }
+      const it = String(r.item || '—');
+      g.items[it] = (g.items[it] || 0) + 1;
+    }
+    const holders = [...by.entries()].map(([k, g]) => {
+      const reg = regBy.get(k) || null;
+      return { agent: g.agent, role: reg ? (reg.role || '') : '', branch: reg ? (reg.branch || '') : '',
+        pieces: g.pieces, avgAge: g.ageN ? Math.round(g.ageSum / g.ageN) : null, maxAge: g.maxAge,
+        items: Object.entries(g.items).sort((x, y) => y[1] - x[1]).slice(0, 4)
+          .map(e => e[0] + ' ×' + e[1]).join(', ') };
+    }).sort((x, y) => y.maxAge - x.maxAge || y.pieces - x.pieces);
+    const serials = rows.map(r => ({ serial: r.serial, agent: r.agent || '', item: r.item || '',
+      received: r.received ? String(r.received).slice(0, 10) : '', age: r.age_days == null ? null : num(r.age_days) }))
+      .sort((x, y) => (y.age || 0) - (x.age || 0));
+    return { ok: true, asOf, total: rows.length, holders, serials: serials.slice(0, 500) };
+  },
+
   async saveTeam(db, user, args) {
     requireWrite(user); requireSettings(user);
     const a = args || {};

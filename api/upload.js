@@ -56,6 +56,17 @@ async function writeChunks(db, table, records, onConflict) {
   return written;
 }
 
+/** WHO UPLOADED WHAT lands in the same audit_log the portal writes to, so the Settings
+    audit list shows every kind of data anybody sent. Fire-and-forget (audit.js rule 3):
+    a log line can never break an upload. Last slice only -- one line per file. */
+async function logUpload(user, action, subject) {
+  try {
+    await supabase.from('audit_log').insert({
+      actor_code: user.code, actor_name: user.name, actor_role: user.role,
+      action, subject, ok: true });
+  } catch (e) { /* swallowed -- an upload must not depend on its log line */ }
+}
+
 /** Trials need an eraser. Deletes ONE day's data: that day's snapshots, the register
     rows last confirmed that day, and the deck rows it stamped (their comments cascade).
     Budget: 3 bounded deletes + 1 settings write; every delete is scoped to the date. */
@@ -72,6 +83,7 @@ async function deleteDay(user, day) {
   const { error } = await supabase.from('settings')
     .upsert({ key: 'DATA_VERSION', value: randomUUID() }, { onConflict: 'key' });
   if (error) throw new Error('settings: ' + error.message);
+  await logUpload(user, 'upload:delete-day', day + ' · deck ' + gone.deck + ' · reg ' + gone.register + ' · hist ' + gone.snapshots);
   return { ok: true, deleted: gone, date: day };
 }
 
@@ -128,6 +140,7 @@ export default withApi(async (req) => {
     }
     await writeChunks(supabase, 'hoop_agents',
       ag.records.map(r => ({ ...r, updated_at: new Date().toISOString() })), 'phone');
+    if (isLast) await logUpload(user, 'upload:agents', 'rows ' + ag.records.length);
     return { kind: 'agents', inserted: ag.records.length, batch,
       dropped: ag.dropped.length, droppedRows: ag.dropped.slice(0, 50),
       part: { index, total, last: isLast } };
@@ -143,6 +156,7 @@ export default withApi(async (req) => {
     }
     await writeChunks(supabase, 'hoop_aged_stock',
       st.records.map(r => ({ ...r, as_of: snapshotDate, updated_at: new Date().toISOString() })), 'serial');
+    if (isLast) await logUpload(user, 'upload:agedstock', snapshotDate + ' · rows ' + st.records.length);
     return { kind: 'agedstock', inserted: st.records.length, date: snapshotDate, batch,
       dropped: st.dropped.length, droppedRows: st.dropped.slice(0, 50),
       part: { index, total, last: isLast } };
@@ -159,6 +173,7 @@ export default withApi(async (req) => {
       sales.records.map(r => ({ ...r, sale_date: r.sale_date || snapshotDate,
         upload_batch: batch, updated_at: now })),
       'sale_key');
+    if (isLast) await logUpload(user, 'upload:sales', snapshotDate + ' · rows ' + sales.records.length);
     return {
       kind: 'sales',
       inserted: sales.records.length,
@@ -234,6 +249,7 @@ export default withApi(async (req) => {
     const { error } = await supabase.from('settings')
       .upsert({ key: 'DATA_VERSION', value: batch }, { onConflict: 'key' });
     if (error) throw new Error('settings: ' + error.message);
+    await logUpload(user, 'upload:watu-deck', snapshotDate + ' · rows ' + records.length);
   }
 
   return {
