@@ -123,8 +123,8 @@ export default withApi(async (req) => {
   const wantKind = String((meta && meta.kind) || '').trim();
   const enforceKind = actual => {
     if (wantKind && wantKind !== actual) {
-      const e = new Error('Umechagua "' + wantKind + '" lakini faili hili ni "' + actual
-        + '". / The chosen report type does not match the file.');
+      const e = new Error('The chosen report type is "' + wantKind + '" but this file is "'
+        + actual + '".');
       e.status = 400; throw e;
     }
   };

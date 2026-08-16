@@ -48,48 +48,48 @@ details summary i{color:var(--mut);font-size:12px}
 <div class="wrap">
   <div class="head">
     <svg class="mark" viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#fff"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
-    <div><h1>Watu daily list</h1><p>Pakia orodha ya Watu ya leo — Excel au CSV, safu 16 za kawaida.</p></div>
+    <div><h1>HOOP PMO — Upload</h1><p>Watu daily list, sales report, agents register, aged stock — Excel, CSV, or a saved SyscoPos page.</p></div>
   </div>
   <div class="card">
-    <label>Msimbo wa mfumo / Access code</label>
+    <label>Access code</label>
     <input type="password" id="code" placeholder="Access code (needs upload permission)" autocomplete="off">
-    <label>Tarehe ya orodha / List date</label>
+    <label>List date</label>
     <input type="date" id="date">
-    <label>Aina ya ripoti / Report type</label>
+    <label>Report type</label>
     <div class="kinds" id="kinds">
-      <button type="button" class="kchip on" data-k="auto">Itambue yenyewe / Auto</button>
+      <button type="button" class="kchip on" data-k="auto">Auto-detect</button>
       <button type="button" class="kchip" data-k="watu">Watu deck</button>
       <button type="button" class="kchip" data-k="sales">Sales</button>
       <button type="button" class="kchip" data-k="agents">Agents</button>
       <button type="button" class="kchip" data-k="agedstock">Aged stock</button>
     </div>
     <div id="kindSample" style="display:none;margin-top:10px;font-size:13px"></div>
-    <label class="file-drop" id="drop">Bofya kuchagua faili — Excel, CSV, au ukurasa wa HTML uliohifadhiwa (SyscoPos)<input type="file" id="file" accept=".xlsx,.xls,.csv,.html,.htm"></label>
+    <label class="file-drop" id="drop">Choose a file — Excel, CSV, or a saved SyscoPos HTML page<input type="file" id="file" accept=".xlsx,.xls,.csv,.html,.htm"></label>
     <div id="picked" style="font-size:13px;color:var(--mut);margin-top:8px"></div>
-    <button class="btn" id="send" disabled>Pakia / Upload &mdash; inachukua nafasi ya tarehe hii / replaces this date</button>
-    <button class="btn" id="wipe" style="background:#fff;color:#B42318;border:1.5px solid #F6CFCB;margin-top:10px">Futa data ya tarehe hii / Delete this date's data</button>
+    <button class="btn" id="send" disabled>Upload &mdash; replaces this date</button>
+    <button class="btn" id="wipe" style="background:#fff;color:#B42318;border:1.5px solid #F6CFCB;margin-top:10px">Delete this date's data (deck only)</button>
     <div class="bar" id="bar"><i id="barFill"></i></div>
     <div class="msg" id="msg"></div>
   </div>
   <div class="card">
-    <h2 style="font-size:15px;margin:0 0 4px">Mifano ya mafaili / What each file looks like</h2>
-    <p style="font-size:12.5px;color:var(--mut);margin:0 0 10px">Mfumo unatambua faili kwa VICHWA vyake — hivi ndivyo kila aina inavyotakiwa kuonekana. <b>Mwenye ruhusa ya upload anapakia aina ZOTE nne.</b></p>
+    <h2 style="font-size:15px;margin:0 0 4px">What each file looks like</h2>
+    <p style="font-size:12.5px;color:var(--mut);margin:0 0 10px">The system recognizes a file by its HEADERS — this is what each kind should look like. <b>Upload permission covers all four kinds.</b></p>
     <details>
-      <summary><b>1 · Watu daily list (deck)</b> — Excel/CSV kutoka Watu, kila asubuhi. <i>Inachukua nafasi ya tarehe yake.</i></summary>
+      <summary><b>1 · Watu daily list (deck)</b> — Excel/CSV from Watu, every morning. <i>Replaces its date.</i></summary>
       <div class="samp">Shop | Agent | Agent ID | Client Name | Client Mobile | Model | Model Details | Disbursed Date | IMEI | Price | Has Ever Paid | Days Offline | Onboarding Time (Min) | App Signed Up | Locked 4+ Days | Locked 7+ Days</div>
       <div class="samp ex">"Hoop Limited, Kinondoni" | Denis John | 120405 | Alafati K Selemani | 255716548153 | A07 | A07 (SM-A075F/DS) | 13-Jul-26 | 351929937378664 | 450000 | FALSE | 21 | 375 | TRUE | TRUE | TRUE</div>
     </details>
     <details>
-      <summary><b>2 · Sales report</b> — export ya hoopltd.shop (Mwinyi). <i>Inaongeza na kusasisha; safu ya "Total" inarukwa yenyewe.</i></summary>
+      <summary><b>2 · Sales report</b> — the hoopltd.shop export. <i>Adds &amp; updates; the "Total" row is skipped.</i></summary>
       <div class="samp">Date | Branch | Agent | Client_Name | Client_Id | Client_Phone | Phone_Model | Receipt_Number | Imei | Commission_Agent | Commission_Phone | Price</div>
       <div class="samp ex">14/08/2026 | HOOP LIMITED | CYPRIAN RENATUS | Fredy J Damasi | N/A | 0797053513 | SAMSUNG A07-64GB | 9969 | 350748531117000 | Cyprian Dotto Renatus | 0780866571 | 503000.00</div>
     </details>
     <details>
-      <summary><b>3 · Agents Register</b> — ukurasa wa SyscoPos ULIOHIFADHIWA (Sipho). <i>Hifadhi BAADA ya orodha kuonekana skrini.</i></summary>
-      <div class="samp">Ukurasa wenye safu: Date | Name | Details (National_Id/Phone/Email) | Next_Of_Kin | Role | Branch | Status — pakia HTML yenyewe, data inatolewa na ukurasa unatupwa.</div>
+      <summary><b>3 · Agents Register</b> — a SAVED SyscoPos page. <i>Save AFTER the table is visible.</i></summary>
+      <div class="samp">A page with columns: Date | Name | Details (National_Id/Phone/Email) | Next_Of_Kin | Role | Branch | Status — upload the HTML itself; the data is extracted and the page discarded.</div>
     </details>
     <details>
-      <summary><b>4 · Aged Stock</b> — CSV kutoka kitufe cha ripoti, au ukurasa uliohifadhiwa. <i>Inaongeza na kusasisha.</i></summary>
+      <summary><b>4 · Aged Stock</b> — CSV from the report's own button, or a saved page. <i>Adds &amp; updates.</i></summary>
       <div class="samp">Agent | Item | Serial | Received | Age</div>
       <div class="samp ex">Anord Sawe | SAMSUNG A06-64GB | 350115227805852 | 03/07/2026 | 43</div>
     </details>
@@ -132,12 +132,12 @@ function parseHtmlFile(text){
         pick(c[3],'Name','Phone|Relationship'), pick(c[3],'Phone','Relationship|Name'), pick(c[3],'Relationship','Name|Phone'),
         c[4]||'', c[5]||'', c[6]||'']);
     });
-    return { kind: 'Agents Register — rejista ya maajenti', aoa: out };
+    return { kind: 'Agents Register', aoa: out };
   }
   if (thStr.indexOf('SERIAL') >= 0){
     var out2 = [['AGENT','ITEM','SERIAL','RECEIVED','AGE']];
     rows.forEach(function(c){ out2.push([c[0]||'', c[1]||'', c[2]||'', c[3]||'', c[4]||'']); });
-    return { kind: 'Aged Stock — stoo iliyokaa', aoa: out2 };
+    return { kind: 'Aged Stock', aoa: out2 };
   }
   return { kind: null, aoa: null, headers: ths };
 }
@@ -149,24 +149,24 @@ var KIND = null;       // what will actually be uploaded
 var DETECTED = null;   // what the file's own headers say it is
 var PICK = 'auto';     // what the person chose -- 'auto' trusts the headers
 var KINDS = {
-  watu:      { label: 'Watu daily list — orodha ya ufuatiliaji (deck)',
-               btn: 'Pakia / Upload — inachukua nafasi ya tarehe hii / replaces this date',
-               note: 'Excel/CSV kutoka Watu, kila asubuhi. Inachukua nafasi ya tarehe yake.',
+  watu:      { label: 'Watu daily list (deck)',
+               btn: 'Upload — replaces this date',
+               note: 'Excel/CSV from Watu, every morning. Replaces its date.',
                head: 'Shop | Agent | Agent ID | Client Name | Client Mobile | Model | Model Details | Disbursed Date | IMEI | Price | Has Ever Paid | Days Offline | Onboarding Time (Min) | App Signed Up | Locked 4+ Days | Locked 7+ Days',
                ex: '"Hoop Limited, Kinondoni" | Denis John | 120405 | Alafati K Selemani | 255716548153 | A07 | A07 (SM-A075F/DS) | 13-Jul-26 | 351929937378664 | 450000 | FALSE | 21 | 375 | TRUE | TRUE | TRUE' },
-  sales:     { label: 'Sales report — mauzo ya hoopltd.shop',
-               btn: 'Pakia / Upload — inaongeza na kusasisha mauzo / adds & updates',
-               note: 'Export ya hoopltd.shop (Mwinyi). Safu ya "Total" inarukwa yenyewe.',
+  sales:     { label: 'Sales report (hoopltd.shop)',
+               btn: 'Upload — adds & updates sales',
+               note: 'The hoopltd.shop export (general duty). The "Total" footer row is skipped automatically.',
                head: 'Date | Branch | Agent | Client_Name | Client_Id | Client_Phone | Phone_Model | Receipt_Number | Imei | Commission_Agent | Commission_Phone | Price',
                ex: '14/08/2026 | HOOP LIMITED | CYPRIAN RENATUS | Fredy J Damasi | N/A | 0797053513 | SAMSUNG A07-64GB | 9969 | 350748531117000 | Cyprian Dotto Renatus | 0780866571 | 503000.00' },
-  agents:    { label: 'Agents Register — rejista ya maajenti',
-               btn: 'Pakia / Upload — inaongeza na kusasisha maajenti / adds & updates',
-               note: 'Ukurasa wa SyscoPos ULIOHIFADHIWA (HTML) — hifadhi BAADA ya orodha kuonekana skrini, pakia ukurasa wenyewe.',
+  agents:    { label: 'Agents Register',
+               btn: 'Upload — adds & updates agents',
+               note: 'A SAVED SyscoPos page (HTML) — save AFTER the table is visible on screen, then upload the page itself.',
                head: 'Date | Name | Details (National_Id / Phone / Email) | Next_Of_Kin | Role | Branch | Status',
                ex: '' },
-  agedstock: { label: 'Aged Stock — stoo iliyokaa',
-               btn: 'Pakia / Upload — inaongeza na kusasisha stoo / adds & updates',
-               note: 'CSV kutoka kitufe cha ripoti, au ukurasa uliohifadhiwa.',
+  agedstock: { label: 'Aged Stock',
+               btn: 'Upload — adds & updates stock',
+               note: 'CSV from the report\'s own button, or a saved page.',
                head: 'Agent | Item | Serial | Received | Age',
                ex: 'Anord Sawe | SAMSUNG A06-64GB | 350115227805852 | 03/07/2026 | 43' },
 };
@@ -196,14 +196,14 @@ function applyKind(extraNote){
   if (!AOA) return;
   if (!DETECTED){
     KIND = null; $('#send').disabled = true;
-    $('#picked').textContent = NAME + ' — faili halijatambuliwa. Vichwa: ' + ((AOA[0]||[]).slice(0,10).join(', '));
-    show('Vichwa havifanani na aina yoyote. Angalia "Mifano ya mafaili" hapa chini.', 'bad');
+    $('#picked').textContent = NAME + ' — file not recognized. Headers: ' + ((AOA[0]||[]).slice(0,10).join(', '));
+    show('The headers match no known kind. See "What each file looks like" below.', 'bad');
     return;
   }
   if (PICK !== 'auto' && PICK !== DETECTED){
     KIND = null; $('#send').disabled = true;
-    $('#picked').innerHTML = '<b>Umechagua: ' + KINDS[PICK].label + '</b><br>Lakini faili hili ni: <b>' + KINDS[DETECTED].label + '</b>';
-    show('Aina uliyochagua hailingani na faili. Chagua aina sahihi au "Itambue yenyewe / Auto". / The chosen type does not match this file.', 'bad');
+    $('#picked').innerHTML = '<b>You chose: ' + KINDS[PICK].label + '</b><br>But this file is: <b>' + KINDS[DETECTED].label + '</b>';
+    show('The chosen report type does not match this file. Pick the right type, or Auto-detect.', 'bad');
     return;
   }
   KIND = DETECTED;
@@ -221,16 +221,16 @@ function preview(extraNote){
   var n = Math.max(0, (AOA||[]).length - 1);
   var head = (AOA && AOA[0]) || [];
   var k = KIND ? KINDS[KIND] : null;
-  var html = (k ? '<b>Imetambuliwa: ' + k.label + '</b>' + (extraNote ? ' <span style="color:var(--mut)">' + extraNote + '</span>' : '') + '<br>' : '')
-    + NAME + ' — safu ' + n + ' data rows.';
-  html += '<br>Vichwa: ' + head.slice(0,7).join(', ') + (head.length > 7 ? '…' : '');
+  var html = (k ? '<b>Recognized: ' + k.label + '</b>' + (extraNote ? ' <span style="color:var(--mut)">' + extraNote + '</span>' : '') + '<br>' : '')
+    + NAME + ' — ' + n + ' data rows.';
+  html += '<br>Headers: ' + head.slice(0,7).join(', ') + (head.length > 7 ? '…' : '');
   for (var i = 1; i <= Math.min(2, n); i++){
     html += '<br><span style="color:#0F172A">• ' + AOA[i].slice(0,5).map(function(c){ return String(c === '' ? '—' : c); }).join(' · ') + '</span>';
   }
   $('#picked').innerHTML = html;
   $('#send').disabled = !n;
   if (k) $('#send').textContent = k.btn;
-  if (!n) show('Safu 0 — ukurasa ulihifadhiwa KABLA orodha haijaonekana. Fungua ukurasa, subiri majina yaonekane, ndipo u-save tena. / 0 rows: save the page AFTER the table is visible.', 'bad');
+  if (!n) show('0 rows — the page was saved BEFORE the table finished loading. Open the page, wait for the names to show, then save it again.', 'bad');
   else show('', '');
 }
 
@@ -246,13 +246,13 @@ $('#file').addEventListener('change', function(){
         var got = parseHtmlFile(String(rd.result));
         if (!got.kind){
           AOA = null; KIND = null; DETECTED = null; $('#send').disabled = true;
-          $('#picked').textContent = NAME + ' — ukurasa haujatambuliwa. Vichwa vilivyoonekana: ' + (got.headers || []).join(', ');
-          show('Ukurasa huu wa HTML haufanani na Agents Register wala Aged Stock.', 'bad');
+          $('#picked').textContent = NAME + ' — page not recognized. Headers seen: ' + (got.headers || []).join(', ');
+          show('This HTML page matches neither the Agents Register nor Aged Stock.', 'bad');
           return;
         }
         AOA = got.aoa;
         DETECTED = kindOf(AOA[0]);
-        applyKind('(data pekee inapakiwa; HTML inatupwa)');
+        applyKind('(only the data is uploaded; the HTML is discarded)');
         return;
       }
       var wb = XLSX.read(new Uint8Array(rd.result), { type:'array', cellDates:true });
@@ -268,7 +268,7 @@ $('#file').addEventListener('change', function(){
       }); });
       DETECTED = kindOf(AOA[0] || []);
       applyKind('');
-    } catch(e){ show('Faili halisomeki: ' + e.message, 'bad'); }
+    } catch(e){ show('The file could not be read: ' + e.message, 'bad'); }
   };
   if (isHtml) rd.readAsText(f); else rd.readAsArrayBuffer(f);
 });
@@ -283,12 +283,12 @@ function uuid_(){
 $('#wipe').onclick = function(){
   var code = $('#code').value.trim();
   var day = $('#date').value;
-  if (!code){ show('Weka msimbo wako / enter your access code.', 'bad'); return; }
-  if (!day){ show('Chagua tarehe kwanza / choose the date first.', 'bad'); return; }
-  if (!confirm('FUTA data YOTE ya tarehe ' + day + '? Orodha ya siku hiyo, historia yake na maoni ya simu za siku hiyo vinaondoka kabisa. / DELETE ALL data for ' + day + '? That day\'s list, its history and its call-app comments are removed for good.')) return;
+  if (!code){ show('Enter your access code.', 'bad'); return; }
+  if (!day){ show('Choose the date first.', 'bad'); return; }
+  if (!confirm('DELETE ALL data for ' + day + '? That day\'s deck, its history and its call-app comments are removed for good.')) return;
   try { localStorage.setItem('huCode', code); } catch(e){}
   $('#wipe').disabled = true; $('#send').disabled = true;
-  show('Inafuta\u2026 / deleting\u2026', 'ok');
+  show('Deleting\u2026', 'ok');
   fetch('/api/upload', {
     method:'POST', headers:{ 'Content-Type':'application/json' },
     body: JSON.stringify({ code: code, action: 'delete', meta: { uploadDate: day } })
@@ -296,17 +296,17 @@ $('#wipe').onclick = function(){
     .then(function(x){
       if (x.s < 200 || x.s >= 300 || x.b.ok === false) throw new Error((x.b && x.b.error) || ('HTTP ' + x.s));
       var d = x.b.deleted || {};
-      show('Imefutwa tarehe ' + x.b.date + ': orodha ' + (d.deck||0) + ' \u00B7 rejista ' + (d.register||0)
-        + ' \u00B7 historia ' + (d.snapshots||0) + '. Simu zitajisafisha zenyewe. / Deleted \u2014 phones will refresh themselves.', 'ok');
+      show('Deleted ' + x.b.date + ': deck ' + (d.deck||0) + ' \u00B7 register ' + (d.register||0)
+        + ' \u00B7 history ' + (d.snapshots||0) + '. Phones will refresh themselves.', 'ok');
     })
-    .catch(function(e){ show('Imeshindikana: ' + (e.message || e), 'bad'); })
+    .catch(function(e){ show('Failed: ' + (e.message || e), 'bad'); })
     .then(function(){ $('#wipe').disabled = false; $('#send').disabled = !(AOA && AOA.length > 1); });
 };
 
 $('#send').onclick = function(){
   var code = $('#code').value.trim();
-  if (!code){ show('Weka msimbo wako / enter your access code.', 'bad'); return; }
-  if (!AOA || AOA.length < 2){ show('Chagua faili kwanza.', 'bad'); return; }
+  if (!code){ show('Enter your access code.', 'bad'); return; }
+  if (!AOA || AOA.length < 2){ show('Choose a file first.', 'bad'); return; }
   try { localStorage.setItem('huCode', code); } catch(e){}
   var header = AOA[0], data = AOA.slice(1);
   var total = Math.max(1, Math.ceil(data.length / SLICE));
@@ -314,7 +314,7 @@ $('#send').onclick = function(){
   var sent = 0, inserted = 0, droppedAll = [];
   $('#send').disabled = true;
   $('#bar').style.display = 'block'; $('#barFill').style.width = '2%';
-  show('Inapakia… / uploading…', 'ok');
+  show('Uploading…', 'ok');
   function part(i){
     var rows = [header].concat(data.slice(i*SLICE, (i+1)*SLICE));
     return fetch('/api/upload', {
@@ -332,14 +332,14 @@ $('#send').onclick = function(){
         var srvKind = x.b.kind || 'watu';
         var t;
         if (srvKind === 'watu') {
-          t = 'Imepakiwa: DECK ya safu ' + inserted + ' · tarehe ' + (x.b.date || $('#date').value)
-            + '. Simu zitajipakia zenyewe (DATA_VERSION imesogezwa).';
+          t = 'Uploaded: DECK, ' + inserted + ' rows · date ' + (x.b.date || $('#date').value)
+            + '. Phones will refresh themselves (DATA_VERSION moved).';
         } else {
-          var lbl = { sales: 'Mauzo', agents: 'Maajenti', agedstock: 'Aged stock' }[srvKind] || srvKind;
-          t = 'Imepakiwa: ' + lbl + ' — safu ' + inserted
-            + '. Mpya zimeongezwa, zilizokuwepo zimesasishwa; orodha za simu hazijaguswa.';
+          var lbl = { sales: 'Sales', agents: 'Agents', agedstock: 'Aged stock' }[srvKind] || srvKind;
+          t = 'Uploaded: ' + lbl + ' — ' + inserted + ' rows.'
+            + ' New rows added, existing ones updated; the phones\' lists are untouched.';
         }
-        if (droppedAll.length) t += '\nZilizokataliwa (' + droppedAll.length + '): '
+        if (droppedAll.length) t += '\nRejected rows (' + droppedAll.length + '): '
           + droppedAll.slice(0,10).map(function(d){ return d.name + ' (' + d.imei + ')'; }).join('; ')
           + (droppedAll.length > 10 ? ' …' : '');
         show(t, 'ok');
@@ -347,7 +347,7 @@ $('#send').onclick = function(){
       });
   }
   part(0).catch(function(e){
-    show('Imeshindikana: ' + (e.message || e) + ' — jaribu tena; upakiaji mpya unapata batch mpya, hakuna kitakachorudiwa mara mbili.', 'bad');
+    show('Failed: ' + (e.message || e) + ' — try again; a fresh upload gets a fresh batch, nothing is written twice.', 'bad');
     $('#send').disabled = false;
   });
 };

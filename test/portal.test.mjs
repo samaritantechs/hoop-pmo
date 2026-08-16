@@ -329,7 +329,7 @@ test('salesAudit judges every sale: OK, DRIFT, PENDING, BULK, HAKUNA_WATU', asyn
   assert.equal(s3.reg.name, 'Cyprian Dotto Renatus', 'the flagged sale names its seller from the register');
   assert.equal(s3.reg.kin, 'Mama Cyprian', 'and the next of kin rides along');
   assert.equal(r.rows[0].status, 'HAKUNA_WATU', 'worst first');
-  await assert.rejects(() => _FNS.salesAudit(d, { ...VIEWER, tabs: [] }, {}), /upload au settings/);
+  await assert.rejects(() => _FNS.salesAudit(d, { ...VIEWER, tabs: [] }, {}), /upload or settings/);
 });
 
 test('agentScore scores Watu agents by their customers and sellers by their payouts', async () => {
@@ -359,7 +359,7 @@ test('ADMIN role passes every portal gate even with a blank tabs cell', async ()
   const codes = await _FNS.accessCodes(d, bareAdmin, {});
   assert.equal(codes.ok, true, 'requireSettings yields to the ADMIN role');
   const nonAdmin = { ...bareAdmin, role: 'FINANCE' };
-  await assert.rejects(() => _FNS.salesAudit(d, nonAdmin, {}), /upload au settings/,
+  await assert.rejects(() => _FNS.salesAudit(d, nonAdmin, {}), /upload or settings/,
     'a blank-tabs non-admin is still refused');
 });
 

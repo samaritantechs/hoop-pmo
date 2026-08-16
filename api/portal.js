@@ -65,7 +65,7 @@ function requireOps(user) {
   if (isAdminRole(user)) return;
   const t = user.tabs || [];
   if (!(t.includes('upload') || t.includes('settings'))) {
-    const e = new Error('Ukaguzi wa mauzo unahitaji ruhusa ya upload au settings. / The sales audit needs upload or settings permission.');
+    const e = new Error('The sales audit needs upload or settings permission.');
     e.status = 403; throw e;
   }
 }
