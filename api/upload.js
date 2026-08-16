@@ -105,10 +105,23 @@ export default withApi(async (req) => {
   // Budget per non-watu slice: 1 auth + 1 gate (cached) + 1 chunked upsert.
   const header = Array.isArray(rows) && rows.length ? rows[0] : null;
 
+  // The page lets the uploader CHOOSE the report type; the choice travels as meta.kind
+  // and is enforced here too -- a sales file can never land "as" a deck because the
+  // wrong chip was picked, whatever client sent it.
+  const wantKind = String((meta && meta.kind) || '').trim();
+  const enforceKind = actual => {
+    if (wantKind && wantKind !== actual) {
+      const e = new Error('Umechagua "' + wantKind + '" lakini faili hili ni "' + actual
+        + '". / The chosen report type does not match the file.');
+      e.status = 400; throw e;
+    }
+  };
+
   // Sipho's Agents Register (browser-parsed from his saved HTML) -> hoop_agents.
   // Upsert on phone: rows he already sent update, new people insert -- "update data
   // that doesn't exist" is the on-conflict clause doing its job.
   if (header && isAgentsFile(header)) {
+    enforceKind('agents');
     const ag = importAgents(rows);
     if (!ag.records.length && !ag.dropped.length) {
       const e = new Error('No agent rows could be read.'); e.status = 400; throw e;
@@ -123,6 +136,7 @@ export default withApi(async (req) => {
   // Sipho's Aged Stock -> hoop_aged_stock, stamped with the chosen date (as_of):
   // age is only true on the day the report was read.
   if (header && isAgedStockFile(header)) {
+    enforceKind('agedstock');
     const st = importAgedStock(rows);
     if (!st.records.length && !st.dropped.length) {
       const e = new Error('No stock rows could be read.'); e.status = 400; throw e;
@@ -135,6 +149,7 @@ export default withApi(async (req) => {
   }
 
   if (header && isSalesFile(header)) {
+    enforceKind('sales');
     const sales = importSales(rows);
     if (!sales.records.length && !sales.dropped.length) {
       const e = new Error('No sales rows could be read from the file.'); e.status = 400; throw e;
@@ -155,6 +170,7 @@ export default withApi(async (req) => {
     };
   }
 
+  enforceKind('watu');
   const { records, teams, dropped } = importWatu(rows || []);
   if (!records.length && !dropped.length) {
     const e = new Error('No data rows could be read from the file.'); e.status = 400; throw e;

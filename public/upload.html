@@ -21,6 +21,10 @@ label{display:block;font-size:12px;font-weight:700;color:var(--mut);margin:14px 
 input[type=text],input[type=password],input[type=date]{width:100%;padding:12px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:15px}
 .file-drop{display:block;border:2px dashed var(--b300);background:var(--b50);color:var(--b800);border-radius:12px;
   padding:26px 16px;text-align:center;font-weight:700;cursor:pointer;margin-top:14px}
+.kinds{display:flex;gap:6px;flex-wrap:wrap}
+.kchip{padding:8px 12px;border:1.5px solid var(--line);border-radius:99px;background:#fff;
+  font-size:12.5px;font-weight:700;color:var(--b800);cursor:pointer}
+.kchip.on{background:var(--b700);border-color:var(--b700);color:#fff}
 .file-drop input{display:none}
 .btn{width:100%;margin-top:16px;padding:14px;border:0;border-radius:11px;background:var(--b700);color:#fff;
   font-size:15px;font-weight:700;cursor:pointer}
@@ -51,6 +55,14 @@ details summary i{color:var(--mut);font-size:12px}
     <input type="password" id="code" placeholder="Access code (needs upload permission)" autocomplete="off">
     <label>Tarehe ya orodha / List date</label>
     <input type="date" id="date">
+    <label>Aina ya ripoti / Report type</label>
+    <div class="kinds" id="kinds">
+      <button type="button" class="kchip on" data-k="auto">Itambue yenyewe / Auto</button>
+      <button type="button" class="kchip" data-k="watu">Watu deck</button>
+      <button type="button" class="kchip" data-k="sales">Sales</button>
+      <button type="button" class="kchip" data-k="agents">Agents</button>
+      <button type="button" class="kchip" data-k="agedstock">Aged stock</button>
+    </div>
     <label class="file-drop" id="drop">Bofya kuchagua faili — Excel, CSV, au ukurasa wa HTML uliohifadhiwa (SyscoPos)<input type="file" id="file" accept=".xlsx,.xls,.csv,.html,.htm"></label>
     <div id="picked" style="font-size:13px;color:var(--mut);margin-top:8px"></div>
     <button class="btn" id="send" disabled>Pakia / Upload &mdash; inachukua nafasi ya tarehe hii / replaces this date</button>
@@ -132,26 +144,54 @@ function parseHtmlFile(text){
 /* WHAT is being uploaded is decided from the headers and SAID OUT LOUD before anything
    is sent -- the four kinds behave differently (a deck replaces its date; the rest add
    and update), so the page must never let somebody guess. */
-var KIND = null;
+var KIND = null;       // what will actually be uploaded
+var DETECTED = null;   // what the file's own headers say it is
+var PICK = 'auto';     // what the person chose -- 'auto' trusts the headers
 var KINDS = {
-  watu:   { label: 'Watu daily list — orodha ya ufuatiliaji (deck)',
-            btn: 'Pakia / Upload — inachukua nafasi ya tarehe hii / replaces this date' },
-  sales:  { label: 'Sales report — mauzo ya hoopltd.shop',
-            btn: 'Pakia / Upload — inaongeza na kusasisha mauzo / adds & updates' },
-  agents: { label: 'Agents Register — rejista ya maajenti',
-            btn: 'Pakia / Upload — inaongeza na kusasisha maajenti / adds & updates' },
-  aged:   { label: 'Aged Stock — stoo iliyokaa',
-            btn: 'Pakia / Upload — inaongeza na kusasisha stoo / adds & updates' },
+  watu:      { label: 'Watu daily list — orodha ya ufuatiliaji (deck)',
+               btn: 'Pakia / Upload — inachukua nafasi ya tarehe hii / replaces this date' },
+  sales:     { label: 'Sales report — mauzo ya hoopltd.shop',
+               btn: 'Pakia / Upload — inaongeza na kusasisha mauzo / adds & updates' },
+  agents:    { label: 'Agents Register — rejista ya maajenti',
+               btn: 'Pakia / Upload — inaongeza na kusasisha maajenti / adds & updates' },
+  agedstock: { label: 'Aged Stock — stoo iliyokaa',
+               btn: 'Pakia / Upload — inaongeza na kusasisha stoo / adds & updates' },
 };
 function kindOf(head){
   var H = (head||[]).map(function(x){ return String(x==null?'':x).trim().toUpperCase().replace(/\s+/g,' '); });
   var has = function(){ for (var i=0;i<arguments.length;i++) if (H.indexOf(arguments[i])>=0) return true; return false; };
   if (has('RECEIPT_NUMBER','RECEIPT NUMBER','COMMISSION_AGENT','COMMISSION AGENT')) return 'sales';
   if (has('KIN_NAME','KIN NAME','NEXT_OF_KIN','NEXT OF KIN')) return 'agents';
-  if (has('SERIAL') && has('AGE','RECEIVED','DATE_RECEIVED')) return 'aged';
+  if (has('SERIAL') && has('AGE','RECEIVED','DATE_RECEIVED')) return 'agedstock';
   if (has('IMEI','IMEI NUMBER','IMEI NO')) return 'watu';
   return null;
 }
+/* The chosen type is a GUARD, not a converter: a file that IS a sales report cannot be
+   uploaded "as" a deck by picking the wrong chip -- mismatch refuses, both sides named. */
+function applyKind(extraNote){
+  if (!AOA) return;
+  if (!DETECTED){
+    KIND = null; $('#send').disabled = true;
+    $('#picked').textContent = NAME + ' — faili halijatambuliwa. Vichwa: ' + ((AOA[0]||[]).slice(0,10).join(', '));
+    show('Vichwa havifanani na aina yoyote. Angalia "Mifano ya mafaili" hapa chini.', 'bad');
+    return;
+  }
+  if (PICK !== 'auto' && PICK !== DETECTED){
+    KIND = null; $('#send').disabled = true;
+    $('#picked').innerHTML = '<b>Umechagua: ' + KINDS[PICK].label + '</b><br>Lakini faili hili ni: <b>' + KINDS[DETECTED].label + '</b>';
+    show('Aina uliyochagua hailingani na faili. Chagua aina sahihi au "Itambue yenyewe / Auto". / The chosen type does not match this file.', 'bad');
+    return;
+  }
+  KIND = DETECTED;
+  preview(extraNote || '');
+}
+document.querySelectorAll('#kinds .kchip').forEach(function(b){
+  b.onclick = function(){
+    PICK = b.getAttribute('data-k');
+    document.querySelectorAll('#kinds .kchip').forEach(function(x){ x.classList.toggle('on', x === b); });
+    applyKind('');
+  };
+});
 function preview(extraNote){
   var n = Math.max(0, (AOA||[]).length - 1);
   var head = (AOA && AOA[0]) || [];
@@ -180,14 +220,14 @@ $('#file').addEventListener('change', function(){
       if (isHtml){
         var got = parseHtmlFile(String(rd.result));
         if (!got.kind){
-          AOA = null; KIND = null; $('#send').disabled = true;
+          AOA = null; KIND = null; DETECTED = null; $('#send').disabled = true;
           $('#picked').textContent = NAME + ' — ukurasa haujatambuliwa. Vichwa vilivyoonekana: ' + (got.headers || []).join(', ');
           show('Ukurasa huu wa HTML haufanani na Agents Register wala Aged Stock.', 'bad');
           return;
         }
         AOA = got.aoa;
-        KIND = kindOf(AOA[0]);
-        preview('(data pekee inapakiwa; HTML inatupwa)');
+        DETECTED = kindOf(AOA[0]);
+        applyKind('(data pekee inapakiwa; HTML inatupwa)');
         return;
       }
       var wb = XLSX.read(new Uint8Array(rd.result), { type:'array', cellDates:true });
@@ -201,15 +241,8 @@ $('#file').addEventListener('change', function(){
         }
         return c;
       }); });
-      KIND = kindOf(AOA[0] || []);
-      if (!KIND){
-        var seen = (AOA[0] || []).slice(0, 10).join(', ');
-        AOA = null; $('#send').disabled = true;
-        $('#picked').textContent = NAME + ' — faili halijatambuliwa. Vichwa: ' + seen;
-        show('Vichwa havifanani na aina yoyote: Watu daily, Sales, Agents, wala Aged Stock. Angalia "Mifano ya mafaili" hapa chini.', 'bad');
-        return;
-      }
-      preview('');
+      DETECTED = kindOf(AOA[0] || []);
+      applyKind('');
     } catch(e){ show('Faili halisomeki: ' + e.message, 'bad'); }
   };
   if (isHtml) rd.readAsText(f); else rd.readAsArrayBuffer(f);
@@ -262,7 +295,7 @@ $('#send').onclick = function(){
     return fetch('/api/upload', {
       method:'POST', headers:{ 'Content-Type':'application/json' },
       body: JSON.stringify({ code: code, rows: rows,
-        meta: { uploadDate: $('#date').value },
+        meta: { uploadDate: $('#date').value, kind: KIND },
         part: { id: batch, index: i, total: total } })
     }).then(function(r){ return r.json().then(function(b){ return { s:r.status, b:b }; }); })
       .then(function(x){
