@@ -599,20 +599,34 @@ function drawStaff(m){
     m.innerHTML='<div class="card"><h2>Staff — the whole office ('+money(d.total)+')</h2>'
       +'<div class="mut" style="margin-bottom:8px">From the agents register: agents, team leaders, RSMs. System logins (portal codes, app users) live under Access codes.</div>'
       +'<div class="row"><input class="inp" id="staffQ" placeholder="Search: name, phone, role, branch, IMEI, agent…"></div>'
-      +'<div class="row" style="gap:6px">'+Object.keys(d.byRole||{}).map(function(k){return '<span class="chip">'+esc(k)+' · '+money(d.byRole[k])+'</span>';}).join('')+'</div>'
+      +'<div class="row" style="gap:6px">'+Object.keys(d.byRole||{}).map(function(k){return '<button class="chip" data-rf="'+esc(k)+'" style="border:1px solid transparent;cursor:pointer">'+esc(k)+' · '+money(d.byRole[k])+'</button>';}).join('')+'</div>'
       +'<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Phone</th>'+(canKin?'<th>Next of kin</th>':'')+'<th>Status</th></tr></thead><tbody>'
       +((d.staff||[]).length?(d.staff||[]).map(function(o){
-        return '<tr><td><b>'+esc(o.name)+'</b>'+(o.joined?'<div class="mut" style="font-size:10px">since '+esc(o.joined)+'</div>':'')+'</td>'
+        return '<tr data-role="'+esc(o.role||'')+'"><td><b>'+esc(o.name)+'</b>'+(o.joined?'<div class="mut" style="font-size:10px">since '+esc(o.joined)+'</div>':'')+'</td>'
           +'<td>'+esc(o.role||'—')+'</td><td>'+esc(o.branch||'—')+'</td><td>'+esc(o.phone||'')+'</td>'
           +(canKin?'<td class="mut" style="font-size:11px">'+esc(o.kin||'—')+(o.kinPhone?' · '+esc(o.kinPhone):'')+'</td>':'')
           +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td></tr>';
       }).join(''):'<tr><td colspan="6" class="mut">No staff yet — upload the Agents Register page (saved HTML) at /upload.</td></tr>')
       +'</tbody></table></div></div><div id="staffCust"></div>';
-    wireSearch_('#staffQ','#staffCust',function(q){
+    /* The role chips are FILTERS: click one to see just that rank, click again for all.
+       The search box and the chip compose -- both must match. */
+    var ROLEF='';
+    function applyStaffFilter(){
+      var q=($('#staffQ')?$('#staffQ').value.trim().toUpperCase():'');
       $all('tbody tr', $('#main')).forEach(function(tr){
-        tr.style.display = !q || tr.textContent.toUpperCase().indexOf(q)>=0 ? '' : 'none';
+        var okQ=!q||tr.textContent.toUpperCase().indexOf(q)>=0;
+        var okR=!ROLEF||tr.getAttribute('data-role')===ROLEF;
+        tr.style.display=(okQ&&okR)?'':'none';
       });
+      $all('[data-rf]',m).forEach(function(c){
+        c.style.borderColor=(c.getAttribute('data-rf')===ROLEF)?'var(--b700)':'transparent';
+        c.style.background=(c.getAttribute('data-rf')===ROLEF)?'var(--b100)':'';
+      });
+    }
+    $all('[data-rf]',m).forEach(function(c){
+      c.onclick=function(){ ROLEF=(ROLEF===c.getAttribute('data-rf'))?'':c.getAttribute('data-rf'); applyStaffFilter(); };
     });
+    wireSearch_('#staffQ','#staffCust',function(){ applyStaffFilter(); });
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
 
@@ -671,33 +685,35 @@ function drawCodes(m){
           +'<td class="r"><button class="btn sm ghost" data-tg="'+esc(o.userId)+'" data-on="'+(o.active?1:0)+'">'+(o.active?'Zima':'Washa')+'</button></td></tr>';
       }).join(''):'<tr><td colspan="6" class="mut">No app users yet — the credit team registers from the app with a team code.</td></tr>')
       +'</tbody></table></div></div>'
-      +'<div class="card"><h2>Branches &amp; app sign-in codes</h2>'
-      +'<div class="mut" style="margin-bottom:10px">The branch code is what the credit team signs in with on the phones. Rotating it signs out every phone using it — the right move when somebody leaves. Hoop has no teams model: branches are locations and login machinery only.</div>'
-      +'<div style="overflow-x:auto"><table><thead><tr><th>Branch</th><th>Code</th><th>RSM</th><th>RSM phone</th><th></th></tr></thead><tbody>'
-      +(BOOT.teams||[]).map(function(t){
-        return '<tr><td><b>'+esc(t.team)+'</b></td><td class="code">'+esc(t.code||'—')+'</td>'
-          +'<td>'+esc(t.rsm||'')+'</td><td>'+esc(t.rsmNo||'')+'</td>'
-          +'<td class="r"><button class="btn sm ghost" data-nc="'+esc(t.team)+'">New code</button></td></tr>';
-      }).join('')+'</tbody></table></div>'
-      +'<div class="row" style="margin-top:14px"><input class="inp" id="ntName" placeholder="New branch (location)"><input class="inp" id="ntRsm" placeholder="RSM name"><input class="inp" id="ntNo" placeholder="RSM phone"><button class="btn sm" id="ntAdd">Add</button></div>'
-      +'</div>';
-    $all('[data-nc]',m).forEach(function(b){
-      b.onclick=function(){
-        if(!confirm('New code for '+b.getAttribute('data-nc')+'? Every phone signed in with the old one must sign in again.')) return;
-        srv('newTeamCode',{team:b.getAttribute('data-nc')}).then(function(d2){
-          toast('New code for '+d2.team+': '+d2.code);
-          return srv('boot').then(function(x){BOOT=x;drawCodes(m);});
-        }).catch(function(e){toast(String(e.message||e),true);});
-      };
-    });
-    $('#ntAdd').onclick=function(){
-      var t=$('#ntName').value.trim(); if(!t) return;
-      srv('saveTeam',{team:t,rsm:$('#ntRsm').value,rsmNo:$('#ntNo').value})
-        .then(function(){ return srv('newTeamCode',{team:t.toUpperCase()}); })
-        .then(function(d2){ toast('Branch '+d2.team+' · code '+d2.code);
+      +'</tbody></table></div></div>'
+      +(function(){
+        /* NO teams, NO branches -- one COMPANY sign-in code for the app. Kinondoni and
+           the rest are just location labels on customer rows. Legacy rows may still
+           hold codes; only the HOOP company code is offered here. */
+        var co=(BOOT.teams||[]).filter(function(t){return t.team==='HOOP';})[0];
+        return '<div class="card"><h2>App sign-in code</h2>'
+          +'<div class="mut" style="margin-bottom:10px">ONE code for the whole company — every credit user registers on HOOP Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.</div>'
+          +(co
+            ? '<div class="row"><span class="code" style="font-size:20px">'+esc(co.code||'—')+'</span>'
+              +'<button class="btn sm ghost" id="coRotate">Rotate code</button></div>'
+            : '<button class="btn sm" id="coMake">Create the company code</button>')
+          +'</div>';
+      })();
+    var mk=function(){
+      srv('saveTeam',{team:'HOOP'})
+        .then(function(){ return srv('newTeamCode',{team:'HOOP'}); })
+        .then(function(d2){ toast('Company code: '+d2.code);
           return srv('boot').then(function(x){BOOT=x;drawCodes(m);}); })
         .catch(function(e){toast(String(e.message||e),true);});
     };
+    var rb=$('#coRotate'); if(rb) rb.onclick=function(){
+      if(!confirm('Rotate the company code? The old one stops working for new registrations.')) return;
+      srv('newTeamCode',{team:'HOOP'}).then(function(d2){
+        toast('New company code: '+d2.code);
+        return srv('boot').then(function(x){BOOT=x;drawCodes(m);});
+      }).catch(function(e){toast(String(e.message||e),true);});
+    };
+    var mb=$('#coMake'); if(mb) mb.onclick=mk;
     $all('[data-tg]',m).forEach(function(b){
       b.onclick=function(){
         srv('officerActive',{userId:b.getAttribute('data-tg'),active:b.getAttribute('data-on')!=='1'})

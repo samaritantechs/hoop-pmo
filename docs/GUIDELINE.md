@@ -28,7 +28,7 @@ yenyewe; simu zinarekodiwa kiotomatiki (Android).
 
 ## Kila mtu na kazi yake / Who does what
 
-- **Credit team (mf. Ainea):** app tu. Msimbo wa TIMU mara moja. Tabs nne + Ripoti kwa
+- **Credit team (mf. Ainea):** app tu. Msimbo MMOJA wa kampuni mara moja. Tabs nne + Ripoti kwa
   kiongozi. **Orodha ni ya kampuni nzima, inagawanywa yenyewe** kwa zamu (round-robin)
   kati ya credit users wote — kila mtu anaona FUNGU LAKE tu. Ukisajili credit user
   mpya, mgawanyo unajipanga upya wenyewe. Kipimo cha kazi (performance bar): % ya
@@ -48,15 +48,16 @@ yenyewe; simu zinarekodiwa kiotomatiki (Android).
 
 - **Portal:** msimbo BINAFSI (access code). Role inaamua tabs; AUDITOR = kuangalia tu.
   Unaweza kuhariri hata msimbo wako (Access codes → Hariri).
-- **App:** msimbo wa TIMU — mmoja kwa timu. Kubadilisha kunatoa timu nzima (mtu
-  akiondoka). Kuzima mtu mmoja: Staff → Zima.
+- **App:** msimbo MMOJA wa kampuni (Access codes → App sign-in code). Kubadilisha
+  kunazuia usajili MPYA kwa msimbo wa zamani; kumtoa mtu aliyepo: App users → Zima.
 
 ## Sheria za mfumo / The rules
 
 - **Dirisha la siku 45:** ndani yake mteja ni jukumu la Hoop. Locked 7+ aliyepita
   siku 45 si jukumu letu — tab ya 45+ tu.
-- **Timu = TAWI la kampuni (Kinondoni ni location),** si fungu la wateja. Msimbo wa
-  timu ni wa kuingia tu; orodha ya kupiga ni ya kampuni nzima, inagawanywa kwa zamu.
+- **Hakuna timu wala matawi kwenye mfumo.** Kinondoni na mengineyo ni LOCATION ya
+  kampuni tu kwenye mstari wa mteja. Orodha ya kupiga ni ya kampuni nzima,
+  inagawanywa kwa zamu kwa credit users wote.
 - **Ref ya malipo Watu = namba ya simu ya mteja.** Kamwe si IMEI.
 - **Upload inachukua nafasi ya tarehe ile ile; maoni hayafutwi.**
 - **Kila mtu anaandika maoni kwa mteja yeyote** (Portal → Wateja; view-only hawaandiki).
