@@ -187,7 +187,8 @@ function enter(){
   $('#scrIn').classList.add('hide'); $('#scrApp').classList.remove('hide');
   $('#whoName').textContent=BOOT.name||'—';
   $('#whoRole').textContent=(BOOT.role||'')+(BOOT.readOnly?' · view-only':'');
-  var hasSettings=(BOOT.tabs||[]).indexOf('settings')>=0;
+  var isAdmin=String(BOOT.role||'').toUpperCase()==='ADMIN';
+  var hasSettings=isAdmin||(BOOT.tabs||[]).indexOf('settings')>=0;
   var hasOps=hasSettings||(BOOT.tabs||[]).indexOf('upload')>=0;
   $('#tabCodes').classList.toggle('hide',!hasSettings);
   $('#tabSettings').classList.toggle('hide',!hasSettings);

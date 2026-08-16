@@ -350,3 +350,15 @@ test('agentScore scores Watu agents by their customers and sellers by their payo
   assert.equal(elia.sales, 3);
   assert.equal(elia.reg, null, 'not in the register yet -- shown as such, never invented');
 });
+
+test('ADMIN role passes every portal gate even with a blank tabs cell', async () => {
+  const bareAdmin = { code: 'A0', name: 'Boss', role: 'ADMIN', teams: null, tabs: [], readOnly: false };
+  const d = fakeDb({ hoop_sales: [], watu_loans: [], hoop_agents: [], access_codes: [], roles: [], settings: [] });
+  const audit = await _FNS.salesAudit(d, bareAdmin, {});
+  assert.equal(audit.ok, true, 'requireOps yields to the ADMIN role');
+  const codes = await _FNS.accessCodes(d, bareAdmin, {});
+  assert.equal(codes.ok, true, 'requireSettings yields to the ADMIN role');
+  const nonAdmin = { ...bareAdmin, role: 'FINANCE' };
+  await assert.rejects(() => _FNS.salesAudit(d, nonAdmin, {}), /upload au settings/,
+    'a blank-tabs non-admin is still refused');
+});

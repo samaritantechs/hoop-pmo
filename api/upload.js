@@ -221,6 +221,7 @@ export default withApi(async (req) => {
   }
 
   return {
+    kind: 'watu',
     inserted: records.length,
     date: snapshotDate,
     batch,

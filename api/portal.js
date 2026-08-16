@@ -47,7 +47,12 @@ function requireWrite(user) {
     const e = new Error('Msimbo huu ni wa kuangalia tu. / This is a view-only code.'); e.status = 403; throw e;
   }
 }
+/* ADMIN sees all -- the same rule auth.js's resolveTabs and can() apply, repeated here so
+   the portal's own gates can never drift from the enforcement (the owner's word, and the
+   bug Hope once had when UI and gate read different rules). */
+const isAdminRole = user => String((user && user.role) || '').trim().toUpperCase() === 'ADMIN';
 function requireSettings(user) {
+  if (isAdminRole(user)) return;
   if (!(user.tabs || []).includes('settings')) {
     const e = new Error('Settings permission is required.'); e.status = 403; throw e;
   }
@@ -57,6 +62,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
 /** The sales audit names people and their kin -- anyone trusted with uploads or
     settings sees it; a plain viewer role does not. */
 function requireOps(user) {
+  if (isAdminRole(user)) return;
   const t = user.tabs || [];
   if (!(t.includes('upload') || t.includes('settings'))) {
     const e = new Error('Ukaguzi wa mauzo unahitaji ruhusa ya upload au settings. / The sales audit needs upload or settings permission.');
