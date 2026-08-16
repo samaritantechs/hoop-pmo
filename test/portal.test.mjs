@@ -331,7 +331,7 @@ test('salesAudit judges every sale: OK, DRIFT, PENDING, BULK, HAKUNA_WATU', asyn
   assert.equal(r.rows[0].status, 'HAKUNA_WATU', 'worst first');
   await assert.rejects(
     () => _FNS.salesAudit(d, { ...VIEWER, readOnly: false, role: 'FINANCE', tabs: [] }, {}),
-    /upload or settings/, 'a blank non-viewer is refused; the AUDITOR itself sees every pane');
+    /no access to the fraud pane/, 'a blank non-viewer is refused; the AUDITOR itself sees every pane');
 });
 
 test('agentScore scores Watu agents by their customers and sellers by their payouts', async () => {
@@ -361,7 +361,7 @@ test('ADMIN role passes every portal gate even with a blank tabs cell', async ()
   const codes = await _FNS.accessCodes(d, bareAdmin, {});
   assert.equal(codes.ok, true, 'requireSettings yields to the ADMIN role');
   const nonAdmin = { ...bareAdmin, role: 'FINANCE' };
-  await assert.rejects(() => _FNS.salesAudit(d, nonAdmin, {}), /upload or settings/,
+  await assert.rejects(() => _FNS.salesAudit(d, nonAdmin, {}), /no access to the fraud pane/,
     'a blank-tabs non-admin is still refused');
 });
 
@@ -420,7 +420,10 @@ test('per-role navs: granted panes open, ungranted refuse, legacy roles keep the
     tabs: ['upload', 'settings'], readOnly: false };
   assert.equal((await _FNS.customers(d, legacy, {})).ok, true, 'legacy tabs keep the old defaults');
   assert.equal((await _FNS.recovery(d, legacy, {})).ok, true);
-  assert.equal((await _FNS.salesAudit(d, legacy, {})).ok, true, 'upload/settings still grant sales');
+  assert.equal((await _FNS.salesAudit(d, legacy, {})).ok, true, 'upload/settings still grant the fraud pane');
+  const salesAlias = { ...legacy, tabs: ['dashboard', 'customers', 'sales'] };
+  assert.equal((await _FNS.salesAudit(d, salesAlias, {})).ok, true, "the stored 'sales' grant opens fraud");
+  assert.equal((await _FNS.stockView(d, salesAlias, {})).ok, true, "...and scorecards and stock");
   assert.equal((await _FNS.customers(d, VIEWER, {})).ok, true, 'AUDITOR sees every pane');
   const out = await _FNS.accessCodes(d, ADMIN, {});
   assert.ok(Array.isArray(out.navTabs) && out.navTabs.includes('customers'),

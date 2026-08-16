@@ -114,7 +114,9 @@ td.r,th.r{text-align:right}
       <button data-t="cust">Wateja / Customers</button>
       <button data-t="ripoti">Call reports</button>
       <button data-t="recovery">Recovery</button>
-      <button data-t="mauzo" id="tabMauzo">Sales</button>
+      <button data-t="fraud">Fraud audit</button>
+      <button data-t="score">Agent scorecards</button>
+      <button data-t="stock">Stock</button>
       <button data-t="staff">Staff</button>
       <button data-t="codes" id="tabCodes">Access codes</button>
       <button data-t="settings" id="tabSettings">Settings</button>
@@ -237,7 +239,7 @@ function enter(){
      every button -- the same rule the endpoints enforce. A pane added later shows up
      here the moment the server lists it. */
   var NAVKEY={dash:'dashboard',cust:'customers',ripoti:'reports',recovery:'recovery',
-    mauzo:'sales',staff:'staff',codes:'codes',settings:'settings'};
+    fraud:'fraud',score:'scorecards',stock:'stock',staff:'staff',codes:'codes',settings:'settings'};
   var NAVS=BOOT.navs||[];
   $all('#tabs button').forEach(function(b){
     var k=NAVKEY[b.getAttribute('data-t')];
@@ -272,7 +274,9 @@ function draw(){
   var m=$('#main');
   if(TAB==='dash') return drawDash(m);
   if(TAB==='cust') return drawCust(m);
-  if(TAB==='mauzo') return drawMauzo(m);
+  if(TAB==='fraud') return drawAudit(m);
+  if(TAB==='score') return drawAgents(m);
+  if(TAB==='stock') return drawStock(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
   if(TAB==='staff') return drawStaff(m);
@@ -501,36 +505,25 @@ function openCust(c){
   };
 }
 
-/* ---------- mauzo: fraud audit + agent scorecards ----------
-   The owner's loop: general duty's book vs Watu's records finds the sale nobody
-   financed; Sipho's register names who answers for it; the daily files score how each
-   agent's customers behave. Two pills, one nav. */
-var MZ={list:'audit',from:isoToday(-30),to:isoToday(0)};
-function drawMauzo(m){
-  m.innerHTML='<div class="card"><h2>Sales</h2><div class="mut">Loading…</div></div>';
-  if(MZ.list==='audit') drawAudit(m);
-  else if(MZ.list==='stock') drawStock(m);
-  else drawAgents(m);
-}
-function mzPills(){
+/* ---------- fraud audit / agent scorecards / stock: three first-class navs ----------
+   The owner's loop, one pane each: general duty's book vs Watu's records finds the sale
+   nobody financed; Sipho's register names who answers for it; the daily files score how
+   each agent's customers behave; the warehouse shows who holds the aged phones. */
+var MZ={from:isoToday(-30),to:isoToday(0)};
+function mzDates(redraw){
   return '<div class="row">'
-    +'<button class="btn sm'+(MZ.list==='audit'?'':' ghost')+'" data-mz="audit">Fraud audit</button>'
-    +'<button class="btn sm'+(MZ.list==='agents'?'':' ghost')+'" data-mz="agents">Agent scorecards</button>'
-    +'<button class="btn sm'+(MZ.list==='stock'?'':' ghost')+'" data-mz="stock">Stock</button>'
-    +(MZ.list==='stock'?'':'<input class="inp" type="date" id="mzFrom" value="'+MZ.from+'" style="flex:0 1 150px">'
-      +'<input class="inp" type="date" id="mzTo" value="'+MZ.to+'" style="flex:0 1 150px">'
-      +'<button class="btn sm ghost" id="mzGo">Show</button>')
-    +'</div>';
+    +'<input class="inp" type="date" id="mzFrom" value="'+MZ.from+'" style="flex:0 1 150px">'
+    +'<input class="inp" type="date" id="mzTo" value="'+MZ.to+'" style="flex:0 1 150px">'
+    +'<button class="btn sm ghost" id="mzGo">Show</button></div>';
 }
-function mzWire(m){
-  $all('[data-mz]',m).forEach(function(b){ b.onclick=function(){ MZ.list=b.getAttribute('data-mz'); drawMauzo(m); }; });
-  var go=$('#mzGo'); if(go) go.onclick=function(){ MZ.from=$('#mzFrom').value||MZ.from; MZ.to=$('#mzTo').value||MZ.to; drawMauzo(m); };
+function mzWire(m,redraw){
+  var go=$('#mzGo'); if(go) go.onclick=function(){ MZ.from=$('#mzFrom').value||MZ.from; MZ.to=$('#mzTo').value||MZ.to; redraw(m); };
 }
 function drawStock(m){
+  m.innerHTML='<div class="card"><h2>Stock</h2><div class="mut">Loading…</div></div>';
   srv('stockView').then(function(d){
     var filt='<div class="row"><input class="inp" id="stQ" placeholder="Filter: agent, IMEI, item…"></div>';
     m.innerHTML='<div class="card"><h2>Aged stock — by RSMs and agents'+(d.asOf?' <span class="mut" style="font-weight:400;font-size:12px">(report of '+esc(d.asOf)+')</span>':'')+'</h2>'
-      +mzPills()
       +(d.total?
         '<div class="tiles">'
         +'<div class="tile"><div class="l">Aged phones</div><div class="v">'+money(d.total)+'</div><div class="s">past the age limit</div></div>'
@@ -554,7 +547,6 @@ function drawStock(m){
         }).join('')+'</tbody></table></div>'
       :'<div class="mut">No stock uploaded yet. Sipho: open Aged Stock in SyscoPos → click the <b>CSV</b> button → upload that file at <a href="/upload">/upload</a> (or save the page AFTER the table is visible and upload the HTML).</div>')
       +'</div>';
-    mzWire(m);
     var q=$('#stQ');
     if(q) q.addEventListener('input',function(){
       var Q=this.value.trim().toUpperCase();
@@ -570,10 +562,11 @@ function mzStatusChip(s){
   return '<span class="chip bad">⚠ NOT IN WATU</span>';
 }
 function drawAudit(m){
+  m.innerHTML='<div class="card"><h2>Fraud audit</h2><div class="mut">Loading…</div></div>';
   srv('salesAudit',{from:MZ.from,to:MZ.to}).then(function(d){
     var c=d.counts||{};
     m.innerHTML='<div class="card"><h2>Fraud audit — '+esc(d.from)+' → '+esc(d.to)+'</h2>'
-      +mzPills()
+      +mzDates()
       +'<div class="tiles">'
       +'<div class="tile"><div class="l">Sales</div><div class="v">'+money(c.total)+'</div></div>'
       +'<div class="tile"><div class="l">In Watu</div><div class="v" style="color:var(--ok)">'+money(c.ok)+'</div></div>'
@@ -596,13 +589,14 @@ function drawAudit(m){
       }).join('')
       +((d.rows||[]).length?'':'<tr><td colspan="7" class="mut">No sales in this period — upload a sales report at /upload (the file is recognized automatically).</td></tr>')
       +'</tbody></table></div></div>';
-    mzWire(m);
+    mzWire(m,drawAudit);
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
 function drawAgents(m){
+  m.innerHTML='<div class="card"><h2>Agent scorecards</h2><div class="mut">Loading…</div></div>';
   srv('agentScore',{from:MZ.from,to:MZ.to}).then(function(d){
     m.innerHTML='<div class="card"><h2>Agent scorecards — how their customers behave (Watu)</h2>'
-      +mzPills()
+      +mzDates()
       +'<div class="mut" style="margin-bottom:8px">Per Watu agent: how their customers behave on the follow-up lists. Top = chase first (most locked 7+).</div>'
       +'<div style="overflow-x:auto"><table><thead><tr><th>Agent (Watu)</th><th class="r">Customers</th><th class="r">% paid</th><th class="r">Locked 7+</th><th class="r">Avg OFF</th><th class="r">Past 45</th></tr></thead><tbody>'
       +(d.watuAgents||[]).map(function(a){
@@ -627,7 +621,7 @@ function drawAgents(m){
       }).join('')
       +((d.sellers||[]).length?'':'<tr><td colspan="4" class="mut">No sales report yet — upload one at /upload.</td></tr>')
       +'</tbody></table></div></div>';
-    mzWire(m);
+    mzWire(m,drawAgents);
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
 
@@ -705,7 +699,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',recovery:'Recovery',
-            sales:'Sales',teams:'Teams',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',staff:'Staff',codes:'Access codes',settings:'Settings',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
             +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';

@@ -70,13 +70,16 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    ADMIN holds everything; a read-only code (AUDITOR) SEES everything and changes
    nothing; a role whose tabs never chose any nav keeps the old defaults so existing
    codes do not go dark the day this shipped. */
-/* No 'teams' pane: Hoop has no teams model -- branches and their app sign-in codes are
-   login machinery and live under Access codes (the owner's call). */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'sales', 'staff', 'codes', 'settings'];
+/* No 'teams' pane: Hoop has no teams model. Fraud audit, Agent scorecards and Stock are
+   THREE first-class panes (the owner's call), each grantable on its own; the retired
+   'sales' key remains a stored alias that grants all three, so roles saved under it
+   keep every door they had. */
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 function navsFor(user) {
   if (isAdminRole(user) || isReadOnly(user)) return NAV_TABS.slice();
   const t = (user.tabs || []).map(x => String(x).toLowerCase());
+  if (t.includes('sales')) t.push('fraud', 'scorecards', 'stock');
   const chosen = NAV_TABS.filter(k => t.includes(k));
   // 'dashboard' and 'settings' were the OLD vocabulary too -- a role carrying only
   // those was saved before panes were choosable and must keep the old defaults, or
@@ -84,7 +87,7 @@ function navsFor(user) {
   if (chosen.some(k => k !== 'dashboard' && k !== 'settings')) return chosen;
   const base = LEGACY_NAVS.slice();
   if (t.includes('settings')) base.push('codes', 'settings');
-  if (t.includes('settings') || t.includes('upload')) base.push('sales');
+  if (t.includes('settings') || t.includes('upload')) base.push('fraud', 'scorecards', 'stock');
   return base;
 }
 function requireNav(user, k) {
@@ -94,14 +97,7 @@ function requireNav(user, k) {
   }
 }
 
-/** The sales audit names people and their kin -- it opens only to roles holding the
-    sales pane (upload/settings grant it to legacy roles; ADMIN and AUDITOR see all). */
-function requireOps(user) {
-  if (isAdminRole(user)) return;
-  if (navsFor(user).includes('sales')) return;
-  const e = new Error('The sales audit needs upload or settings permission.');
-  e.status = 403; throw e;
-}
+
 const dayShift = (key, days) =>
   new Date(Date.parse(key + 'T00:00:00Z') + days * 86400000).toISOString().slice(0, 10);
 
@@ -308,7 +304,7 @@ const FNS = {
       Budget: 3 parallel bounded reads -- sales by date range, the register
       (imei+agent+agent_id only, the whole portfolio, paged), agents (~1k rows). */
   async salesAudit(db, user, args) {
-    requireOps(user);
+    requireNav(user, 'fraud');
     const a = args || {};
     const today = todayKey();
     const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? a.to : today;
@@ -360,7 +356,7 @@ const FNS = {
       commission earner, with the hoop_agents identity attached.
       Budget: 3 parallel bounded reads -- register (scoped), sales by range, agents. */
   async agentScore(db, user, args) {
-    requireOps(user);
+    requireNav(user, 'scorecards');
     const a = args || {};
     const today = todayKey();
     const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? a.to : today;
@@ -422,7 +418,7 @@ const FNS = {
       reports (past its age limit), stamped as_of the day the report was read.
       Budget: 2 parallel bounded reads -- the aged table and the agents register. */
   async stockView(db, user) {
-    requireOps(user);
+    requireNav(user, 'stock');
     const [rows, agents] = await Promise.all([
       fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, item, received, age_days, as_of')),
       fetchAll(() => db.from('hoop_agents').select('name, role, branch')),
@@ -615,7 +611,7 @@ const FNS = {
     if (!role) throw new Error('Role name is required.');
     // Every nav pane is a grantable tab, plus the two ACTIONS (upload, audit). A pane
     // added to NAV_TABS later is automatically grantable here -- one list, everywhere.
-    const ALLOWED = new Set([...NAV_TABS, 'upload', 'audit']);
+    const ALLOWED = new Set([...NAV_TABS, 'upload', 'audit', 'sales']);   // 'sales' = stored alias for the three
     const tabs = (Array.isArray(args && args.tabs) ? args.tabs : [])
       .map(t => String(t).toLowerCase()).filter(t => ALLOWED.has(t));
     const { error } = await db.from('roles').upsert({ role, tabs }, { onConflict: 'role' });
