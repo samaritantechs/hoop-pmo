@@ -168,7 +168,9 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
 .rangebar select{flex:1.2;background-image:linear-gradient(45deg,transparent 50%,var(--soft) 50%),linear-gradient(135deg,var(--soft) 50%,transparent 50%);background-position:calc(100% - 14px) 52%,calc(100% - 9px) 52%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:24px}
 .otable{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .otable th,.otable td{padding:9px 10px;font-size:12.5px;text-align:left;border-bottom:1px solid var(--line)}
-.otable th{background:var(--b50);color:var(--b900);font-size:10.5px;text-transform:uppercase}
+.otable th{background:var(--b50);color:var(--b900);font-size:10.5px;text-transform:uppercase;cursor:pointer;user-select:none}
+.otable th[data-sd="a"]::after{content:" \2191"}
+.otable th[data-sd="d"]::after{content:" \2193"}
 .otable td.r,.otable th.r{text-align:right}
 .otable tr:last-child td{border-bottom:0}
 
@@ -373,6 +375,43 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
 </div>
 
 <script>
+/* EVERY TABLE SORTS ITSELF: click a header to sort by that column, click again to flip.
+   Delegated once on the document, so every table -- including ones added later -- gets
+   it for free. Numbers sort as numbers (commas, %%, leading figures like "3 (25%%)"),
+   ties and text fall back to text; ISO dates are zero-padded so text order IS date
+   order. Row click-handlers survive: sorting moves the same nodes. */
+document.addEventListener('click', function(e){
+  var th = e.target.closest ? e.target.closest('th') : null;
+  if (!th) return;
+  var table = th.closest('table'); if (!table) return;
+  var tbody = table.querySelector('tbody'); if (!tbody) return;
+  var ths = [].slice.call(th.parentNode.children);
+  var idx = ths.indexOf(th); if (idx < 0) return;
+  var rows = [].slice.call(tbody.children).filter(function(r){ return r.children.length > 1; });
+  if (rows.length < 2) return;
+  var dir = th.getAttribute('data-sd') === 'a' ? -1 : 1;
+  ths.forEach(function(x){ x.removeAttribute('data-sd'); });
+  th.setAttribute('data-sd', dir === 1 ? 'a' : 'd');
+  function txt(tr){ var td = tr.children[idx]; return td ? td.textContent.trim() : ''; }
+  function numv(s){
+    var t = s.replace(/[,%%\s]/g, '');
+    var n = Number(t);
+    if (isFinite(n) && t !== '') return n;
+    if (/^[0-9]/.test(t)) { n = parseFloat(t); if (isFinite(n)) return n; }
+    return null;
+  }
+  rows.sort(function(a, b){
+    var x = txt(a), y = txt(b);
+    var nx = numv(x), ny = numv(y);
+    if (nx !== null || ny !== null){
+      var cx = nx === null ? -Infinity : nx, cy = ny === null ? -Infinity : ny;
+      if (cx !== cy) return (cx - cy) * dir;
+    }
+    return (x < y ? -1 : x > y ? 1 : 0) * dir;
+  });
+  rows.forEach(function(r){ tbody.appendChild(r); });
+});
+
 /* ================= tiny helpers (self-contained -- call.html is its own HtmlService file) ================= */
 function $(s,r){ return (r||document).querySelector(s); }
 function $all(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); }

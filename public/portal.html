@@ -64,7 +64,9 @@ body.nav-closed aside.side{display:none}
 .card h2{font-size:15px;margin:0 0 10px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:8px 9px;text-align:left;border-bottom:1px solid var(--line)}
-th{background:var(--b50);color:var(--b900);font-size:10.5px;text-transform:uppercase}
+th{background:var(--b50);color:var(--b900);font-size:10.5px;text-transform:uppercase;cursor:pointer;user-select:none}
+th[data-sd="a"]::after{content:" \2191"}
+th[data-sd="d"]::after{content:" \2193"}
 td.r,th.r{text-align:right}
 .chip{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;background:var(--b50);color:var(--b600)}
 .chip.ok{background:var(--okbg);color:var(--ok)}
@@ -138,6 +140,44 @@ function toast(m,bad){ var t=$('#toast'); t.textContent=m; t.className='toast'+(
 function isoToday(off){ var d=new Date(); d.setDate(d.getDate()+(off||0)); var p=function(n){return('0'+n).slice(-2);}; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 
 var CODE='', BOOT=null, TAB='dash';
+
+/* EVERY TABLE SORTS ITSELF: click a header to sort by that column, click again to flip.
+   Delegated once on the document, so every table -- including ones added later -- gets
+   it for free. Numbers sort as numbers (commas, %%, leading figures like "3 (25%%)"),
+   ties and text fall back to text; ISO dates are zero-padded so text order IS date
+   order. Row click-handlers survive: sorting moves the same nodes. */
+document.addEventListener('click', function(e){
+  var th = e.target.closest ? e.target.closest('th') : null;
+  if (!th) return;
+  var table = th.closest('table'); if (!table) return;
+  var tbody = table.querySelector('tbody'); if (!tbody) return;
+  var ths = [].slice.call(th.parentNode.children);
+  var idx = ths.indexOf(th); if (idx < 0) return;
+  var rows = [].slice.call(tbody.children).filter(function(r){ return r.children.length > 1; });
+  if (rows.length < 2) return;
+  var dir = th.getAttribute('data-sd') === 'a' ? -1 : 1;
+  ths.forEach(function(x){ x.removeAttribute('data-sd'); });
+  th.setAttribute('data-sd', dir === 1 ? 'a' : 'd');
+  function txt(tr){ var td = tr.children[idx]; return td ? td.textContent.trim() : ''; }
+  function numv(s){
+    var t = s.replace(/[,%%\s]/g, '');
+    var n = Number(t);
+    if (isFinite(n) && t !== '') return n;
+    if (/^[0-9]/.test(t)) { n = parseFloat(t); if (isFinite(n)) return n; }
+    return null;
+  }
+  rows.sort(function(a, b){
+    var x = txt(a), y = txt(b);
+    var nx = numv(x), ny = numv(y);
+    if (nx !== null || ny !== null){
+      var cx = nx === null ? -Infinity : nx, cy = ny === null ? -Infinity : ny;
+      if (cx !== cy) return (cx - cy) * dir;
+    }
+    return (x < y ? -1 : x > y ? 1 : 0) * dir;
+  });
+  rows.forEach(function(r){ tbody.appendChild(r); });
+});
+
 /* One search box, two jobs: filter the table rows on the page instantly, and (from three
    characters) ask the register for customers by name / phone / IMEI / agent. */
 function custRow_(c){
