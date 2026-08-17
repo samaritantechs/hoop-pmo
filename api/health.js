@@ -51,6 +51,34 @@ export default async function handler(req, res) {
       };
     } catch (e) { card = { error: String(e && e.message).slice(0, 200) }; }
   }
+  /* HOPE'S POSTGRES RULE, ADAPTED: when a phone and the database disagree, do not guess
+     from the screen -- run the phone's OWN pipeline server-side and count what it
+     produces. This samples one active app account and calls the real api_callList, then
+     reports field PRESENCE only (counts, a role, dates -- never a name or a number).
+     If these counts are full and a handset still shows dashes, the fault is on the
+     handset; if they are zero, the fault is in the data or the code, named right here. */
+  let deep = null;
+  if (db && db.reachable) {
+    try {
+      const { supabase, fetchAll } = await import('./_lib/supabase.js');
+      const core = await import('./_lib/call-core.js');
+      const users = await fetchAll(() => supabase.from('call_users').select('device_id, role, active'));
+      const pick = users.find(u => u.active !== false && u.device_id);
+      if (!pick) deep = { error: 'no active app account to sample' };
+      else {
+        const r = await core.callApi(supabase, 'api_callList', [pick.device_id], Date.now());
+        deep = (r && r.ok) ? {
+          sampledRole: pick.role || '(blank)',
+          rows: r.rows.length, asOf: r.asOf, stale: !!r.stale, note: r.note || null,
+          withHeldBy: r.rows.filter(x => x.heldBy).length,
+          withAgentName: r.rows.filter(x => x.agentName).length,
+          withAgentPhone: r.rows.filter(x => x.agentPhone).length,
+          withGuarantor: r.rows.filter(x => x.gName).length,
+          withBranch: r.rows.filter(x => x.team).length,
+        } : { error: (r && r.error) || 'list did not answer' };
+      }
+    } catch (e) { deep = { error: String(e && e.message).slice(0, 200) }; }
+  }
   res.status(200).json({
     ok: true,
     service: 'hoop-pmo',
@@ -59,6 +87,6 @@ export default async function handler(req, res) {
       SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
       SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
     },
-    urlValid, host, keyPastedAsUrl: looksLikeKey, db, card,
+    urlValid, host, keyPastedAsUrl: looksLikeKey, db, card, deep,
   });
 }
