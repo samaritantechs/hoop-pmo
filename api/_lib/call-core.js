@@ -222,8 +222,19 @@ async function register(db, [dev, name, team, accessCode, phone, passcode, locat
        branches, so the team slot carries it (Kinondoni is a location, not a fence). */
     if (K(match.team) === 'AGENT') {
       role = 'AGENT';
-      if (!loc) throw new Error('Andika eneo lako. / Enter your location — agents sign in with name, phone number and location.');
-      team = loc;
+      /* Sipho's register already knows most agents by phone: take the canonical NAME
+         and the BRANCH from it -- "the agents location are the branch column" (owner).
+         The typed location only covers an agent the register has not caught up with
+         yet. Budget: the shared cached agent index -- no extra round trip warm. */
+      const agents = await agentIndex(db, nowMs);
+      const known = agents.byPhone[phoneD] || null;
+      if (known) {
+        name = known.name || name;
+        team = known.branch || loc || 'AGENT';
+      } else {
+        if (!loc) throw new Error('Andika eneo lako. / Enter your location — agents sign in with name, phone number and location.');
+        team = loc;
+      }
     }
     const { data: acct } = await db.from('call_users').select('active').eq('phone', phoneD).maybeSingle();
     if (acct && acct.active === false) throw new Error('Akaunti yako imezimwa. / Your account has been switched off. Ask your admin.');
@@ -326,20 +337,23 @@ async function agentIndex(db, nowMs) {
   const version = (await settingGet(db, 'DATA_VERSION')) || '';
   const hit = agentIdxCache.get(db);
   if (hit && hit.version === version && (nowMs - hit.at) < 15 * 60000) return hit;
-  const byImei = {}, phoneByName = {}, nameByPhone = {};
+  const byImei = {}, phoneByName = {}, byPhone = {};
   try {
     const [reg, agents] = await Promise.all([
       fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id')),
-      fetchAll(() => db.from('hoop_agents').select('name, phone')),
+      fetchAll(() => db.from('hoop_agents').select('name, phone, branch')),
     ]);
     for (const r of reg) if (r.agent) byImei[String(r.imei)] = { name: r.agent, id: r.agent_id || '' };
     for (const a of agents) if (a.name) {
       phoneByName[K(a.name)] = a.phone || '';
-      // The reverse map is the AGENT sign-in fence: their registered phone -> their name.
-      const p = pnorm(a.phone); if (p && !nameByPhone[p]) nameByPhone[p] = K(a.name);
+      // The reverse map is the AGENT sign-in fence: their registered phone -> who they
+      // are. branch rides along because it IS the agent's location (the owner: "the
+      // agents location are the branch column" of Sipho's report).
+      const p = pnorm(a.phone);
+      if (p && !byPhone[p]) byPhone[p] = { name: a.name, key: K(a.name), branch: a.branch || '' };
     }
   } catch (e) { /* decoration for the card; the agent fence fails CLOSED on empty maps */ }
-  const value = { version, at: nowMs, byImei, phoneByName, nameByPhone };
+  const value = { version, at: nowMs, byImei, phoneByName, byPhone };
   agentIdxCache.set(db, value);
   return value;
 }
@@ -372,7 +386,7 @@ async function list(db, [dev], nowMs) {
   if (isAgent(cu)) {
     // The agent fence: their registered phone names them on Sipho's register; the Watu
     // register names them on each IMEI. No match -> EMPTY book (fails closed) + why.
-    const myKey = agents.nameByPhone[pnorm(cu.phone)] || '';
+    const me = agents.byPhone[pnorm(cu.phone)] || null, myKey = me ? me.key : '';
     mine = myKey ? fu.filter(r => { const ag = agents.byImei[String(r.imei)]; return ag && K(ag.name) === myKey; }) : [];
     if (!myKey) note = 'Your phone number is not on the agents register yet — ask the office to add it, then reopen the app.';
     else if (!mine.length) note = 'Safi! Hakuna mteja wako kwenye orodha ya leo. / None of the customers you sold are on today’s locked list.';
@@ -722,7 +736,7 @@ async function summaryForAgent(db, cu, nowMs) {
     histFor(db, nowMs),
     agentIndex(db, nowMs),
   ]);
-  const myKey = agents.nameByPhone[pnorm(cu.phone)] || '';
+  const me = agents.byPhone[pnorm(cu.phone)] || null, myKey = me ? me.key : '';
   const mineFn = r => { const ag = agents.byImei[String(r.imei)]; return !!(myKey && ag && K(ag.name) === myKey); };
   const mine = deck.filter(mineFn);
   const inWinOf = r => { const l = lifeDayOf(r.disbursed_date, today); return l != null && l <= 45; };

@@ -279,25 +279,34 @@ test('the card carries WHO SOLD the phone: agent name, id and own number on the 
   assert.equal(b.gName, '', 'guarantor slots stay honest until a Watu report carries them (PENDING 1)');
 });
 
-test('the AGENT code registers role AGENT and demands a location', async () => {
+test('the AGENT code registers role AGENT; the register supplies branch + canonical name', async () => {
   const d = fakeDb({
     settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }],
     teams: [{ team: 'HOOP', team_code: 'AB2C3D' }, { team: 'AGENT', team_code: 'QQ7R8S' }],
+    hoop_agents: [{ name: 'Anord Sawe', phone: '0658918324', branch: 'KINONDONI' }],
     call_users: [],
   });
-  await assert.rejects(() => callApi(d, 'api_callRegister',
-    ['dev-9', 'Anord Sawe', '', '', '0658918324', 'QQ7R8S'], NOW), /location/i);
+  // A phone the register KNOWS: branch becomes the location, the register's spelling
+  // of the name wins, and no typed location is demanded.
   const r = await callApi(d, 'api_callRegister',
-    ['dev-9', 'Anord Sawe', '', '', '0658918324', 'QQ7R8S', 'Mbagala'], NOW);
+    ['dev-9', 'anold', '', '', '0658918324', 'QQ7R8S'], NOW);
   assert.equal(r.ok, true);
   const cu = d._dump('call_users')[0];
   assert.equal(cu.role, 'AGENT');
-  assert.equal(cu.team, 'Mbagala', 'no branches -- the team slot carries the agent\'s location');
+  assert.equal(cu.name, 'Anord Sawe', 'the register\'s canonical name replaces the typo');
+  assert.equal(cu.team, 'KINONDONI', 'the BRANCH column of Sipho\'s report IS the agent\'s location');
   assert.equal(cu.is_leader, false);
-  // The staff code still registers an OFFICER with no location asked.
+  // A phone the register does NOT know: the typed location is required and stored.
+  await assert.rejects(() => callApi(d, 'api_callRegister',
+    ['dev-7', 'Someone New', '', '', '0755000111', 'QQ7R8S'], NOW), /location/i);
   const r2 = await callApi(d, 'api_callRegister',
-    ['dev-8', 'Ainea', '', '', '0712345678', 'AB2C3D'], NOW);
+    ['dev-7', 'Someone New', '', '', '0755000111', 'QQ7R8S', 'Mbagala'], NOW);
   assert.equal(r2.ok, true);
+  assert.equal(d._dump('call_users').find(u => u.name === 'Someone New').team, 'Mbagala');
+  // The staff code still registers an OFFICER with no location asked.
+  const r3 = await callApi(d, 'api_callRegister',
+    ['dev-8', 'Ainea', '', '', '0712345678', 'AB2C3D'], NOW);
+  assert.equal(r3.ok, true);
   assert.equal(d._dump('call_users').find(u => u.name === 'Ainea').role, 'OFFICER');
 });
 
