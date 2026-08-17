@@ -314,11 +314,17 @@ const isCredit = cu => CREDIT_ROLES.has(K(cu && cu.role));
    join the credit roster; if the index fails or the phone is unknown the agent sees an
    EMPTY book, never somebody else's -- this fence fails closed. */
 const isAgent = cu => K(cu && cu.role) === 'AGENT';
-async function activeRoster(db) {
-  const rows = await fetchAll(() => db.from('call_users').select('user_id, role, active'));
-  return rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role)))
-    .map(r => String(r.user_id)).sort();
+/** The deal's roster WITH NAMES -- same single read; names ride along so every list row
+    can say which credit person is chasing that customer (the third chip on the card). */
+async function rosterFull(db) {
+  const rows = await fetchAll(() => db.from('call_users').select('user_id, name, role, active'));
+  const on = rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role)))
+    .sort((a, b) => (String(a.user_id) < String(b.user_id) ? -1 : 1));
+  const names = {};
+  for (const r of on) names[String(r.user_id)] = r.name || '';
+  return { ids: on.map(r => String(r.user_id)), names };
 }
+async function activeRoster(db) { return (await rosterFull(db)).ids; }
 function myShare(items, keyFn, roster, uid) {
   const k = roster.indexOf(String(uid));
   if (k < 0 || !roster.length) return items;   // a device outside the roster peeks at the whole book
@@ -339,11 +345,17 @@ async function agentIndex(db, nowMs) {
   if (hit && hit.version === version && (nowMs - hit.at) < 15 * 60000) return hit;
   const byImei = {}, phoneByName = {}, byPhone = {};
   try {
+    // Guarantors landed with the offline queue (2026-08-17). Until the migration has
+    // run, PostgREST refuses the WHOLE select for the unknown columns -- so fall back
+    // to the old shape rather than letting the agent fence and the card go dark.
     const [reg, agents] = await Promise.all([
-      fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id')),
+      fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id, branch, guarantor_name, guarantor_phone'))
+        .catch(() => fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id'))),
       fetchAll(() => db.from('hoop_agents').select('name, phone, branch')),
     ]);
-    for (const r of reg) if (r.agent) byImei[String(r.imei)] = { name: r.agent, id: r.agent_id || '' };
+    for (const r of reg) if (r.agent || r.branch || r.guarantor_name || r.guarantor_phone)
+      byImei[String(r.imei)] = { name: r.agent || '', id: r.agent_id || '', branch: r.branch || '',
+        gName: r.guarantor_name || '', gPhone: r.guarantor_phone || '' };
     for (const a of agents) if (a.name) {
       phoneByName[K(a.name)] = a.phone || '';
       // The reverse map is the AGENT sign-in fence: their registered phone -> who they
@@ -375,8 +387,9 @@ async function latestDeckDate(db) {
 async function list(db, [dev], nowMs) {
   const cu = await userByDeviceSoft(db, dev);
   if (!cu) return { ok: false, error: 'DEVICE_NOT_REGISTERED' };
-  const [called, deckDate, roster, agents] = await Promise.all([
-    calledTodaySet(db, nowMs), latestDeckDate(db), activeRoster(db), agentIndex(db, nowMs)]);
+  const [called, deckDate, rosterAll, agents] = await Promise.all([
+    calledTodaySet(db, nowMs), latestDeckDate(db), rosterFull(db), agentIndex(db, nowMs)]);
+  const roster = rosterAll.ids;
   if (!deckDate) return { ok: true, rows: [], asOf: null, stale: false, narrowed: null, note: null };
   // The WHOLE deck -- no team fence (the team column is the selling branch) -- then this
   // officer's dealt share of it. Budget: the deck read is the same one as before; the
@@ -395,20 +408,33 @@ async function list(db, [dev], nowMs) {
   }
   const today = todayKey(nowMs);
   const hit = c => !!called[pnorm(c)];
+  // WHO IS CHASING each customer: the same deal, labeled. Sort the whole deck once by
+  // IMEI; row i belongs to roster member i % n -- so a leader, an agent or any whole-
+  // book viewer sees the responsible credit person on every card. Zero extra reads.
+  const holdsOf = {};
+  if (roster.length) {
+    const ordered = [...fu].sort((a, b) => (String(a.imei) < String(b.imei) ? -1 : 1));
+    ordered.forEach((r, i) => { holdsOf[String(r.imei)] = rosterAll.names[roster[i % roster.length]] || ''; });
+  }
   const rows = mine.map(r => {
     const life = lifeDayOf(r.disbursed_date, today);
     const ag = agents.byImei[String(r.imei)] || null;
     return {
-      // Hope-shaped keys so the page machinery carries over; ref IS the IMEI.
-      ref: r.imei, name: r.client_name, contact: r.contact, gName: '', gContact: '',
+      // Hope-shaped keys so the page machinery carries over; ref IS the IMEI. The
+      // guarantor slot is REAL now -- fed by the offline-queue upload via the register.
+      ref: r.imei, name: r.client_name, contact: r.contact,
+      gName: ag ? (ag.gName || '') : '', gContact: ag ? (ag.gPhone || '') : '',
       agentName: ag ? ag.name : '', agentId: ag ? ag.id : '',
-      agentPhone: ag ? (phoneByNameOf(agents, ag.name)) : '',
+      agentPhone: ag && ag.name ? (phoneByNameOf(agents, ag.name)) : '',
+      heldBy: holdsOf[String(r.imei)] || '',
       amt: num(r.price), installment: null,
       custStatus: r.locked7 ? 'LOCKED 7+' : (r.locked4 ? 'LOCKED 4+' : ''),
       fuStatus: r.fu_status || '',
       ds: life == null ? '' : life + '/45',
       days: r.days_offline == null ? '' : r.days_offline,
-      team: r.team,
+      // The offline queue's BRANCH is the location the owner wants read out loud;
+      // the deck's shop-derived team is only the fallback.
+      team: (ag && ag.branch) || r.team,
       called: hit(r.contact),
       // Hoop's own facts, printed by the adapted page.
       model: r.model || '', lifeDay: life,
@@ -777,7 +803,7 @@ export async function reportCore(db, scopeTeams, from, to, alwaysUid, nowMs) {
     scope = {};
     (Array.isArray(scopeTeams) ? scopeTeams : String(scopeTeams).split(',')).forEach(t => { const k = K(t); if (k) scope[k] = 1; });
   }
-  const [users0, teamRows, logs] = await Promise.all([
+  const [users0, teamRows, logs, agIdx] = await Promise.all([
     fetchAll(() => db.from('call_users').select('*')),
     fetchAll(() => db.from('teams').select('team, rsm')),
     // Date-bounded and team-scoped AT THE DATABASE (the budget rule) on the fastest-growing table.
@@ -786,6 +812,9 @@ export async function reportCore(db, scopeTeams, from, to, alwaysUid, nowMs) {
       if (scope && Object.keys(scope).length) q = q.in('team', Object.keys(scope));
       return q;
     }),
+    // The per-place section groups by the CUSTOMER's branch (offline queue), not the
+    // officer's timu -- the owner's rule. Shared cached index: no new round trips warm.
+    agentIndex(db, nowMs),
   ]);
   const curTeam = {}, curName = {}, curRole = {}, curPhone = {};
   users0.forEach(r => { curTeam[r.user_id] = r.team || ''; curName[r.user_id] = r.name || ''; curRole[r.user_id] = r.role || ''; curPhone[r.user_id] = r.phone || ''; });
@@ -812,8 +841,12 @@ export async function reportCore(db, scopeTeams, from, to, alwaysUid, nowMs) {
     u.calls++; u.dur += dur; u.days[day] = 1;
     if (isPf) { u.pf++; u.uniq[String(r.ref || r.phone)] = 1; } else u.npf++;
     if (outc === 'CONNECTED') u.connected++;
-    if (!teams[team]) teams[team] = { team, calls: 0, dur: 0, pf: 0, npf: 0 };
-    teams[team].calls++; teams[team].dur += dur; isPf ? teams[team].pf++ : teams[team].npf++;
+    // "Not sort by timu but these branches": the customer's branch from the register.
+    // A call to somebody outside the register (or non-portfolio) buckets as OTHER.
+    const gg = r.ref && agIdx.byImei[String(r.ref)];
+    const br = (gg && gg.branch) || (isPf ? String(team || 'OTHER') : 'OTHER');
+    if (!teams[br]) teams[br] = { team: br, calls: 0, dur: 0, pf: 0, npf: 0 };
+    teams[br].calls++; teams[br].dur += dur; isPf ? teams[br].pf++ : teams[br].npf++;
     if (!byOutcome[outc]) byOutcome[outc] = { outcome: outc, calls: 0, dur: 0 };
     byOutcome[outc].calls++; byOutcome[outc].dur += dur;
   }

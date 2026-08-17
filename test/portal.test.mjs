@@ -135,9 +135,11 @@ test('customers splits leo at day 45, keeps jana newest-per-imei, and joins the 
         days_offline: 11, agent: 'JUMA', snapshot_date: '2026-08-13', created_at: '2026-08-13T09:00:00Z' },
     ],
     watu_loans: [
-      { imei: 'A1', agent: 'JUMA', team: 'KINONDONI' },
+      { imei: 'A1', agent: 'JUMA', team: 'KINONDONI', branch: 'Dar es salaam',
+        guarantor_name: 'Issack daniely samawa', guarantor_phone: '0788533370' },
       { imei: 'B2', agent: 'ASHA', team: 'TEMEKE' },
     ],
+    hoop_agents: [{ name: 'Juma', phone: '0712999888' }],
     settings: [],
   });
   const r = await _FNS.customers(d, ADMIN, {});
@@ -146,15 +148,36 @@ test('customers splits leo at day 45, keeps jana newest-per-imei, and joins the 
   assert.equal(r.leo45.length, 1);
   assert.equal(r.leo45[0].imei, 'A1');
   assert.equal(r.leo45[0].agent, 'JUMA', 'the deck has no agent column; the register supplies it');
+  assert.equal(r.leo45[0].agentPhone, '0712999888', 'the agent\'s own number joins from Sipho\'s register');
+  assert.equal(r.leo45[0].branch, 'Dar es salaam', 'the offline queue\'s branch rides the row');
+  assert.equal(r.leo45[0].gName, 'Issack daniely samawa');
+  assert.equal(r.leo45[0].gPhone, '0788533370');
   assert.ok(r.leo45[0].lifeDay <= 45);
   assert.equal(r.leo45plus.length, 1);
   assert.equal(r.leo45plus[0].imei, 'B2');
   assert.equal(r.leo45plus[0].agent, 'ASHA');
+  assert.equal(r.leo45plus[0].gName, '', 'no guarantor on file stays an honest blank');
   assert.equal(r.leo45plus[0].fu, 'HAPATIKANI');
   assert.equal(r.jana.length, 1, 'same-imei re-upload rows collapse to one');
   assert.equal(r.jana[0].daysOff, 11, 'the NEWEST snapshot of the day wins');
   assert.equal(r.jana[0].agent, 'JUMA', 'snapshots carry the agent themselves');
   assert.ok(Array.isArray(r.fuStatuses) && r.fuStatuses.length, 'the comment form vocabulary rides along');
+});
+
+test('customers survives a database that has not run the guarantor migration yet', async () => {
+  const today = todayKey();
+  const d = fakeDb({
+    followup_status: [
+      { imei: 'A1', client_name: 'Yetu', team: 'KINONDONI', disbursed_date: dayShift(today, -5), deck_date: '2026-08-14' },
+    ],
+    watu_snapshots: [], settings: [],
+    watu_loans: [{ imei: 'A1', agent: 'JUMA', team: 'KINONDONI' }],
+    hoop_agents: [],
+  }, { missingColumns: { watu_loans: ['guarantor_name', 'guarantor_phone', 'branch'] } });
+  const r = await _FNS.customers(d, ADMIN, {});
+  assert.equal(r.ok, true, 'the un-migrated select falls back instead of failing the tab');
+  assert.equal(r.leo45[0].agent, 'JUMA', 'the agent join still works on the old columns');
+  assert.equal(r.leo45[0].gName, '', 'guarantor is simply blank until the migration runs');
 });
 
 test('customers scopes a team-bound code at the database', async () => {

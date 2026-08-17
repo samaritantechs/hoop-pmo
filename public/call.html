@@ -1643,7 +1643,11 @@ function rowHtml(r, showSeg){
      officer holding the phone needs to know who to ask before they call. */
   var chips = (r.custStatus ? statusChip(r.custStatus) : '') + (r.fuStatus ? statusChip(r.fuStatus) : '')
     + (r.ds ? '<span class="chip' + (r.inWindow === false ? ' mut' : '') + '">Siku ' + esc(r.ds) + '</span>' : '')
-    + (r.inWindow === false ? '<span class="chip mut">NJE YA 45</span>' : '');
+    + (r.inWindow === false ? '<span class="chip mut">NJE YA 45</span>' : '')
+    /* The third chip: WHICH CREDIT PERSON is chasing this customer. On an officer's own
+       list it is themselves; a leader, an agent or any whole-book viewer reads who to
+       ask before touching the customer. The deal computes it -- nothing is stored. */
+    + (r.heldBy ? '<span class="chip">👤 ' + esc(r.heldBy) + '</span>' : '');
   return '<div class="crow' + (r.called?' called':'') + '" data-ref="' + esc(r.ref) + '">'
     + '<div class="crow-main">'
     + '<div class="crow-name">' + esc(r.name) + (r.called ? ' <span class="tick">\u2713 Amepigiwa leo</span>' : '') + '</div>'
@@ -1725,11 +1729,14 @@ function sheetSkeleton(r){
     + (r.custStatus ? '<div class="factrow"><span>Hali / Lock status</span>' + statusChip(r.custStatus) + '</div>' : '')
     + (r.paid === false ? '<div class="factrow"><span>Malipo / Payments</span>' + statusChip('UNPAID') + '</div>' : '')
     + (r.fuStatus ? '<div class="factrow"><span>Ufuatiliaji wa mwisho / Last follow-up</span>' + statusChip(r.fuStatus) + '</div>' : '')
-    /* WHO ELSE TO LEAN ON -- Hope's card had the guarantor here; Hoop's second person is
-       the AGENT who sold the phone, with their own number from the agents register. The
-       guarantor line stays, honest, until Watu's reports carry the data. */
-    + '<div class="factrow"><span>Agent / Muuzaji</span><span>' + (r.agentName ? esc(r.agentName) + (r.agentPhone ? ' \u00B7 ' + esc(r.agentPhone) : '') : '\u2014') + '</span></div>'
-    + '<div class="factrow"><span>Mdhamini / Guarantor</span><span>' + (r.gName ? esc(r.gName) + (r.gContact ? ' \u00B7 ' + esc(r.gContact) : '') : '\u2014 bado kwenye ripoti za Watu') + '</span></div>'
+    /* WHO ELSE TO LEAN ON -- Hope's card slots, both REAL now: the AGENT who sold the
+       phone (Sipho's register) and the GUARANTOR (the offline-queue sheet). Their
+       numbers are tap-to-call right on the line, and again as buttons below. */
+    + '<div class="factrow"><span>Agent / Muuzaji</span><span>' + (r.agentName ? esc(r.agentName)
+        + (r.agentPhone ? ' \u00B7 ' + (telHref(r.agentPhone)!=='#' ? '<a href="tel:'+telHref(r.agentPhone)+'">'+esc(r.agentPhone)+'</a>' : esc(r.agentPhone)) : '') : '\u2014') + '</span></div>'
+    + '<div class="factrow"><span>Mdhamini / Guarantor</span><span>' + (r.gName ? esc(r.gName)
+        + (r.gContact ? ' \u00B7 ' + (telHref(r.gContact)!=='#' ? '<a href="tel:'+telHref(r.gContact)+'">'+esc(r.gContact)+'</a>' : esc(r.gContact)) : '')
+        : (r.gContact && telHref(r.gContact)!=='#' ? '<a href="tel:'+telHref(r.gContact)+'">'+esc(r.gContact)+'</a>' : '\u2014')) + '</span></div>'
     + '<div class="callrow">'
     + (cHref!=='#' ? '<a class="btn btn-pri" href="tel:'+cHref+'" data-ref="' + esc(r.ref) + '">\uD83D\uDCDE Mteja \u00B7 ' + esc(r.contact) + '</a>' : '<span class="btn btn-ghost">Hana namba</span>')
     + (r.agentPhone && telHref(r.agentPhone)!=='#' ? '<a class="btn btn-ghost" href="tel:'+telHref(r.agentPhone)+'" data-ref="' + esc(r.ref) + '">\uD83D\uDCDE Agent</a>' : '')

@@ -60,6 +60,7 @@ details summary i{color:var(--mut);font-size:12px}
       <button type="button" class="kchip on" data-k="auto">Auto-detect</button>
       <button type="button" class="kchip" data-k="watu">Watu deck</button>
       <button type="button" class="kchip" data-k="sales">Sales</button>
+      <button type="button" class="kchip" data-k="offline">Offline queue</button>
       <button type="button" class="kchip" data-k="agents">Agents</button>
       <button type="button" class="kchip" data-k="agedstock">Aged stock</button>
     </div>
@@ -73,7 +74,7 @@ details summary i{color:var(--mut);font-size:12px}
   </div>
   <div class="card">
     <h2 style="font-size:15px;margin:0 0 4px">What each file looks like</h2>
-    <p style="font-size:12.5px;color:var(--mut);margin:0 0 10px">The system recognizes a file by its HEADERS — this is what each kind should look like. <b>Upload permission covers all four kinds.</b></p>
+    <p style="font-size:12.5px;color:var(--mut);margin:0 0 10px">The system recognizes a file by its HEADERS — this is what each kind should look like. <b>Upload permission covers all five kinds.</b></p>
     <details>
       <summary><b>1 · Watu daily list (deck)</b> — Excel/CSV from Watu, every morning. <i>Replaces its date.</i></summary>
       <div class="samp">Shop | Agent | Agent ID | Client Name | Client Mobile | Model | Model Details | Disbursed Date | IMEI | Price | Has Ever Paid | Days Offline | Onboarding Time (Min) | App Signed Up | Locked 4+ Days | Locked 7+ Days</div>
@@ -83,6 +84,11 @@ details summary i{color:var(--mut);font-size:12px}
       <summary><b>2 · Sales report</b> — the hoopltd.shop export. <i>Adds &amp; updates; the "Total" row is skipped.</i></summary>
       <div class="samp">Date | Branch | Agent | Client_Name | Client_Id | Client_Phone | Phone_Model | Receipt_Number | Imei | Commission_Agent | Commission_Phone | Price</div>
       <div class="samp ex">14/08/2026 | HOOP LIMITED | CYPRIAN RENATUS | Fredy J Damasi | N/A | 0797053513 | SAMSUNG A07-64GB | 9969 | 350748531117000 | Cyprian Dotto Renatus | 0780866571 | 503000.00</div>
+    </details>
+    <details>
+      <summary><b>2b · Offline queue (credit)</b> — the credit team's Watu portfolio sheet, WITH guarantors. <i>Adds &amp; updates the register; a blank cell never erases existing data.</i></summary>
+      <div class="samp">Sale Date | IMEI | Offline Bucket | Customer | Customer Phone | Guarantor | Agent | Branch | Offline Owner | Status | …</div>
+      <div class="samp ex">2026-08-01 | 351416739926494 | Offline 7+ | Jefas D Samawa | 0662047809 | Issack daniely samawa &#124; 0788533370 | Anord Sawe | Dar es salaam | - | He/She Will Pay | …</div>
     </details>
     <details>
       <summary><b>3 · Agents Register</b> — a SAVED SyscoPos page. <i>Save AFTER the table is visible.</i></summary>
@@ -159,6 +165,11 @@ var KINDS = {
                note: 'The hoopltd.shop export (general duty). The "Total" footer row is skipped automatically.',
                head: 'Date | Branch | Agent | Client_Name | Client_Id | Client_Phone | Phone_Model | Receipt_Number | Imei | Commission_Agent | Commission_Phone | Price',
                ex: '14/08/2026 | HOOP LIMITED | CYPRIAN RENATUS | Fredy J Damasi | N/A | 0797053513 | SAMSUNG A07-64GB | 9969 | 350748531117000 | Cyprian Dotto Renatus | 0780866571 | 503000.00' },
+  offline:   { label: 'Offline queue (credit)',
+               btn: 'Upload — merges into the register',
+               note: 'The credit team\'s Watu portfolio sheet — the one that carries GUARANTORS. Adds new customers and updates known ones; a blank cell never erases what the register already holds. Extra columns (bucket, owner, status, actions) are ignored.',
+               head: 'Sale Date | IMEI | Offline Bucket | Customer | Customer Phone | Guarantor | Agent | Branch | …',
+               ex: '2026-08-01 | 351416739926494 | Offline 7+ | Jefas D Samawa | 0662047809 | Issack daniely samawa &#124; 0788533370 | Anord Sawe | Dar es salaam | …' },
   agents:    { label: 'Agents Register',
                btn: 'Upload — adds & updates agents',
                note: 'A SAVED SyscoPos page (HTML) — save AFTER the table is visible on screen, then upload the page itself.',
@@ -187,6 +198,9 @@ function kindOf(head){
   if (has('RECEIPT_NUMBER','RECEIPT NUMBER','COMMISSION_AGENT','COMMISSION AGENT')) return 'sales';
   if (has('KIN_NAME','KIN NAME','NEXT_OF_KIN','NEXT OF KIN')) return 'agents';
   if (has('SERIAL') && has('AGE','RECEIVED','DATE_RECEIVED')) return 'agedstock';
+  // BEFORE the deck: the offline queue also carries IMEI, and it must never be
+  // mistaken for a Watu daily list (a deck upload REPLACES its date).
+  if (has('GUARANTOR','OFFLINE BUCKET','OFFLINE_BUCKET')) return 'offline';
   if (has('IMEI','IMEI NUMBER','IMEI NO')) return 'watu';
   return null;
 }

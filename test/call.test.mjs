@@ -265,7 +265,8 @@ test('the card carries WHO SOLD the phone: agent name, id and own number on the 
       { imei: 'A', client_name: 'One', contact: '255716000001', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
       { imei: 'B', client_name: 'Two', contact: '255716000002', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
     ],
-    watu_loans: [{ imei: 'A', agent: 'Anord Sawe', agent_id: '77123' }],
+    watu_loans: [{ imei: 'A', agent: 'Anord Sawe', agent_id: '77123',
+      guarantor_name: 'Issack daniely samawa', guarantor_phone: '0788533370' }],
     hoop_agents: [{ name: 'Anord Sawe', phone: '0658918324' }],
     call_users: [{ user_id: 'U1', device_id: 'dev-1', name: 'Ainea', role: 'CREDIT', active: true }],
     call_logs: [],
@@ -275,8 +276,29 @@ test('the card carries WHO SOLD the phone: agent name, id and own number on the 
   assert.equal(a.agentName, 'Anord Sawe');
   assert.equal(a.agentId, '77123');
   assert.equal(a.agentPhone, '0658918324', 'the agent\'s own number comes from Sipho\'s register by name');
+  assert.equal(a.gName, 'Issack daniely samawa', 'the offline queue put a REAL guarantor on the card');
+  assert.equal(a.gContact, '0788533370');
   assert.equal(b.agentName, '', 'an IMEI missing from the register shows a dash, never a guess');
-  assert.equal(b.gName, '', 'guarantor slots stay honest until a Watu report carries them (PENDING 1)');
+  assert.equal(b.gName, '', 'no guarantor on file stays an honest blank');
+  assert.equal(a.heldBy, 'Ainea', 'the third chip: the credit person chasing this customer');
+  assert.equal(b.heldBy, 'Ainea', 'one credit user holds the whole book, so every row says so');
+});
+
+test('the card survives a database that has not run the guarantor migration yet', async () => {
+  const d = fakeDb({
+    settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+    teams: [],
+    followup_status: [
+      { imei: 'A', client_name: 'One', contact: '255716000001', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+    ],
+    watu_loans: [{ imei: 'A', agent: 'Anord Sawe', agent_id: '77123' }],
+    hoop_agents: [{ name: 'Anord Sawe', phone: '0658918324' }],
+    call_users: [{ user_id: 'U1', device_id: 'dev-1', name: 'Ainea', role: 'CREDIT', active: true }],
+    call_logs: [],
+  }, { missingColumns: { watu_loans: ['guarantor_name', 'guarantor_phone', 'branch'] } });
+  const r = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  assert.equal(r.rows[0].agentName, 'Anord Sawe', 'the un-migrated select falls back -- the agent still shows');
+  assert.equal(r.rows[0].gName, '', 'guarantor is simply blank until the migration runs');
 });
 
 test('the AGENT code registers role AGENT; the register supplies branch + canonical name', async () => {

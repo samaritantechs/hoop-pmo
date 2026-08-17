@@ -179,3 +179,56 @@ test('importAgedStock keys on the serial and keeps the report date honest', () =
   assert.equal(records[0].age_days, 43);
   assert.equal(dropped.length, 1);
 });
+
+/* ---------- the offline queue: guarantors land at last ---------- */
+import { importOfflineQueue, isOfflineQueueFile, splitGuarantor } from '../api/_lib/importers.js';
+
+const OQ_HEADERS = ['Sale Date', 'IMEI', 'Offline Bucket', 'Customer', 'Customer Phone',
+  'Guarantor', 'Agent', 'Branch', 'Offline Owner', 'Status', 'Next Action Date',
+  'Last Action Type', 'Last Action At', 'Last Action By', 'Last Action Note'];
+
+test('the offline queue is recognized -- and NEVER mistaken for a deck', () => {
+  assert.equal(isOfflineQueueFile(OQ_HEADERS), true);
+  assert.equal(isSalesFile(OQ_HEADERS), false, 'no receipt/commission columns');
+  assert.equal(isAgentsFile(OQ_HEADERS), false, 'no next-of-kin column');
+  assert.equal(isOfflineQueueFile(['Shop', 'Agent', 'IMEI', 'Client Name']), false,
+    'the daily deck is not an offline queue');
+});
+
+test('splitGuarantor takes "name | phone" apart and invents neither half', () => {
+  assert.deepEqual(splitGuarantor('Issack daniely samawa | 0788533370'),
+    { name: 'Issack daniely samawa', phone: '0788533370' });
+  assert.deepEqual(splitGuarantor('-'), { name: null, phone: null });
+  assert.deepEqual(splitGuarantor('Grace Simbeye'), { name: 'Grace Simbeye', phone: null });
+  assert.deepEqual(splitGuarantor('0788533370'), { name: null, phone: '0788533370' });
+});
+
+test('importOfflineQueue takes ONLY what the register needs and merges by presence', () => {
+  const { records, dropped } = importOfflineQueue([OQ_HEADERS,
+    ['2026-08-01', '351416739926494', 'Offline 7+', 'Jefas D Samawa', '0662047809',
+      'Issack daniely samawa | 0788533370', 'Anord Sawe', 'Dar es salaam', '-',
+      'He/She Will Pay', '2026-08-17', 'comment', '2026-08-17 09:41', 'AYNEA', 'atalipia'],
+    // A row with NO guarantor and NO agent: those keys must be ABSENT, not null --
+    // that absence is what stops an upload erasing what the register already holds.
+    ['2026-08-02', '358179230370041', 'Offline 4+', 'Kapama I Mbao', '255760042887',
+      '-', '', 'Lake zone', '-', '', '', '', '', '', ''],
+    ['', '(no imei)', '', 'Ghost Row', '', '', '', '', '', '', '', '', '', '', ''],
+  ]);
+  assert.equal(records.length, 2);
+  const a = records[0];
+  assert.equal(a.imei, '351416739926494');
+  assert.equal(a.client_name, 'Jefas D Samawa');
+  assert.equal(a.client_mobile, '0662047809');
+  assert.equal(a.guarantor_name, 'Issack daniely samawa');
+  assert.equal(a.guarantor_phone, '0788533370');
+  assert.equal(a.agent, 'Anord Sawe');
+  assert.equal(a.branch, 'Dar es salaam');
+  assert.equal(a.disbursed_date, '2026-08-01');
+  assert.equal(a.status, undefined, 'Watu working-state columns are extra data -- not taken');
+  const b = records[1];
+  assert.ok(!('guarantor_name' in b) && !('guarantor_phone' in b), 'a dash guarantor stays absent');
+  assert.ok(!('agent' in b), 'a blank agent cell stays absent -- never null over existing data');
+  assert.equal(b.branch, 'Lake zone');
+  assert.equal(dropped.length, 1, 'the IMEI-less row is dropped AND named');
+  assert.equal(dropped[0].name, 'Ghost Row');
+});

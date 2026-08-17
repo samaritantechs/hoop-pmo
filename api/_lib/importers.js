@@ -208,6 +208,92 @@ function salesH36(s) {
 }
 
 /* =====================================================================================
+   THE OFFLINE QUEUE -- the credit team's Watu portfolio sheet, and THE file that finally
+   carries GUARANTORS (the PENDING #1 trigger, landed 2026-08-17). Real shape:
+
+     Sale Date | IMEI | Offline Bucket | Customer | Customer Phone | Guarantor |
+     Agent | Branch | Offline Owner | Status | Next Action Date | Last Action ...
+
+   Guarantor arrives as ONE cell: "Issack daniely samawa | 0788533370" -- name, pipe,
+   phone. Only the columns the register NEEDS are taken (the owner: "the file has extra
+   data, dont use it if we dont have to"); the Watu working-state columns (bucket, owner,
+   status, actions) stay in the file. MERGE, NEVER LOSE: a key rides a record only when
+   its cell holds a value, so a blank cell leaves whatever the register already knows --
+   the upload endpoint groups records by shape so PostgREST updates exactly those keys.
+   ===================================================================================== */
+const OFFLINE_COLS = [
+  ['disbursed_date', v => watuDate(v),   'SALE DATE', 'SALE_DATE', 'DISBURSED DATE', 'DATE'],
+  ['client_name',    v => textOrNull(v), 'CUSTOMER', 'CUSTOMER NAME', 'CLIENT NAME', 'CLIENT_NAME'],
+  ['client_mobile',  v => textOrNull(v), 'CUSTOMER PHONE', 'CUSTOMER_PHONE', 'CLIENT MOBILE', 'CLIENT PHONE'],
+  ['agent',          v => textOrNull(v), 'AGENT', 'AGENT NAME'],
+  ['branch',         v => textOrNull(v), 'BRANCH'],
+];
+export function isOfflineQueueFile(headerRow) {
+  const h = buildHeaderMap(headerRow || []);
+  const has = n => h[normalizeHeader(n)] !== undefined;
+  return has('GUARANTOR') || has('OFFLINE BUCKET') || has('OFFLINE_BUCKET');
+}
+/** "name | phone" in one cell; a lone dash is Watu's own blank. No pipe: digits are a
+    phone, anything else is a name -- never invent the half the cell does not hold. */
+export function splitGuarantor(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s || s === '-') return { name: null, phone: null };
+  const i = s.lastIndexOf('|');
+  if (i < 0) {
+    const d = s.replace(/\D/g, '');
+    return d.length >= 9 ? { name: null, phone: s } : { name: s, phone: null };
+  }
+  return { name: s.slice(0, i).trim() || null, phone: s.slice(i + 1).trim() || null };
+}
+export function importOfflineQueue(rows) {
+  const all = (rows || []).filter(r => Array.isArray(r) && r.some(c => String(c == null ? '' : c).trim() !== ''));
+  if (all.length < 2) return { records: [], dropped: [], headers: [] };
+  const h = buildHeaderMap(all[0]);
+  const present = OFFLINE_COLS.filter(([, , ...names]) => names.some(n => h[normalizeHeader(n)] !== undefined));
+  const imeiIdx = IMEI_HEADERS.map(n => h[normalizeHeader(n)]).find(i => i !== undefined);
+  const gIdx = ['GUARANTOR', 'GUARANTOR NAME'].map(n => h[normalizeHeader(n)]).find(i => i !== undefined);
+  const gPhoneIdx = ['GUARANTOR PHONE', 'GUARANTOR_PHONE'].map(n => h[normalizeHeader(n)]).find(i => i !== undefined);
+  if (imeiIdx === undefined) {
+    const e = new Error('The offline-queue file has no IMEI column. Headers seen: ' + all[0].join(' | '));
+    e.status = 400; throw e;
+  }
+  const records = [];
+  const dropped = [];
+  const seen = new Set();
+  for (let i = 1; i < all.length; i++) {
+    const row = all[i];
+    const imei = watuImei(row[imeiIdx]);
+    if (!imei) {
+      const name = cellOf(row, h, ['CUSTOMER', 'CUSTOMER NAME', 'CLIENT NAME']);
+      dropped.push({ line: i + 1, name: textOrNull(name.value) || '(no name)', imei: textOrNull(row[imeiIdx]) || '(blank)' });
+      continue;
+    }
+    // MERGE RULE: only keys whose cell holds a value ride the record.
+    const out = { imei };
+    for (const [key, fn, ...names] of present) {
+      const got = cellOf(row, h, names);
+      if (!got.has) continue;
+      const v = fn(got.value);
+      if (v != null && v !== '') out[key] = v;
+    }
+    if (gIdx !== undefined) {
+      const g = splitGuarantor(row[gIdx]);
+      if (g.name) out.guarantor_name = g.name;
+      if (g.phone) out.guarantor_phone = g.phone;
+    }
+    if (gPhoneIdx !== undefined) {
+      const p = textOrNull(row[gPhoneIdx]);
+      if (p) out.guarantor_phone = p;
+    }
+    if (seen.has(imei)) {
+      const j = records.findIndex(r => r.imei === imei);
+      if (j >= 0) records[j] = out;
+    } else { seen.add(imei); records.push(out); }
+  }
+  return { records, dropped, headers: present.map(p => p[0]) };
+}
+
+/* =====================================================================================
    SIPHO'S HTML SAVES -- he cannot export Excel, so the upload page parses his saved
    SyscoPos pages IN THE BROWSER (DOMParser), turns the rendered table into plain rows,
    and sends them here like any other file. The HTML itself is never stored -- the rows

@@ -3,24 +3,19 @@
 Durable memory. Each item here was promised to the owner in chat; delete an item only
 when it ships, and say so in the commit that deletes it.
 
-## 1. GUARANTORS — integrate the moment a report carries them
+## 1. GUARANTORS — SHIPPED 2026-08-17 (the trigger fired)
 
 The owner's words: *"we'll intergarate guarantors too when we get reports with that info
-later, when we land such a report remember this please."*
+later, when we land such a report remember this please."* — **the report landed**: the
+credit team's OFFLINE QUEUE sheet (portfolio_offline_queue export) carries Guarantor
+("name | phone" in one cell), plus Customer, Customer Phone, Agent, Branch, Sale Date.
 
-Today no Watu export we hold has guarantor columns (the credit team's locked-7-days file
-lacks them; hoopltd.shop holds them but exports nothing). **The trigger is a landed file
-with guarantor fields.** When one lands:
-
-- Migration: add `guarantor_name`, `guarantor_phone` (and whatever else the file carries —
-  header-presence rule: only columns the file actually has) to `watu_loans`,
-  `watu_snapshots`, and `followup_status`.
-- Importer: add the header candidates to `api/_lib/importers.js` the same way `agent` is
-  matched today.
-- Display: guarantor rides every customer row and the phone's detail sheet **exactly the
-  slot it held in Hope** — beside the agent, who already plays that "second person to lean
-  on" role for Hoop.
-- Budget note as always: no new round trips — the columns join reads that already happen.
+What shipped: `guarantor_name`, `guarantor_phone`, `branch` on **watu_loans only** (the
+daily deck file still has no guarantor columns, so followup_status / watu_snapshots stay
+untouched — header-presence rule); the offline-queue upload kind at /upload (merge, never
+lose); the guarantor beside the agent on the phone card with tap-to-call, on the Wateja
+tab and the register search. The sheet's Last Action comments were imported ONCE into
+followup_comments (owner: commenting lives in HOOP Calls now — never pull them again).
 
 ## 2. Payment reference = the CUSTOMER'S PHONE NUMBER
 

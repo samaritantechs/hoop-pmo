@@ -150,7 +150,7 @@ var CODE='', BOOT=null, TAB='dash';
 function csvOfTable_(t){
   var out=[];
   [].slice.call(t.rows).forEach(function(tr){
-    if(tr.style.display==='none') return;
+    if(tr.style.display==='none'||tr.classList.contains('fhide')) return;
     var cells=[].slice.call(tr.cells).map(function(td){
       return '"'+td.textContent.replace(/\s+/g,' ').trim().replace(/"/g,'""')+'"';
     });
@@ -164,20 +164,122 @@ function xlName_(){
 }
 function injectExports_(){
   $all('#main table').forEach(function(t){
-    if(t.__xp) return; t.__xp=1;
-    if(!t.tHead) return;
-    var b=document.createElement('button');
-    b.textContent='\u2913 Excel'; b.className='btn sm ghost'; b.style.cssText='margin:0 0 8px;font-size:11.5px;padding:5px 10px';
-    b.onclick=function(){
-      var a=document.createElement('a');
-      a.href=URL.createObjectURL(new Blob([csvOfTable_(t)],{type:'text/csv;charset=utf-8'}));
-      a.download=xlName_(); document.body.appendChild(a); a.click();
-      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },500);
-    };
-    t.parentNode.insertBefore(b,t);
+    if(!t.__xp){ t.__xp=1;
+      if(t.tHead){
+        var b=document.createElement('button');
+        b.textContent='\u2913 Excel'; b.className='btn sm ghost'; b.style.cssText='margin:0 0 8px;font-size:11.5px;padding:5px 10px';
+        b.onclick=function(){
+          var a=document.createElement('a');
+          a.href=URL.createObjectURL(new Blob([csvOfTable_(t)],{type:'text/csv;charset=utf-8'}));
+          a.download=xlName_(); document.body.appendChild(a); a.click();
+          setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },500);
+        };
+        t.parentNode.insertBefore(b,t);
+      }
+    }
+    // The tick-list funnel on every header -- group any table by one agent, one
+    // branch, one status. Injected here so tables added later get it for free.
+    if(t.tHead) $all('th',t.tHead).forEach(function(th){
+      if(th.querySelector('.thfilt')) return;
+      var s=document.createElement('span');
+      s.className='thfilt'; s.textContent='\u23f7'; s.title='Chuja / filter this column';
+      th.appendChild(s);
+    });
   });
 }
 new MutationObserver(function(){ injectExports_(); }).observe(document.body,{childList:true,subtree:true});
+
+/* EXCEL-STYLE COLUMN FILTERS ("tick inside, not just up-down"): the funnel on a header
+   opens a tick-list of that column's distinct values -- untick to hide, so a table
+   groups to a single agent or branch in two clicks. Composes with sorting (same
+   header), the search boxes (both must pass) and the Excel button (exports what you
+   see). Filters live on the table node; a redraw starts clean. */
+(function(){
+  var st=document.createElement('style');
+  st.textContent='.fhide{display:none!important}'
+    +'.thfilt{cursor:pointer;opacity:.4;margin-left:4px;font-size:9px;user-select:none}'
+    +'.thfilt.on{opacity:1;color:#B42318}'
+    +'#fltMenu{position:absolute;z-index:999;background:#fff;border:1px solid var(--line);border-radius:10px;'
+    +'box-shadow:0 8px 24px rgba(15,23,42,.16);padding:10px;max-height:320px;overflow:auto;min-width:210px;max-width:280px}';
+  document.head.appendChild(st);
+})();
+var fltMenu=null;
+function cellVal_(td){
+  var c=td.cloneNode(true);
+  $all('.mut',c).forEach(function(x){ if(x.parentNode) x.parentNode.removeChild(x); });
+  return c.textContent.replace(/\s+/g,' ').trim();
+}
+function applyFlt_(table){
+  var f=table.__flt||{};
+  var keys=Object.keys(f).filter(function(k){ return f[k]; });
+  var tbody=table.querySelector('tbody'); if(!tbody) return;
+  [].slice.call(tbody.children).forEach(function(tr){
+    if(tr.children.length<2) return;
+    var hide=keys.some(function(k){
+      var td=tr.children[k]; if(!td) return false;
+      return !f[k][cellVal_(td)];
+    });
+    tr.classList.toggle('fhide',hide);
+  });
+  if(table.tHead) $all('.thfilt',table.tHead).forEach(function(s){
+    var th=s.closest('th');
+    var i=[].slice.call(th.parentNode.children).indexOf(th);
+    s.classList.toggle('on',!!f[i]);
+  });
+}
+function openFlt_(sp){
+  var th=sp.closest('th'), table=th.closest('table');
+  var idx=[].slice.call(th.parentNode.children).indexOf(th);
+  var tbody=table.querySelector('tbody'); if(!tbody) return;
+  var vals={};
+  [].slice.call(tbody.children).forEach(function(tr){
+    if(tr.children.length<2) return;
+    var td=tr.children[idx]; if(!td) return;
+    var v=cellVal_(td); vals[v]=(vals[v]||0)+1;
+  });
+  var list=Object.keys(vals).sort();
+  var cur=(table.__flt||{})[idx]||null;
+  if(fltMenu){ fltMenu.remove(); fltMenu=null; }
+  fltMenu=document.createElement('div'); fltMenu.id='fltMenu';
+  var CAP=120;
+  fltMenu.innerHTML='<div class="row" style="gap:6px;margin-bottom:6px">'
+    +'<button class="btn sm ghost" data-fa="all">All</button>'
+    +'<button class="btn sm ghost" data-fa="none">None</button>'
+    +'<button class="btn sm ghost" data-fa="off">Clear</button></div>'
+    +list.slice(0,CAP).map(function(v){
+      var on=!cur||!!cur[v];
+      return '<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;margin:2px 0;cursor:pointer">'
+        +'<input type="checkbox" class="fV" data-v="'+esc(v)+'"'+(on?' checked':'')+'> '
+        +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(v===''?'<i>(blank)</i>':esc(v))+'</span>'
+        +'<span class="mut">'+vals[v]+'</span></label>';
+    }).join('')
+    +(list.length>CAP?'<div class="mut">\u2026'+(list.length-CAP)+' more values \u2014 narrow with the search box first</div>':'');
+  document.body.appendChild(fltMenu);
+  var r=sp.getBoundingClientRect();
+  fltMenu.style.top=(r.bottom+window.scrollY+4)+'px';
+  fltMenu.style.left=Math.max(8,Math.min(r.left+window.scrollX,window.scrollX+document.documentElement.clientWidth-290))+'px';
+  function commit(){
+    var sel={},all=true;
+    $all('.fV',fltMenu).forEach(function(b){ if(b.checked) sel[b.getAttribute('data-v')]=1; else all=false; });
+    table.__flt=table.__flt||{};
+    table.__flt[idx]=all?null:sel;
+    applyFlt_(table);
+  }
+  fltMenu.addEventListener('change',commit);
+  $all('[data-fa]',fltMenu).forEach(function(b){
+    b.onclick=function(){
+      var a=b.getAttribute('data-fa');
+      if(a==='off'){ if(table.__flt) table.__flt[idx]=null; applyFlt_(table); fltMenu.remove(); fltMenu=null; return; }
+      $all('.fV',fltMenu).forEach(function(x){ x.checked=(a==='all'); });
+      commit();
+    };
+  });
+}
+document.addEventListener('click',function(e){
+  var sp=e.target.closest?e.target.closest('.thfilt'):null;
+  if(sp){ openFlt_(sp); return; }
+  if(fltMenu&&!(e.target.closest&&e.target.closest('#fltMenu'))){ fltMenu.remove(); fltMenu=null; }
+});
 
 /* EVERY TABLE SORTS ITSELF: click a header to sort by that column, click again to flip.
    Delegated once on the document, so every table -- including ones added later -- gets
@@ -185,6 +287,8 @@ new MutationObserver(function(){ injectExports_(); }).observe(document.body,{chi
    ties and text fall back to text; ISO dates are zero-padded so text order IS date
    order. Row click-handlers survive: sorting moves the same nodes. */
 document.addEventListener('click', function(e){
+  // The funnel and its menu belong to the FILTER, not the sort.
+  if (e.target.closest && (e.target.closest('.thfilt') || e.target.closest('#fltMenu'))) return;
   var th = e.target.closest ? e.target.closest('th') : null;
   if (!th) return;
   var table = th.closest('table'); if (!table) return;
@@ -429,16 +533,20 @@ function custRender(m){
     +pill('leo45','Leo · siku ≤ 45')
     +pill('leo45plus','Leo · 45+')
     +'</div>'
-    +'<div class="row"><input class="inp" id="custQ" placeholder="Tafuta: jina, simu, IMEI, agent, timu… / search"></div>'
-    +'<div class="mut" style="margin-bottom:8px">Bofya mteja kuona historia na kuandika maoni. <b>Agent</b> = aliyemuuzia simu.</div>'
-    +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Timu</th><th>Agent</th><th class="r">OFF</th><th class="r">Siku/45</th><th>Hali</th></tr></thead><tbody id="custRows">'
+    +'<div class="row"><input class="inp" id="custQ" placeholder="Tafuta: jina, simu, IMEI, agent, branch, mdhamini… / search"></div>'
+    +'<div class="mut" style="margin-bottom:8px">Bofya mteja kuona historia na kuandika maoni. <b>Agent</b> = aliyemuuzia simu · <b>Mdhamini</b> = guarantor (kutoka offline queue).</div>'
+    +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Simu</th><th>Branch</th><th>Agent</th><th>Mdhamini / Guarantor</th><th class="r">OFF</th><th class="r">Siku/45</th><th>Hali</th></tr></thead><tbody id="custRows">'
     +(rows.length?rows.map(function(r,i){
+      var hh=telHref(r.phone);
       return '<tr data-ci="'+i+'" style="cursor:pointer"><td><b>'+esc(r.name||'—')+'</b><div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td>'
-        +'<td>'+esc(r.team||'')+'</td><td>'+esc(r.agent||'—')+'</td>'
+        +'<td>'+(hh!=='#'?'<a href="tel:'+hh+'" onclick="event.stopPropagation()">'+esc(r.phone)+'</a>':'—')+'</td>'
+        +'<td>'+esc(r.branch||r.team||'')+'</td>'
+        +'<td>'+esc(r.agent||'—')+(r.agentPhone?'<div class="mut" style="font-size:10px">'+esc(r.agentPhone)+'</div>':'')+'</td>'
+        +'<td>'+(r.gName?esc(r.gName):'—')+(r.gPhone?'<div class="mut" style="font-size:10px">'+esc(r.gPhone)+'</div>':'')+'</td>'
         +'<td class="r">'+(r.daysOff!=null?money(r.daysOff):'—')+(r.locked7?' <span class="chip bad">7+</span>':(r.locked4?' <span class="chip warn">4+</span>':''))+'</td>'
         +'<td class="r">'+(r.lifeDay!=null?(r.lifeDay<=45?money(r.lifeDay)+'/45':'<span class="chip">NJE</span>'):'—')+'</td>'
         +'<td>'+(r.fu?'<span class="chip">'+esc(r.fu)+'</span>':(r.paid?'<span class="chip ok">amelipa</span>':''))+'</td></tr>';
-    }).join(''):'<tr><td colspan="6" class="mut">Hakuna mteja kwenye orodha hii bado.</td></tr>')
+    }).join(''):'<tr><td colspan="8" class="mut">Hakuna mteja kwenye orodha hii bado.</td></tr>')
     +'</tbody></table></div></div>'
     +'<div id="custDetail"></div><div id="custSrch"></div>';
   $all('[data-pl]',m).forEach(function(b){ b.onclick=function(){ CUST.list=b.getAttribute('data-pl'); CUST.sel=null; custRender(m); }; });
@@ -463,10 +571,11 @@ function custRender(m){
         var cs=x.customers||[];
         if(!box) return;
         box.innerHTML=!cs.length?'':'<div class="card"><h2>Rejista nzima / Whole register — '+cs.length+'</h2>'
-          +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Timu</th><th>Agent</th><th class="r">OFF</th></tr></thead><tbody>'
+          +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Branch</th><th>Agent</th><th>Mdhamini</th><th class="r">OFF</th></tr></thead><tbody>'
           +cs.map(function(c,i){
             return '<tr data-si="'+i+'" style="cursor:pointer"><td><b>'+esc(c.name||'—')+'</b><div class="mut" style="font-size:10px">'+esc(c.imei)+'</div></td>'
-              +'<td>'+esc(c.team||'')+'</td><td>'+esc(c.agent||'—')+'</td>'
+              +'<td>'+esc(c.branch||c.team||'')+'</td><td>'+esc(c.agent||'—')+'</td>'
+              +'<td>'+(c.gName?esc(c.gName):'—')+(c.gPhone?'<div class="mut" style="font-size:10px">'+esc(c.gPhone)+'</div>':'')+'</td>'
               +'<td class="r">'+(c.daysOff!=null?money(c.daysOff):'—')+(c.locked7?' <span class="chip bad">7+</span>':'')+'</td></tr>';
           }).join('')+'</tbody></table></div></div>';
         $all('[data-si]',box).forEach(function(tr){
@@ -485,10 +594,13 @@ function openCust(c){
   var h=telHref(c.phone);
   var fus=d.fuStatuses||[];
   box.innerHTML=
-    '<div class="card" id="custCard"><h2>'+esc(c.name||'—')+' '+(c.team?'<span class="chip">'+esc(c.team)+'</span>':'')+'</h2>'
+    '<div class="card" id="custCard"><h2>'+esc(c.name||'—')+' '+((c.branch||c.team)?'<span class="chip">'+esc(c.branch||c.team)+'</span>':'')+'</h2>'
     +'<div class="mut" style="margin-bottom:6px">IMEI '+esc(c.imei)+(c.model?' · '+esc(c.model):'')+(c.price?' · TZS '+money(c.price):'')
     +(c.lifeDay!=null?' · siku '+money(c.lifeDay)+'/45':'')+(c.daysOff!=null?' · OFF siku '+money(c.daysOff):'')+'</div>'
-    +'<div style="font-size:13.5px;margin-bottom:4px"><b>Agent (aliyemuuzia): '+esc(c.agent||'—')+'</b></div>'
+    +'<div style="font-size:13.5px;margin-bottom:4px"><b>Agent (aliyemuuzia): '+esc(c.agent||'—')+'</b>'
+    +(c.agentPhone&&telHref(c.agentPhone)!=='#'?' · <a href="tel:'+telHref(c.agentPhone)+'">'+esc(c.agentPhone)+'</a>':'')+'</div>'
+    +'<div style="font-size:13.5px;margin-bottom:4px"><b>Mdhamini / Guarantor: '+(c.gName?esc(c.gName):'—')+'</b>'
+    +(c.gPhone&&telHref(c.gPhone)!=='#'?' · <a href="tel:'+telHref(c.gPhone)+'">'+esc(c.gPhone)+'</a>':'')+'</div>'
     +'<div style="font-size:13.5px;margin-bottom:10px">Simu: '+(h!=='#'?'<a href="tel:'+h+'">'+esc(c.phone)+'</a>':'—')
     +' <span class="mut">(namba hii ndiyo ref ya malipo Watu)</span></div>'
     +'<div id="custHist" class="mut">Inapakia historia…</div>'
@@ -664,42 +776,66 @@ function drawAgents(m){
 
 /* ---------- stock movement: what got away after every upload ---------- */
 var MV={hoopA:'',hoopB:'',watuA:'',watuB:''};
+/* Which of the four movement reports are on screen. The pane holds a LOT of rows, so
+   the reports are chosen with chips and laid side by side (left to right) instead of
+   stacked -- "finding the next report requires a lot of scrolling" (the owner). The
+   tiles are the same chooser: click one to show just that report. */
+var MVSHOW={leftHoop:true,newInHoop:true,newWatu:true,leftWatu:true};
 function drawMove(m){
   m.innerHTML='<div class="card"><h2>Stock movement</h2><div class="mut">Loading…</div></div>';
   srv('stockMovement',{hoopA:MV.hoopA,hoopB:MV.hoopB,watuA:MV.watuA,watuB:MV.watuB}).then(function(d){
     var c=d.counts||{};
-    function tbl(title,rows,cols){
-      return '<div class="card"><h2>'+title+'</h2>'
-        +'<div style="overflow-x:auto"><table><thead><tr>'+cols.map(function(x){return '<th>'+x[0]+'</th>';}).join('')+'</tr></thead><tbody>'
-        +(rows.length?rows.map(function(r){
-          return '<tr>'+cols.map(function(x){return '<td>'+esc(r[x[1]]||'—')+'</td>';}).join('')+'</tr>';
-        }).join(''):'<tr><td colspan="'+cols.length+'" class="mut">Nothing moved between these dates.</td></tr>')
+    /* HONEST NAMES: the Watu side diffs two DAILY LOCKED LISTS, not Watu's whole loan
+       book -- "new" means newly locked, "left" means no longer on the locked list
+       (paid / back online / loan closed). The HOOP side diffs two Aged Stock reports. */
+    var DEFS=[
+      {k:'leftHoop', t:'Left the Hoop store', s:'in '+(d.hoopA||'—')+', gone by '+(d.hoopB||'—'),
+        rows:d.leftHoop||[], cols:[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']], color:'var(--bad)'},
+      {k:'newInHoop', t:'New in the Hoop store', s:'appeared by '+(d.hoopB||'—'),
+        rows:d.newInHoop||[], cols:[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']], color:''},
+      {k:'newWatu', t:'New on the locked list', s:'locked by '+(d.watuB||'—')+' — just got locked, call first',
+        rows:d.newWatu||[], cols:[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']], color:'var(--bad)'},
+      {k:'leftWatu', t:'Left the locked list', s:'on '+(d.watuA||'—')+', off by '+(d.watuB||'—')+' — paid or back online',
+        rows:d.leftWatu||[], cols:[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']], color:'var(--ok)'},
+    ];
+    var shown=DEFS.filter(function(x){return MVSHOW[x.k];});
+    function tbl(x){
+      return '<div class="card" style="flex:1 1 '+(shown.length>1?'340px':'100%')+';min-width:300px;margin:0">'
+        +'<h2>'+esc(x.t)+' — '+money(x.rows.length)+'</h2><div class="mut" style="margin-bottom:6px">'+esc(x.s)+'</div>'
+        +'<div style="overflow-x:auto;max-height:420px;overflow-y:auto"><table><thead><tr>'
+        +x.cols.map(function(cc){return '<th>'+cc[0]+'</th>';}).join('')+'</tr></thead><tbody>'
+        +(x.rows.length?x.rows.map(function(r){
+          return '<tr>'+x.cols.map(function(cc){return '<td>'+esc(r[cc[1]]||'—')+'</td>';}).join('')+'</tr>';
+        }).join(''):'<tr><td colspan="'+x.cols.length+'" class="mut">Nothing moved between these dates.</td></tr>')
         +'</tbody></table></div></div>';
     }
     m.innerHTML=
       '<div class="card"><h2>Stock movement — the difference after every upload</h2>'
-      +'<div class="mut" style="margin-bottom:8px">HOOP store compares two Aged Stock uploads; the Watu book compares two daily lists. Defaults are the newest two of each — change any date to check a different gap.</div>'
+      +'<div class="mut" style="margin-bottom:8px">HOOP store compares two Aged Stock uploads; the Watu side compares two daily LOCKED lists. Defaults are the newest two of each — change any date to check a different gap. Tick which reports to see; they sit side by side.</div>'
       +'<div class="row">'
       +'<span class="mut">Hoop store:</span><input class="inp" type="date" id="mvHA" value="'+esc(d.hoopA||'')+'" style="flex:0 1 140px"><span class="mut">→</span><input class="inp" type="date" id="mvHB" value="'+esc(d.hoopB||'')+'" style="flex:0 1 140px">'
-      +'<span class="mut" style="margin-left:10px">Watu book:</span><input class="inp" type="date" id="mvWA" value="'+esc(d.watuA||'')+'" style="flex:0 1 140px"><span class="mut">→</span><input class="inp" type="date" id="mvWB" value="'+esc(d.watuB||'')+'" style="flex:0 1 140px">'
+      +'<span class="mut" style="margin-left:10px">Locked lists:</span><input class="inp" type="date" id="mvWA" value="'+esc(d.watuA||'')+'" style="flex:0 1 140px"><span class="mut">→</span><input class="inp" type="date" id="mvWB" value="'+esc(d.watuB||'')+'" style="flex:0 1 140px">'
       +'<button class="btn sm ghost" id="mvGo">Show</button></div>'
-      +'<div class="tiles">'
-      +'<div class="tile"><div class="l">Left Hoop store</div><div class="v" style="color:var(--bad)">'+money(c.leftHoop)+'</div><div class="s">in '+esc(d.hoopA||'—')+', gone by '+esc(d.hoopB||'—')+'</div></div>'
-      +'<div class="tile"><div class="l">New in Hoop store</div><div class="v">'+money(c.newInHoop)+'</div></div>'
-      +'<div class="tile"><div class="l">Financed into Watu</div><div class="v" style="color:var(--ok)">'+money(c.newWatu)+'</div><div class="s">new on the '+esc(d.watuB||'—')+' list</div></div>'
-      +'<div class="tile"><div class="l">Left the Watu book</div><div class="v">'+money(c.leftWatu)+'</div></div>'
+      +'<div class="row" style="gap:6px 14px;flex-wrap:wrap">'
+      +DEFS.map(function(x){
+        return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0;cursor:pointer">'
+          +'<input type="checkbox" class="mvT" value="'+x.k+'"'+(MVSHOW[x.k]?' checked':'')+'> '
+          +x.t+' <b'+(x.color?' style="color:'+x.color+'"':'')+'>'+money(c[x.k])+'</b></label>';
+      }).join('')+'</div>'
+      +((d.hoopA||d.hoopB)?'':'<div class="mut" style="margin-top:8px">No Aged Stock uploads yet — the Hoop-store side fills the day Sipho uploads two reports.</div>')
       +'</div>'
-      +((d.hoopA||d.hoopB)?'':'<div class="mut" style="margin-bottom:8px">No Aged Stock uploads yet — the Hoop-store side fills the day Sipho uploads two reports.</div>')
-      +'</div>'
-      +tbl('Left the Hoop store — '+esc(d.hoopA||'—')+' → '+esc(d.hoopB||'—'),d.leftHoop||[],[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']])
-      +tbl('New in the Hoop store',d.newInHoop||[],[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']])
-      +tbl('Financed into Watu — new on '+esc(d.watuB||'—'),d.newWatu||[],[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']])
-      +tbl('Left the Watu book — on '+esc(d.watuA||'—')+', gone by '+esc(d.watuB||'—'),d.leftWatu||[],[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']]);
+      +'<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">'
+      +shown.map(tbl).join('')
+      +(shown.length?'':'<div class="card" style="flex:1;margin:0"><div class="mut">Tick at least one report above.</div></div>')
+      +'</div>';
     $('#mvGo').onclick=function(){
       MV.hoopA=$('#mvHA').value; MV.hoopB=$('#mvHB').value;
       MV.watuA=$('#mvWA').value; MV.watuB=$('#mvWB').value;
       drawMove(m);
     };
+    $all('.mvT',m).forEach(function(cb){
+      cb.onchange=function(){ MVSHOW[cb.value]=cb.checked; drawMove(m); };
+    });
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
 

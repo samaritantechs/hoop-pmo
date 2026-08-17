@@ -200,7 +200,8 @@ const FNS = {
       The AGENT rides on every row -- who sold the phone is who to lean on, the same
       slot the guarantor held in Hope.
       Budget: 2 tiny indexed date lookups + 1 deck read + 1 prev-day snapshot read +
-      1 register read (imei+agent only), all team-scoped; FU vocabulary is 1 keyed read. */
+      1 register read (six columns, with a pre-migration fallback) + 1 bounded
+      hoop_agents read (agent phones), all team-scoped; FU vocabulary is 1 keyed read. */
   async customers(db, user) {
     requireNav(user, 'customers');
     const today = todayKey();
@@ -214,26 +215,39 @@ const FNS = {
         .order('snapshot_date', { ascending: false }).limit(1);
       prevDate = d2.data && d2.data[0] ? String(d2.data[0].snapshot_date).slice(0, 10) : null;
     }
-    const [deck, prev, agents, fu] = await Promise.all([
+    const [deck, prev, agents, hoopAgents, fu] = await Promise.all([
       deckDate ? fetchAll(() => scopeQ(user, db.from('followup_status')
         .select('imei, client_name, contact, team, model, price, disbursed_date, days_offline, locked4, locked7, has_ever_paid, fu_status, comment_by')
         .eq('deck_date', deckDate))) : [],
       prevDate ? fetchAll(() => scopeQ(user, db.from('watu_snapshots')
         .select('imei, client_name, client_mobile, team, model, price, disbursed_date, days_offline, locked4, locked7, has_ever_paid, agent, created_at')
         .eq('snapshot_date', prevDate))) : [],
-      fetchAll(() => scopeQ(user, db.from('watu_loans').select('imei, agent, team'))),
+      // Guarantor + branch arrived with the offline queue; before the migration the
+      // whole select is refused for them, so fall back to the old three columns.
+      fetchAll(() => scopeQ(user, db.from('watu_loans')
+        .select('imei, agent, team, branch, guarantor_name, guarantor_phone')))
+        .catch(() => fetchAll(() => scopeQ(user, db.from('watu_loans').select('imei, agent, team')))),
+      fetchAll(() => db.from('hoop_agents').select('name, phone')),
       fuStatusConfig(db),
     ]);
-    const agentOf = {};
-    agents.forEach(r => { agentOf[r.imei] = r.agent || ''; });
-    const mk = (r, contactKey, refDay) => ({
-      imei: r.imei, name: r.client_name || '', phone: r[contactKey] || '',
-      team: r.team || '', model: r.model || '', price: num(r.price),
-      agent: r.agent !== undefined ? (r.agent || '') : (agentOf[r.imei] || ''),
-      daysOff: r.days_offline == null ? null : num(r.days_offline),
-      locked7: r.locked7 === true, locked4: r.locked4 === true, paid: r.has_ever_paid === true,
-      fu: r.fu_status || '', lifeDay: lifeDayOf(r.disbursed_date, refDay),
-    });
+    const regOf = {};
+    agents.forEach(r => { regOf[r.imei] = r; });
+    const agPhone = {};
+    hoopAgents.forEach(a => { if (a.name) agPhone[K(a.name)] = a.phone || ''; });
+    const mk = (r, contactKey, refDay) => {
+      const reg = regOf[r.imei] || {};
+      const agent = r.agent !== undefined ? (r.agent || '') : (reg.agent || '');
+      return {
+        imei: r.imei, name: r.client_name || '', phone: r[contactKey] || '',
+        team: r.team || '', branch: reg.branch || '',
+        model: r.model || '', price: num(r.price),
+        agent, agentPhone: agent ? (agPhone[K(agent)] || '') : '',
+        gName: reg.guarantor_name || '', gPhone: reg.guarantor_phone || '',
+        daysOff: r.days_offline == null ? null : num(r.days_offline),
+        locked7: r.locked7 === true, locked4: r.locked4 === true, paid: r.has_ever_paid === true,
+        fu: r.fu_status || '', lifeDay: lifeDayOf(r.disbursed_date, refDay),
+      };
+    };
     // jana: a same-date re-upload appends, so the newest row per IMEI within the day wins.
     const seen = new Map();
     prev.forEach(r => {
@@ -539,17 +553,25 @@ const FNS = {
     const q = String((args && args.q) || '').trim().replace(/[%,()]/g, ' ').replace(/\s+/g, ' ').trim();
     if (q.length < 3) return { ok: true, customers: [] };
     const pat = '*' + q + '*';
-    let query = db.from('watu_loans')
-      .select('imei, client_name, client_mobile, team, agent, model, days_offline, locked7, snapshot_date')
-      .or(['client_name.ilike.' + pat, 'client_mobile.ilike.' + pat,
-           'imei.ilike.' + pat, 'agent.ilike.' + pat].join(','))
-      .limit(30);
-    if (user.teams && user.teams.length) query = query.in('team', user.teams.map(K));
-    const { data, error } = await query;
+    // Guarantor columns arrived with the offline queue; until the migration runs the
+    // whole select would be refused for them, so fall back to the old shape.
+    const mk = cols => {
+      let query = db.from('watu_loans').select(cols)
+        .or(['client_name.ilike.' + pat, 'client_mobile.ilike.' + pat,
+             'imei.ilike.' + pat, 'agent.ilike.' + pat].join(','))
+        .limit(30);
+      if (user.teams && user.teams.length) query = query.in('team', user.teams.map(K));
+      return query;
+    };
+    let { data, error } = await mk('imei, client_name, client_mobile, team, agent, model, '
+      + 'days_offline, locked7, snapshot_date, branch, guarantor_name, guarantor_phone');
+    if (error) ({ data, error } = await mk('imei, client_name, client_mobile, team, agent, model, '
+      + 'days_offline, locked7, snapshot_date'));
     if (error) throw new Error(error.message);
     return { ok: true, customers: (data || []).map(r => ({
       imei: r.imei, name: r.client_name || '', phone: r.client_mobile || '',
-      team: r.team || '', agent: r.agent || '', model: r.model || '',
+      team: r.team || '', branch: r.branch || '', agent: r.agent || '', model: r.model || '',
+      gName: r.guarantor_name || '', gPhone: r.guarantor_phone || '',
       daysOff: r.days_offline, locked7: r.locked7 === true,
       asOf: r.snapshot_date ? String(r.snapshot_date).slice(0, 10) : null })) };
   },

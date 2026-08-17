@@ -3,7 +3,8 @@ import { supabase } from './_lib/supabase.js';
 import { withApi, gatedUser, can } from './_lib/auth.js';
 import { todayKey } from './_lib/time.js';
 import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
-  importAgedStock, isAgedStockFile, lifetimeDay } from './_lib/importers.js';
+  importAgedStock, isAgedStockFile, importOfflineQueue, isOfflineQueueFile,
+  lifetimeDay } from './_lib/importers.js';
 
 /* =====================================================================================
    POST /api/upload -- the daily Watu list, AND the hoopltd.shop sales export. The header
@@ -53,6 +54,23 @@ async function writeChunks(db, table, records, onConflict) {
     }
     written += slice.length;
   }
+  return written;
+}
+
+/** MERGE WITHOUT LOSS. Rows whose key sets differ cannot share one PostgREST request,
+    and a PostgREST upsert updates exactly the keys in the payload -- so grouping rows
+    by shape is what makes "a blank cell leaves what the register holds" literally true:
+    the blank's key is absent from that row's group, so the column is never touched.
+    A handful of shapes at most; writes stay bounded by rows/CHUNK + shapes. */
+async function writeChunksGrouped(db, table, records, onConflict) {
+  const groups = new Map();
+  for (const r of records) {
+    const sig = Object.keys(r).sort().join(',');
+    if (!groups.has(sig)) groups.set(sig, []);
+    groups.get(sig).push(r);
+  }
+  let written = 0;
+  for (const g of groups.values()) written += await writeChunks(db, table, g, onConflict);
   return written;
 }
 
@@ -160,6 +178,43 @@ export default withApi(async (req) => {
     if (isLast) await logUpload(user, 'upload:agedstock', snapshotDate + ' · rows ' + st.records.length);
     return { kind: 'agedstock', inserted: st.records.length, date: snapshotDate, batch,
       dropped: st.dropped.length, droppedRows: st.dropped.slice(0, 50),
+      part: { index, total, last: isLast } };
+  }
+
+  // The credit team's OFFLINE QUEUE sheet -> merged into the watu_loans register by
+  // IMEI. This is the file that carries GUARANTORS (name | phone in one cell), plus
+  // customer, phone, agent and sale date; its Watu working-state columns are ignored.
+  // "Always append and update existing": new IMEIs insert, known IMEIs update ONLY the
+  // keys each row actually carries (writeChunksGrouped) -- nothing already known is
+  // ever nulled out. Moves DATA_VERSION: the phones' cards must pick the guarantors up.
+  // Budget per slice: 1 auth + 1 gate (cached) + <=shapes chunked upserts, bounded by
+  // the file's rows; last slice adds 1 settings write + the audit line.
+  if (header && isOfflineQueueFile(header)) {
+    enforceKind('offline');
+    const oq = importOfflineQueue(rows);
+    if (!oq.records.length && !oq.dropped.length) {
+      const e = new Error('No offline-queue rows could be read.'); e.status = 400; throw e;
+    }
+    const nowOq = new Date().toISOString();
+    try {
+      await writeChunksGrouped(supabase, 'watu_loans',
+        oq.records.map(r => ({ ...r, updated_at: nowOq })), 'imei');
+    } catch (err) {
+      if (/guarantor_/i.test(String(err.message))) {
+        const e = new Error('The register has no guarantor columns yet — run '
+          + 'db/migrations/RUN-ME-2026-08-17-offline-queue.sql in the Supabase SQL editor, then upload again.');
+        e.status = 400; throw e;
+      }
+      throw err;
+    }
+    if (isLast) {
+      const { error } = await supabase.from('settings')
+        .upsert({ key: 'DATA_VERSION', value: batch }, { onConflict: 'key' });
+      if (error) throw new Error('settings: ' + error.message);
+      await logUpload(user, 'upload:offline-queue', 'rows ' + oq.records.length);
+    }
+    return { kind: 'offline', inserted: oq.records.length, batch,
+      dropped: oq.dropped.length, droppedRows: oq.dropped.slice(0, 50),
       part: { index, total, last: isLast } };
   }
 
