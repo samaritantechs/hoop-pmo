@@ -956,7 +956,7 @@ function drawCodes(m){
             'ONE code for the whole company — every credit user registers on HOOP Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.',
             'Create the company code')
           +card('AGENT','App sign-in code — agents',
-            'ONE shared code for ALL sales agents — share it in the WhatsApp group and rotate it here when somebody leaves. An agent registers with their name, phone number and location; the phone number must match the agents register, and the app then shows them ONLY the customers they sold. A wrong or unknown number sees an empty list, never anybody else’s customers.',
+            'ONE shared code for ALL sales agents — share it in the WhatsApp group and rotate it here when somebody leaves. An agent signs in with just their registered phone number and this code; their name and branch are read from the agents register, and the app shows them ONLY the customers they sold. A number that is not on the register cannot sign in at all.',
             'Create the agent code');
       })();
     $all('[data-comk]',m).forEach(function(b){

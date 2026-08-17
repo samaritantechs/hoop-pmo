@@ -264,7 +264,8 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
     <div class="fld">
       <label>Mimi ni / I am</label>
       <div class="regToggle">
-        <button type="button" class="regToggleBtn on" data-role="officer">Afisa<span>Field officer</span></button>
+        <button type="button" class="regToggleBtn on" data-role="officer">Afisa<span>Staff</span></button>
+        <button type="button" class="regToggleBtn" data-role="agent">Wakala<span>Sales agent</span></button>
         <button type="button" class="regToggleBtn" data-role="leader">Kiongozi<span>Leader</span></button>
       </div>
     </div>
@@ -272,13 +273,9 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
       <div class="note">Ndiyo unayoingia nayo &#x2014; lazima iwe ile PMO aliyosajili. / This is your login: it must be the number your PMO officer registered.</div>
     </div>
     <div class="fld" id="regNameWrap"><label>Jina lako / Your name</label><input id="regName" placeholder="e.g. Juma Issa"></div>
-    <div class="fld" id="regPassWrap"><label>Msimbo wa timu / Team code</label>
+    <div class="fld" id="regPassWrap"><label id="regPassLbl">Msimbo wa timu / Team code</label>
       <input id="regPass" placeholder="XXXXXX" autocomplete="off" data-secret data-upper>
-      <div class="note">Umepewa na afisa wa PMO. Msimbo ndio unaonyesha timu yako &#x2014; hakuna haja ya kuichagua. / Issued by your PMO officer. The code identifies your team, so there is nothing to pick. Mawakala hutumia msimbo wa mawakala hapa hapa. / Agents enter the agent code in this same box.</div>
-    </div>
-    <div class="fld" id="regLocWrap"><label>Eneo / Location</label>
-      <input id="regLoc" placeholder="e.g. Kinondoni">
-      <div class="note">Kwa mawakala tu &#x2014; ukiwa kwenye rejista ya mawakala, eneo (branch) linajazwa lenyewe; vinginevyo andika eneo unalouzia. Wafanyakazi wa ofisi waache wazi. / Agents only: if you are on the agents register your branch fills in by itself; otherwise type the area you sell in. Office staff leave this empty.</div>
+      <div class="note" id="regPassNote">Umepewa na afisa wa PMO. Msimbo ndio unaonyesha timu yako &#x2014; hakuna haja ya kuichagua. / Issued by your PMO officer. The code identifies your team, so there is nothing to pick.</div>
     </div>
     <div class="fld hide" id="regCodeWrap"><label>Msimbo wa uongozi / Leader access code</label>
       <input id="regCode" placeholder="Enter your portal access code" data-secret>
@@ -901,10 +898,15 @@ $all('.regToggleBtn').forEach(function(b){
     $all('.regToggleBtn').forEach(function(x){ x.classList.toggle('on', x===b); });
     // Leaders never type their own name or pick a team -- both come from their access code,
     // same as the portal itself (Leaders sheet / access code owns that identity, not a form field).
-    $('#regNameWrap').classList.toggle('hide', regRole==='leader');
+    // An AGENT types nothing but their phone and the shared agent code -- their name
+    // and branch come from the agents register, which is also the fence.
+    $('#regNameWrap').classList.toggle('hide', regRole!=='officer');
     $('#regPassWrap').classList.toggle('hide', regRole==='leader');
-    $('#regLocWrap').classList.toggle('hide', regRole==='leader');
-    $('#regCodeWrap').classList.toggle('hide', regRole==='officer');
+    $('#regCodeWrap').classList.toggle('hide', regRole!=='leader');
+    $('#regPassLbl').textContent = regRole==='agent' ? 'Msimbo wa mawakala / Agent code' : 'Msimbo wa timu / Team code';
+    $('#regPassNote').textContent = regRole==='agent'
+      ? 'Unatolewa kwenye WhatsApp group ya mawakala. Jina lako na eneo vinasomwa kutoka rejista kwa namba yako ya simu. / Shared in the agents WhatsApp group. Your name and branch are read from the register by your phone number.'
+      : 'Umepewa na afisa wa PMO. Msimbo ndio unaonyesha timu yako — hakuna haja ya kuichagua. / Issued by your PMO officer. The code identifies your team, so there is nothing to pick.';
   };
 });
 $('#regBtn').onclick = function(){
@@ -912,15 +914,15 @@ $('#regBtn').onclick = function(){
   // created. Typing them was how anyone with the APK gave themselves a team's portfolio.
   var phone = $('#regPhone').value.trim();
   var name = regRole === 'officer' ? $('#regName').value.trim() : '';
-  var pass = regRole === 'officer' ? $('#regPass').value.trim() : '';
+  var pass = regRole !== 'leader' ? $('#regPass').value.trim() : '';
   var code = regRole === 'leader' ? $('#regCode').value.trim() : '';
-  var loc = regRole === 'officer' ? $('#regLoc').value.trim() : '';
   if (!phone){ $('#regErr').innerHTML = '<div class="err">Andika namba yako ya simu.</div>'; return; }
   if (regRole === 'officer' && !name){ $('#regErr').innerHTML = '<div class="err">Andika jina lako.</div>'; return; }
   if (regRole === 'officer' && !pass){ $('#regErr').innerHTML = '<div class="err">Weka msimbo wa timu yako.</div>'; return; }
+  if (regRole === 'agent' && !pass){ $('#regErr').innerHTML = '<div class="err">Weka msimbo wa mawakala.</div>'; return; }
   if (regRole === 'leader' && !code){ $('#regErr').innerHTML = '<div class="err">Weka msimbo wako wa uongozi.</div>'; return; }
   $('#regBtn').disabled = true; $('#regBtn').textContent = 'Inajiunga\u2026';
-  srv('api_callRegister', DEV, name, '', code, phone, pass, loc).then(function(){
+  srv('api_callRegister', DEV, name, '', code, phone, pass).then(function(){
     return srv('api_callBoot', DEV);
   }).then(function(d){
     if (d.ok) {

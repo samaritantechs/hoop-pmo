@@ -213,29 +213,23 @@ async function register(db, [dev, name, team, accessCode, phone, passcode, locat
     const teamRows = await fetchAll(() => db.from('teams').select('*'));
     const match = teamRows.find(t => K(t.team_code || '').replace(/[^0-9A-Z]/g, '') === codeKey && codeKey);
     if (!match) throw new Error('Msimbo wa timu si sahihi. / That team code is not correct. Ask your admin.');
-    if (!name) throw new Error('Andika jina lako. / Enter your name.');
     team = match.team;
     role = 'OFFICER';
-    /* The AGENT code is the same shared-code flow (one code, rotated in the WhatsApp
-       group when somebody leaves), but the account it makes is fenced: role AGENT sees
-       only the customers THEY sold. Their location is required -- the company has no
-       branches, so the team slot carries it (Kinondoni is a location, not a fence). */
+    /* AGENTS SIGN IN WITH PHONE + THE SHARED CODE, NOTHING ELSE (the owner: "their
+       sign in code should be their registered phone number and agent code ... read
+       their names and branch from system"). The register IS the identity: canonical
+       name, branch as location. An unknown phone cannot register as an agent at all --
+       the fence fails closed at the front door, not just on the list. Budget: the
+       shared cached agent index -- no extra round trip warm. */
     if (K(match.team) === 'AGENT') {
       role = 'AGENT';
-      /* Sipho's register already knows most agents by phone: take the canonical NAME
-         and the BRANCH from it -- "the agents location are the branch column" (owner).
-         The typed location only covers an agent the register has not caught up with
-         yet. Budget: the shared cached agent index -- no extra round trip warm. */
       const agents = await agentIndex(db, nowMs);
       const known = agents.byPhone[phoneD] || null;
-      if (known) {
-        name = known.name || name;
-        team = known.branch || loc || 'AGENT';
-      } else {
-        if (!loc) throw new Error('Andika eneo lako. / Enter your location — agents sign in with name, phone number and location.');
-        team = loc;
-      }
-    }
+      if (!known) throw new Error('Namba yako haipo kwenye rejista ya mawakala. '
+        + '/ Your phone number is not on the agents register yet — ask the office to add you, then sign in again.');
+      name = known.name || name || 'Agent';
+      team = known.branch || loc || 'AGENT';
+    } else if (!name) throw new Error('Andika jina lako. / Enter your name.');
     const { data: acct } = await db.from('call_users').select('active').eq('phone', phoneD).maybeSingle();
     if (acct && acct.active === false) throw new Error('Akaunti yako imezimwa. / Your account has been switched off. Ask your admin.');
   }

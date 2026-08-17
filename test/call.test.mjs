@@ -301,31 +301,27 @@ test('the card survives a database that has not run the guarantor migration yet'
   assert.equal(r.rows[0].gName, '', 'guarantor is simply blank until the migration runs');
 });
 
-test('the AGENT code registers role AGENT; the register supplies branch + canonical name', async () => {
+test('an agent signs in with PHONE + the shared code alone; the register is the identity', async () => {
   const d = fakeDb({
     settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }],
     teams: [{ team: 'HOOP', team_code: 'AB2C3D' }, { team: 'AGENT', team_code: 'QQ7R8S' }],
     hoop_agents: [{ name: 'Anord Sawe', phone: '0658918324', branch: 'KINONDONI' }],
     call_users: [],
   });
-  // A phone the register KNOWS: branch becomes the location, the register's spelling
-  // of the name wins, and no typed location is demanded.
+  // No name typed at all -- the register supplies the name AND the branch by phone.
   const r = await callApi(d, 'api_callRegister',
-    ['dev-9', 'anold', '', '', '0658918324', 'QQ7R8S'], NOW);
+    ['dev-9', '', '', '', '0658918324', 'QQ7R8S'], NOW);
   assert.equal(r.ok, true);
   const cu = d._dump('call_users')[0];
   assert.equal(cu.role, 'AGENT');
-  assert.equal(cu.name, 'Anord Sawe', 'the register\'s canonical name replaces the typo');
+  assert.equal(cu.name, 'Anord Sawe', 'the register\'s spelling, not a typed one');
   assert.equal(cu.team, 'KINONDONI', 'the BRANCH column of Sipho\'s report IS the agent\'s location');
   assert.equal(cu.is_leader, false);
-  // A phone the register does NOT know: the typed location is required and stored.
+  // A phone the register does NOT know cannot become an agent account at all --
+  // the fence fails closed at the front door.
   await assert.rejects(() => callApi(d, 'api_callRegister',
-    ['dev-7', 'Someone New', '', '', '0755000111', 'QQ7R8S'], NOW), /location/i);
-  const r2 = await callApi(d, 'api_callRegister',
-    ['dev-7', 'Someone New', '', '', '0755000111', 'QQ7R8S', 'Mbagala'], NOW);
-  assert.equal(r2.ok, true);
-  assert.equal(d._dump('call_users').find(u => u.name === 'Someone New').team, 'Mbagala');
-  // The staff code still registers an OFFICER with no location asked.
+    ['dev-7', 'Someone New', '', '', '0755000111', 'QQ7R8S'], NOW), /agents register/i);
+  // The staff code is untouched: name still typed, role OFFICER, the deal covers them.
   const r3 = await callApi(d, 'api_callRegister',
     ['dev-8', 'Ainea', '', '', '0712345678', 'AB2C3D'], NOW);
   assert.equal(r3.ok, true);
