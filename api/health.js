@@ -37,7 +37,13 @@ export default async function handler(req, res) {
       const CR = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CREDIT TEAM']);
       const K = s => String(s == null ? '' : s).trim().toUpperCase();
       const dv = await supabase.from('settings').select('value').eq('key', 'DATA_VERSION').maybeSingle();
+      // Stock rides along: row count + how many report dates -- so "did Sipho's upload
+      // land" is answerable from here without guessing from a screen.
+      const stCount = await supabase.from('hoop_aged_stock').select('serial', { count: 'exact', head: true });
+      const stDates = await fetchAll(() => supabase.from('hoop_aged_stock').select('as_of'));
       card = {
+        agedStockRows: stCount.error ? null : (stCount.count || 0),
+        agedStockDates: [...new Set(stDates.map(r => String(r.as_of).slice(0, 10)))].sort().slice(-4),
         guarantorColumns: !probeSel.error,
         columnError: probeSel.error ? String(probeSel.error.message || '').slice(0, 160) : null,
         register: reg.length,
