@@ -333,8 +333,12 @@ function myShare(items, keyFn, roster, uid) {
    DATA_VERSION like the phone index; a failed build must NEVER break the list -- the
    card just shows a dash. Budget: warm = 1 keyed DATA_VERSION read; a version change
    or 15-minute lapse costs 2 bounded reads (register imei+agent, agents name+phone). */
+/* Names arrive in any order and any casing -- Watu writes "Anord Sawe", SyscoPos may
+   hold "SAWE Anord". A token-sorted key lets every spelling of the same person meet:
+   the tokens, uppercased, sorted, rejoined. */
+export const nameKey = s => K(s).split(/\s+/).filter(Boolean).sort().join(' ');
 const agentIdxCache = new WeakMap();
-async function agentIndex(db, nowMs) {
+export async function agentIndex(db, nowMs) {
   const version = (await settingGet(db, 'DATA_VERSION')) || '';
   const hit = agentIdxCache.get(db);
   if (hit && hit.version === version && (nowMs - hit.at) < 15 * 60000) return hit;
@@ -343,21 +347,31 @@ async function agentIndex(db, nowMs) {
     // Guarantors landed with the offline queue (2026-08-17). Until the migration has
     // run, PostgREST refuses the WHOLE select for the unknown columns -- so fall back
     // to the old shape rather than letting the agent fence and the card go dark.
-    const [reg, agents] = await Promise.all([
+    const [reg, agents, sales] = await Promise.all([
       fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id, branch, guarantor_name, guarantor_phone'))
         .catch(() => fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id'))),
       fetchAll(() => db.from('hoop_agents').select('name, phone, branch')),
+      // The sales report carries the agent's payout number per sale (the owner: "sales
+      // report of store keeper sipho has the agents numbers") -- a SECOND source of
+      // agent phones, so a card need not wait for the agent's register page to land.
+      fetchAll(() => db.from('hoop_sales').select('commission_agent, commission_phone')
+        .not('commission_phone', 'is', null)).catch(() => []),
     ]);
     for (const r of reg) if (r.agent || r.branch || r.guarantor_name || r.guarantor_phone)
       byImei[String(r.imei)] = { name: r.agent || '', id: r.agent_id || '', branch: r.branch || '',
         gName: r.guarantor_name || '', gPhone: r.guarantor_phone || '' };
     for (const a of agents) if (a.name) {
-      phoneByName[K(a.name)] = a.phone || '';
+      phoneByName[nameKey(a.name)] = a.phone || '';
       // The reverse map is the AGENT sign-in fence: their registered phone -> who they
       // are. branch rides along because it IS the agent's location (the owner: "the
       // agents location are the branch column" of Sipho's report).
       const p = pnorm(a.phone);
-      if (p && !byPhone[p]) byPhone[p] = { name: a.name, key: K(a.name), branch: a.branch || '' };
+      if (p && !byPhone[p]) byPhone[p] = { name: a.name, key: nameKey(a.name), branch: a.branch || '' };
+    }
+    // Sipho's register wins on a clash; sales phones fill only the gaps.
+    for (const s of sales) if (s.commission_agent && s.commission_phone) {
+      const k = nameKey(s.commission_agent);
+      if (!phoneByName[k]) phoneByName[k] = s.commission_phone;
     }
   } catch (e) { /* decoration for the card; the agent fence fails CLOSED on empty maps */ }
   const value = { version, at: nowMs, byImei, phoneByName, byPhone };
@@ -395,7 +409,7 @@ async function list(db, [dev], nowMs) {
     // The agent fence: their registered phone names them on Sipho's register; the Watu
     // register names them on each IMEI. No match -> EMPTY book (fails closed) + why.
     const me = agents.byPhone[pnorm(cu.phone)] || null, myKey = me ? me.key : '';
-    mine = myKey ? fu.filter(r => { const ag = agents.byImei[String(r.imei)]; return ag && K(ag.name) === myKey; }) : [];
+    mine = myKey ? fu.filter(r => { const ag = agents.byImei[String(r.imei)]; return ag && nameKey(ag.name) === myKey; }) : [];
     if (!myKey) note = 'Your phone number is not on the agents register yet — ask the office to add it, then reopen the app.';
     else if (!mine.length) note = 'Safi! Hakuna mteja wako kwenye orodha ya leo. / None of the customers you sold are on today’s locked list.';
   } else {
@@ -445,7 +459,7 @@ async function list(db, [dev], nowMs) {
   return { ok: true, rows, asOf: deckDate, stale, narrowed: null, note };
 }
 
-function phoneByNameOf(agents, name) { return agents.phoneByName[K(name)] || ''; }
+function phoneByNameOf(agents, name) { return agents.phoneByName[nameKey(name)] || ''; }
 
 /* ---------- the phone index (who is this number) ---------- */
 /* Cached against DATA_VERSION exactly as Hope's is: an upload moves the version, the next
@@ -460,17 +474,27 @@ async function phoneIndex(db, nowMs, dataVersion) {
   return value;
 }
 async function phoneIndexCompute(db) {
-  const [fu, cm] = await Promise.all([
+  const [fu, cm, reg, ags, sales] = await Promise.all([
     fetchAll(() => db.from('followup_status').select('imei, client_name, contact, team')),
     fetchAll(() => db.from('followup_comments').select('imei, new_number, client_name, team')
       .not('new_number', 'is', null).neq('new_number', '')),
+    // GUARANTOR AND AGENT CALLS ARE PORTFOLIO WORK (the owner's rule): ringing the
+    // guarantor IS chasing that customer, ringing the agent is chasing their sales.
+    // Guarantor numbers point at the customer's IMEI; agent numbers carry the agent's
+    // own name with no team, so the portfolio flag holds for every caller.
+    fetchAll(() => db.from('watu_loans').select('imei, client_name, team, guarantor_phone')
+      .not('guarantor_phone', 'is', null)).catch(() => []),
+    fetchAll(() => db.from('hoop_agents').select('name, phone')).catch(() => []),
+    fetchAll(() => db.from('hoop_sales').select('commission_agent, commission_phone')
+      .not('commission_phone', 'is', null)).catch(() => []),
   ]);
   const byNum = {};
-  const add = (numRaw, name, ref, team) => {
+  const add = (numRaw, name, ref, team, kind) => {
     const d = pnorm(numRaw);
     if (!d || byNum[d]) return;
-    byNum[d] = { K: d, N: name || '', R: ref || '', T: team || '', C: 'C', S: 'LOCKED' };
+    byNum[d] = { K: d, N: name || '', R: ref || '', T: team || '', C: kind || 'C', S: 'LOCKED' };
   };
+  // Customers first -- a number that is both a customer's and an agent's is a customer.
   fu.forEach(r => add(r.contact, r.client_name, r.imei, r.team));
   const refName = {}, refTeam = {};
   Object.values(byNum).forEach(o => { if (o.R) { refName[o.R] = o.N; refTeam[o.R] = o.T; } });
@@ -480,6 +504,9 @@ async function phoneIndexCompute(db) {
     const ref = String(r.imei || '');
     add(nn, refName[ref] || r.client_name || '', ref, refTeam[ref] || r.team);
   });
+  reg.forEach(r => add(r.guarantor_phone, (r.client_name || '') + ' (mdhamini)', r.imei, r.team, 'GUARANTOR'));
+  ags.forEach(a => add(a.phone, 'Agent: ' + (a.name || ''), '', '', 'AGENT'));
+  sales.forEach(s => add(s.commission_phone, 'Agent: ' + (s.commission_agent || ''), '', '', 'AGENT'));
   return byNum;
 }
 
@@ -515,7 +542,7 @@ async function sync(db, [dev, calls], nowMs) {
       id, user_id: cu.user_id, officer: cu.name, team: cu.team, phone: d,
       direction: c.dir === 'in' ? 'IN' : 'OUT',
       call_date: eatDate(ts), call_time: eatTime(ts), duration: dur,
-      portfolio: mine, match_type: m ? 'CUSTOMER' : null,
+      portfolio: mine, match_type: m ? (m.C === 'AGENT' ? 'AGENT' : m.C === 'GUARANTOR' ? 'GUARANTOR' : 'CUSTOMER') : null,
       ref: m ? m.R : null, customer: m ? m.N : null,
       synced_at: new Date(nowMs).toISOString(),
       // category deliberately null: Hoop has ONE book (the locked list), so the
@@ -758,7 +785,7 @@ async function summaryForAgent(db, cu, nowMs) {
     agentIndex(db, nowMs),
   ]);
   const me = agents.byPhone[pnorm(cu.phone)] || null, myKey = me ? me.key : '';
-  const mineFn = r => { const ag = agents.byImei[String(r.imei)]; return !!(myKey && ag && K(ag.name) === myKey); };
+  const mineFn = r => { const ag = agents.byImei[String(r.imei)]; return !!(myKey && ag && nameKey(ag.name) === myKey); };
   const mine = deck.filter(mineFn);
   const inWinOf = r => { const l = lifeDayOf(r.disbursed_date, today); return l != null && l <= 45; };
   const value = {

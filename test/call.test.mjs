@@ -398,3 +398,57 @@ test('a blank-role trial account is NOT dealt -- it opens the whole book', async
   const cr = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
   assert.equal(cr.rows.length, 2, 'the ONLY credit account holds the whole book -- n=1');
 });
+
+test('the agent number reaches the card from the SALES report too, whatever the name order', async () => {
+  const d = fakeDb({
+    settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+    teams: [],
+    followup_status: [
+      { imei: 'A', client_name: 'One', contact: '255716000001', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+      { imei: 'B', client_name: 'Two', contact: '255716000002', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+    ],
+    watu_loans: [
+      { imei: 'A', agent: 'Neema John' },
+      { imei: 'B', agent: 'Anord Sawe' },
+    ],
+    // Sipho's register spells the name the other way round -- token order must not matter.
+    hoop_agents: [{ name: 'SAWE Anord', phone: '0658918324' }],
+    // Neema is not on the register yet; her payout number rides the sales report.
+    hoop_sales: [{ commission_agent: 'Neema John', commission_phone: '0712000999' }],
+    call_users: [{ user_id: 'U1', device_id: 'dev-1', name: 'Ainea', role: 'CREDIT', active: true }],
+    call_logs: [],
+  });
+  const r = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  const a = r.rows.find(x => x.ref === 'A'), b = r.rows.find(x => x.ref === 'B');
+  assert.equal(a.agentPhone, '0712000999', 'the sales report fills the register\'s gap');
+  assert.equal(b.agentPhone, '0658918324', 'token-sorted names: SAWE Anord IS Anord Sawe');
+});
+
+test('guarantor and agent calls are PORTFOLIO calls', async () => {
+  const d = fakeDb({
+    settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+    teams: [{ team: 'KINONDONI', team_code: 'AB2C3D' }],
+    followup_status: [
+      { imei: '351929937378664', client_name: 'Alafati Kalikawe Selemani', contact: '255716548153',
+        team: 'KINONDONI', deck_date: '2026-08-14', disbursed_date: '2026-07-13' },
+    ],
+    watu_loans: [{ imei: '351929937378664', client_name: 'Alafati Kalikawe Selemani',
+      team: 'KINONDONI', guarantor_phone: '0788533370' }],
+    hoop_agents: [{ name: 'Anord Sawe', phone: '0658918324' }],
+    followup_comments: [], call_users: [], call_logs: [],
+  });
+  await callApi(d, 'api_callRegister', ['dev-1', 'Ainea', '', '', '0712345678', 'AB2C3D'], NOW);
+  const r = await callApi(d, 'api_callSync', ['dev-1', [
+    { ts: NOW - 3600000, dur: 60, dir: 'out', num: '0788533370', outcome: 'CONNECTED' },  // the guarantor
+    { ts: NOW - 1800000, dur: 45, dir: 'out', num: '0658918324', outcome: 'CONNECTED' },  // the agent
+  ]], NOW);
+  assert.equal(r.ok, true);
+  assert.equal(r.portfolio, 2, 'ringing the guarantor or the agent IS portfolio work');
+  const logs = d._dump('call_logs');
+  const g = logs.find(l => l.match_type === 'GUARANTOR');
+  assert.equal(g.ref, '351929937378664', 'the guarantor call points at THEIR customer');
+  assert.match(g.customer, /mdhamini/);
+  const ag = logs.find(l => l.match_type === 'AGENT');
+  assert.equal(ag.portfolio, true);
+  assert.match(ag.customer, /Agent: Anord Sawe/);
+});

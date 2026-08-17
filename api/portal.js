@@ -2,7 +2,8 @@ import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey } from './_lib/time.js';
-import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull } from './_lib/call-core.js';
+import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
+  agentIndex, nameKey } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -227,13 +228,14 @@ const FNS = {
       fetchAll(() => scopeQ(user, db.from('watu_loans')
         .select('imei, agent, team, branch, guarantor_name, guarantor_phone')))
         .catch(() => fetchAll(() => scopeQ(user, db.from('watu_loans').select('imei, agent, team')))),
-      fetchAll(() => db.from('hoop_agents').select('name, phone')),
+      // The SHARED agent index: Sipho's register plus the sales report's payout
+      // numbers, token-sorted names -- the same phones the app's card resolves.
+      agentIndex(db, Date.now()),
       fuStatusConfig(db),
     ]);
     const regOf = {};
     agents.forEach(r => { regOf[r.imei] = r; });
-    const agPhone = {};
-    hoopAgents.forEach(a => { if (a.name) agPhone[K(a.name)] = a.phone || ''; });
+    const agPhone = hoopAgents.phoneByName || {};
     /* THE SAME DEAL THE PHONES RUN, shown to the office: sort today's deck by IMEI,
        row i belongs to credit person i % n -- so Wateja names who is chasing whom
        exactly as the handsets see it, and re-deals itself the moment a credit user is
@@ -251,7 +253,7 @@ const FNS = {
         imei: r.imei, name: r.client_name || '', phone: r[contactKey] || '',
         team: r.team || '', branch: reg.branch || '',
         model: r.model || '', price: num(r.price),
-        agent, agentPhone: agent ? (agPhone[K(agent)] || '') : '',
+        agent, agentPhone: agent ? (agPhone[nameKey(agent)] || '') : '',
         gName: reg.guarantor_name || '', gPhone: reg.guarantor_phone || '',
         heldBy: holdsOf[String(r.imei)] || '',
         daysOff: r.days_offline == null ? null : num(r.days_offline),
