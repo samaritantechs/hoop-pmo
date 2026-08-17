@@ -12,7 +12,9 @@ jobs:
           for path in / /call /api/health; do
             echo "=== GET $path ==="
             curl -sS -o /tmp/body -w "HTTP %{http_code} final=%{url_effective}\n" -L "https://hoop-pmo.vercel.app$path"
-            head -c 400 /tmp/body; echo; echo
+            # health carries the card diagnostic -- print it whole; pages stay trimmed.
+            case "$path" in /api/health) head -c 2500 /tmp/body;; *) head -c 400 /tmp/body;; esac
+            echo; echo
           done
           echo "=== POST /api/call api_brand ==="
           curl -sS -w "\nHTTP %{http_code}\n" -X POST -H 'Content-Type: application/json' \
