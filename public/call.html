@@ -407,11 +407,20 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
       b.textContent='\u2913 Excel';
       b.style.cssText='margin:0 0 8px;font-size:11.5px;padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--b800);font-weight:700;cursor:pointer';
       b.onclick=function(){
-        var blob=new Blob([csvOf(t)],{type:'text/csv;charset=utf-8'});
+        var csv=csvOf(t);
+        var blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
         var f=null;
         try { f=new File([blob],'HOOP-ripoti.csv',{type:'text/csv'}); } catch(e){}
-        if (window.HopeCalls && f && navigator.canShare && navigator.canShare({files:[f]})){
-          navigator.share({files:[f],title:'HOOP ripoti'}).catch(function(){});
+        /* Inside the APK a blob link punts to Chrome -- the SHARE SHEET keeps it on
+           the phone: "Files" saves it as a download, Drive keeps it, WhatsApp sends
+           it. File share first, text share as the fallback for older WebViews; the
+           plain download runs only where a real browser owns the page. */
+        if (window.HopeCalls && navigator.share){
+          if (f && navigator.canShare && navigator.canShare({files:[f]})){
+            navigator.share({files:[f],title:'HOOP ripoti'}).catch(function(){});
+            return;
+          }
+          navigator.share({title:'HOOP ripoti',text:csv}).catch(function(){});
           return;
         }
         var a=document.createElement('a');

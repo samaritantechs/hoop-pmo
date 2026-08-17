@@ -4,7 +4,7 @@ import { withApi, gatedUser, can } from './_lib/auth.js';
 import { todayKey } from './_lib/time.js';
 import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
   importAgedStock, isAgedStockFile, importOfflineQueue, isOfflineQueueFile,
-  lifetimeDay } from './_lib/importers.js';
+  looksLikeHeader, lifetimeDay } from './_lib/importers.js';
 
 /* =====================================================================================
    POST /api/upload -- the daily Watu list, AND the hoopltd.shop sales export. The header
@@ -130,10 +130,18 @@ export default withApi(async (req) => {
   const wantDate = String((meta && meta.uploadDate) || '').trim();
   const snapshotDate = /^\d{4}-\d{2}-\d{2}$/.test(wantDate) ? wantDate : todayKey();
 
-  // ONE upload slot, FOUR file kinds: the header row says which arrived. Sales, agents
+  // ONE upload slot, FIVE file kinds: the header row says which arrived. Sales, agents
   // and aged stock touch NOTHING the phones read -- no deck release, no DATA_VERSION.
   // Budget per non-watu slice: 1 auth + 1 gate (cached) + 1 chunked upsert.
-  const header = Array.isArray(rows) && rows.length ? rows[0] : null;
+  // A merged company banner ABOVE the real header must not fail the file: read from
+  // the first row any importer recognizes (first slice carries the top of the file;
+  // later slices re-send the true header row themselves).
+  let fileRows = (Array.isArray(rows) ? rows : [])
+    .filter(r => Array.isArray(r) && r.some(c => String(c == null ? '' : c).trim() !== ''));
+  for (let i = 0; i < Math.min(8, fileRows.length); i++) {
+    if (looksLikeHeader(fileRows[i])) { if (i > 0) fileRows = fileRows.slice(i); break; }
+  }
+  const header = fileRows.length ? fileRows[0] : null;
 
   // The page lets the uploader CHOOSE the report type; the choice travels as meta.kind
   // and is enforced here too -- a sales file can never land "as" a deck because the
@@ -152,7 +160,7 @@ export default withApi(async (req) => {
   // that doesn't exist" is the on-conflict clause doing its job.
   if (header && isAgentsFile(header)) {
     enforceKind('agents');
-    const ag = importAgents(rows);
+    const ag = importAgents(fileRows);
     if (!ag.records.length && !ag.dropped.length) {
       const e = new Error('No agent rows could be read.'); e.status = 400; throw e;
     }
@@ -168,7 +176,7 @@ export default withApi(async (req) => {
   // age is only true on the day the report was read.
   if (header && isAgedStockFile(header)) {
     enforceKind('agedstock');
-    const st = importAgedStock(rows);
+    const st = importAgedStock(fileRows);
     if (!st.records.length && !st.dropped.length) {
       const e = new Error('No stock rows could be read.'); e.status = 400; throw e;
     }
@@ -191,7 +199,7 @@ export default withApi(async (req) => {
   // the file's rows; last slice adds 1 settings write + the audit line.
   if (header && isOfflineQueueFile(header)) {
     enforceKind('offline');
-    const oq = importOfflineQueue(rows);
+    const oq = importOfflineQueue(fileRows);
     if (!oq.records.length && !oq.dropped.length) {
       const e = new Error('No offline-queue rows could be read.'); e.status = 400; throw e;
     }
@@ -242,7 +250,7 @@ export default withApi(async (req) => {
 
   if (header && isSalesFile(header)) {
     enforceKind('sales');
-    const sales = importSales(rows);
+    const sales = importSales(fileRows);
     if (!sales.records.length && !sales.dropped.length) {
       const e = new Error('No sales rows could be read from the file.'); e.status = 400; throw e;
     }
@@ -264,7 +272,7 @@ export default withApi(async (req) => {
   }
 
   enforceKind('watu');
-  const { records, teams, dropped } = importWatu(rows || []);
+  const { records, teams, dropped } = importWatu(fileRows);
   if (!records.length && !dropped.length) {
     const e = new Error('No data rows could be read from the file.'); e.status = 400; throw e;
   }

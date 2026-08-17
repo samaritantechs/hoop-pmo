@@ -280,6 +280,11 @@ $('#file').addEventListener('change', function(){
         }
         return c;
       }); });
+      // A merged company banner ABOVE the real header ("HOOP LTD" in one wide cell)
+      // must not fail the file: start reading from the first row a detector knows.
+      for (var bi = 0; bi < Math.min(8, AOA.length); bi++){
+        if (kindOf(AOA[bi] || [])){ if (bi > 0) AOA = AOA.slice(bi); break; }
+      }
       DETECTED = kindOf(AOA[0] || []);
       applyKind('');
     } catch(e){ show('The file could not be read: ' + e.message, 'bad'); }

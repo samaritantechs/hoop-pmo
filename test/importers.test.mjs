@@ -181,7 +181,7 @@ test('importAgedStock keys on the serial and keeps the report date honest', () =
 });
 
 /* ---------- the offline queue: guarantors land at last ---------- */
-import { importOfflineQueue, isOfflineQueueFile, splitGuarantor } from '../api/_lib/importers.js';
+import { importOfflineQueue, isOfflineQueueFile, splitGuarantor, looksLikeHeader } from '../api/_lib/importers.js';
 
 const OQ_HEADERS = ['Sale Date', 'IMEI', 'Offline Bucket', 'Customer', 'Customer Phone',
   'Guarantor', 'Agent', 'Branch', 'Offline Owner', 'Status', 'Next Action Date',
@@ -252,4 +252,12 @@ test('importOfflineQueue carries the sheet\'s Last Action trail as one-time comm
   assert.equal(comments[1].comment, "[Doesn't Answer]");
   assert.equal(comments[1].created_by, 'Watu offline queue');
   assert.equal(comments[1].created_at, null, 'no timestamp on the sheet -> the upload stamps it');
+});
+
+test('a merged company banner above the real header is recognized, never a refusal', () => {
+  assert.equal(looksLikeHeader(['HOOP LTD', '', '', '', '']), false, 'a banner matches no kind');
+  assert.equal(looksLikeHeader(['Aged stock report — all branches']), false);
+  assert.equal(looksLikeHeader(OQ_HEADERS), true, 'the offline queue header is known');
+  assert.equal(looksLikeHeader(['AGENT', 'ITEM', 'SERIAL', 'RECEIVED', 'AGE']), true, 'aged stock is known');
+  assert.equal(looksLikeHeader(['Shop', 'Agent', 'IMEI', 'Client Name']), true, 'a deck header is known by its IMEI');
 });

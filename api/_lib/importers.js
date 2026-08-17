@@ -233,6 +233,17 @@ export function isOfflineQueueFile(headerRow) {
   const has = n => h[normalizeHeader(n)] !== undefined;
   return has('GUARANTOR') || has('OFFLINE BUCKET') || has('OFFLINE_BUCKET');
 }
+
+/** Does this row LOOK like a header any importer knows? Some exports carry a merged
+    company banner ABOVE the real header ("HOOP LTD" across one wide cell) -- the
+    upload scans the first rows with this instead of refusing the file over a
+    decoration. A banner matches nothing; the real header matches its kind. */
+export function looksLikeHeader(row) {
+  const h = buildHeaderMap(row || []);
+  const has = n => h[normalizeHeader(n)] !== undefined;
+  return isAgentsFile(row) || isAgedStockFile(row) || isSalesFile(row)
+    || isOfflineQueueFile(row) || ['IMEI', 'IMEI NUMBER', 'IMEI NO'].some(has);
+}
 /** "name | phone" in one cell; a lone dash is Watu's own blank. No pipe: digits are a
     phone, anything else is a name -- never invent the half the cell does not hold. */
 export function splitGuarantor(v) {

@@ -762,6 +762,19 @@ function drawStock(m){
         +'<div class="tile"><div class="l">Oldest</div><div class="v" style="color:var(--bad)">'+money((d.holders[0]||{}).maxAge||0)+'</div><div class="s">days</div></div>'
         +'</div>'
         +'<div class="mut" style="margin-bottom:8px">Ages are SyscoPos\'s own (resettable there — true age comes in phase 3). Top = oldest burden.</div>'
+        +'<h2 style="margin-top:4px">By item — IMEI numbers inclusive</h2>'
+        +(d.items||[]).map(function(it){
+          return '<details style="border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:6px 0">'
+            +'<summary style="cursor:pointer;font-weight:700">'+esc(it.item)+' — '+money(it.pieces)+' phones'
+            +' <span class="mut" style="font-weight:400;font-size:11.5px">avg '+(it.avgAge!=null?money(it.avgAge):'—')+'d · oldest '
+            +'<span'+(it.maxAge>=14?' style="color:var(--bad)"':'')+'>'+money(it.maxAge)+'d</span></span></summary>'
+            +'<div style="overflow-x:auto;margin-top:8px"><table><thead><tr><th>Serial / IMEI</th><th>Holder</th><th>Received</th><th class="r">Age (days)</th></tr></thead><tbody>'
+            +(it.serials||[]).map(function(s){
+              return '<tr><td style="font-size:11px">'+esc(s.serial)+'</td><td>'+esc(s.agent)+'</td>'
+                +'<td>'+esc(s.received||'—')+'</td><td class="r"'+(s.age>=14?' style="color:var(--bad)"':'')+'>'+(s.age!=null?money(s.age):'—')+'</td></tr>';
+            }).join('')+'</tbody></table></div></details>';
+        }).join('')
+        +'<h2 style="margin-top:16px">By holder</h2>'
         +'<div style="overflow-x:auto"><table><thead><tr><th>Holder</th><th>Role</th><th class="r">Phones</th><th class="r">Avg age</th><th class="r">Oldest</th><th>Items</th></tr></thead><tbody>'
         +(d.holders||[]).map(function(h){
           return '<tr><td><b>'+esc(h.agent)+'</b>'+(h.branch?'<div class="mut" style="font-size:10px">'+esc(h.branch)+'</div>':'')+'</td>'

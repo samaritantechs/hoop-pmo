@@ -479,7 +479,28 @@ const FNS = {
     const serials = rows.map(r => ({ serial: r.serial, agent: r.agent || '', item: r.item || '',
       received: r.received ? String(r.received).slice(0, 10) : '', age: r.age_days == null ? null : num(r.age_days) }))
       .sort((x, y) => (y.age || 0) - (x.age || 0));
-    return { ok: true, asOf, total: rows.length, holders, serials: serials.slice(0, 500) };
+    /* BY ITEM, IMEI NUMBERS INCLUSIVE (the owner's shape for this report): every model
+       with its piece count and ages, carrying its own serial list -- grouped over ALL
+       rows of the newest report, so the counts stay true past any display cap. */
+    const byItem = new Map();
+    for (const r of rows) {
+      const it = String(r.item || '—');
+      let g = byItem.get(it);
+      if (!g) { g = { item: it, pieces: 0, ageSum: 0, ageN: 0, maxAge: 0, serials: [] }; byItem.set(it, g); }
+      g.pieces++;
+      if (r.age_days != null) {
+        g.ageSum += num(r.age_days); g.ageN++;
+        if (num(r.age_days) > g.maxAge) g.maxAge = num(r.age_days);
+      }
+      g.serials.push({ serial: r.serial, agent: r.agent || '',
+        received: r.received ? String(r.received).slice(0, 10) : '',
+        age: r.age_days == null ? null : num(r.age_days) });
+    }
+    const items = [...byItem.values()].map(g => ({ item: g.item, pieces: g.pieces,
+      avgAge: g.ageN ? Math.round(g.ageSum / g.ageN) : null, maxAge: g.maxAge,
+      serials: g.serials.sort((x, y) => (y.age || 0) - (x.age || 0)).slice(0, 300) }))
+      .sort((x, y) => y.pieces - x.pieces);
+    return { ok: true, asOf, total: rows.length, holders, items, serials: serials.slice(0, 500) };
   },
 
   /** STOCK MOVEMENT -- what got away after every upload, on BOTH books, checkable by
