@@ -45,7 +45,9 @@ export const FU_NEED_NUMBER = ['ANA NAMBA NYINGINE'];
 export const FU_STATUS_KEY = 'FU_STATUSES';
 
 export function parseFuStatuses(raw) {
-  const list = String(raw == null ? '' : raw).split(/[\r\n]+/).map(x => x.trim()).filter(Boolean);
+  // Newlines OR commas: the Settings box is a one-line input, so a comma-separated
+  // paste must work exactly like the newline shape the API docs describe.
+  const list = String(raw == null ? '' : raw).split(/[\r\n,]+/).map(x => x.trim()).filter(Boolean);
   const seen = new Set(); const out = [];
   for (const x of list) { const k = x.toUpperCase(); if (!seen.has(k)) { seen.add(k); out.push(x); } }
   return out.length ? out : FU_STATUSES.slice();
@@ -320,11 +322,42 @@ export async function rosterFull(db) {
   return { ids: on.map(r => String(r.user_id)), names };
 }
 async function activeRoster(db) { return (await rosterFull(db)).ids; }
-function myShare(items, keyFn, roster, uid) {
-  const k = roster.indexOf(String(uid));
-  if (k < 0 || !roster.length) return items;   // a device outside the roster peeks at the whole book
-  const sorted = [...items].sort((a, b) => (String(keyFn(a)) < String(keyFn(b)) ? -1 : 1));
-  return sorted.filter((_, i) => i % roster.length === k);
+/* THE WINDOW IS 45 DAYS PLUS TWO OF GRACE. The owner (2026-08-17): "i have 49 and they
+   had 52 and my number of days are like 2 infront since months vary lengths -- add two
+   more days to the calendar we are pulling so that we get all customers we should."
+   Watu keeps a customer about two days longer than plain day arithmetic, so the window
+   follows Watu -- otherwise we drop customers Watu still counts as Hoop's. The label
+   stays "/45" everywhere: the BUSINESS window is 45; the +2 is calendar slack. */
+export const WINDOW_DAYS = 47;
+const inWindowOf = (r, day) => { const l = lifeDayOf(r.disbursed_date, day); return l != null && l <= WINDOW_DAYS; };
+
+/* THE EQUAL DEAL, PER KIND. One round-robin over the whole book looked equal ("all
+   credits should get equal distribution") yet the owner saw "3 got 12 and one got 9" on
+   a tab: an officer's share can happen to hold fewer locked-7 customers. So the deal is
+   cut per stratum -- locked 7+ in window, locked 4-6 in window, the rest of the window,
+   beyond the window -- each dealt round-robin by IMEI. Every officer's every TAB is now
+   equal, plus-minus one. Nothing is stored; the deal still re-cuts itself the moment
+   the roster changes. Exported: the portal's Wateja must run the SAME deal. */
+export function dealMap(rows, rosterIds, day) {
+  const out = {};
+  if (!rosterIds || !rosterIds.length) return out;
+  const strata = { L7: [], L4: [], IN: [], OUT: [] };
+  for (const r of rows) {
+    const k = !inWindowOf(r, day) ? 'OUT' : (r.locked7 === true ? 'L7' : (r.locked4 === true ? 'L4' : 'IN'));
+    strata[k].push(r);
+  }
+  for (const k of ['L7', 'L4', 'IN', 'OUT']) {
+    strata[k].sort((a, b) => (String(a.imei) < String(b.imei) ? -1 : 1))
+      .forEach((r, i) => { out[String(r.imei)] = String(rosterIds[i % rosterIds.length]); });
+  }
+  return out;
+}
+/** This user's cut of the rows under the stratified deal; a device outside the roster
+    peeks at the whole book, exactly as before. */
+function shareOf(rows, roster, uid, day) {
+  if (!roster.length || roster.indexOf(String(uid)) < 0) return rows;
+  const deal = dealMap(rows, roster, day);
+  return rows.filter(r => deal[String(r.imei)] === String(uid));
 }
 
 /* WHO SOLD THIS PHONE, on the card -- the agent holds Hope's guarantor slot until
@@ -404,6 +437,7 @@ async function list(db, [dev], nowMs) {
   // officer's dealt share of it. Budget: the deck read is the same one as before; the
   // roster is one extra bounded read.
   const fu = await fetchAll(() => db.from('followup_status').select(DECK_COLS).eq('deck_date', deckDate));
+  const today = todayKey(nowMs);
   let mine, note = null;
   if (isAgent(cu)) {
     // The agent fence: their registered phone names them on Sipho's register; the Watu
@@ -413,18 +447,14 @@ async function list(db, [dev], nowMs) {
     if (!myKey) note = 'Your phone number is not on the agents register yet — ask the office to add it, then reopen the app.';
     else if (!mine.length) note = 'Safi! Hakuna mteja wako kwenye orodha ya leo. / None of the customers you sold are on today’s locked list.';
   } else {
-    mine = myShare(fu, r => r.imei, roster, cu.user_id);
+    mine = shareOf(fu, roster, cu.user_id, today);
   }
-  const today = todayKey(nowMs);
   const hit = c => !!called[pnorm(c)];
-  // WHO IS CHASING each customer: the same deal, labeled. Sort the whole deck once by
-  // IMEI; row i belongs to roster member i % n -- so a leader, an agent or any whole-
-  // book viewer sees the responsible credit person on every card. Zero extra reads.
+  // WHO IS CHASING each customer: the SAME stratified deal, labeled -- so a leader, an
+  // agent or any whole-book viewer sees the responsible credit person on every card.
+  const deal = dealMap(fu, roster, today);
   const holdsOf = {};
-  if (roster.length) {
-    const ordered = [...fu].sort((a, b) => (String(a.imei) < String(b.imei) ? -1 : 1));
-    ordered.forEach((r, i) => { holdsOf[String(r.imei)] = rosterAll.names[roster[i % roster.length]] || ''; });
-  }
+  for (const k of Object.keys(deal)) holdsOf[k] = rosterAll.names[deal[k]] || '';
   const rows = mine.map(r => {
     const life = lifeDayOf(r.disbursed_date, today);
     const ag = agents.byImei[String(r.imei)] || null;
@@ -450,7 +480,7 @@ async function list(db, [dev], nowMs) {
       daysOff: r.days_offline == null ? null : num(r.days_offline),
       locked4: !!r.locked4, locked7: !!r.locked7,
       paid: r.has_ever_paid === true,
-      inWindow: life != null && life <= 45,
+      inWindow: life != null && life <= WINDOW_DAYS,
     };
   });
   // Most-offline first -- the deepest-locked phone is the call that matters most.
@@ -634,7 +664,10 @@ async function histFor(db, nowMs) {
   const yDate = one.data && one.data[0] ? String(one.data[0].snapshot_date).slice(0, 10) : null;
   const from = yDate && yDate < weekStart ? yDate : weekStart;
   const [snaps, logs, minRaw] = await Promise.all([
-    fetchAll(() => db.from('watu_snapshots').select('imei, client_mobile, snapshot_date, created_at')
+    // locked flags + disbursed_date ride along so yesterday's book deals by the SAME
+    // strata as today's -- the bar must measure the share the officer actually held.
+    fetchAll(() => db.from('watu_snapshots')
+      .select('imei, client_mobile, snapshot_date, created_at, locked4, locked7, disbursed_date')
       .gte('snapshot_date', from).lte('snapshot_date', yEnd)),
     fetchAll(() => db.from('call_logs').select('user_id, phone, duration, call_date')
       .gte('call_date', from).lte('call_date', yEnd)),
@@ -669,7 +702,7 @@ function reachedOn(date, hist, uid, roster, poolFn) {
   if (!deckMap || !deckMap.size) return null;
   const all = [...deckMap.values()];
   // poolFn overrides the deal: an AGENT's pool is "the customers they sold", not a share.
-  const pool = poolFn ? all.filter(poolFn) : (uid == null ? all : myShare(all, r => r.imei, roster, uid));
+  const pool = poolFn ? all.filter(poolFn) : (uid == null ? all : shareOf(all, roster, String(uid), date));
   if (!pool.length) return null;
   const phones = new Set(pool.map(r => pnorm(r.client_mobile)).filter(Boolean));
   const got = new Set();
@@ -707,7 +740,7 @@ async function summaryCompute(db, user, nowMs) {
     fetchAll(() => scope(db.from('call_logs').select('phone, ref, duration, portfolio').eq('call_date', today))),
     settingGet(db, 'DATA_VERSION'),
   ]);
-  const inWinOf = r => { const l = lifeDayOf(r.disbursed_date, today); return l != null && l <= 45; };
+  const inWinOf = r => inWindowOf(r, today);
   const inWin = deck.filter(inWinOf).length;
   // Locked 7+ counts Hoop's own burden ONLY: past day 45 the customer is Watu's problem
   // (the owner's rule). The tile must agree with the app's Lock 7+ tab, which drops them.
@@ -749,8 +782,8 @@ async function summaryForOfficer(db, cu, nowMs) {
       .eq('call_date', today).eq('user_id', String(cu.user_id))),
     histFor(db, nowMs),
   ]);
-  const mine = myShare(deck, r => r.imei, roster, cu.user_id);
-  const inWinOf = r => { const l = lifeDayOf(r.disbursed_date, today); return l != null && l <= 45; };
+  const mine = shareOf(deck, roster, cu.user_id, today);
+  const inWinOf = r => inWindowOf(r, today);
   const value = {
     ok: true,
     deckDate,
@@ -787,7 +820,7 @@ async function summaryForAgent(db, cu, nowMs) {
   const me = agents.byPhone[pnorm(cu.phone)] || null, myKey = me ? me.key : '';
   const mineFn = r => { const ag = agents.byImei[String(r.imei)]; return !!(myKey && ag && nameKey(ag.name) === myKey); };
   const mine = deck.filter(mineFn);
-  const inWinOf = r => { const l = lifeDayOf(r.disbursed_date, today); return l != null && l <= 45; };
+  const inWinOf = r => inWindowOf(r, today);
   const value = {
     ok: true,
     deckDate,

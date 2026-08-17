@@ -84,9 +84,10 @@ test('the list is the NEWEST deck, dealt company-wide -- teams are locations, no
   assert.equal(r.rows[0].lifeDay, 33);
   assert.equal(r.rows[0].inWindow, true);
   assert.equal(r.rows[0].ds, '33/45');
-  // 30-Jun customer is day 46 -- aged out, and the row says so.
+  // 30-Jun customer is day 46 -- INSIDE the window now: the owner's 2-day calendar
+  // grace (months vary; Watu keeps a customer ~2 days longer than plain arithmetic).
   assert.equal(r.rows[1].lifeDay, 46);
-  assert.equal(r.rows[1].inWindow, false);
+  assert.equal(r.rows[1].inWindow, true, 'day 46 rides the 2-day grace -- Watu still counts them');
 });
 
 test('sync writes call logs deduped by construction and matches the deck by phone', async () => {
@@ -141,8 +142,8 @@ test('the daily summary counts the officer\'s dealt share; the bar is yesterday,
   const s = await callApi(d, 'api_callDailySummary', ['dev-1'], NOW);
   assert.equal(s.ok, true);
   assert.equal(s.list.num, 3, 'ONE credit user is dealt the WHOLE company deck -- both teams');
-  assert.equal(s.locked7.num, 1, 'Alafati only: Rinus is locked 7+ but past day 45 -- not our burden');
-  assert.equal(s.inWindow.num, 1);
+  assert.equal(s.locked7.num, 2, 'Alafati AND Rinus: day 47 rides the 2-day grace, so Rinus is our burden again');
+  assert.equal(s.inWindow.num, 3, 'days 33, 46 and 47 are all inside 45+2');
   assert.equal(s.calls.num, 1, 'their OWN calls today');
   assert.equal(s.reached.pct, null, 'no yesterday upload in this fixture -- the bar says so, never today');
   assert.equal(s.weekAvg.pct, null);
@@ -164,10 +165,35 @@ test('locked 7+ beyond day 45 leaves the count -- not Hoop\'s responsibility', a
     days_offline: 40, locked4: true, locked7: true, has_ever_paid: false, deck_date: '2026-08-14' });
   await registerOfficer(d);
   const s = await callApi(d, 'api_callDailySummary', ['dev-1'], NOW);
-  assert.equal(s.list.num, 4, 'company pool: both branches AND the beyond-45 row stay on the deck');
-  assert.equal(s.locked7.num, 1, 'but the Locked 7+ burden counts only the in-window one');
-  assert.equal(s.inWindow.num, 1);
+  assert.equal(s.list.num, 4, 'company pool: both branches AND the beyond-window row stay on the deck');
+  assert.equal(s.locked7.num, 2, 'the day-100 row stays OUT even with the 2-day grace; days 33 and 47 count');
+  assert.equal(s.inWindow.num, 3);
   _clearSummaryCache();
+});
+
+test('the deal is equal PER TAB: every officer gets the same cut of every stratum', async () => {
+  // Four locked-7 customers and four unlocked in-window ones, two credit users:
+  // each must hold exactly 2 + 2 -- never "3 got 12 and one got 9" on a tab again.
+  const mk = (imei, l7) => ({ imei, client_name: 'C' + imei, contact: '25571600000' + imei,
+    disbursed_date: '2026-08-01', locked4: l7, locked7: l7, deck_date: '2026-08-14' });
+  const d = fakeDb({
+    settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+    teams: [],
+    followup_status: [mk('1', true), mk('2', false), mk('3', true), mk('4', false),
+                      mk('5', true), mk('6', false), mk('7', true), mk('8', false)],
+    call_users: [
+      { user_id: 'U1', device_id: 'dev-1', name: 'Ainea', role: 'CREDIT', active: true },
+      { user_id: 'U2', device_id: 'dev-2', name: 'Baraka', role: 'CREDIT', active: true },
+    ],
+    call_logs: [],
+  });
+  const a = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  const b = await callApi(d, 'api_callList', ['dev-2', 'today'], NOW);
+  assert.equal(a.rows.length, 4); assert.equal(b.rows.length, 4);
+  assert.equal(a.rows.filter(r => r.locked7).length, 2, 'the Lock 7+ tab is equal too');
+  assert.equal(b.rows.filter(r => r.locked7).length, 2);
+  const refsA = new Set(a.rows.map(r => r.ref));
+  assert.ok(!b.rows.some(r => refsA.has(r.ref)), 'no customer dealt twice');
 });
 
 /* ---------- the workload deal + the performance bar ---------- */

@@ -623,7 +623,7 @@ function custRender(m){
         +'<td>'+(r.gName?esc(r.gName):'—')+(r.gPhone?'<div class="mut" style="font-size:10px">'+esc(r.gPhone)+'</div>':'')+'</td>'
         +'<td>'+(r.heldBy?'👤 '+esc(r.heldBy):'—')+'</td>'
         +'<td class="r">'+(r.daysOff!=null?money(r.daysOff):'—')+(r.locked7?' <span class="chip bad">7+</span>':(r.locked4?' <span class="chip warn">4+</span>':''))+'</td>'
-        +'<td class="r">'+(r.lifeDay!=null?(r.lifeDay<=45?money(r.lifeDay)+'/45':'<span class="chip">NJE</span>'):'—')+'</td>'
+        +'<td class="r">'+(r.lifeDay!=null?(r.inWindow!==false?money(r.lifeDay)+'/45':'<span class="chip">NJE</span>'):'—')+'</td>'
         +'<td>'+(r.fu?'<span class="chip">'+esc(r.fu)+'</span>':(r.paid?'<span class="chip ok">amelipa</span>':''))+'</td></tr>';
     }).join(''):'<tr><td colspan="9" class="mut">Hakuna mteja kwenye orodha hii bado.</td></tr>')
     +'</tbody></table></div></div>'
@@ -1140,7 +1140,7 @@ function drawSettings(m){
           +'<input class="inp" id="st'+i+'" value="'+esc(s.value)+'">'
           +'<button class="btn sm" data-sv="'+esc(s.key)+'" data-i="'+i+'">Save</button></div>';
       }).join('')
-      +'<div class="mut">SYSTEM_OPEN=YES hufungua mfumo. CALL_BRAND ni jina kwenye app. FU_STATUSES: hali za ufuatiliaji, moja kwa mstari.</div>'
+      +'<div class="mut">SYSTEM_OPEN=YES hufungua mfumo. CALL_BRAND ni jina kwenye app. FU_STATUSES: hali za ufuatiliaji — tenganisha kwa comma (au mstari mpya).</div>'
       +'</div>';
     $all('[data-sv]',m).forEach(function(b){
       b.onclick=function(){

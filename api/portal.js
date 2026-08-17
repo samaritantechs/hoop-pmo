@@ -3,7 +3,7 @@ import { withApi, gatedUser, isReadOnly } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey } from './_lib/time.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
-  agentIndex, nameKey } from './_lib/call-core.js';
+  agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -236,16 +236,14 @@ const FNS = {
     const regOf = {};
     agents.forEach(r => { regOf[r.imei] = r; });
     const agPhone = hoopAgents.phoneByName || {};
-    /* THE SAME DEAL THE PHONES RUN, shown to the office: sort today's deck by IMEI,
-       row i belongs to credit person i % n -- so Wateja names who is chasing whom
-       exactly as the handsets see it, and re-deals itself the moment a credit user is
-       added or switched off. One extra bounded call_users read. */
+    /* THE SAME STRATIFIED DEAL THE PHONES RUN, shown to the office -- so Wateja names
+       who is chasing whom exactly as the handsets see it, tab-equal cuts included, and
+       re-deals itself the moment a credit user is added or switched off. One extra
+       bounded call_users read. */
     const rosterAll = await rosterFull(db);
+    const dealt = dealMap(deck, rosterAll.ids, today);
     const holdsOf = {};
-    if (rosterAll.ids.length && deck.length) {
-      [...deck].sort((a, b) => (String(a.imei) < String(b.imei) ? -1 : 1))
-        .forEach((r, i) => { holdsOf[String(r.imei)] = rosterAll.names[rosterAll.ids[i % rosterAll.ids.length]] || ''; });
-    }
+    for (const k of Object.keys(dealt)) holdsOf[k] = rosterAll.names[dealt[k]] || '';
     const mk = (r, contactKey, refDay) => {
       const reg = regOf[r.imei] || {};
       const agent = r.agent !== undefined ? (r.agent || '') : (reg.agent || '');
@@ -259,6 +257,7 @@ const FNS = {
         daysOff: r.days_offline == null ? null : num(r.days_offline),
         locked7: r.locked7 === true, locked4: r.locked4 === true, paid: r.has_ever_paid === true,
         fu: r.fu_status || '', lifeDay: lifeDayOf(r.disbursed_date, refDay),
+        inWindow: (() => { const l = lifeDayOf(r.disbursed_date, refDay); return l != null && l <= WINDOW_DAYS; })(),
       };
     };
     // jana: a same-date re-upload appends, so the newest row per IMEI within the day wins.
@@ -269,8 +268,10 @@ const FNS = {
     });
     const jana = [...seen.values()].map(r => mk(r, 'client_mobile', prevDate));
     const leo = deck.map(r => mk(r, 'contact', today));
-    const inWindow = leo.filter(r => r.lifeDay != null && r.lifeDay <= 45);
-    const beyond = leo.filter(r => !(r.lifeDay != null && r.lifeDay <= 45));
+    // WINDOW_DAYS, not 45: the 2-day calendar grace (months vary) keeps every customer
+    // Watu still counts -- "i have 49 and they had 52" must never happen again.
+    const inWindow = leo.filter(r => r.inWindow);
+    const beyond = leo.filter(r => !r.inWindow);
     const bySunk = (a, b) => num(b.daysOff) - num(a.daysOff);
     inWindow.sort(bySunk); beyond.sort(bySunk); jana.sort(bySunk);
     return { ok: true, deckDate, prevDate, leo45: inWindow, leo45plus: beyond, jana, ...fu };
@@ -807,6 +808,9 @@ const FNS = {
       'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK'];
     const rows = await fetchAll(() => db.from('settings').select('key, value').in('key', KEYS));
     const by = {}; rows.forEach(r => { by[r.key] = r.value; });
+    // An empty FU_STATUSES box looked like "there is no list" when the list simply
+    // lives in code -- show the WORKING vocabulary so editing starts from the truth.
+    if (!String(by.FU_STATUSES || '').trim()) by.FU_STATUSES = FU_STATUSES.join(', ');
     return { ok: true, settings: KEYS.map(k => ({ key: k, value: by[k] == null ? '' : by[k] })) };
   },
 
