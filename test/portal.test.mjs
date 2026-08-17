@@ -486,3 +486,35 @@ test('stockMovement diffs both books between two dates and honors the sales alia
   const noNav = { ...store, role: 'FINANCE', tabs: ['customers'] };
   await assert.rejects(() => _FNS.stockMovement(d, noNav, {}), /no access to the movement pane/);
 });
+
+test('globalSearch finds a customer by any spelling of the number, plus office and stock', async () => {
+  const d = fakeDb({
+    watu_loans: [
+      { imei: '351416739926494', client_name: 'Jefas D Samawa', client_mobile: '255662047809',
+        team: 'KINONDONI', branch: 'Dar es salaam', agent: 'Anord Sawe',
+        guarantor_name: 'Issack daniely samawa', guarantor_phone: '0788533370' },
+    ],
+    hoop_agents: [{ name: 'Anord Sawe', phone: '0658918324', role: 'Regional_Manager', branch: 'Dar es salaam' }],
+    hoop_aged_stock: [
+      { serial: '350115227805852', item: 'SAMSUNG A06-64GB', agent: 'Anord Sawe', as_of: '2026-08-16' },
+      { serial: '350115227805852', item: 'SAMSUNG A06-64GB', agent: 'Anord Sawe', as_of: '2026-08-15' },
+    ],
+    settings: [], roles: [], access_codes: [],
+  });
+  // The customer's phone typed the LOCAL way finds the 255-stored row.
+  const r = await _FNS.globalSearch(d, ADMIN, { q: '0662047809' });
+  assert.equal(r.customers.length, 1);
+  assert.equal(r.customers[0].name, 'Jefas D Samawa');
+  // A guarantor's name finds the customer they guarantee.
+  const g = await _FNS.globalSearch(d, ADMIN, { q: 'Issack daniely' });
+  assert.equal(g.customers.length, 1);
+  // An agent search reaches the office register AND their customers.
+  const p = await _FNS.globalSearch(d, ADMIN, { q: 'Anord Sawe' });
+  assert.equal(p.people.length, 1);
+  assert.equal(p.people[0].phone, '0658918324');
+  assert.equal(p.customers.length, 1, 'their sold customer rides the same search');
+  // A serial finds stock ONCE (newest report), not once per report date.
+  const s = await _FNS.globalSearch(d, ADMIN, { q: '350115227805852' });
+  assert.equal(s.stock.length, 1);
+  assert.equal(s.stock[0].asOf, '2026-08-16');
+});

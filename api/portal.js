@@ -564,20 +564,29 @@ const FNS = {
     const q = String((args && args.q) || '').trim().replace(/[%,()]/g, ' ').replace(/\s+/g, ' ').trim();
     if (q.length < 3) return { ok: true, customers: [] };
     const pat = '*' + q + '*';
+    /* A number is typed however the person remembers it -- 0712..., 255712..., or the
+       bare tail. Digits get a second, normalized term (last 9), so every spelling of
+       the same phone finds the same customer. Guarantors are searchable too. */
+    const digits = q.replace(/\D/g, '');
+    const dpat = digits.length >= 6 ? '*' + digits.slice(-9) + '*' : null;
     // Guarantor columns arrived with the offline queue; until the migration runs the
     // whole select would be refused for them, so fall back to the old shape.
-    const mk = cols => {
-      let query = db.from('watu_loans').select(cols)
-        .or(['client_name.ilike.' + pat, 'client_mobile.ilike.' + pat,
-             'imei.ilike.' + pat, 'agent.ilike.' + pat].join(','))
-        .limit(30);
+    const mk = (cols, withG) => {
+      const terms = ['client_name.ilike.' + pat, 'client_mobile.ilike.' + pat,
+        'imei.ilike.' + pat, 'agent.ilike.' + pat];
+      if (withG) terms.push('guarantor_name.ilike.' + pat, 'guarantor_phone.ilike.' + pat);
+      if (dpat) {
+        terms.push('client_mobile.ilike.' + dpat, 'imei.ilike.' + dpat);
+        if (withG) terms.push('guarantor_phone.ilike.' + dpat);
+      }
+      let query = db.from('watu_loans').select(cols).or(terms.join(',')).limit(30);
       if (user.teams && user.teams.length) query = query.in('team', user.teams.map(K));
       return query;
     };
     let { data, error } = await mk('imei, client_name, client_mobile, team, agent, model, '
-      + 'days_offline, locked7, snapshot_date, branch, guarantor_name, guarantor_phone');
+      + 'days_offline, locked7, snapshot_date, branch, guarantor_name, guarantor_phone', true);
     if (error) ({ data, error } = await mk('imei, client_name, client_mobile, team, agent, model, '
-      + 'days_offline, locked7, snapshot_date'));
+      + 'days_offline, locked7, snapshot_date', false));
     if (error) throw new Error(error.message);
     return { ok: true, customers: (data || []).map(r => ({
       imei: r.imei, name: r.client_name || '', phone: r.client_mobile || '',
@@ -585,6 +594,41 @@ const FNS = {
       gName: r.guarantor_name || '', gPhone: r.guarantor_phone || '',
       daysOff: r.days_offline, locked7: r.locked7 === true,
       asOf: r.snapshot_date ? String(r.snapshot_date).slice(0, 10) : null })) };
+  },
+
+  /** ONE BOX FOR THE WHOLE SYSTEM: an IMEI, a name or a number, searched everywhere at
+      once -- customers (guarantors included), the office (agents register) and stock
+      serials. Open to every signed-in code, view-only included: reading is what a
+      search is. Budget: <=3 bounded or()-filtered reads (30 + 20 + 20 rows), and only
+      from 3 typed characters; the customers leg is customerSearch itself. */
+  async globalSearch(db, user, args) {
+    const a = args || {};
+    const cs = await FNS.customerSearch(db, user, a);
+    const q = String(a.q || '').trim().replace(/[%,()]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (q.length < 3) return { ok: true, customers: [], people: [], stock: [] };
+    const pat = '*' + q + '*';
+    const digits = q.replace(/\D/g, '');
+    const dpat = digits.length >= 6 ? '*' + digits.slice(-9) + '*' : null;
+    const pTerms = ['name.ilike.' + pat, 'phone.ilike.' + pat]
+      .concat(dpat ? ['phone.ilike.' + dpat] : []);
+    const sTerms = ['serial.ilike.' + pat, 'agent.ilike.' + pat, 'item.ilike.' + pat];
+    const [pe, st] = await Promise.all([
+      db.from('hoop_agents').select('name, phone, role, branch, active').or(pTerms.join(',')).limit(20),
+      db.from('hoop_aged_stock').select('serial, item, agent, as_of')
+        .or(sTerms.join(',')).order('as_of', { ascending: false }).limit(20),
+    ]);
+    if (pe.error) throw new Error(pe.error.message);
+    const seenS = new Set(), stock = [];
+    for (const s of (st.error ? [] : (st.data || []))) {
+      if (seenS.has(String(s.serial))) continue;
+      seenS.add(String(s.serial));
+      stock.push({ serial: s.serial, item: s.item || '', holder: s.agent || '',
+        asOf: s.as_of ? String(s.as_of).slice(0, 10) : '' });
+    }
+    return { ok: true, customers: cs.customers,
+      people: (pe.data || []).map(p => ({ name: p.name || '', phone: p.phone || '',
+        role: p.role || '', branch: p.branch || '', active: p.active !== false })),
+      stock };
   },
 
   /** THE OFFICE, not the logins: everyone on Sipho's register -- agents, team leaders,

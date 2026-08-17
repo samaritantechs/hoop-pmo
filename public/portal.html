@@ -101,11 +101,14 @@ td.r,th.r{text-align:right}
       <button class="btn sm ghost" id="navBtn" title="Menyu">&#9776;</button>
       <svg class="lg" viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#fff"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
       <div class="who"><b id="whoName">—</b><span id="whoRole">—</span></div>
+      <input id="gq" placeholder="🔍 IMEI · jina · namba / search everything" autocomplete="off"
+        style="flex:1 1 180px;min-width:120px;max-width:340px;padding:8px 12px;border:1.5px solid rgba(255,255,255,.35);border-radius:99px;background:rgba(255,255,255,.14);color:#fff;font-size:12.5px;outline:none">
       <a class="btn sm ghost" href="/upload">Upload</a>
       <a class="btn sm ghost" href="/call">Calls</a>
       <button class="btn sm ghost" id="outBtn">Toka</button>
     </div>
 </header>
+<div id="gres" class="hide" style="position:fixed;z-index:998;top:58px;left:50%;transform:translateX(-50%);width:min(640px,94vw);max-height:70vh;overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px rgba(15,23,42,.22);padding:12px"></div>
   <div class="shell">
     <div class="navBack" id="navBack"></div>
     <aside class="side">
@@ -319,6 +322,81 @@ document.addEventListener('click', function(e){
   });
   rows.forEach(function(r){ tbody.appendChild(r); });
 });
+
+/* THE EVERYTHING BOX in the header: an IMEI, a name or a number finds customers
+   (guarantors included), office people and stock serials from ANY tab. A customer hit
+   jumps to Wateja and opens their card ready for a comment; people and stock show
+   their facts on the spot with a callable number. Esc or a click outside closes. */
+window.GOPEN=null;
+(function(){
+  var t=null, box=null;
+  function hide(){ var g=$('#gres'); if(g) g.classList.add('hide'); }
+  function jump(c){
+    hide(); $('#gq').value='';
+    window.GOPEN=c;
+    var b=$('#tabs button[data-t="cust"]');
+    if(b) b.click(); else window.GOPEN=null;
+  }
+  function draw(d){
+    var g=$('#gres'); if(!g) return;
+    var cs=d.customers||[], pe=d.people||[], st=d.stock||[];
+    if(!cs.length&&!pe.length&&!st.length){
+      g.innerHTML='<div class="mut" style="padding:6px">Hakuna kilichopatikana. / Nothing found.</div>';
+      g.classList.remove('hide'); return;
+    }
+    var h='';
+    if(cs.length){
+      h+='<div style="font-weight:800;font-size:12px;color:var(--mut);margin:2px 0 6px">WATEJA / CUSTOMERS — '+cs.length+'</div>'
+        +cs.map(function(c,i){
+          return '<div class="gitem" data-gc="'+i+'" style="padding:8px 10px;border-radius:10px;cursor:pointer;border-bottom:1px solid var(--line)">'
+            +'<b>'+esc(c.name||'—')+'</b> <span class="mut" style="font-size:11px">'+esc(c.imei)+'</span>'
+            +(c.locked7?' <span class="chip bad">7+</span>':'')
+            +'<div class="mut" style="font-size:11.5px">'+esc(c.branch||c.team||'')+(c.agent?' · Agent: '+esc(c.agent):'')
+            +(c.gName?' · Mdhamini: '+esc(c.gName):'')+(c.phone?' · '+esc(c.phone):'')+'</div></div>';
+        }).join('');
+    }
+    if(pe.length){
+      h+='<div style="font-weight:800;font-size:12px;color:var(--mut);margin:10px 0 6px">OFISI / OFFICE — '+pe.length+'</div>'
+        +pe.map(function(p){
+          var hh=telHref(p.phone);
+          return '<div style="padding:8px 10px;border-bottom:1px solid var(--line)">'
+            +'<b>'+esc(p.name)+'</b>'+(p.active?'':' <span class="chip bad">OFF</span>')
+            +'<div class="mut" style="font-size:11.5px">'+esc(p.role||'')+(p.branch?' · '+esc(p.branch):'')
+            +(p.phone?' · '+(hh!=='#'?'<a href="tel:'+hh+'">'+esc(p.phone)+'</a>':esc(p.phone)):'')+'</div></div>';
+        }).join('');
+    }
+    if(st.length){
+      h+='<div style="font-weight:800;font-size:12px;color:var(--mut);margin:10px 0 6px">STOCK — '+st.length+'</div>'
+        +st.map(function(s){
+          return '<div style="padding:8px 10px;border-bottom:1px solid var(--line)">'
+            +'<b>'+esc(s.serial)+'</b><div class="mut" style="font-size:11.5px">'+esc(s.item)
+            +(s.holder?' · kwa '+esc(s.holder):'')+(s.asOf?' · ripoti '+esc(s.asOf):'')+'</div></div>';
+        }).join('');
+    }
+    g.innerHTML=h;
+    g.classList.remove('hide');
+    $all('[data-gc]',g).forEach(function(el){
+      el.onclick=function(){ jump(cs[parseInt(el.getAttribute('data-gc'),10)]); };
+    });
+  }
+  document.addEventListener('input',function(e){
+    if(!e.target||e.target.id!=='gq') return;
+    var q=e.target.value.trim();
+    clearTimeout(t);
+    if(q.length<3){ hide(); return; }
+    t=setTimeout(function(){
+      srv('globalSearch',{q:q}).then(function(d){
+        if($('#gq').value.trim()!==q) return;
+        draw(d);
+      }).catch(function(){});
+    },300);
+  });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape') hide(); });
+  document.addEventListener('click',function(e){
+    if(e.target.closest&&(e.target.closest('#gres')||e.target.id==='gq')) return;
+    hide();
+  });
+})();
 
 /* One search box, two jobs: filter the table rows on the page instantly, and (from three
    characters) ask the register for customers by name / phone / IMEI / agent. */
@@ -586,6 +664,8 @@ function custRender(m){
     },350);
   });
   if(CUST.sel) openCust(CUST.sel);
+  // A hit from the header's everything-box lands here: open that customer's card.
+  if(window.GOPEN){ var g0=window.GOPEN; window.GOPEN=null; openCust(g0); }
 }
 function openCust(c){
   var box=$('#custDetail'); if(!box||!c) return;

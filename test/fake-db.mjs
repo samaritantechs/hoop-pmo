@@ -20,7 +20,11 @@ export function setPageCap(n) { PAGE_CAP = n; }
 const rxEsc = c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 function likeMatch(value, pattern) {
   const v = String(value == null ? '' : value);
-  const p = String(pattern == null ? '' : pattern);
+  // PostgREST accepts `*` as an alias for `%` in like/ilike patterns -- and it is the
+  // spelling every search here actually sends. The fake not knowing it meant every
+  // or()-search matched NOTHING in tests while working in the field: the exact
+  // wrong-way-round a fake must never be.
+  const p = String(pattern == null ? '' : pattern).replace(/\*/g, '%');
   let rx = '';
   for (let i = 0; i < p.length; i++) {
     const c = p.charAt(i);
