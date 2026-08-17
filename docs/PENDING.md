@@ -69,9 +69,11 @@ Highest value first; who to lean on is from the starter's people table:
 - Vercel env: `SUPABASE_URL` currently holds a pasted API key; the code self-heals
   (`SUPABASE_URL_NORM`) but the honest fix is setting the real URL.
 
-## 5. Coming stage (owner, 2026-08-17): agents see THEIR OWN customers
+## 5. SHIPPED 2026-08-17: agents see THEIR OWN customers
 
-*"we'll move to agents seeing their customers in coming up stages."* When the word comes:
-sales agents (hoop_agents) get a view of the customers THEY sold (joined by the agent
-field on the register / hoop_sales by payout phone) — likely a lightweight portal role or
-app mode. Distribution stays CREDIT-only; this is a viewing stage, not a dealing change.
+The stage arrived the same day it was promised. One shared AGENT sign-in code (portal →
+Access codes, rotated in the WhatsApp group like the staff code); an agent registers with
+name + phone + location, the phone must match `hoop_agents`, and the app shows only the
+customers whose register row names them. Unknown phone = empty book (fails closed) with a
+note to ask the office. Distribution stays CREDIT-only — agents never join the deal.
+Remaining refinement if wanted later: an agent portal view of their sales/commissions.

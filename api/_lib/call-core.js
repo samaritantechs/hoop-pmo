@@ -180,13 +180,14 @@ async function boot(db, [dev], nowMs) {
 
 /** Identity keyed by PHONE; the team code decides WHICH team -- verbatim Hope flow,
     including the live (uncached) teams read so a rotated code cuts instantly. */
-async function register(db, [dev, name, team, accessCode, phone, passcode], nowMs) {
+async function register(db, [dev, name, team, accessCode, phone, passcode, location], nowMs) {
   dev = String(dev == null ? '' : dev).trim();
   if (!dev) throw new Error('Missing device id.');
   name = String(name == null ? '' : name).trim();
   const phoneD = pnorm(phone);
   if (!phoneD) throw new Error('Enter your phone number.');
   team = String(team == null ? '' : team).trim();
+  const loc = String(location == null ? '' : location).trim();
   const code = String(accessCode == null ? '' : accessCode).trim();
   let role = 'OFFICER', leader = false, leaderTeams = null;
   const teams = await teamList(db);
@@ -215,6 +216,15 @@ async function register(db, [dev, name, team, accessCode, phone, passcode], nowM
     if (!name) throw new Error('Andika jina lako. / Enter your name.');
     team = match.team;
     role = 'OFFICER';
+    /* The AGENT code is the same shared-code flow (one code, rotated in the WhatsApp
+       group when somebody leaves), but the account it makes is fenced: role AGENT sees
+       only the customers THEY sold. Their location is required -- the company has no
+       branches, so the team slot carries it (Kinondoni is a location, not a fence). */
+    if (K(match.team) === 'AGENT') {
+      role = 'AGENT';
+      if (!loc) throw new Error('Andika eneo lako. / Enter your location — agents sign in with name, phone number and location.');
+      team = loc;
+    }
     const { data: acct } = await db.from('call_users').select('active').eq('phone', phoneD).maybeSingle();
     if (acct && acct.active === false) throw new Error('Akaunti yako imezimwa. / Your account has been switched off. Ask your admin.');
   }
@@ -285,6 +295,14 @@ const CREDIT_ROLES = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CREDIT TEA
    be dealt a share by default (that bug put the admin's own phone into the deal). A
    person registered with a personal CREDIT access code counts, leader flag or not. */
 const isCredit = cu => CREDIT_ROLES.has(K(cu && cu.role));
+/* AGENTS -- the owner's coming stage, arrived (2026-08-17): "agents should see only
+   their data". One shared AGENT sign-in code (rotated in the WhatsApp group exactly like
+   the staff code); the agent's own PHONE is the identity -- it must match Sipho's
+   register (hoop_agents), which maps their name onto every IMEI they sold in the Watu
+   register. No per-agent codes to mint or track. Agents are never dealt shares and never
+   join the credit roster; if the index fails or the phone is unknown the agent sees an
+   EMPTY book, never somebody else's -- this fence fails closed. */
+const isAgent = cu => K(cu && cu.role) === 'AGENT';
 async function activeRoster(db) {
   const rows = await fetchAll(() => db.from('call_users').select('user_id, role, active'));
   return rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role)))
@@ -295,6 +313,35 @@ function myShare(items, keyFn, roster, uid) {
   if (k < 0 || !roster.length) return items;   // a device outside the roster peeks at the whole book
   const sorted = [...items].sort((a, b) => (String(keyFn(a)) < String(keyFn(b)) ? -1 : 1));
   return sorted.filter((_, i) => i % roster.length === k);
+}
+
+/* WHO SOLD THIS PHONE, on the card -- the agent holds Hope's guarantor slot until
+   Watu's reports carry real guarantors (PENDING #1). The register knows the agent per
+   IMEI; Sipho's register knows the agent's own phone by name. Cached against
+   DATA_VERSION like the phone index; a failed build must NEVER break the list -- the
+   card just shows a dash. Budget: warm = 1 keyed DATA_VERSION read; a version change
+   or 15-minute lapse costs 2 bounded reads (register imei+agent, agents name+phone). */
+const agentIdxCache = new WeakMap();
+async function agentIndex(db, nowMs) {
+  const version = (await settingGet(db, 'DATA_VERSION')) || '';
+  const hit = agentIdxCache.get(db);
+  if (hit && hit.version === version && (nowMs - hit.at) < 15 * 60000) return hit;
+  const byImei = {}, phoneByName = {}, nameByPhone = {};
+  try {
+    const [reg, agents] = await Promise.all([
+      fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id')),
+      fetchAll(() => db.from('hoop_agents').select('name, phone')),
+    ]);
+    for (const r of reg) if (r.agent) byImei[String(r.imei)] = { name: r.agent, id: r.agent_id || '' };
+    for (const a of agents) if (a.name) {
+      phoneByName[K(a.name)] = a.phone || '';
+      // The reverse map is the AGENT sign-in fence: their registered phone -> their name.
+      const p = pnorm(a.phone); if (p && !nameByPhone[p]) nameByPhone[p] = K(a.name);
+    }
+  } catch (e) { /* decoration for the card; the agent fence fails CLOSED on empty maps */ }
+  const value = { version, at: nowMs, byImei, phoneByName, nameByPhone };
+  agentIdxCache.set(db, value);
+  return value;
 }
 
 /* ---------- the list: the newest Watu deck ---------- */
@@ -314,21 +361,34 @@ async function latestDeckDate(db) {
 async function list(db, [dev], nowMs) {
   const cu = await userByDeviceSoft(db, dev);
   if (!cu) return { ok: false, error: 'DEVICE_NOT_REGISTERED' };
-  const [called, deckDate, roster] = await Promise.all([
-    calledTodaySet(db, nowMs), latestDeckDate(db), activeRoster(db)]);
-  if (!deckDate) return { ok: true, rows: [], asOf: null, stale: false, narrowed: null };
+  const [called, deckDate, roster, agents] = await Promise.all([
+    calledTodaySet(db, nowMs), latestDeckDate(db), activeRoster(db), agentIndex(db, nowMs)]);
+  if (!deckDate) return { ok: true, rows: [], asOf: null, stale: false, narrowed: null, note: null };
   // The WHOLE deck -- no team fence (the team column is the selling branch) -- then this
   // officer's dealt share of it. Budget: the deck read is the same one as before; the
   // roster is one extra bounded read.
   const fu = await fetchAll(() => db.from('followup_status').select(DECK_COLS).eq('deck_date', deckDate));
-  const mine = myShare(fu, r => r.imei, roster, cu.user_id);
+  let mine, note = null;
+  if (isAgent(cu)) {
+    // The agent fence: their registered phone names them on Sipho's register; the Watu
+    // register names them on each IMEI. No match -> EMPTY book (fails closed) + why.
+    const myKey = agents.nameByPhone[pnorm(cu.phone)] || '';
+    mine = myKey ? fu.filter(r => { const ag = agents.byImei[String(r.imei)]; return ag && K(ag.name) === myKey; }) : [];
+    if (!myKey) note = 'Your phone number is not on the agents register yet — ask the office to add it, then reopen the app.';
+    else if (!mine.length) note = 'Safi! Hakuna mteja wako kwenye orodha ya leo. / None of the customers you sold are on today’s locked list.';
+  } else {
+    mine = myShare(fu, r => r.imei, roster, cu.user_id);
+  }
   const today = todayKey(nowMs);
   const hit = c => !!called[pnorm(c)];
   const rows = mine.map(r => {
     const life = lifeDayOf(r.disbursed_date, today);
+    const ag = agents.byImei[String(r.imei)] || null;
     return {
       // Hope-shaped keys so the page machinery carries over; ref IS the IMEI.
       ref: r.imei, name: r.client_name, contact: r.contact, gName: '', gContact: '',
+      agentName: ag ? ag.name : '', agentId: ag ? ag.id : '',
+      agentPhone: ag ? (phoneByNameOf(agents, ag.name)) : '',
       amt: num(r.price), installment: null,
       custStatus: r.locked7 ? 'LOCKED 7+' : (r.locked4 ? 'LOCKED 4+' : ''),
       fuStatus: r.fu_status || '',
@@ -347,8 +407,10 @@ async function list(db, [dev], nowMs) {
   // Most-offline first -- the deepest-locked phone is the call that matters most.
   rows.sort((a, b) => (num(b.daysOff) - num(a.daysOff)) || (num(b.amt) - num(a.amt)));
   const stale = deckDate < today;
-  return { ok: true, rows, asOf: deckDate, stale, narrowed: null };
+  return { ok: true, rows, asOf: deckDate, stale, narrowed: null, note };
 }
+
+function phoneByNameOf(agents, name) { return agents.phoneByName[K(name)] || ''; }
 
 /* ---------- the phone index (who is this number) ---------- */
 /* Cached against DATA_VERSION exactly as Hope's is: an upload moves the version, the next
@@ -539,12 +601,13 @@ async function histFor(db, nowMs) {
 /** Reached % for one date: the dealt share when uid is given, the whole company when
     null. Yesterday's share is dealt with TODAY's roster -- a person added since then
     shifts it slightly, which is the honest cost of "nothing is stored". */
-function reachedOn(date, hist, uid, roster) {
+function reachedOn(date, hist, uid, roster, poolFn) {
   if (!date) return null;
   const deckMap = hist.deckByDate.get(date);
   if (!deckMap || !deckMap.size) return null;
   const all = [...deckMap.values()];
-  const pool = uid == null ? all : myShare(all, r => r.imei, roster, uid);
+  // poolFn overrides the deal: an AGENT's pool is "the customers they sold", not a share.
+  const pool = poolFn ? all.filter(poolFn) : (uid == null ? all : myShare(all, r => r.imei, roster, uid));
   if (!pool.length) return null;
   const phones = new Set(pool.map(r => pnorm(r.client_mobile)).filter(Boolean));
   const got = new Set();
@@ -556,10 +619,10 @@ function reachedOn(date, hist, uid, roster) {
   }
   return { pct: phones.size ? got.size / phones.size : null, num: got.size, den: phones.size };
 }
-function weekAvgFor(hist, uid, roster) {
+function weekAvgFor(hist, uid, roster, poolFn) {
   const days = [];
   for (let i = 0; i < 7; i++) {
-    const r = reachedOn(addDaysKey(hist.weekStart, i), hist, uid, roster);
+    const r = reachedOn(addDaysKey(hist.weekStart, i), hist, uid, roster, poolFn);
     if (r && r.pct != null) days.push(r.pct);
   }
   return days.length ? { pct: days.reduce((a, b) => a + b, 0) / days.length, days: days.length } : { pct: null, days: 0 };
@@ -641,12 +704,52 @@ async function summaryForOfficer(db, cu, nowMs) {
   summaryCache.set(key, { at: nowMs, value });
   return { ...value, cached: false };
 }
+/** The AGENT's strip: only the customers THEY sold -- counted with the same yesterday
+    and last-week rules as everyone else. Cached per user like the officer strip.
+    Budget on a cache miss: 1 deck read + 1 own-logs-today read (indexed user_id+date)
+    + the day's shared history + the agent index (both memory after the first ask). */
+async function summaryForAgent(db, cu, nowMs) {
+  const key = 'U:' + String(cu.user_id);
+  const hit = summaryCache.get(key);
+  if (hit && (nowMs - hit.at) < SUMMARY_TTL_MS && hit.at <= nowMs) return { ...hit.value, cached: true };
+  const today = todayKey(nowMs);
+  const deckDate = await latestDeckDate(db);
+  const [deck, myLogs, hist, agents] = await Promise.all([
+    deckDate ? fetchAll(() => db.from('followup_status')
+      .select('imei, contact, disbursed_date, locked4, locked7, days_offline').eq('deck_date', deckDate)) : [],
+    fetchAll(() => db.from('call_logs').select('id, duration')
+      .eq('call_date', today).eq('user_id', String(cu.user_id))),
+    histFor(db, nowMs),
+    agentIndex(db, nowMs),
+  ]);
+  const myKey = agents.nameByPhone[pnorm(cu.phone)] || '';
+  const mineFn = r => { const ag = agents.byImei[String(r.imei)]; return !!(myKey && ag && K(ag.name) === myKey); };
+  const mine = deck.filter(mineFn);
+  const inWinOf = r => { const l = lifeDayOf(r.disbursed_date, today); return l != null && l <= 45; };
+  const value = {
+    ok: true,
+    deckDate,
+    list: { num: mine.length },
+    locked7: { num: mine.filter(r => r.locked7 === true && inWinOf(r)).length },
+    inWindow: { num: mine.filter(inWinOf).length },
+    calls: { num: myLogs.length },
+    reached: reachedOn(hist.yDate, hist, cu.user_id, [], mineFn) || { pct: null, num: 0, den: 0 },
+    weekAvg: weekAvgFor(hist, cu.user_id, [], mineFn),
+    asOfReached: hist.yDate,
+    onRegister: !!myKey,
+    dataVersion: (await settingGet(db, 'DATA_VERSION')) || '',
+  };
+  summaryCache.set(key, { at: nowMs, value });
+  return { ...value, cached: false };
+}
 async function dailySummary(db, [dev], nowMs) {
   const cu = await userByDeviceSoft(db, dev);
   if (!cu) return { ok: false, error: 'DEVICE_NOT_REGISTERED' };
   // A CREDIT-role user sees THEIR share and THEIR numbers -- whether they registered
-  // with the company code or their own CREDIT access code. Every other role (ADMIN,
-  // leads, general duty, blank trial accounts) sees the whole company's average.
+  // with the company code or their own CREDIT access code. An AGENT sees only the
+  // customers they sold. Every other role (ADMIN, leads, general duty, blank trial
+  // accounts) sees the whole company's average.
+  if (isAgent(cu)) return summaryForAgent(db, cu, nowMs);
   if (isCredit(cu)) return summaryForOfficer(db, cu, nowMs);
   return summaryFor(db, { name: cu.name, role: cu.role, teams: null }, nowMs);
 }

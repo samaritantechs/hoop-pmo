@@ -255,6 +255,103 @@ test('only CREDIT roles are dealt shares -- everyone else opens the whole book',
   assert.equal(g.rows.length, 2, 'a non-credit role is NOT dealt -- they open the whole book');
 });
 
+/* ---------- the card knows the seller + the AGENT stage ---------- */
+
+test('the card carries WHO SOLD the phone: agent name, id and own number on the row', async () => {
+  const d = fakeDb({
+    settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+    teams: [],
+    followup_status: [
+      { imei: 'A', client_name: 'One', contact: '255716000001', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+      { imei: 'B', client_name: 'Two', contact: '255716000002', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+    ],
+    watu_loans: [{ imei: 'A', agent: 'Anord Sawe', agent_id: '77123' }],
+    hoop_agents: [{ name: 'Anord Sawe', phone: '0658918324' }],
+    call_users: [{ user_id: 'U1', device_id: 'dev-1', name: 'Ainea', role: 'CREDIT', active: true }],
+    call_logs: [],
+  });
+  const r = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  const a = r.rows.find(x => x.ref === 'A'), b = r.rows.find(x => x.ref === 'B');
+  assert.equal(a.agentName, 'Anord Sawe');
+  assert.equal(a.agentId, '77123');
+  assert.equal(a.agentPhone, '0658918324', 'the agent\'s own number comes from Sipho\'s register by name');
+  assert.equal(b.agentName, '', 'an IMEI missing from the register shows a dash, never a guess');
+  assert.equal(b.gName, '', 'guarantor slots stay honest until a Watu report carries them (PENDING 1)');
+});
+
+test('the AGENT code registers role AGENT and demands a location', async () => {
+  const d = fakeDb({
+    settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }],
+    teams: [{ team: 'HOOP', team_code: 'AB2C3D' }, { team: 'AGENT', team_code: 'QQ7R8S' }],
+    call_users: [],
+  });
+  await assert.rejects(() => callApi(d, 'api_callRegister',
+    ['dev-9', 'Anord Sawe', '', '', '0658918324', 'QQ7R8S'], NOW), /location/i);
+  const r = await callApi(d, 'api_callRegister',
+    ['dev-9', 'Anord Sawe', '', '', '0658918324', 'QQ7R8S', 'Mbagala'], NOW);
+  assert.equal(r.ok, true);
+  const cu = d._dump('call_users')[0];
+  assert.equal(cu.role, 'AGENT');
+  assert.equal(cu.team, 'Mbagala', 'no branches -- the team slot carries the agent\'s location');
+  assert.equal(cu.is_leader, false);
+  // The staff code still registers an OFFICER with no location asked.
+  const r2 = await callApi(d, 'api_callRegister',
+    ['dev-8', 'Ainea', '', '', '0712345678', 'AB2C3D'], NOW);
+  assert.equal(r2.ok, true);
+  assert.equal(d._dump('call_users').find(u => u.name === 'Ainea').role, 'OFFICER');
+});
+
+const agentStageDb = () => fakeDb({
+  settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+  teams: [],
+  followup_status: [
+    { imei: 'A', client_name: 'Mine', contact: '255716000001', deck_date: '2026-08-14', disbursed_date: '2026-08-01', locked7: true },
+    { imei: 'B', client_name: 'Not Mine', contact: '255716000002', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+    { imei: 'C', client_name: 'Unregistered Sale', contact: '255716000003', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+  ],
+  watu_loans: [
+    { imei: 'A', agent: 'Anord Sawe', agent_id: '1' },
+    { imei: 'B', agent: 'Neema John', agent_id: '2' },
+  ],
+  hoop_agents: [
+    { name: 'Anord Sawe', phone: '0658918324' },
+    { name: 'Neema John', phone: '0712000999' },
+  ],
+  call_users: [
+    { user_id: 'U1', device_id: 'dev-1', name: 'Ainea', role: 'CREDIT', active: true },
+    { user_id: 'U2', device_id: 'dev-2', name: 'Anord Sawe', role: 'AGENT', phone: '658918324', team: 'Mbagala', active: true },
+    { user_id: 'U3', device_id: 'dev-3', name: 'Stranger', role: 'AGENT', phone: '655000000', team: 'Kigamboni', active: true },
+  ],
+  call_logs: [],
+});
+
+test('an AGENT sees ONLY the customers they sold; the credit deal never counts them', async () => {
+  const d = agentStageDb();
+  const ag = await callApi(d, 'api_callList', ['dev-2', 'today'], NOW);
+  assert.equal(ag.rows.length, 1, 'exactly the phones they sold');
+  assert.equal(ag.rows[0].ref, 'A');
+  const cr = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  assert.equal(cr.rows.length, 3, 'the only CREDIT user still holds the whole book -- agents are outside the deal');
+  const str = await callApi(d, 'api_callList', ['dev-3', 'today'], NOW);
+  assert.equal(str.rows.length, 0, 'an unknown agent phone fails CLOSED -- empty, never somebody else\'s book');
+  assert.match(String(str.note), /agents register/);
+});
+
+test('the agent strip counts THEIR book, never the company', async () => {
+  _clearSummaryCache();
+  const d = agentStageDb();
+  const s = await callApi(d, 'api_callDailySummary', ['dev-2'], NOW);
+  assert.equal(s.ok, true);
+  assert.equal(s.list.num, 1, 'one sold customer on today\'s deck');
+  assert.equal(s.locked7.num, 1);
+  assert.equal(s.onRegister, true);
+  _clearSummaryCache();
+  const s3 = await callApi(d, 'api_callDailySummary', ['dev-3'], NOW);
+  assert.equal(s3.list.num, 0);
+  assert.equal(s3.onRegister, false, 'the strip says the phone is not on the register');
+  _clearSummaryCache();
+});
+
 test('a blank-role trial account is NOT dealt -- it opens the whole book', async () => {
   const d = fakeDb({
     settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],

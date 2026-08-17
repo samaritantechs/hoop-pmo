@@ -790,7 +790,8 @@ function drawCodes(m){
       +'<div class="mut" style="margin-bottom:10px">Who is signed in on the phones. Switching one person off does not touch the team code — only their account.</div>'
       +'<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Branch</th><th>Phone</th><th>Last sync</th><th>Status</th><th></th></tr></thead><tbody>'
       +((off.officers||[]).length?(off.officers||[]).map(function(o){
-        return '<tr><td><b>'+esc(o.name)+'</b>'+(o.leader?' <span class="chip">leader</span>':'')+'</td>'
+        return '<tr><td><b>'+esc(o.name)+'</b>'+(o.leader?' <span class="chip">leader</span>':'')
+          +(String(o.role||'').toUpperCase()==='AGENT'?' <span class="chip">agent</span>':'')+'</td>'
           +'<td>'+esc(o.team||'')+'</td><td>'+esc(o.phone||'')+'</td>'
           +'<td class="mut">'+(o.lastSync?esc(String(o.lastSync).slice(0,16).replace('T',' ')):'—')+'</td>'
           +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td>'
@@ -799,33 +800,49 @@ function drawCodes(m){
       +'</tbody></table></div></div>'
       +'</tbody></table></div></div>'
       +(function(){
-        /* NO teams, NO branches -- one COMPANY sign-in code for the app. Kinondoni and
-           the rest are just location labels on customer rows. Legacy rows may still
-           hold codes; only the HOOP company code is offered here. */
-        var co=(BOOT.teams||[]).filter(function(t){return t.team==='HOOP';})[0];
-        return '<div class="card"><h2>App sign-in code</h2>'
-          +'<div class="mut" style="margin-bottom:10px">ONE code for the whole company — every credit user registers on HOOP Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.</div>'
-          +(co
-            ? '<div class="row"><span class="code" style="font-size:20px">'+esc(co.code||'—')+'</span>'
-              +'<button class="btn sm ghost" id="coRotate">Rotate code</button></div>'
-            : '<button class="btn sm" id="coMake">Create the company code</button>')
-          +'</div>';
+        /* NO teams, NO branches -- shared sign-in codes for the app. Kinondoni and
+           the rest are just location labels on customer rows. Two codes exist: HOOP
+           for staff (the workload deal takes over) and AGENT for sales agents (each
+           agent sees ONLY the customers they sold -- matched by the phone they
+           register with against Sipho's agents register). Both are rotated the same
+           way when somebody leaves. */
+        var card=function(teamKey,title,blurb,makeLbl){
+          var co=(BOOT.teams||[]).filter(function(t){return t.team===teamKey;})[0];
+          return '<div class="card"><h2>'+esc(title)+'</h2>'
+            +'<div class="mut" style="margin-bottom:10px">'+blurb+'</div>'
+            +(co
+              ? '<div class="row"><span class="code" style="font-size:20px">'+esc(co.code||'—')+'</span>'
+                +'<button class="btn sm ghost" data-corot="'+teamKey+'">Rotate code</button></div>'
+              : '<button class="btn sm" data-comk="'+teamKey+'">'+esc(makeLbl)+'</button>')
+            +'</div>';
+        };
+        return card('HOOP','App sign-in code — staff',
+            'ONE code for the whole company — every credit user registers on HOOP Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.',
+            'Create the company code')
+          +card('AGENT','App sign-in code — agents',
+            'ONE shared code for ALL sales agents — share it in the WhatsApp group and rotate it here when somebody leaves. An agent registers with their name, phone number and location; the phone number must match the agents register, and the app then shows them ONLY the customers they sold. A wrong or unknown number sees an empty list, never anybody else’s customers.',
+            'Create the agent code');
       })();
-    var mk=function(){
-      srv('saveTeam',{team:'HOOP'})
-        .then(function(){ return srv('newTeamCode',{team:'HOOP'}); })
-        .then(function(d2){ toast('Company code: '+d2.code);
-          return srv('boot').then(function(x){BOOT=x;drawCodes(m);}); })
-        .catch(function(e){toast(String(e.message||e),true);});
-    };
-    var rb=$('#coRotate'); if(rb) rb.onclick=function(){
-      if(!confirm('Rotate the company code? The old one stops working for new registrations.')) return;
-      srv('newTeamCode',{team:'HOOP'}).then(function(d2){
-        toast('New company code: '+d2.code);
-        return srv('boot').then(function(x){BOOT=x;drawCodes(m);});
-      }).catch(function(e){toast(String(e.message||e),true);});
-    };
-    var mb=$('#coMake'); if(mb) mb.onclick=mk;
+    $all('[data-comk]',m).forEach(function(b){
+      b.onclick=function(){
+        var t=b.getAttribute('data-comk');
+        srv('saveTeam',{team:t})
+          .then(function(){ return srv('newTeamCode',{team:t}); })
+          .then(function(d2){ toast((t==='AGENT'?'Agent':'Company')+' code: '+d2.code);
+            return srv('boot').then(function(x){BOOT=x;drawCodes(m);}); })
+          .catch(function(e){toast(String(e.message||e),true);});
+      };
+    });
+    $all('[data-corot]',m).forEach(function(b){
+      b.onclick=function(){
+        var t=b.getAttribute('data-corot');
+        if(!confirm('Rotate the '+(t==='AGENT'?'agent':'company')+' code? The old one stops working for new registrations.')) return;
+        srv('newTeamCode',{team:t}).then(function(d2){
+          toast('New '+(t==='AGENT'?'agent':'company')+' code: '+d2.code);
+          return srv('boot').then(function(x){BOOT=x;drawCodes(m);});
+        }).catch(function(e){toast(String(e.message||e),true);});
+      };
+    });
     $all('[data-tg]',m).forEach(function(b){
       b.onclick=function(){
         srv('officerActive',{userId:b.getAttribute('data-tg'),active:b.getAttribute('data-on')!=='1'})

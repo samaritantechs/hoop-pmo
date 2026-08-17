@@ -274,7 +274,11 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
     <div class="fld" id="regNameWrap"><label>Jina lako / Your name</label><input id="regName" placeholder="e.g. Juma Issa"></div>
     <div class="fld" id="regPassWrap"><label>Msimbo wa timu / Team code</label>
       <input id="regPass" placeholder="XXXXXX" autocomplete="off" data-secret data-upper>
-      <div class="note">Umepewa na afisa wa PMO. Msimbo ndio unaonyesha timu yako &#x2014; hakuna haja ya kuichagua. / Issued by your PMO officer. The code identifies your team, so there is nothing to pick.</div>
+      <div class="note">Umepewa na afisa wa PMO. Msimbo ndio unaonyesha timu yako &#x2014; hakuna haja ya kuichagua. / Issued by your PMO officer. The code identifies your team, so there is nothing to pick. Mawakala hutumia msimbo wa mawakala hapa hapa. / Agents enter the agent code in this same box.</div>
+    </div>
+    <div class="fld" id="regLocWrap"><label>Eneo / Location</label>
+      <input id="regLoc" placeholder="e.g. Kinondoni">
+      <div class="note">Kwa mawakala tu &#x2014; eneo unalouzia. Wafanyakazi wa ofisi waache wazi. / Agents only: the area you sell in. Office staff leave this empty.</div>
     </div>
     <div class="fld hide" id="regCodeWrap"><label>Msimbo wa uongozi / Leader access code</label>
       <input id="regCode" placeholder="Enter your portal access code" data-secret>
@@ -899,6 +903,7 @@ $all('.regToggleBtn').forEach(function(b){
     // same as the portal itself (Leaders sheet / access code owns that identity, not a form field).
     $('#regNameWrap').classList.toggle('hide', regRole==='leader');
     $('#regPassWrap').classList.toggle('hide', regRole==='leader');
+    $('#regLocWrap').classList.toggle('hide', regRole==='leader');
     $('#regCodeWrap').classList.toggle('hide', regRole==='officer');
   };
 });
@@ -909,12 +914,13 @@ $('#regBtn').onclick = function(){
   var name = regRole === 'officer' ? $('#regName').value.trim() : '';
   var pass = regRole === 'officer' ? $('#regPass').value.trim() : '';
   var code = regRole === 'leader' ? $('#regCode').value.trim() : '';
+  var loc = regRole === 'officer' ? $('#regLoc').value.trim() : '';
   if (!phone){ $('#regErr').innerHTML = '<div class="err">Andika namba yako ya simu.</div>'; return; }
   if (regRole === 'officer' && !name){ $('#regErr').innerHTML = '<div class="err">Andika jina lako.</div>'; return; }
   if (regRole === 'officer' && !pass){ $('#regErr').innerHTML = '<div class="err">Weka msimbo wa timu yako.</div>'; return; }
   if (regRole === 'leader' && !code){ $('#regErr').innerHTML = '<div class="err">Weka msimbo wako wa uongozi.</div>'; return; }
   $('#regBtn').disabled = true; $('#regBtn').textContent = 'Inajiunga\u2026';
-  srv('api_callRegister', DEV, name, '', code, phone, pass).then(function(){
+  srv('api_callRegister', DEV, name, '', code, phone, pass, loc).then(function(){
     return srv('api_callBoot', DEV);
   }).then(function(d){
     if (d.ok) {
@@ -1421,8 +1427,10 @@ function staleNote_(){
 
 function emptyWhy_(v){
   if (LIST_SOURCE[v] === 'today') {
-    if (!(S.cache.today && S.cache.today.length))
+    if (!(S.cache.today && S.cache.today.length)) {
+      if (S.srvNote && S.srvNote.today) return S.srvNote.today;
       return 'Orodha ya Watu ya leo haijapakiwa bado. Mwambie admin apakie orodha ya leo kwenye /upload.';
+    }
     if (v === 'win45') return 'Hakuna mteja ndani ya siku 45 kwenye orodha ya leo.';
     if (v === 'over45') return 'Hakuna mteja nje ya dirisha la siku 45 — wote bado wako ndani.';
     if (v === 'lock4') return 'Hakuna aliyefungiwa siku 4–6 kwenye orodha ya leo (angalia Lock 7+).';
@@ -1480,6 +1488,10 @@ function fetchSource_(src, showSpinner){
     S.asOf[src] = { date: d.asOf || null, stale: !!d.stale };
     S.narrowed = S.narrowed || {};
     S.narrowed[src] = d.narrowed || null;
+    // The server can say WHY a list is empty (an agent whose phone is not on the
+    // register yet); that answer beats any guess this side can make.
+    S.srvNote = S.srvNote || {};
+    S.srvNote[src] = d.note || null;
     if (src === 'expdf') S.expdf = d.expdf || null;
     S.cacheAt[src] = Date.now();
     saveCacheToDevice_();
@@ -1713,8 +1725,15 @@ function sheetSkeleton(r){
     + (r.custStatus ? '<div class="factrow"><span>Hali / Lock status</span>' + statusChip(r.custStatus) + '</div>' : '')
     + (r.paid === false ? '<div class="factrow"><span>Malipo / Payments</span>' + statusChip('UNPAID') + '</div>' : '')
     + (r.fuStatus ? '<div class="factrow"><span>Ufuatiliaji wa mwisho / Last follow-up</span>' + statusChip(r.fuStatus) + '</div>' : '')
+    /* WHO ELSE TO LEAN ON -- Hope's card had the guarantor here; Hoop's second person is
+       the AGENT who sold the phone, with their own number from the agents register. The
+       guarantor line stays, honest, until Watu's reports carry the data. */
+    + '<div class="factrow"><span>Agent / Muuzaji</span><span>' + (r.agentName ? esc(r.agentName) + (r.agentPhone ? ' \u00B7 ' + esc(r.agentPhone) : '') : '\u2014') + '</span></div>'
+    + '<div class="factrow"><span>Mdhamini / Guarantor</span><span>' + (r.gName ? esc(r.gName) + (r.gContact ? ' \u00B7 ' + esc(r.gContact) : '') : '\u2014 bado kwenye ripoti za Watu') + '</span></div>'
     + '<div class="callrow">'
     + (cHref!=='#' ? '<a class="btn btn-pri" href="tel:'+cHref+'" data-ref="' + esc(r.ref) + '">\uD83D\uDCDE Mteja \u00B7 ' + esc(r.contact) + '</a>' : '<span class="btn btn-ghost">Hana namba</span>')
+    + (r.agentPhone && telHref(r.agentPhone)!=='#' ? '<a class="btn btn-ghost" href="tel:'+telHref(r.agentPhone)+'" data-ref="' + esc(r.ref) + '">\uD83D\uDCDE Agent</a>' : '')
+    + (r.gContact && telHref(r.gContact)!=='#' ? '<a class="btn btn-ghost" href="tel:'+telHref(r.gContact)+'" data-ref="' + esc(r.ref) + '">\uD83D\uDCDE Mdhamini</a>' : '')
     + '</div>'
     + '</div>'
     + '<div class="sheet-card"><div class="sheet-title" style="font-size:14px">Historia / History</div>'
