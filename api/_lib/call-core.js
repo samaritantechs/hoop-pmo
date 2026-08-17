@@ -281,10 +281,13 @@ async function calledTodaySet(db, nowMs) {
    users as OFFICER, so both spellings count as credit. All credits share EQUALLY:
    round-robin gives every roster member the same count, plus-minus one. */
 const CREDIT_ROLES = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CREDIT TEAM']);
-const isCredit = cu => CREDIT_ROLES.has(K((cu && cu.role) || 'OFFICER'));
+/* EXPLICIT roles only -- no fallback. An old trial account with a blank role must NOT
+   be dealt a share by default (that bug put the admin's own phone into the deal). A
+   person registered with a personal CREDIT access code counts, leader flag or not. */
+const isCredit = cu => CREDIT_ROLES.has(K(cu && cu.role));
 async function activeRoster(db) {
   const rows = await fetchAll(() => db.from('call_users').select('user_id, role, active'));
-  return rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role || 'OFFICER')))
+  return rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role)))
     .map(r => String(r.user_id)).sort();
 }
 function myShare(items, keyFn, roster, uid) {
@@ -641,9 +644,10 @@ async function summaryForOfficer(db, cu, nowMs) {
 async function dailySummary(db, [dev], nowMs) {
   const cu = await userByDeviceSoft(db, dev);
   if (!cu) return { ok: false, error: 'DEVICE_NOT_REGISTERED' };
-  // A CREDIT user sees THEIR share and THEIR numbers; leaders and every other role see
-  // the whole company's average -- the detail lives in Ripoti.
-  if (!cu.is_leader && isCredit(cu)) return summaryForOfficer(db, cu, nowMs);
+  // A CREDIT-role user sees THEIR share and THEIR numbers -- whether they registered
+  // with the company code or their own CREDIT access code. Every other role (ADMIN,
+  // leads, general duty, blank trial accounts) sees the whole company's average.
+  if (isCredit(cu)) return summaryForOfficer(db, cu, nowMs);
   return summaryFor(db, { name: cu.name, role: cu.role, teams: null }, nowMs);
 }
 

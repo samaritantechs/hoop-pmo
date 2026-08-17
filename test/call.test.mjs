@@ -199,9 +199,9 @@ test('the bar: own yesterday % and last-week average for a credit user; company 
         disbursed_date: '2026-08-01', days_offline: 9, locked4: true, locked7: false, deck_date: '2026-08-14' },
     ],
     call_users: [
-      { user_id: 'U1', device_id: 'dev-1', name: 'Ainea', team: 'KINONDONI', is_leader: false, active: true },
-      { user_id: 'U2', device_id: 'dev-2', name: 'Baraka', team: 'KINONDONI', is_leader: false, active: true },
-      { user_id: 'U9', device_id: 'dev-9', name: 'Bosi', team: 'KINONDONI', is_leader: true, active: true },
+      { user_id: 'U1', device_id: 'dev-1', name: 'Ainea', team: 'KINONDONI', role: 'CREDIT', is_leader: false, active: true },
+      { user_id: 'U2', device_id: 'dev-2', name: 'Baraka', team: 'KINONDONI', role: 'CREDIT', is_leader: true, active: true },
+      { user_id: 'U9', device_id: 'dev-9', name: 'Bosi', team: 'KINONDONI', role: 'MANAGER', is_leader: true, active: true },
     ],
     // Yesterday's book: two customers. Sorted by IMEI, X1 deals to U1, X2 to U2.
     watu_snapshots: [
@@ -253,4 +253,24 @@ test('only CREDIT roles are dealt shares -- everyone else opens the whole book',
   assert.equal(Math.abs(a.rows.length - b.rows.length), 0);
   const g = await callApi(d, 'api_callList', ['dev-5', 'today'], NOW);
   assert.equal(g.rows.length, 2, 'a non-credit role is NOT dealt -- they open the whole book');
+});
+
+test('a blank-role trial account is NOT dealt -- it opens the whole book', async () => {
+  const d = fakeDb({
+    settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+    teams: [],
+    followup_status: [
+      { imei: 'A', client_name: 'One', contact: '255716000001', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+      { imei: 'B', client_name: 'Two', contact: '255716000002', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+    ],
+    call_users: [
+      { user_id: 'U0', device_id: 'dev-0', name: 'Old Trial', is_leader: false, active: true },
+      { user_id: 'U1', device_id: 'dev-1', name: 'Neema', role: 'CREDIT', is_leader: true, active: true },
+    ],
+    call_logs: [],
+  });
+  const old = await callApi(d, 'api_callList', ['dev-0', 'today'], NOW);
+  assert.equal(old.rows.length, 2, 'no role saved -> whole book, never a share');
+  const cr = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  assert.equal(cr.rows.length, 2, 'the ONLY credit account holds the whole book -- n=1');
 });
