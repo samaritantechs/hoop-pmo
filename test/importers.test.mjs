@@ -232,3 +232,24 @@ test('importOfflineQueue takes ONLY what the register needs and merges by presen
   assert.equal(dropped.length, 1, 'the IMEI-less row is dropped AND named');
   assert.equal(dropped[0].name, 'Ghost Row');
 });
+
+test('importOfflineQueue carries the sheet\'s Last Action trail as one-time comments', () => {
+  const { comments } = importOfflineQueue([OQ_HEADERS,
+    ['2026-08-01', '351416739926494', 'Offline 7+', 'Jefas D Samawa', '0662047809',
+      'Issack | 0788', 'Anord', 'Dar', '-', 'He/She Will Pay', '2026-08-17',
+      'comment', '2026-08-17 09:41', 'AYNEA POLYASI', 'atalipia ya wiki leo'],
+    // Status but no note -> the status itself becomes the comment, bracketed.
+    ['2026-08-02', '358179230370041', 'Offline 4+', 'Kapama I Mbao', '255760042887',
+      '-', '', 'Lake zone', '-', "Doesn't Answer", '', '', '', '', ''],
+    // Nothing at all -> no comment row.
+    ['2026-08-03', '358179230370215', 'Offline 4+', 'Quiet Row', '255698151755',
+      '-', '', '', '-', '', '', '', '', '', ''],
+  ]);
+  assert.equal(comments.length, 2);
+  assert.equal(comments[0].comment, 'atalipia ya wiki leo');
+  assert.equal(comments[0].created_by, 'AYNEA POLYASI (Watu)');
+  assert.equal(comments[0].created_at, '2026-08-17T09:41:00+03:00');
+  assert.equal(comments[1].comment, "[Doesn't Answer]");
+  assert.equal(comments[1].created_by, 'Watu offline queue');
+  assert.equal(comments[1].created_at, null, 'no timestamp on the sheet -> the upload stamps it');
+});

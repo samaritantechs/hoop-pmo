@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { supabase } from './_lib/supabase.js';
 import { withApi, gatedUser, can } from './_lib/auth.js';
 import { todayKey } from './_lib/time.js';
@@ -207,13 +207,35 @@ export default withApi(async (req) => {
       }
       throw err;
     }
+    // The sheet's Last Action trail joins the app's comment history ONE TIME: the id is
+    // a hash of (imei, text, author, time), so re-sending the same sheet -- or a newer
+    // sheet carrying the same old notes -- writes nothing new. Only customers already
+    // on a deck can carry comments (FK), found with chunked keyed reads.
+    let notesIn = 0;
+    if (oq.comments.length) {
+      const have = new Set();
+      for (let i = 0; i < oq.comments.length; i += 500) {
+        const part = [...new Set(oq.comments.slice(i, i + 500).map(c => c.imei))];
+        const { data, error } = await supabase.from('followup_status').select('imei').in('imei', part);
+        if (error) throw new Error('followup_status: ' + error.message);
+        (data || []).forEach(r => have.add(String(r.imei)));
+      }
+      const idOf = c => {
+        const x = createHash('md5').update([c.imei, c.comment, c.created_by, c.created_at || ''].join('|')).digest('hex');
+        return x.slice(0, 8) + '-' + x.slice(8, 12) + '-' + x.slice(12, 16) + '-' + x.slice(16, 20) + '-' + x.slice(20, 32);
+      };
+      const rows = oq.comments.filter(c => have.has(String(c.imei)))
+        .map(c => ({ id: idOf(c), imei: c.imei, comment: c.comment,
+          created_by: c.created_by, created_at: c.created_at || nowOq }));
+      if (rows.length) notesIn = await writeChunks(supabase, 'followup_comments', rows, 'id');
+    }
     if (isLast) {
       const { error } = await supabase.from('settings')
         .upsert({ key: 'DATA_VERSION', value: batch }, { onConflict: 'key' });
       if (error) throw new Error('settings: ' + error.message);
-      await logUpload(user, 'upload:offline-queue', 'rows ' + oq.records.length);
+      await logUpload(user, 'upload:offline-queue', 'rows ' + oq.records.length + ' · notes ' + notesIn);
     }
-    return { kind: 'offline', inserted: oq.records.length, batch,
+    return { kind: 'offline', inserted: oq.records.length, notes: notesIn, batch,
       dropped: oq.dropped.length, droppedRows: oq.dropped.slice(0, 50),
       part: { index, total, last: isLast } };
   }

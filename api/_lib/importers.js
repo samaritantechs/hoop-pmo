@@ -259,7 +259,14 @@ export function importOfflineQueue(rows) {
   }
   const records = [];
   const dropped = [];
+  const comments = [];
   const seen = new Set();
+  // The sheet's own follow-up trail (Status / Last Action ...) imports ONE TIME into the
+  // app's comment history -- the owner: "we moved to commenting into the current
+  // HoopCalls app". Deterministic ids at the upload layer make every re-send a no-op.
+  const cCol = n => { const i = h[normalizeHeader(n)]; return i === undefined ? -1 : i; };
+  const stIdx = cCol('STATUS'), noteIdx = cCol('LAST ACTION NOTE'),
+    byIdx = cCol('LAST ACTION BY'), atIdx = cCol('LAST ACTION AT');
   for (let i = 1; i < all.length; i++) {
     const row = all[i];
     const imei = watuImei(row[imeiIdx]);
@@ -285,12 +292,22 @@ export function importOfflineQueue(rows) {
       const p = textOrNull(row[gPhoneIdx]);
       if (p) out.guarantor_phone = p;
     }
+    const note = noteIdx >= 0 ? String(row[noteIdx] == null ? '' : row[noteIdx]).trim() : '';
+    const status = stIdx >= 0 ? String(row[stIdx] == null ? '' : row[stIdx]).trim() : '';
+    if (note || (status && status !== '-')) {
+      const by = byIdx >= 0 ? String(row[byIdx] == null ? '' : row[byIdx]).trim() : '';
+      const at = atIdx >= 0 ? String(row[atIdx] == null ? '' : row[atIdx]).trim() : '';
+      const ts = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(at)
+        ? at.slice(0, 16).replace(' ', 'T') + ':00+03:00' : null;
+      comments.push({ imei, comment: note || ('[' + status + ']'),
+        created_by: by ? by + ' (Watu)' : 'Watu offline queue', created_at: ts });
+    }
     if (seen.has(imei)) {
       const j = records.findIndex(r => r.imei === imei);
       if (j >= 0) records[j] = out;
     } else { seen.add(imei); records.push(out); }
   }
-  return { records, dropped, headers: present.map(p => p[0]) };
+  return { records, comments, dropped, headers: present.map(p => p[0]) };
 }
 
 /* =====================================================================================
