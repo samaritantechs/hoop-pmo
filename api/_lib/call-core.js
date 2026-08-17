@@ -276,9 +276,16 @@ async function calledTodaySet(db, nowMs) {
    user changes n and the deal rebalances ITSELF on the next refresh -- the owner's
    "automatic distribution continues". Leaders are dealt a share like everyone; their
    oversight lives in Ripoti. */
+/* Only CREDIT people are dealt shares -- every other role opens the WHOLE book (the
+   owner's rule; per-agent views come in a later stage). The app registers company-code
+   users as OFFICER, so both spellings count as credit. All credits share EQUALLY:
+   round-robin gives every roster member the same count, plus-minus one. */
+const CREDIT_ROLES = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CREDIT TEAM']);
+const isCredit = cu => CREDIT_ROLES.has(K((cu && cu.role) || 'OFFICER'));
 async function activeRoster(db) {
-  const rows = await fetchAll(() => db.from('call_users').select('user_id, active'));
-  return rows.filter(r => r.active !== false).map(r => String(r.user_id)).sort();
+  const rows = await fetchAll(() => db.from('call_users').select('user_id, role, active'));
+  return rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role || 'OFFICER')))
+    .map(r => String(r.user_id)).sort();
 }
 function myShare(items, keyFn, roster, uid) {
   const k = roster.indexOf(String(uid));
@@ -634,9 +641,9 @@ async function summaryForOfficer(db, cu, nowMs) {
 async function dailySummary(db, [dev], nowMs) {
   const cu = await userByDeviceSoft(db, dev);
   if (!cu) return { ok: false, error: 'DEVICE_NOT_REGISTERED' };
-  // A credit user sees THEIR portion and THEIR numbers; a leader (any oversight role)
-  // sees the whole company's average -- the detail lives in Ripoti.
-  if (!cu.is_leader) return summaryForOfficer(db, cu, nowMs);
+  // A CREDIT user sees THEIR share and THEIR numbers; leaders and every other role see
+  // the whole company's average -- the detail lives in Ripoti.
+  if (!cu.is_leader && isCredit(cu)) return summaryForOfficer(db, cu, nowMs);
   return summaryFor(db, { name: cu.name, role: cu.role, teams: null }, nowMs);
 }
 

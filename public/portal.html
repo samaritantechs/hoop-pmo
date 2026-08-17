@@ -117,6 +117,7 @@ td.r,th.r{text-align:right}
       <button data-t="fraud">Fraud audit</button>
       <button data-t="score">Agent scorecards</button>
       <button data-t="stock">Stock</button>
+      <button data-t="move">Stock movement</button>
       <button data-t="staff">Staff</button>
       <button data-t="codes" id="tabCodes">Access codes</button>
       <button data-t="settings" id="tabSettings">Settings</button>
@@ -142,6 +143,41 @@ function toast(m,bad){ var t=$('#toast'); t.textContent=m; t.className='toast'+(
 function isoToday(off){ var d=new Date(); d.setDate(d.getDate()+(off||0)); var p=function(n){return('0'+n).slice(-2);}; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 
 var CODE='', BOOT=null, TAB='dash';
+/* EVERY TABLE EXPORTS TO EXCEL: a button injected above each table automatically, so
+   every report in every tab -- including tabs added later -- is born exportable.
+   CSV with a BOM: Excel opens it clean, Swahili characters intact. Hidden rows
+   (filtered out by a search box or a chip) are NOT exported -- you export what you see. */
+function csvOfTable_(t){
+  var out=[];
+  [].slice.call(t.rows).forEach(function(tr){
+    if(tr.style.display==='none') return;
+    var cells=[].slice.call(tr.cells).map(function(td){
+      return '"'+td.textContent.replace(/\s+/g,' ').trim().replace(/"/g,'""')+'"';
+    });
+    if(cells.length) out.push(cells.join(','));
+  });
+  return '\ufeff'+out.join('\r\n');
+}
+function xlName_(){
+  var d=new Date(),p=function(n){return ('0'+n).slice(-2);};
+  return 'HOOP-'+(TAB||'report')+'-'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'.csv';
+}
+function injectExports_(){
+  $all('#main table').forEach(function(t){
+    if(t.__xp) return; t.__xp=1;
+    if(!t.tHead) return;
+    var b=document.createElement('button');
+    b.textContent='\u2913 Excel'; b.className='btn sm ghost'; b.style.cssText='margin:0 0 8px;font-size:11.5px;padding:5px 10px';
+    b.onclick=function(){
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([csvOfTable_(t)],{type:'text/csv;charset=utf-8'}));
+      a.download=xlName_(); document.body.appendChild(a); a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },500);
+    };
+    t.parentNode.insertBefore(b,t);
+  });
+}
+new MutationObserver(function(){ injectExports_(); }).observe(document.body,{childList:true,subtree:true});
 
 /* EVERY TABLE SORTS ITSELF: click a header to sort by that column, click again to flip.
    Delegated once on the document, so every table -- including ones added later -- gets
@@ -239,7 +275,7 @@ function enter(){
      every button -- the same rule the endpoints enforce. A pane added later shows up
      here the moment the server lists it. */
   var NAVKEY={dash:'dashboard',cust:'customers',ripoti:'reports',recovery:'recovery',
-    fraud:'fraud',score:'scorecards',stock:'stock',staff:'staff',codes:'codes',settings:'settings'};
+    fraud:'fraud',score:'scorecards',stock:'stock',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
   var NAVS=BOOT.navs||[];
   $all('#tabs button').forEach(function(b){
     var k=NAVKEY[b.getAttribute('data-t')];
@@ -277,6 +313,7 @@ function draw(){
   if(TAB==='fraud') return drawAudit(m);
   if(TAB==='score') return drawAgents(m);
   if(TAB==='stock') return drawStock(m);
+  if(TAB==='move') return drawMove(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
   if(TAB==='staff') return drawStaff(m);
@@ -625,6 +662,47 @@ function drawAgents(m){
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
 }
 
+/* ---------- stock movement: what got away after every upload ---------- */
+var MV={hoopA:'',hoopB:'',watuA:'',watuB:''};
+function drawMove(m){
+  m.innerHTML='<div class="card"><h2>Stock movement</h2><div class="mut">Loading…</div></div>';
+  srv('stockMovement',{hoopA:MV.hoopA,hoopB:MV.hoopB,watuA:MV.watuA,watuB:MV.watuB}).then(function(d){
+    var c=d.counts||{};
+    function tbl(title,rows,cols){
+      return '<div class="card"><h2>'+title+'</h2>'
+        +'<div style="overflow-x:auto"><table><thead><tr>'+cols.map(function(x){return '<th>'+x[0]+'</th>';}).join('')+'</tr></thead><tbody>'
+        +(rows.length?rows.map(function(r){
+          return '<tr>'+cols.map(function(x){return '<td>'+esc(r[x[1]]||'—')+'</td>';}).join('')+'</tr>';
+        }).join(''):'<tr><td colspan="'+cols.length+'" class="mut">Nothing moved between these dates.</td></tr>')
+        +'</tbody></table></div></div>';
+    }
+    m.innerHTML=
+      '<div class="card"><h2>Stock movement — the difference after every upload</h2>'
+      +'<div class="mut" style="margin-bottom:8px">HOOP store compares two Aged Stock uploads; the Watu book compares two daily lists. Defaults are the newest two of each — change any date to check a different gap.</div>'
+      +'<div class="row">'
+      +'<span class="mut">Hoop store:</span><input class="inp" type="date" id="mvHA" value="'+esc(d.hoopA||'')+'" style="flex:0 1 140px"><span class="mut">→</span><input class="inp" type="date" id="mvHB" value="'+esc(d.hoopB||'')+'" style="flex:0 1 140px">'
+      +'<span class="mut" style="margin-left:10px">Watu book:</span><input class="inp" type="date" id="mvWA" value="'+esc(d.watuA||'')+'" style="flex:0 1 140px"><span class="mut">→</span><input class="inp" type="date" id="mvWB" value="'+esc(d.watuB||'')+'" style="flex:0 1 140px">'
+      +'<button class="btn sm ghost" id="mvGo">Show</button></div>'
+      +'<div class="tiles">'
+      +'<div class="tile"><div class="l">Left Hoop store</div><div class="v" style="color:var(--bad)">'+money(c.leftHoop)+'</div><div class="s">in '+esc(d.hoopA||'—')+', gone by '+esc(d.hoopB||'—')+'</div></div>'
+      +'<div class="tile"><div class="l">New in Hoop store</div><div class="v">'+money(c.newInHoop)+'</div></div>'
+      +'<div class="tile"><div class="l">Financed into Watu</div><div class="v" style="color:var(--ok)">'+money(c.newWatu)+'</div><div class="s">new on the '+esc(d.watuB||'—')+' list</div></div>'
+      +'<div class="tile"><div class="l">Left the Watu book</div><div class="v">'+money(c.leftWatu)+'</div></div>'
+      +'</div>'
+      +((d.hoopA||d.hoopB)?'':'<div class="mut" style="margin-bottom:8px">No Aged Stock uploads yet — the Hoop-store side fills the day Sipho uploads two reports.</div>')
+      +'</div>'
+      +tbl('Left the Hoop store — '+esc(d.hoopA||'—')+' → '+esc(d.hoopB||'—'),d.leftHoop||[],[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']])
+      +tbl('New in the Hoop store',d.newInHoop||[],[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']])
+      +tbl('Financed into Watu — new on '+esc(d.watuB||'—'),d.newWatu||[],[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']])
+      +tbl('Left the Watu book — on '+esc(d.watuA||'—')+', gone by '+esc(d.watuB||'—'),d.leftWatu||[],[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']]);
+    $('#mvGo').onclick=function(){
+      MV.hoopA=$('#mvHA').value; MV.hoopB=$('#mvHB').value;
+      MV.watuA=$('#mvWA').value; MV.watuB=$('#mvWB').value;
+      drawMove(m);
+    };
+  }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+
 /* ---------- staff: THE OFFICE, from Sipho's register ---------- */
 function drawStaff(m){
   m.innerHTML='<div class="card"><h2>Staff</h2><div class="mut">Loading…</div></div>';
@@ -699,7 +777,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',movement:'Stock movement',staff:'Staff',codes:'Access codes',settings:'Settings',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
             +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';

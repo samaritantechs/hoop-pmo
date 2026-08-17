@@ -432,3 +432,32 @@ test('per-role navs: granted panes open, ungranted refuse, legacy roles keep the
   const row = d._dump('roles').find(x => x.role === 'FINANCE');
   assert.deepEqual(row.tabs, ['customers', 'sales', 'upload'], 'nav keys are grantable tabs now');
 });
+
+test('stockMovement diffs both books between two dates and honors the sales alias', async () => {
+  const d = fakeDb({
+    hoop_aged_stock: [
+      { serial: 'S1', item: 'A06', agent: 'Anord Sawe', as_of: '2026-08-14' },
+      { serial: 'S2', item: 'A07', agent: 'Anord Sawe', as_of: '2026-08-14' },
+      { serial: 'S2', item: 'A07', agent: 'Anord Sawe', as_of: '2026-08-15' },
+      { serial: 'S3', item: 'A07', agent: 'Dariasy', as_of: '2026-08-15' },
+    ],
+    watu_snapshots: [
+      { imei: 'W1', client_name: 'Aliyepo', agent: 'JUMA', model: 'A07', snapshot_date: '2026-08-14', created_at: '2026-08-14T08:00:00Z' },
+      { imei: 'W1', client_name: 'Aliyepo', agent: 'JUMA', model: 'A07', snapshot_date: '2026-08-15', created_at: '2026-08-15T08:00:00Z' },
+      { imei: 'S1', client_name: 'Mpya Kafadhiliwa', agent: 'ASHA', model: 'A06', snapshot_date: '2026-08-15', created_at: '2026-08-15T08:00:00Z' },
+      { imei: 'W9', client_name: 'Ametoka', agent: 'JUMA', model: 'A07', snapshot_date: '2026-08-14', created_at: '2026-08-14T08:00:00Z' },
+    ],
+  });
+  const r = await _FNS.stockMovement(d, ADMIN, {});
+  assert.equal(r.hoopA, '2026-08-14'); assert.equal(r.hoopB, '2026-08-15');
+  assert.equal(r.counts.leftHoop, 1, 'S1 left the store');
+  assert.equal(r.leftHoop[0].serial, 'S1');
+  assert.equal(r.counts.newInHoop, 1, 'S3 arrived');
+  assert.equal(r.counts.newWatu, 1, 'S1 shows up financed into Watu -- the same phone that left the store');
+  assert.equal(r.newWatu[0].imei, 'S1');
+  assert.equal(r.counts.leftWatu, 1, 'W9 left the Watu book');
+  const store = { code: 'S', name: 'Sipho', role: 'STORE', teams: null, tabs: ['sales'], readOnly: false };
+  assert.equal((await _FNS.stockMovement(d, store, {})).ok, true, "the stored 'sales' alias opens movement");
+  const noNav = { ...store, role: 'FINANCE', tabs: ['customers'] };
+  await assert.rejects(() => _FNS.stockMovement(d, noNav, {}), /no access to the movement pane/);
+});

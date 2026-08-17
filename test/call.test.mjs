@@ -231,3 +231,26 @@ test('the bar: own yesterday % and last-week average for a credit user; company 
   assert.equal(s9.reached.pct, 0.5);
   _clearSummaryCache();
 });
+
+test('only CREDIT roles are dealt shares -- everyone else opens the whole book', async () => {
+  const d = fakeDb({
+    settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+    teams: [{ team: 'HOOP', team_code: 'AB2C3D' }],
+    followup_status: [
+      { imei: 'A', client_name: 'One', contact: '255716000001', team: 'DAR', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+      { imei: 'B', client_name: 'Two', contact: '255716000002', team: 'DAR', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+    ],
+    call_users: [
+      { user_id: 'U1', device_id: 'dev-1', name: 'Ainea', role: 'OFFICER', is_leader: false, active: true },
+      { user_id: 'U2', device_id: 'dev-2', name: 'Baraka', role: 'CREDIT', is_leader: false, active: true },
+      { user_id: 'U5', device_id: 'dev-5', name: 'Mwinyi', role: 'GENERAL DUTY', is_leader: false, active: true },
+    ],
+    call_logs: [],
+  });
+  const a = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  const b = await callApi(d, 'api_callList', ['dev-2', 'today'], NOW);
+  assert.equal(a.rows.length + b.rows.length, 2, 'the two CREDIT users split the book equally');
+  assert.equal(Math.abs(a.rows.length - b.rows.length), 0);
+  const g = await callApi(d, 'api_callList', ['dev-5', 'today'], NOW);
+  assert.equal(g.rows.length, 2, 'a non-credit role is NOT dealt -- they open the whole book');
+});

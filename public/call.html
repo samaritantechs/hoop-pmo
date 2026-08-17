@@ -380,6 +380,38 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
    it for free. Numbers sort as numbers (commas, %%, leading figures like "3 (25%%)"),
    ties and text fall back to text; ISO dates are zero-padded so text order IS date
    order. Row click-handlers survive: sorting moves the same nodes. */
+(function(){
+  /* Excel export for the report tables -- BROWSER ONLY: the APK WebView cannot take a
+     blob download, and the same reports export from the portal's Call reports pane. */
+  function csvOf(t){
+    var out=[];
+    [].slice.call(t.rows).forEach(function(tr){
+      if(tr.style.display==='none') return;
+      var cells=[].slice.call(tr.cells).map(function(td){
+        return '"'+td.textContent.replace(/\s+/g,' ').trim().replace(/"/g,'""')+'"';
+      });
+      if(cells.length) out.push(cells.join(','));
+    });
+    return '\ufeff'+out.join('\r\n');
+  }
+  new MutationObserver(function(){
+    if (window.HopeCalls) return;                       // inside the APK: no downloads
+    [].slice.call(document.querySelectorAll('table.otable')).forEach(function(t){
+      if(t.__xp) return; t.__xp=1;
+      if(!t.tHead) return;
+      var b=document.createElement('button');
+      b.textContent='\u2913 Excel';
+      b.style.cssText='margin:0 0 8px;font-size:11.5px;padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--b800);font-weight:700;cursor:pointer';
+      b.onclick=function(){
+        var a=document.createElement('a');
+        a.href=URL.createObjectURL(new Blob([csvOf(t)],{type:'text/csv;charset=utf-8'}));
+        a.download='HOOP-ripoti.csv'; document.body.appendChild(a); a.click();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },500);
+      };
+      t.parentNode.insertBefore(b,t);
+    });
+  }).observe(document.body,{childList:true,subtree:true});
+})();
 document.addEventListener('click', function(e){
   var th = e.target.closest ? e.target.closest('th') : null;
   if (!th) return;

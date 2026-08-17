@@ -74,12 +74,12 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    THREE first-class panes (the owner's call), each grantable on its own; the retired
    'sales' key remains a stored alias that grants all three, so roles saved under it
    keep every door they had. */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 function navsFor(user) {
   if (isAdminRole(user) || isReadOnly(user)) return NAV_TABS.slice();
   const t = (user.tabs || []).map(x => String(x).toLowerCase());
-  if (t.includes('sales')) t.push('fraud', 'scorecards', 'stock');
+  if (t.includes('sales')) t.push('fraud', 'scorecards', 'stock', 'movement');
   const chosen = NAV_TABS.filter(k => t.includes(k));
   // 'dashboard' and 'settings' were the OLD vocabulary too -- a role carrying only
   // those was saved before panes were choosable and must keep the old defaults, or
@@ -87,7 +87,7 @@ function navsFor(user) {
   if (chosen.some(k => k !== 'dashboard' && k !== 'settings')) return chosen;
   const base = LEGACY_NAVS.slice();
   if (t.includes('settings')) base.push('codes', 'settings');
-  if (t.includes('settings') || t.includes('upload')) base.push('fraud', 'scorecards', 'stock');
+  if (t.includes('settings') || t.includes('upload')) base.push('fraud', 'scorecards', 'stock', 'movement');
   return base;
 }
 function requireNav(user, k) {
@@ -419,15 +419,17 @@ const FNS = {
       Budget: 2 parallel bounded reads -- the aged table and the agents register. */
   async stockView(db, user) {
     requireNav(user, 'stock');
-    const [rows, agents] = await Promise.all([
+    const [all, agents] = await Promise.all([
       fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, item, received, age_days, as_of')),
       fetchAll(() => db.from('hoop_agents').select('name, role, branch')),
     ]);
+    // History is kept per report date now -- holdings are the NEWEST report only.
+    let asOf = null;
+    for (const r of all) if (r.as_of && (!asOf || String(r.as_of) > String(asOf))) asOf = String(r.as_of).slice(0, 10);
+    const rows = all.filter(r => String(r.as_of).slice(0, 10) === asOf);
     const regBy = new Map(agents.map(a => [K(a.name), a]));
     const by = new Map();
-    let asOf = null;
     for (const r of rows) {
-      if (r.as_of && (!asOf || String(r.as_of) > String(asOf))) asOf = String(r.as_of).slice(0, 10);
       const k = K(r.agent) || '?';
       let g = by.get(k);
       if (!g) { g = { agent: r.agent || '—', pieces: 0, ageSum: 0, ageN: 0, maxAge: 0, items: {} }; by.set(k, g); }
@@ -450,6 +452,58 @@ const FNS = {
       received: r.received ? String(r.received).slice(0, 10) : '', age: r.age_days == null ? null : num(r.age_days) }))
       .sort((x, y) => (y.age || 0) - (x.age || 0));
     return { ok: true, asOf, total: rows.length, holders, serials: serials.slice(0, 500) };
+  },
+
+  /** STOCK MOVEMENT -- what got away after every upload, on BOTH books, checkable by
+      date. HOOP side: serials in report A missing from report B = left the store.
+      WATU side: IMEIs new on list B = financed into Watu; IMEIs gone from A = left
+      Watu's book. Defaults are the newest two dates of each source.
+      Budget: 2 tiny ordered date lookups per source + 4 date-keyed bounded reads;
+      the aged table's own dates come from the read it already makes. */
+  async stockMovement(db, user, args) {
+    requireNav(user, 'movement');
+    const a = args || {};
+    const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null;
+    const latestOf = async (table, col, before) => {
+      let q = db.from(table).select(col).not(col, 'is', null).order(col, { ascending: false }).limit(1);
+      if (before) q = q.lt(col, before);
+      const { data } = await q;
+      return data && data[0] ? String(data[0][col]).slice(0, 10) : null;
+    };
+    const hoopB = day(a.hoopB) || await latestOf('hoop_aged_stock', 'as_of');
+    const hoopA = day(a.hoopA) || (hoopB ? await latestOf('hoop_aged_stock', 'as_of', hoopB) : null);
+    const watuB = day(a.watuB) || await latestOf('watu_snapshots', 'snapshot_date');
+    const watuA = day(a.watuA) || (watuB ? await latestOf('watu_snapshots', 'snapshot_date', watuB) : null);
+    const [hA, hB, wA, wB] = await Promise.all([
+      hoopA ? fetchAll(() => db.from('hoop_aged_stock').select('serial, item, agent').eq('as_of', hoopA)) : [],
+      hoopB ? fetchAll(() => db.from('hoop_aged_stock').select('serial, item, agent').eq('as_of', hoopB)) : [],
+      watuA ? fetchAll(() => db.from('watu_snapshots').select('imei, client_name, agent, model, created_at').eq('snapshot_date', watuA)) : [],
+      watuB ? fetchAll(() => db.from('watu_snapshots').select('imei, client_name, agent, model, created_at').eq('snapshot_date', watuB)) : [],
+    ]);
+    const newest = rows => {
+      const m = new Map();
+      for (const r of rows) {
+        const had = m.get(String(r.imei));
+        if (!had || String(r.created_at) > String(had.created_at)) m.set(String(r.imei), r);
+      }
+      return m;
+    };
+    const hbSet = new Set(hB.map(r => String(r.serial)));
+    const haSet = new Set(hA.map(r => String(r.serial)));
+    const wAm = newest(wA), wBm = newest(wB);
+    const leftHoop = hA.filter(r => !hbSet.has(String(r.serial)))
+      .map(r => ({ serial: r.serial, item: r.item || '', holder: r.agent || '' }));
+    const newInHoop = hB.filter(r => !haSet.has(String(r.serial)))
+      .map(r => ({ serial: r.serial, item: r.item || '', holder: r.agent || '' }));
+    const newWatu = [...wBm.values()].filter(r => !wAm.has(String(r.imei)))
+      .map(r => ({ imei: r.imei, name: r.client_name || '', agent: r.agent || '', model: r.model || '' }));
+    const leftWatu = [...wAm.values()].filter(r => !wBm.has(String(r.imei)))
+      .map(r => ({ imei: r.imei, name: r.client_name || '', agent: r.agent || '', model: r.model || '' }));
+    return { ok: true, hoopA, hoopB, watuA, watuB,
+      counts: { leftHoop: leftHoop.length, newInHoop: newInHoop.length,
+        newWatu: newWatu.length, leftWatu: leftWatu.length },
+      leftHoop: leftHoop.slice(0, 300), newInHoop: newInHoop.slice(0, 300),
+      newWatu: newWatu.slice(0, 300), leftWatu: leftWatu.slice(0, 300) };
   },
 
   async saveTeam(db, user, args) {

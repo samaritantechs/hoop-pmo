@@ -68,3 +68,10 @@ Highest value first; who to lean on is from the starter's people table:
   password.
 - Vercel env: `SUPABASE_URL` currently holds a pasted API key; the code self-heals
   (`SUPABASE_URL_NORM`) but the honest fix is setting the real URL.
+
+## 5. Coming stage (owner, 2026-08-17): agents see THEIR OWN customers
+
+*"we'll move to agents seeing their customers in coming up stages."* When the word comes:
+sales agents (hoop_agents) get a view of the customers THEY sold (joined by the agent
+field on the register / hoop_sales by payout phone) — likely a lightweight portal role or
+app mode. Distribution stays CREDIT-only; this is a viewing stage, not a dealing change.

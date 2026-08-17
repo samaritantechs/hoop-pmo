@@ -154,8 +154,9 @@ export default withApi(async (req) => {
     if (!st.records.length && !st.dropped.length) {
       const e = new Error('No stock rows could be read.'); e.status = 400; throw e;
     }
+    // One row per phone PER REPORT DATE -- movement is the diff between two dates.
     await writeChunks(supabase, 'hoop_aged_stock',
-      st.records.map(r => ({ ...r, as_of: snapshotDate, updated_at: new Date().toISOString() })), 'serial');
+      st.records.map(r => ({ ...r, as_of: snapshotDate, updated_at: new Date().toISOString() })), 'serial,as_of');
     if (isLast) await logUpload(user, 'upload:agedstock', snapshotDate + ' · rows ' + st.records.length);
     return { kind: 'agedstock', inserted: st.records.length, date: snapshotDate, batch,
       dropped: st.dropped.length, droppedRows: st.dropped.slice(0, 50),
