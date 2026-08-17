@@ -2,7 +2,7 @@ import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey } from './_lib/time.js';
-import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm } from './_lib/call-core.js';
+import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -234,6 +234,16 @@ const FNS = {
     agents.forEach(r => { regOf[r.imei] = r; });
     const agPhone = {};
     hoopAgents.forEach(a => { if (a.name) agPhone[K(a.name)] = a.phone || ''; });
+    /* THE SAME DEAL THE PHONES RUN, shown to the office: sort today's deck by IMEI,
+       row i belongs to credit person i % n -- so Wateja names who is chasing whom
+       exactly as the handsets see it, and re-deals itself the moment a credit user is
+       added or switched off. One extra bounded call_users read. */
+    const rosterAll = await rosterFull(db);
+    const holdsOf = {};
+    if (rosterAll.ids.length && deck.length) {
+      [...deck].sort((a, b) => (String(a.imei) < String(b.imei) ? -1 : 1))
+        .forEach((r, i) => { holdsOf[String(r.imei)] = rosterAll.names[rosterAll.ids[i % rosterAll.ids.length]] || ''; });
+    }
     const mk = (r, contactKey, refDay) => {
       const reg = regOf[r.imei] || {};
       const agent = r.agent !== undefined ? (r.agent || '') : (reg.agent || '');
@@ -243,6 +253,7 @@ const FNS = {
         model: r.model || '', price: num(r.price),
         agent, agentPhone: agent ? (agPhone[K(agent)] || '') : '',
         gName: reg.guarantor_name || '', gPhone: reg.guarantor_phone || '',
+        heldBy: holdsOf[String(r.imei)] || '',
         daysOff: r.days_offline == null ? null : num(r.days_offline),
         locked7: r.locked7 === true, locked4: r.locked4 === true, paid: r.has_ever_paid === true,
         fu: r.fu_status || '', lifeDay: lifeDayOf(r.disbursed_date, refDay),

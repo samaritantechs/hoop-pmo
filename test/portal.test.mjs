@@ -140,9 +140,11 @@ test('customers splits leo at day 45, keeps jana newest-per-imei, and joins the 
       { imei: 'B2', agent: 'ASHA', team: 'TEMEKE' },
     ],
     hoop_agents: [{ name: 'Juma', phone: '0712999888' }],
+    call_users: [{ user_id: 'U1', name: 'Ainea', role: 'CREDIT', active: true }],
     settings: [],
   });
   const r = await _FNS.customers(d, ADMIN, {});
+  assert.equal(r.leo45[0].heldBy, 'Ainea', 'Wateja names the chasing credit person -- same deal as the phones');
   assert.equal(r.deckDate, '2026-08-14');
   assert.equal(r.prevDate, '2026-08-13');
   assert.equal(r.leo45.length, 1);

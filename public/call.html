@@ -340,7 +340,7 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
 </div>
 
 <div class="sheet-backdrop" id="sheet">
-  <div class="sheet-panel">
+  <div class="sheet-panel" id="sheetPanel">
     <div class="sheet-handle"></div>
     <button class="close-sheet" id="sheetClose">&#x2715;</button>
     <div id="sheetBody"></div>
@@ -396,7 +396,10 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
     return '\ufeff'+out.join('\r\n');
   }
   new MutationObserver(function(){
-    if (window.HopeCalls) return;                       // inside the APK: no downloads
+    /* The APK exports too -- most people never get the portal link (the phone IS the
+       job), so the phone is where the report must leave from. Inside the wrapper a
+       blob <a download> can be inert, so the Web Share API carries the file there
+       (Android hands it to WhatsApp/Drive/Files); the browser keeps the download. */
     [].slice.call(document.querySelectorAll('table.otable')).forEach(function(t){
       if(t.__xp) return; t.__xp=1;
       if(!t.tHead) return;
@@ -404,8 +407,15 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
       b.textContent='\u2913 Excel';
       b.style.cssText='margin:0 0 8px;font-size:11.5px;padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--b800);font-weight:700;cursor:pointer';
       b.onclick=function(){
+        var blob=new Blob([csvOf(t)],{type:'text/csv;charset=utf-8'});
+        var f=null;
+        try { f=new File([blob],'HOOP-ripoti.csv',{type:'text/csv'}); } catch(e){}
+        if (window.HopeCalls && f && navigator.canShare && navigator.canShare({files:[f]})){
+          navigator.share({files:[f],title:'HOOP ripoti'}).catch(function(){});
+          return;
+        }
         var a=document.createElement('a');
-        a.href=URL.createObjectURL(new Blob([csvOf(t)],{type:'text/csv;charset=utf-8'}));
+        a.href=URL.createObjectURL(blob);
         a.download='HOOP-ripoti.csv'; document.body.appendChild(a); a.click();
         setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },500);
       };
@@ -1692,6 +1702,23 @@ document.addEventListener('keydown', function(e){
   if (e.key === 'Escape' && $('#sheet').style.display === 'flex') sheetHide();
 });
 
+/* THE KEYBOARD MUST NOT SWALLOW THE COMMENT. On Android the soft keyboard shrinks the
+   viewport under the sheet, and the follow-up boxes -- the comment above all -- ended up
+   BEHIND it: the officer typed blind. When anything in the sheet takes focus, wait out
+   the keyboard's slide (300ms) and lift the focused box to the middle of what remains
+   visible; the visualViewport resize catches keyboards that open slowly. */
+(function(){
+  var lift = function(){
+    var el = document.activeElement;
+    if (!el || !el.closest || !el.closest('#sheetPanel')) return;
+    if (!/^(TEXTAREA|INPUT|SELECT)$/.test(el.tagName)) return;
+    try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch(e){ el.scrollIntoView(); }
+  };
+  document.addEventListener('focusin', function(e){
+    if (e.target && e.target.closest && e.target.closest('#sheetPanel')) setTimeout(lift, 300);
+  });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', function(){ setTimeout(lift, 60); });
+})();
 function openSheet(ref){
   var r = null;
   for (var i=0;i<S.rows.length;i++){ if (String(S.rows[i].ref)===String(ref)) { r = S.rows[i]; break; } }

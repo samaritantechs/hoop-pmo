@@ -535,7 +535,7 @@ function custRender(m){
     +'</div>'
     +'<div class="row"><input class="inp" id="custQ" placeholder="Tafuta: jina, simu, IMEI, agent, branch, mdhamini… / search"></div>'
     +'<div class="mut" style="margin-bottom:8px">Bofya mteja kuona historia na kuandika maoni. <b>Agent</b> = aliyemuuzia simu · <b>Mdhamini</b> = guarantor (kutoka offline queue).</div>'
-    +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Simu</th><th>Branch</th><th>Agent</th><th>Mdhamini / Guarantor</th><th class="r">OFF</th><th class="r">Siku/45</th><th>Hali</th></tr></thead><tbody id="custRows">'
+    +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Simu</th><th>Branch</th><th>Agent</th><th>Mdhamini / Guarantor</th><th>Anayefuatilia</th><th class="r">OFF</th><th class="r">Siku/45</th><th>Hali</th></tr></thead><tbody id="custRows">'
     +(rows.length?rows.map(function(r,i){
       var hh=telHref(r.phone);
       return '<tr data-ci="'+i+'" style="cursor:pointer"><td><b>'+esc(r.name||'—')+'</b><div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td>'
@@ -543,10 +543,11 @@ function custRender(m){
         +'<td>'+esc(r.branch||r.team||'')+'</td>'
         +'<td>'+esc(r.agent||'—')+(r.agentPhone?'<div class="mut" style="font-size:10px">'+esc(r.agentPhone)+'</div>':'')+'</td>'
         +'<td>'+(r.gName?esc(r.gName):'—')+(r.gPhone?'<div class="mut" style="font-size:10px">'+esc(r.gPhone)+'</div>':'')+'</td>'
+        +'<td>'+(r.heldBy?'👤 '+esc(r.heldBy):'—')+'</td>'
         +'<td class="r">'+(r.daysOff!=null?money(r.daysOff):'—')+(r.locked7?' <span class="chip bad">7+</span>':(r.locked4?' <span class="chip warn">4+</span>':''))+'</td>'
         +'<td class="r">'+(r.lifeDay!=null?(r.lifeDay<=45?money(r.lifeDay)+'/45':'<span class="chip">NJE</span>'):'—')+'</td>'
         +'<td>'+(r.fu?'<span class="chip">'+esc(r.fu)+'</span>':(r.paid?'<span class="chip ok">amelipa</span>':''))+'</td></tr>';
-    }).join(''):'<tr><td colspan="8" class="mut">Hakuna mteja kwenye orodha hii bado.</td></tr>')
+    }).join(''):'<tr><td colspan="9" class="mut">Hakuna mteja kwenye orodha hii bado.</td></tr>')
     +'</tbody></table></div></div>'
     +'<div id="custDetail"></div><div id="custSrch"></div>';
   $all('[data-pl]',m).forEach(function(b){ b.onclick=function(){ CUST.list=b.getAttribute('data-pl'); CUST.sel=null; custRender(m); }; });
@@ -601,6 +602,7 @@ function openCust(c){
     +(c.agentPhone&&telHref(c.agentPhone)!=='#'?' · <a href="tel:'+telHref(c.agentPhone)+'">'+esc(c.agentPhone)+'</a>':'')+'</div>'
     +'<div style="font-size:13.5px;margin-bottom:4px"><b>Mdhamini / Guarantor: '+(c.gName?esc(c.gName):'—')+'</b>'
     +(c.gPhone&&telHref(c.gPhone)!=='#'?' · <a href="tel:'+telHref(c.gPhone)+'">'+esc(c.gPhone)+'</a>':'')+'</div>'
+    +(c.heldBy?'<div style="font-size:13.5px;margin-bottom:4px"><b>Anayefuatilia / Chasing: 👤 '+esc(c.heldBy)+'</b></div>':'')
     +'<div style="font-size:13.5px;margin-bottom:10px">Simu: '+(h!=='#'?'<a href="tel:'+h+'">'+esc(c.phone)+'</a>':'—')
     +' <span class="mut">(namba hii ndiyo ref ya malipo Watu)</span></div>'
     +'<div id="custHist" class="mut">Inapakia historia…</div>'

@@ -309,8 +309,9 @@ const isCredit = cu => CREDIT_ROLES.has(K(cu && cu.role));
    EMPTY book, never somebody else's -- this fence fails closed. */
 const isAgent = cu => K(cu && cu.role) === 'AGENT';
 /** The deal's roster WITH NAMES -- same single read; names ride along so every list row
-    can say which credit person is chasing that customer (the third chip on the card). */
-async function rosterFull(db) {
+    can say which credit person is chasing that customer (the third chip on the card).
+    Exported: the portal's Wateja shows the same dealt names -- one deal, two screens. */
+export async function rosterFull(db) {
   const rows = await fetchAll(() => db.from('call_users').select('user_id, name, role, active'));
   const on = rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role)))
     .sort((a, b) => (String(a.user_id) < String(b.user_id) ? -1 : 1));
