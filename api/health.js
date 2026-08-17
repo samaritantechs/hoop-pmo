@@ -19,6 +19,38 @@ export default async function handler(req, res) {
   } catch (e) {
     db = { reachable: false, error: 'module: ' + String(e && e.message).slice(0, 200) };
   }
+  /* THE CARD'S SUPPLY LINES, counted -- never named. When the phone shows a dash where
+     an agent or guarantor belongs, this section says which link is dry: the register
+     read (columns there? rows there?), the agents register, the credit roster behind
+     the "who is chasing" chip. Counts only -- an unauthenticated page carries no PII.
+     Budget: 4 bounded reads, and only when the base check above already reached the db. */
+  let card = null;
+  if (db && db.reachable) {
+    try {
+      const { supabase, fetchAll } = await import('./_lib/supabase.js');
+      const probeSel = await supabase.from('watu_loans')
+        .select('imei, agent, agent_id, branch, guarantor_name, guarantor_phone').limit(1);
+      const reg = await fetchAll(() => supabase.from('watu_loans')
+        .select(probeSel.error ? 'imei, agent' : 'imei, agent, branch, guarantor_name'));
+      const ags = await fetchAll(() => supabase.from('hoop_agents').select('name, phone'));
+      const cus = await fetchAll(() => supabase.from('call_users').select('user_id, role, active'));
+      const CR = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CREDIT TEAM']);
+      const K = s => String(s == null ? '' : s).trim().toUpperCase();
+      const dv = await supabase.from('settings').select('value').eq('key', 'DATA_VERSION').maybeSingle();
+      card = {
+        guarantorColumns: !probeSel.error,
+        columnError: probeSel.error ? String(probeSel.error.message || '').slice(0, 160) : null,
+        register: reg.length,
+        withAgent: reg.filter(r => r.agent).length,
+        withGuarantor: probeSel.error ? null : reg.filter(r => r.guarantor_name).length,
+        withBranch: probeSel.error ? null : reg.filter(r => r.branch).length,
+        agentsRegister: ags.length,
+        agentsWithPhone: ags.filter(a => a.phone).length,
+        creditRoster: cus.filter(u => u.active !== false && CR.has(K(u.role))).length,
+        dataVersion: dv.data ? String(dv.data.value).slice(0, 8) : null,
+      };
+    } catch (e) { card = { error: String(e && e.message).slice(0, 200) }; }
+  }
   res.status(200).json({
     ok: true,
     service: 'hoop-pmo',
@@ -27,6 +59,6 @@ export default async function handler(req, res) {
       SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
       SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
     },
-    urlValid, host, keyPastedAsUrl: looksLikeKey, db,
+    urlValid, host, keyPastedAsUrl: looksLikeKey, db, card,
   });
 }
