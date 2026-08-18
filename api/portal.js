@@ -143,9 +143,15 @@ const FNS = {
       Budget: ONE read, date-bounded at the database and narrowed to locked7 rows only,
       three columns; cached 5 minutes because a dashboard is opened in bursts. */
   async lockedTrend(db, user, args) {
-    const days = Math.max(2, Math.min(31, parseInt((args && args.days), 10) || 7));
-    const to = todayKey();
-    const from = dayShift(to, -(days - 1));
+    /* THE WEEK IS MONDAY TO SUNDAY, fixed -- not a rolling seven days that shifts its
+       start every morning. Monday is always the first bar, so two people comparing the
+       chart on different days are comparing the same week. Days not yet uploaded come
+       back null and the chart draws them as gaps. */
+    const t = todayKey();
+    const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();   // 0 = Sunday
+    const from = dayShift(t, -((dow + 6) % 7));                        // this week's Monday
+    const days = 7;
+    const to = dayShift(from, days - 1);                               // ...through Sunday
     const ck = 'trend:' + from + ':' + to;
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };

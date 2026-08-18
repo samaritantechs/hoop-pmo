@@ -519,29 +519,30 @@ test('globalSearch finds a customer by any spelling of the number, plus office a
   assert.equal(s.stock[0].asOf, '2026-08-16');
 });
 
-test('lockedTrend counts one point per upload day, deduped, window-checked per day', async () => {
+test('lockedTrend is this week MONDAY to SUNDAY, deduped and window-checked per day', async () => {
   const today = todayKey();
-  const y = dayShift(today, -1), y2 = dayShift(today, -2);
-  const fresh = dayShift(today, -5);      // well inside the window on any of these days
-  const old = dayShift(today, -300);      // far outside it
+  const dow = new Date(Date.parse(today + 'T00:00:00Z')).getUTCDay();
+  const monday = dayShift(today, -((dow + 6) % 7));
+  const fresh = dayShift(monday, -5);     // inside the window on Monday
+  const old = dayShift(monday, -300);     // long outside it
   const d = fakeDb({
     watu_snapshots: [
-      // yesterday: two distinct locked-7 customers in window, one of them uploaded TWICE
-      { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: y },
-      { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: y },
-      { imei: 'B', locked7: true, disbursed_date: fresh, snapshot_date: y },
-      // and one locked 7+ but long past the window -- not Hoop's burden
-      { imei: 'C', locked7: true, disbursed_date: old, snapshot_date: y },
-      // two days ago: one
-      { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: y2 },
+      // Monday: two distinct locked-7 customers in window, one uploaded TWICE
+      { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: monday },
+      { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: monday },
+      { imei: 'B', locked7: true, disbursed_date: fresh, snapshot_date: monday },
+      // locked 7+ but long past the window -- not Hoop's burden
+      { imei: 'C', locked7: true, disbursed_date: old, snapshot_date: monday },
+      // last week's Sunday must NOT leak in: the week starts on Monday, always
+      { imei: 'D', locked7: true, disbursed_date: fresh, snapshot_date: dayShift(monday, -1) },
     ],
     settings: [],
   });
-  const r = await _FNS.lockedTrend(d, ADMIN, { days: 7 });
-  assert.equal(r.points.length, 7, 'one point per day of the window, upload or not');
-  const py = r.points.find(p => p.date === y);
-  assert.equal(py.num, 2, 'the re-upload does not double the bar; the past-window row is out');
-  assert.equal(r.points.find(p => p.date === y2).num, 1);
-  const gap = r.points.find(p => p.date === dayShift(today, -6));
-  assert.equal(gap.num, null, 'a day with no upload is a GAP, never a zero');
+  const r = await _FNS.lockedTrend(d, ADMIN, {});
+  assert.equal(r.points.length, 7, 'Monday through Sunday, upload or not');
+  assert.equal(r.points[0].date, monday, 'the first bar is always Monday');
+  assert.equal(r.from, monday);
+  assert.equal(r.to, dayShift(monday, 6), 'through Sunday');
+  assert.equal(r.points[0].num, 2, 're-upload does not double the bar; past-window row is out');
+  assert.equal(r.points[6].num, null, 'a day with no upload is a GAP, never a zero');
 });

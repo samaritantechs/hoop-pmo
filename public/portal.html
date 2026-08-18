@@ -535,7 +535,7 @@ function drawDash(m){
    same numbers for anyone who wants to read (or export) them. */
 function drawTrend(){
   var box=$('#trendBox'); if(!box) return;
-  srv('lockedTrend',{days:7}).then(function(d){
+  srv('lockedTrend',{}).then(function(d){
     var pts=d.points||[];
     var box2=$('#trendBox'); if(!box2) return;
     var vals=pts.filter(function(p){return p.num!=null;}).map(function(p){return p.num;});
@@ -544,14 +544,15 @@ function drawTrend(){
       return;
     }
     var max=Math.max.apply(null,vals), n=pts.length;
-    var W=720,H=190,padL=44,padB=34,padT=16,padR=8;
+    var W=720,H=182,padL=44,padB=26,padT=16,padR=8;
     var innerW=W-padL-padR, innerH=H-padT-padB;
     var slot=innerW/n, bw=Math.min(56,slot*0.62);
     var yOf=function(v){ return padT+innerH-(max?(v/max)*innerH:0); };
     var lastIdx=-1; pts.forEach(function(p,i){ if(p.num!=null) lastIdx=i; });
+    // Full English names, Monday first -- the week the server sends, unshifted.
     var dayName=function(iso){
-      var wd=['Jumapili','Jumatatu','Jumanne','Jumatano','Alhamisi','Ijumaa','Jumamosi'];
-      var dt=new Date(iso+'T00:00:00'); return wd[dt.getDay()].slice(0,3);
+      var wd=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      return wd[new Date(iso+'T00:00:00').getDay()];
     };
     var grid='',bars='',labels='';
     [0,0.5,1].forEach(function(f){
@@ -561,8 +562,8 @@ function drawTrend(){
     });
     pts.forEach(function(p,i){
       var cx=padL+slot*i+slot/2;
-      labels+='<text x="'+cx+'" y="'+(H-padB+16)+'" text-anchor="middle" font-size="11" fill="var(--mut)">'+esc(dayName(p.date))+'</text>'
-        +'<text x="'+cx+'" y="'+(H-padB+28)+'" text-anchor="middle" font-size="9.5" fill="var(--soft)">'+esc(p.date.slice(8))+'</text>';
+      labels+='<text x="'+cx+'" y="'+(H-padB+17)+'" text-anchor="middle" font-size="11" '
+        +'font-weight="'+(i===lastIdx?'700':'400')+'" fill="var(--mut)">'+esc(dayName(p.date))+'</text>';
       if(p.num==null){
         labels+='<text x="'+cx+'" y="'+(padT+innerH-6)+'" text-anchor="middle" font-size="10" fill="var(--soft)">—</text>';
         return;
@@ -579,13 +580,9 @@ function drawTrend(){
       +grid+bars+labels+'</svg>'
       +'<div class="mut" style="margin-top:6px">'
       +(vals.length>1
-        ? (diff===0?'Sawa na mwanzo wa wiki.':(diff>0?'⬆ ':'⬇ ')+money(Math.abs(diff))+' kuliko siku ya kwanza yenye upload ('+esc(pts.filter(function(p){return p.num!=null;})[0].date)+').')
+        ? (diff===0?'Sawa na siku ya kwanza yenye upload.':(diff>0?'⬆ ':'⬇ ')+money(Math.abs(diff))+' kuliko siku ya kwanza yenye upload wiki hii.')
         : 'Siku moja tu ya upload wiki hii.')
-      +' Kilele: '+money(max)+'.</div>'
-      +'<div style="overflow-x:auto;margin-top:8px"><table><thead><tr><th>Siku</th><th class="r">Locked 7+</th></tr></thead><tbody>'
-      +pts.map(function(p){
-        return '<tr><td>'+esc(p.date)+'</td><td class="r">'+(p.num!=null?money(p.num):'<span class="mut">hakuna upload</span>')+'</td></tr>';
-      }).join('')+'</tbody></table></div>';
+      +' Kilele: '+money(max)+'. Siku zenye — hazina upload.</div>';
   }).catch(function(e){
     var b=$('#trendBox'); if(b) b.innerHTML='<div class="mut">'+esc(String(e.message||e))+'</div>';
   });
