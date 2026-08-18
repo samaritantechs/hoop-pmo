@@ -564,16 +564,19 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
   const mon = dShift(t, -((dow + 6) % 7));
   const sun = dShift(mon, -1);                 // the run-up day Monday is measured against
 
-  const row = (imei, date, off) => ({ imei, client_name: 'C' + imei, team: 'KINONDONI',
-    days_offline: off, has_ever_paid: true, price: 450000,
+  const inWin = dShift(mon, -10);   // disbursed 10 days ago -- inside Hoop's 45-day window
+  const past  = dShift(mon, -80);   // disbursed 80 days ago -- past it, Watu's problem now
+  const row = (imei, date, off, disb) => ({ imei, client_name: 'C' + imei, team: 'KINONDONI',
+    days_offline: off, has_ever_paid: true, price: 450000, disbursed_date: disb,
     snapshot_date: date, created_at: date + 'T08:00:00Z' });
 
   const d = fakeDb({
     watu_snapshots: [
-      // Sunday (the run-up): two are OFF JANA at 7+, one is not
-      row('A', sun, 9), row('B', sun, 8), row('C', sun, 3),
-      // Monday: A fell 9 -> 4 (recovered), B held at 8, C unchanged
-      row('A', mon, 4), row('B', mon, 8), row('C', mon, 3),
+      // Sunday (the run-up): A and B are OFF JANA at 7+ INSIDE the window; C is not 7+;
+      // D is 7+ but was disbursed long ago, so it is past Hoop's 45 and not ours to chase.
+      row('A', sun, 9, inWin), row('B', sun, 8, inWin), row('C', sun, 3, inWin), row('D', sun, 30, past),
+      // Monday: A fell 9 -> 4 (recovered). B held. C unchanged. D fell too -- and must NOT count.
+      row('A', mon, 4, inWin), row('B', mon, 8, inWin), row('C', mon, 3, inWin), row('D', mon, 5, past),
     ],
     call_users: [
       { user_id: 'u1', name: 'CREDIT ONE', role: 'CREDIT', active: true },
@@ -587,8 +590,10 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
   assert.equal(r.points.length, 7, 'Monday through Sunday, always seven');
 
   const monday = r.points[0];
-  assert.equal(monday.offJana, 2, 'only the two at 7+ on the previous upload count');
-  assert.equal(monday.reduced, 1, 'only A actually fell');
+  assert.equal(monday.offJana, 2,
+    'only the two at 7+ AND inside the 45-day window -- D is 7+ but past it, and is not Hoop\'s');
+  assert.equal(monday.reduced, 1,
+    'only A counts: D also fell, but a customer past the window must never flatter the recovery');
 
   // Two credit people on the roster; the BIKE role is never dealt a share.
   assert.equal(r.credits.length, 2, 'only CREDIT roles join the deal');
