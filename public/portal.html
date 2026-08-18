@@ -571,10 +571,19 @@ function drawCreditRecovery(){
     live.forEach(function(p){ pts.forEach(function(pt){
       var c=p.days[pt.date]; if(c&&c.assigned>max) max=c.assigned; }); });
 
+    /* AN EYE PER DAY, at the end of each day's name -- each day opened on its own, because
+       "who were they" is asked about one day at a time. Drawn only where that day actually
+       had a pool; an eye over a day nobody uploaded would open an empty panel and look
+       broken. The list itself is fetched on the tap, never with the chart. */
     var head='<div style="display:grid;grid-template-columns:132px repeat(7,1fr);gap:4px;align-items:end;margin-bottom:4px">'
       +'<div></div>'+pts.map(function(pt){
+        var any=pts&&pt.offJana;
         return '<div style="text-align:center;font-size:10.5px;color:var(--mut);font-weight:'
-          +(pt.date===today?'700':'400')+'">'+esc(dayShort(pt.date))+'</div>';
+          +(pt.date===today?'700':'400')+'">'+esc(dayShort(pt.date))
+          +(any?' <span class="credEye" data-date="'+esc(pt.date)+'" role="button" tabindex="0" '
+              +'title="Ona wateja wa siku hii / see this day\'s customers" '
+              +'style="cursor:pointer;opacity:.75;font-size:12px">\u{1F441}</span>':'')
+          +'</div>';
       }).join('')+'</div>';
 
     var rows=live.map(function(p){
@@ -607,7 +616,17 @@ function drawCreditRecovery(){
 
     b.innerHTML=head+rows
       +'<div class="mut" style="font-size:10.5px;margin-top:8px">'
-      +'Urefu wote = waliopewa (OFF JANA ya jana) · kijani = waliopungua leo · “—” = hakukuwa na mgao siku hiyo.</div>';
+      +'Urefu wote = waliopewa (OFF JANA ya jana) · kijani = waliopungua leo · “—” = hakukuwa na mgao siku hiyo. '
+      +'Bonyeza \u{1F441} juu ya siku kuona wateja wenyewe.</div>'
+      +'<div id="credDayBox" style="margin-top:10px"></div>';
+
+    // One handler per eye. Each day opens on its own and replaces whatever was open, so the
+    // panel never becomes a stack of days nobody closed.
+    Array.prototype.forEach.call(b.querySelectorAll('.credEye'), function(el){
+      var open=function(){ credDayOpen(el.getAttribute('data-date'), dayShort); };
+      el.onclick=open;
+      el.onkeydown=function(ev){ if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); open(); } };
+    });
   }).catch(function(e){
     var b=$('#credRecBox'); if(b) b.innerHTML='<div class="mut">'+esc(String(e.message||e))+'</div>';
   });
@@ -804,20 +823,80 @@ function svgRecoveryBars(pts){
      "when someone wants to comment in app, the customer board doesnt rise, so they type
       without preview of whats being written"
 
-   On a phone the keyboard covers the bottom of the page, and the comment box sits at the
-   bottom of the customer card -- so the officer was typing into a box they could not see.
-   The viewport meta now asks the browser to shrink the page when the keyboard opens
-   (`interactive-widget=resizes-content`); this brings the box itself back into view once
-   the keyboard's opening animation has finished, for the browsers that ignore the meta.
-   Bound once, globally, so every comment box on every screen gets it. */
+   scrollIntoView({block:'center'}) was NOT enough, and could not be: it centres the box in
+   the PAGE, and the page has no idea where the keyboard ends. On a handset that left the
+   comment box centred BEHIND the keyboard -- still typing blind, just a little higher.
+   ("the customer pannel doesnt rise enogh for one to see what they're typing")
+
+   So measure it rather than guess. visualViewport reports exactly how much screen is still
+   visible once the keyboard is up (offsetTop + height); the box's own rect says where it
+   sits. Scrolling by precisely the overlap plus a margin lands the box just above the keys
+   every time -- on any keyboard height, on any phone, with no magic numbers.
+
+   Asked more than once, because the keyboard slides in over roughly a quarter of a second
+   and the viewport shrinks in steps: a single measurement taken mid-animation is wrong by
+   however much was still moving. */
+var KB_FOCUS=null;
+function keepAboveKeyboard(el){
+  if(!el||!el.getBoundingClientRect) return;
+  var vv=window.visualViewport;
+  var r=el.getBoundingClientRect();
+  var visibleBottom=vv?(vv.offsetTop+vv.height):window.innerHeight;
+  var over=r.bottom+16-visibleBottom;        // +16 so it never sits flush on the keys
+  if(over>1){ try{ window.scrollBy({top:over,behavior:'smooth'}); }catch(err){ window.scrollBy(0,over); } }
+}
 document.addEventListener('focusin', function(e){
   var t=e.target;
   if(!t||!/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
   if(!t.closest||!t.closest('#custCard')) return;
-  setTimeout(function(){
-    try{ t.scrollIntoView({block:'center',behavior:'smooth'}); }catch(err){}
-  },300);
+  KB_FOCUS=t;
+  [120,300,520].forEach(function(ms){ setTimeout(function(){ if(KB_FOCUS===t) keepAboveKeyboard(t); },ms); });
 });
+document.addEventListener('focusout', function(e){ if(KB_FOCUS===e.target) KB_FOCUS=null; });
+if(window.visualViewport){
+  window.visualViewport.addEventListener('resize', function(){ keepAboveKeyboard(KB_FOCUS); });
+}
+
+/* THE DAY BEHIND THE BAR. Opened by the eye on a day's name; fetched on the tap, never with
+   the chart. Every row carries the credit officer who held that customer -- taken from the
+   same deal the bar was counted from, so the name here and the height there always agree --
+   plus the real branch, and what the customer's days-offline went from and to. */
+function credDayOpen(date, dayShort){
+  var box=$('#credDayBox'); if(!box) return;
+  box.innerHTML='<div class="mut">Inapakia wateja wa '+esc(dayShort(date))+'…</div>';
+  srv('recoveryDayList',{date:date}).then(function(d){
+    var b=$('#credDayBox'); if(!b) return;
+    var rows=d.rows||[], c=d.counts||{};
+    if(!rows.length){
+      b.innerHTML='<div class="mut">Hakuna wateja wa 7+ (ndani ya siku 45) siku hiyo.</div>';
+      return;
+    }
+    b.innerHTML='<div style="border-top:1px solid var(--line);padding-top:10px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px">'
+      +'<div><b>'+esc(dayShort(date))+' · '+esc(date)+'</b>'
+      +'<div class="mut" style="font-size:11px">OFF JANA '+money(c.offJana)+' · walipungua '+money(c.recovered)
+      +(c.offJana?' ('+Math.round(100*c.recovered/c.offJana)+'%)':'')
+      +' · ikilinganishwa na upload ya '+esc(d.prev||'—')+'</div></div>'
+      +'<button class="btn sm" id="credDayClose">Funga</button></div>'
+      +'<div style="overflow-x:auto;max-height:340px;overflow-y:auto"><table>'
+      +'<thead><tr><th>Mteja</th><th>Branch</th><th>Credit</th>'
+      +'<th class="r">OFF jana</th><th class="r">OFF leo</th><th></th></tr></thead><tbody>'
+      +rows.map(function(r){
+        return '<tr><td>'+esc(r.name||'—')
+          +'<div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td>'
+          +'<td>'+esc(r.branch||'—')+'</td>'
+          +'<td>'+esc(r.credit||'—')+'</td>'
+          +'<td class="r">'+money(r.was)+'</td>'
+          +'<td class="r"'+(r.recovered?' style="color:var(--ok)"':'')+'>'
+            +(r.now==null?'—':money(r.now))+'</td>'
+          +'<td>'+(r.recovered?'<span class="chip ok">amepungua</span>'
+              :(r.gone?'<span class="chip">hayupo leo</span>':'<span class="chip">bado</span>'))+'</td></tr>';
+      }).join('')+'</tbody></table></div></div>';
+    var x=$('#credDayClose'); if(x) x.onclick=function(){ b.innerHTML=''; };
+  }).catch(function(e){
+    var b=$('#credDayBox'); if(b) b.innerHTML='<div class="mut">'+esc(String(e.message||e))+'</div>';
+  });
+}
 
 function drawRecoveryTrend(){
   var box=$('#recTrendBox'); if(!box) return;
