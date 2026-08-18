@@ -562,7 +562,7 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
   const t = todayKey();
   const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();
   const mon = dShift(t, -((dow + 6) % 7));
-  const sun = dShift(mon, -1);                 // the run-up day Monday is measured against
+  const tue = dShift(mon, 1);                  // where Monday's RESULT becomes visible
 
   const inWin = dShift(mon, -10);   // disbursed 10 days ago -- inside Hoop's 45-day window
   const past  = dShift(mon, -80);   // disbursed 80 days ago -- past it, Watu's problem now
@@ -572,11 +572,12 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
 
   const d = fakeDb({
     watu_snapshots: [
-      // Sunday (the run-up): A and B are OFF JANA at 7+ INSIDE the window; C is not 7+;
-      // D is 7+ but was disbursed long ago, so it is past Hoop's 45 and not ours to chase.
-      row('A', sun, 9, inWin), row('B', sun, 8, inWin), row('C', sun, 3, inWin), row('D', sun, 30, past),
-      // Monday: A fell 9 -> 4 (recovered). B held. C unchanged. D fell too -- and must NOT count.
-      row('A', mon, 4, inWin), row('B', mon, 8, inWin), row('C', mon, 3, inWin), row('D', mon, 5, past),
+      // MONDAY's own list -- the one the officers worked on Monday. A and B are 7+ inside the
+      // window; C is not 7+; D is 7+ but disbursed long ago, so past Hoop's 45 and not ours.
+      row('A', mon, 9, inWin), row('B', mon, 8, inWin), row('C', mon, 3, inWin), row('D', mon, 30, past),
+      // TUESDAY's upload is where Monday's result shows: A fell 9 -> 4. B held. D fell but
+      // must not count. All of this belongs on MONDAY's bar, not Tuesday's.
+      row('A', tue, 4, inWin), row('B', tue, 8, inWin), row('C', tue, 3, inWin), row('D', tue, 5, past),
     ],
     call_users: [
       { user_id: 'u1', name: 'CREDIT ONE', role: 'CREDIT', active: true },
@@ -590,10 +591,15 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
   assert.equal(r.points.length, 7, 'Monday through Sunday, always seven');
 
   const monday = r.points[0];
+  assert.equal(monday.date, mon, 'the first bar is Monday');
   assert.equal(monday.offJana, 2,
     'only the two at 7+ AND inside the 45-day window -- D is 7+ but past it, and is not Hoop\'s');
   assert.equal(monday.reduced, 1,
-    'only A counts: D also fell, but a customer past the window must never flatter the recovery');
+    'MONDAY\'s bar carries Monday\'s work, even though the result only showed on Tuesday');
+  const tuesday = r.points[1];
+  assert.equal(tuesday.offJana, 1, 'Tuesday has its own pool from its own list -- only B is still 7+');
+  assert.equal(tuesday.reduced, null, 'and no upload after it yet, so its result is pending');
+  assert.equal(tuesday.pending, true, 'pending is not zero -- the work is done, the file is not in');
 
   // Two credit people on the roster; the BIKE role is never dealt a share.
   assert.equal(r.credits.length, 2, 'only CREDIT roles join the deal');
@@ -625,7 +631,7 @@ test('recoveryDayList names the customers behind a day, with the credit who held
   const t = todayKey();
   const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();
   const mon = dShift(t, -((dow + 6) % 7));
-  const sun = dShift(mon, -1);
+  const tue = dShift(mon, 1);
   const inWin = dShift(mon, -10), past = dShift(mon, -80);
   const row = (imei, date, off, disb) => ({ imei, client_name: 'C' + imei, team: 'KINONDONI',
     days_offline: off, has_ever_paid: true, price: 450000, disbursed_date: disb,
@@ -633,14 +639,14 @@ test('recoveryDayList names the customers behind a day, with the credit who held
 
   const d = fakeDb({
     watu_snapshots: [
-      row('A', sun, 9, inWin), row('B', sun, 8, inWin), row('D', sun, 30, past),
-      row('A', mon, 4, inWin), row('B', mon, 8, inWin), row('D', mon, 5, past),
+      row('A', mon, 9, inWin), row('B', mon, 8, inWin), row('D', mon, 30, past),
+      row('A', tue, 4, inWin), row('B', tue, 8, inWin), row('D', tue, 5, past),
     ],
     call_users: [{ user_id: 'u1', name: 'CREDIT ONE', role: 'CREDIT', active: true }],
   });
 
   const r = await _FNS.recoveryDayList(d, ADMIN, { date: mon });
-  assert.equal(r.prev, sun, 'measured against the upload before it');
+  assert.equal(r.next, tue, 'the day\'s own list, measured against the NEXT upload');
   assert.equal(r.rows.length, 2, 'only the 7+ inside the 45-day window -- D is past it');
   assert.ok(!r.rows.some(x => x.imei === 'D'), 'a customer past the window is never listed');
 
@@ -655,11 +661,11 @@ test('recoveryDayList names the customers behind a day, with the credit who held
   assert.equal(r.counts.recovered, 1);
 });
 
-test('recoveryDayList refuses a day with nothing before it to compare against', async () => {
+test('recoveryDayList marks a day pending when no later upload exists yet', async () => {
   const d = fakeDb({ watu_snapshots: [
     { imei: '1', snapshot_date: '2026-08-14', created_at: '2026-08-14T08:00:00Z' },
   ], call_users: [] });
   const r = await _FNS.recoveryDayList(d, ADMIN, { date: '2026-08-14' });
-  assert.equal(r.prev, null, 'the first upload has no yesterday');
-  assert.deepEqual(r.rows, [], 'and so lists nobody, rather than inventing a comparison');
+  assert.equal(r.next, null, 'nothing uploaded after it yet');
+  assert.equal(r.pending, true, 'so the day is pending, not a day on which nobody recovered');
 });

@@ -204,16 +204,27 @@ const FNS = {
     const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();     // 0 = Sunday
     const from = dayShift(t, -((dow + 6) % 7));                          // this week's Monday
     const to = dayShift(from, 6);                                        // ...through Sunday
-    // One day of run-up, so MONDAY has a yesterday to be measured against like every other day.
-    const floor = dayShift(from, -1);
-    const ck = 'recweek:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    /* THE BAR IS THE DAY THE WORK WAS DONE, NOT THE DAY THE RESULT LANDED.
+         "since the reduced customers we saw today are of monday put them on monday, those we
+          observe tomorrow will be of tuesday. its confusing to see yesterdays work on tuesday
+          bar graph for credits"
+
+       Exactly right, and it was backwards. Monday morning the officer is handed MONDAY's list
+       and chases it all Monday; TUESDAY's upload is merely when the result becomes visible.
+       Bucketing by the day the result arrived put Monday's work on Tuesday's bar.
+
+       So a day's pool is taken from that day's OWN upload, and its result is read from the
+       NEXT upload -- which means the window has to run one day PAST Sunday to see Sunday's
+       result, where it used to run one day before Monday. */
+    const readTo = dayShift(from, 7);
+    const ck = 'recweek2:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
 
     const COLS = 'imei, snapshot_date, days_offline, created_at, disbursed_date, locked7, locked4';
     const [rows, roster] = await Promise.all([
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS)
-        .gte('snapshot_date', floor).lte('snapshot_date', to))),
+        .gte('snapshot_date', from).lte('snapshot_date', readTo))),
       rosterFull(db),
     ]);
 
@@ -227,45 +238,51 @@ const FNS = {
       if (!had || String(r.created_at) > String(had.created_at)) m.set(k, r);
     }
     const dates = [...byDay.keys()].sort();
-    const prevOf = d => { let p = null; for (const x of dates) { if (x < d) p = x; else break; } return p; };
+    const nextOf = d => { for (const x of dates) if (x > d) return x; return null; };
 
     const points = [];
     const credits = new Map();
     for (const id of roster.ids) credits.set(String(id), { userId: String(id), name: roster.names[id] || '', days: {} });
 
     for (let i = 0; i < 7; i++) {
-      const d = dayShift(from, i);
-      const p = byDay.has(d) ? prevOf(d) : null;
-      // No upload today, or nothing before it to compare against: a GAP, never a zero.
-      // "nobody uploaded" and "nobody recovered" are different facts and must not look alike.
-      if (!p) { points.push({ date: d, offJana: null, reduced: null }); continue; }
-      const cur = byDay.get(d), old = byDay.get(p);
+      const d = dayShift(from, i);                 // the day the list was WORKED
+      // Nobody uploaded that day: a GAP, never a zero. "nobody uploaded" and "nobody
+      // recovered" are different facts and must not look alike on a chart people act on.
+      if (!byDay.has(d)) { points.push({ date: d, offJana: null, reduced: null, pending: false }); continue; }
       /* ONLY HOOP'S OWN BURDEN -- the 45-day class, exactly as the Locked 7+ chart counts it.
          A customer past the window is Watu's problem, not ours: chasing them is not what a
          credit officer is measured on, so they must not swell the denominator and make a good
-         week read as a bad one. Measured against the day the pool was CUT (the previous
-         upload), because that is the book that was handed out that morning -- and it is the
-         same day dealMap strata by, so the deal and the count cannot disagree about who was
-         in the window. WINDOW_DAYS is 45 + 2 days of calendar slack; the label stays "/45". */
+         day read as a bad one. Measured on the day the list was cut, which is also the day
+         dealMap strata by, so the deal and the count cannot disagree about who was in it. */
       const inWin = r => {
-        const l = lifeDayOf(r.disbursed_date, p);
+        const l = lifeDayOf(r.disbursed_date, d);
         return l != null && l <= WINDOW_DAYS;
       };
-      const offJana = [...old.values()].filter(r => num(r.days_offline) >= 7 && inWin(r));
-      const recovered = new Set();
-      for (const o of offJana) {
-        const c = cur.get(String(o.imei));
-        if (c && num(c.days_offline) < num(o.days_offline)) recovered.add(String(o.imei));
-      }
-      points.push({ date: d, offJana: offJana.length, reduced: recovered.size });
+      const offJana = [...byDay.get(d).values()].filter(r => num(r.days_offline) >= 7 && inWin(r));
 
-      // The deal that WAS in force that morning: cut on the previous day's book.
-      const deal = dealMap(offJana, roster.ids, p);
+      /* The result of that day's chasing shows up in the NEXT upload. Until it exists the day
+         is PENDING, not a failure: today's officers have done the work and the answer simply
+         is not in yet. Reporting that as 0 recovered would put a zero against people who are
+         still waiting on tomorrow's file. */
+      const n = nextOf(d);
+      const nextRows = n ? byDay.get(n) : null;
+      const recovered = new Set();
+      if (nextRows) {
+        for (const o of offJana) {
+          const c = nextRows.get(String(o.imei));
+          if (c && num(c.days_offline) < num(o.days_offline)) recovered.add(String(o.imei));
+        }
+      }
+      points.push({ date: d, offJana: offJana.length,
+        reduced: nextRows ? recovered.size : null, pending: !nextRows });
+
+      // The deal that was in force THAT morning, cut on that morning's own book.
+      const deal = dealMap(offJana, roster.ids, d);
       for (const o of offJana) {
         const uid = deal[String(o.imei)];
         const slot = uid && credits.get(String(uid));
         if (!slot) continue;
-        if (!slot.days[d]) slot.days[d] = { assigned: 0, recovered: 0 };
+        if (!slot.days[d]) slot.days[d] = { assigned: 0, recovered: 0, pending: !nextRows };
         slot.days[d].assigned++;
         if (recovered.has(String(o.imei))) slot.days[d].recovered++;
       }
@@ -297,16 +314,20 @@ const FNS = {
     requireNav(user, 'recovery');
     const day = String((args && args.date) || '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('date is required');
+    /* FORWARD, not back -- the eye has to show what its own bar counted. A day's pool is that
+       day's OWN list (the one the officer worked), and the result is read from the NEXT
+       upload. Looking backwards here would list a different set of customers than the bar
+       above it was drawn from, which is worse than showing nothing. */
     const two = await db.from('watu_snapshots').select('snapshot_date')
-      .lt('snapshot_date', day).order('snapshot_date', { ascending: false }).limit(1);
+      .gt('snapshot_date', day).order('snapshot_date', { ascending: true }).limit(1);
     if (two.error) throw new Error(two.error.message);
-    const prev = two.data && two.data[0] && String(two.data[0].snapshot_date).slice(0, 10);
-    if (!prev) return { ok: true, date: day, prev: null, rows: [], counts: { offJana: 0, recovered: 0 } };
+    const next = (two.data && two.data[0] && String(two.data[0].snapshot_date).slice(0, 10)) || null;
 
     const COLS = 'imei, client_name, team, days_offline, created_at, disbursed_date, locked7, locked4';
-    const [cur, old, roster, idx] = await Promise.all([
+    const [old, cur, roster, idx] = await Promise.all([
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', day))),
-      fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', prev))),
+      next ? fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', next)))
+           : Promise.resolve([]),
       rosterFull(db),
       agentIndex(db, Date.now()).catch(() => null),
     ]);
@@ -320,11 +341,11 @@ const FNS = {
       return m;
     };
     const curM = newest(cur), oldM = newest(old);
-    const inWin = r => { const l = lifeDayOf(r.disbursed_date, prev); return l != null && l <= WINDOW_DAYS; };
+    const inWin = r => { const l = lifeDayOf(r.disbursed_date, day); return l != null && l <= WINDOW_DAYS; };
     const offJana = [...oldM.values()].filter(r => num(r.days_offline) >= 7 && inWin(r));
-    const deal = dealMap(offJana, roster.ids, prev);
+    const deal = dealMap(offJana, roster.ids, day);
     const out = offJana.map(o => {
-      const c = curM.get(String(o.imei));
+      const c = next ? curM.get(String(o.imei)) : null;
       const was = num(o.days_offline);
       const now = c ? num(c.days_offline) : null;
       const uid = deal[String(o.imei)];
@@ -334,10 +355,11 @@ const FNS = {
         branch: (a && a.branch) || o.team || '',
         credit: (uid && roster.names[String(uid)]) || '',
         was, now, recovered: now != null && now < was,
-        gone: !c,                       // not on today's upload at all
+        // Not on the next upload at all. Only meaningful once that upload exists.
+        gone: !!next && !c,
       };
     }).sort((x, y) => (y.recovered - x.recovered) || (y.was - x.was));
-    return { ok: true, date: day, prev, rows: out,
+    return { ok: true, date: day, next, pending: !next, rows: out,
       counts: { offJana: out.length, recovered: out.filter(r => r.recovered).length } };
   },
 
