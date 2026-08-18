@@ -240,7 +240,18 @@ const FNS = {
       // "nobody uploaded" and "nobody recovered" are different facts and must not look alike.
       if (!p) { points.push({ date: d, offJana: null, reduced: null }); continue; }
       const cur = byDay.get(d), old = byDay.get(p);
-      const offJana = [...old.values()].filter(r => num(r.days_offline) >= 7);
+      /* ONLY HOOP'S OWN BURDEN -- the 45-day class, exactly as the Locked 7+ chart counts it.
+         A customer past the window is Watu's problem, not ours: chasing them is not what a
+         credit officer is measured on, so they must not swell the denominator and make a good
+         week read as a bad one. Measured against the day the pool was CUT (the previous
+         upload), because that is the book that was handed out that morning -- and it is the
+         same day dealMap strata by, so the deal and the count cannot disagree about who was
+         in the window. WINDOW_DAYS is 45 + 2 days of calendar slack; the label stays "/45". */
+      const inWin = r => {
+        const l = lifeDayOf(r.disbursed_date, p);
+        return l != null && l <= WINDOW_DAYS;
+      };
+      const offJana = [...old.values()].filter(r => num(r.days_offline) >= 7 && inWin(r));
       const recovered = new Set();
       for (const o of offJana) {
         const c = cur.get(String(o.imei));
