@@ -960,6 +960,42 @@ function doLogout(){
   $('#scrBoot').classList.add('hide');
   $('#scrRegister').classList.remove('hide');
 }
+/* THE DEAD END. "still locked down" -- a follow-up sheet showing a customer's history and a
+   Save button that both quietly assumed the device was still registered, and neither one
+   gave the officer anywhere to go when it was not.
+
+   Two ways this actually happens in the field, neither of them the officer's fault: a team
+   code got rotated (register() deliberately clears the OLD device_id when that phone's owner
+   re-registers under a new one -- the same fence that keeps a leaked code from being worth
+   anything), or the app has been open long enough that its cached boot no longer matches what
+   the server has. api_callBoot's own success path already handles this correctly (it clears
+   the saved boot, drops back to sign-in) -- but that check only runs at BOOT. Once the app is
+   in, the comment history load silently rendered "Hakuna historia bado" (which is a LIE -- the
+   history is not empty, it could not be READ) and Save just toasted the same error forever,
+   because neither one is the boot flow and neither one had this reset wired to it.
+
+   Now both do. This is the ordinary reset doLogout() already performs -- WITHOUT flagging
+   hcLoggedOut, so the very next normal boot still tries the network first rather than forcing
+   a permanent manual sign-in for what may be a one-off. */
+function handleSessionInvalid_(){
+  if (S.syncTimer) { clearInterval(S.syncTimer); S.syncTimer = null; }
+  S.boot = null; S.entered = false; S.cache = {}; S.cacheAt = {}; S.rows = []; S.curRef = null;
+  try { localStorage.removeItem(BOOT_LS_KEY); localStorage.removeItem(SUM_LS_KEY); localStorage.removeItem(CACHE_LS_KEY); } catch(e){}
+  sheetHide();
+  $('#scrApp').style.display = 'none';
+  $('#scrBoot').classList.add('hide');
+  $('#scrRegister').classList.remove('hide');
+  $('#regErr').innerHTML = '<div class="err">Simu hii haijasajiliwa tena -- ingia upya. '
+    + '/ This handset is no longer registered -- please sign in again.</div>';
+}
+/** Whether a server rejection is specifically "not registered", by the one code the server
+    actually sends (DEVICE_NOT_REGISTERED) or by the message text the older throw-style
+    endpoints still use -- so a wording change on either side does not silently stop this
+    from being recognised. */
+function isNotRegistered_(x){
+  var s = String((x && x.error) || x || '');
+  return s.indexOf('DEVICE_NOT_REGISTERED') >= 0 || /not registered/i.test(s);
+}
 function showConfirm_(msg, onYes){
   $('#confirmMsg').textContent = msg;
   $('#confirmModal').style.display = 'flex';
@@ -1860,6 +1896,7 @@ function openSheet(ref){
   sheetShow();
   wireSheetForm(r);
   srv('api_callComments', DEV, r.ref).then(function(d){
+    if (d && d.ok === false) { if (isNotRegistered_(d)) handleSessionInvalid_(); return; }
     S.comments = (d && d.items) || [];
     var h = $('#histBox'); if (h) h.innerHTML = historyHtml(S.comments);
     /* The customer's registered complaints, ABOVE the history -- the officer must see an
@@ -1874,7 +1911,10 @@ function openSheet(ref){
           + (c.who ? '<b style="font-size:12px">' + esc(c.who) + '</b> ' : '') + esc(c.what || '') + '</div>';
       }).join('') + h.innerHTML;
     }
-  }).catch(function(){});
+  }).catch(function(e){
+    if (isNotRegistered_(e)) { handleSessionInvalid_(); return; }
+    var h = $('#histBox'); if (h) h.innerHTML = '<div class="hint" style="color:var(--bad);font-size:12.5px">Imeshindikana kupakia historia. / Could not load history.</div>';
+  });
 }
 function sheetSkeleton(r){
   var cHref = telHref(r.contact);
@@ -1949,6 +1989,7 @@ function wireSheetForm(r){
       sheetHide();
       applyLocalFuUpdate_(r.ref, fu);
     }).catch(function(e){
+      if (isNotRegistered_(e)) { handleSessionInvalid_(); return; }
       $('#fuSave').disabled = false; $('#fuSave').textContent = 'Hifadhi / Save';
       toast(String(e), true);
     });
