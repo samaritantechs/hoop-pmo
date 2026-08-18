@@ -176,6 +176,95 @@ const FNS = {
     return { ...value, cached: false };
   },
 
+  /* =====================================================================================
+     THE WEEK'S 7+ RECOVERY -- ONE READ, TWO PICTURES.
+
+       "at recovery pane: how many 7+ reduced daily on week trend - graphical"
+       "at dashboard add credit recovery - graphical ... like Monday someone recovered
+        4 of 15 Tuesday 5 of 10 - to sunday"
+
+     OFF JANA is the 7+ column read against YESTERDAY'S upload: whoever was 7-or-more days
+     offline on the previous deck is the pool that had to be chased today. RECOVERED is that
+     same IMEI's days_offline having FALLEN on today's deck. Both questions -- the daily
+     count for the Recovery pane's chart, and the per-credit split for the dashboard -- come
+     off the SAME rows, so this is ONE bounded read serving two charts rather than two reads
+     answering nearly the same question.
+
+     Budget: one read of watu_snapshots over Monday-minus-one .. Sunday, team-scoped, seven
+     columns; plus rosterFull's single call_users read. Memoised five minutes per week and
+     per scope, exactly like lockedTrend above. Adding the second chart costs nothing.
+
+     The per-credit split runs dealMap -- the SAME stratified round-robin the handsets deal
+     the book by -- cut on the PREVIOUS day's rows, because that is the book that was handed
+     out that morning. So the assignment shown here is the assignment the officer actually
+     had, not a fresh guess made at report time. */
+  async recoveryWeek(db, user) {
+    requireNav(user, 'recovery');
+    const t = todayKey();
+    const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();     // 0 = Sunday
+    const from = dayShift(t, -((dow + 6) % 7));                          // this week's Monday
+    const to = dayShift(from, 6);                                        // ...through Sunday
+    // One day of run-up, so MONDAY has a yesterday to be measured against like every other day.
+    const floor = dayShift(from, -1);
+    const ck = 'recweek:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    const hit = trendCache.get(ck);
+    if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
+
+    const COLS = 'imei, snapshot_date, days_offline, created_at, disbursed_date, locked7, locked4';
+    const [rows, roster] = await Promise.all([
+      fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS)
+        .gte('snapshot_date', floor).lte('snapshot_date', to))),
+      rosterFull(db),
+    ]);
+
+    // A same-date re-upload appends; the newest row per IMEI within the day wins -- the same
+    // rule recovery() applies, so the two screens cannot disagree about a re-uploaded day.
+    const byDay = new Map();
+    for (const r of rows) {
+      const d = String(r.snapshot_date).slice(0, 10);
+      if (!byDay.has(d)) byDay.set(d, new Map());
+      const m = byDay.get(d), k = String(r.imei), had = m.get(k);
+      if (!had || String(r.created_at) > String(had.created_at)) m.set(k, r);
+    }
+    const dates = [...byDay.keys()].sort();
+    const prevOf = d => { let p = null; for (const x of dates) { if (x < d) p = x; else break; } return p; };
+
+    const points = [];
+    const credits = new Map();
+    for (const id of roster.ids) credits.set(String(id), { userId: String(id), name: roster.names[id] || '', days: {} });
+
+    for (let i = 0; i < 7; i++) {
+      const d = dayShift(from, i);
+      const p = byDay.has(d) ? prevOf(d) : null;
+      // No upload today, or nothing before it to compare against: a GAP, never a zero.
+      // "nobody uploaded" and "nobody recovered" are different facts and must not look alike.
+      if (!p) { points.push({ date: d, offJana: null, reduced: null }); continue; }
+      const cur = byDay.get(d), old = byDay.get(p);
+      const offJana = [...old.values()].filter(r => num(r.days_offline) >= 7);
+      const recovered = new Set();
+      for (const o of offJana) {
+        const c = cur.get(String(o.imei));
+        if (c && num(c.days_offline) < num(o.days_offline)) recovered.add(String(o.imei));
+      }
+      points.push({ date: d, offJana: offJana.length, reduced: recovered.size });
+
+      // The deal that WAS in force that morning: cut on the previous day's book.
+      const deal = dealMap(offJana, roster.ids, p);
+      for (const o of offJana) {
+        const uid = deal[String(o.imei)];
+        const slot = uid && credits.get(String(uid));
+        if (!slot) continue;
+        if (!slot.days[d]) slot.days[d] = { assigned: 0, recovered: 0 };
+        slot.days[d].assigned++;
+        if (recovered.has(String(o.imei))) slot.days[d].recovered++;
+      }
+    }
+
+    const value = { ok: true, from, to, points, credits: [...credits.values()] };
+    trendCache.set(ck, { at: Date.now(), value });
+    return { ...value, cached: false };
+  },
+
   async report(db, user, args) {
     requireNav(user, 'reports');
     const a = args || {};
@@ -203,10 +292,22 @@ const FNS = {
       note: 'Upload mbili zinahitajika kupima recovery — hii ni ya kwanza. / Recovery needs two uploads; this is the first.' };
     // client_mobile, NOT contact -- snapshots carry the importer's own column names.
     const COLS = 'imei, client_name, client_mobile, team, days_offline, has_ever_paid, price, created_at';
-    const [cur, old] = await Promise.all([
+    /* THE BRANCH IS THE LOCATION, HERE TOO. watu_snapshots carries only the shop-derived
+       `team` -- teamFromShop() turns "Hoop Limited, Kinondoni" into KINONDONI, so every row
+       of this table reads KINONDONI and the Recovery board looked like one branch owned the
+       whole country. The offline-queue register knows the REAL branch per IMEI, and
+       agentIndex already holds it keyed that way, cached against DATA_VERSION -- so this is
+       the same overlay Wateja and the phone list already do, not a new read shape. Allowed
+       to fail quietly: a missing index must cost the branch column, never the board. */
+    const [cur, old, idx] = await Promise.all([
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', latest))),
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', prev))),
+      agentIndex(db, Date.now()).catch(() => null),
     ]);
+    const branchOf = imei => {
+      const a = idx && idx.byImei && idx.byImei[String(imei)];
+      return (a && a.branch) || '';
+    };
     // A same-date re-upload appends; the newest row per IMEI within the day wins.
     const byImei = rows => {
       const m = new Map();
@@ -230,6 +331,7 @@ const FNS = {
       if (better) reconnected++;
       if (worse) deeper++;
       if (paid || better) rows.push({ imei, name: c.client_name, team: c.team,
+        branch: branchOf(imei),
         was: dOld, now: dNew, paid, price: num(c.price) });
     }
     for (const [imei] of oldM) if (!curM.has(imei)) off++;

@@ -546,3 +546,71 @@ test('lockedTrend is this week MONDAY to SUNDAY, deduped and window-checked per 
   assert.equal(r.points[0].num, 2, 're-upload does not double the bar; past-window row is out');
   assert.equal(r.points[6].num, null, 'a day with no upload is a GAP, never a zero');
 });
+
+/* =====================================================================================
+   THE WEEK'S 7+ RECOVERY -- the Recovery pane's chart and the dashboard's credit chart,
+   both off the one read. OFF JANA is the 7+ pool on YESTERDAY's upload; recovered is that
+   same IMEI's days_offline having fallen by today.
+   ===================================================================================== */
+const dShift = (key, n) => {
+  const d = new Date(Date.parse(key + 'T00:00:00Z'));
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+test('recoveryWeek counts the 7+ who reduced, and deals them across the credit roster', async () => {
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();
+  const mon = dShift(t, -((dow + 6) % 7));
+  const sun = dShift(mon, -1);                 // the run-up day Monday is measured against
+
+  const row = (imei, date, off) => ({ imei, client_name: 'C' + imei, team: 'KINONDONI',
+    days_offline: off, has_ever_paid: true, price: 450000,
+    snapshot_date: date, created_at: date + 'T08:00:00Z' });
+
+  const d = fakeDb({
+    watu_snapshots: [
+      // Sunday (the run-up): two are OFF JANA at 7+, one is not
+      row('A', sun, 9), row('B', sun, 8), row('C', sun, 3),
+      // Monday: A fell 9 -> 4 (recovered), B held at 8, C unchanged
+      row('A', mon, 4), row('B', mon, 8), row('C', mon, 3),
+    ],
+    call_users: [
+      { user_id: 'u1', name: 'CREDIT ONE', role: 'CREDIT', active: true },
+      { user_id: 'u2', name: 'CREDIT TWO', role: 'CREDIT', active: true },
+      { user_id: 'u3', name: 'A BIKE', role: 'BIKE', active: true },
+    ],
+  });
+
+  const r = await _FNS.recoveryWeek(d, ADMIN, {});
+  assert.equal(r.from, mon, 'the week starts on Monday, fixed');
+  assert.equal(r.points.length, 7, 'Monday through Sunday, always seven');
+
+  const monday = r.points[0];
+  assert.equal(monday.offJana, 2, 'only the two at 7+ on the previous upload count');
+  assert.equal(monday.reduced, 1, 'only A actually fell');
+
+  // Two credit people on the roster; the BIKE role is never dealt a share.
+  assert.equal(r.credits.length, 2, 'only CREDIT roles join the deal');
+  assert.ok(!r.credits.some(c => c.name === 'A BIKE'), 'a bike officer is never dealt 7+ work');
+  const dealt = r.credits.reduce((s, c) => s + ((c.days[mon] && c.days[mon].assigned) || 0), 0);
+  const got = r.credits.reduce((s, c) => s + ((c.days[mon] && c.days[mon].recovered) || 0), 0);
+  assert.equal(dealt, 2, 'every OFF JANA customer is dealt to somebody');
+  assert.equal(got, 1, 'and the one who came back is credited to whoever held them');
+});
+
+test('recoveryWeek draws a gap, never a zero, for a day nobody uploaded', async () => {
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();
+  const mon = dShift(t, -((dow + 6) % 7));
+  /* A DIFFERENT SCOPE ON PURPOSE. recoveryWeek memoises per week AND per team scope (the
+     same five-minute trendCache lockedTrend uses), so an ADMIN/ALL call here would be
+     answered by the previous test's cached week rather than by this empty database. */
+  const empty = { ...ADMIN, teams: ['NOWHERE'] };
+  const d = fakeDb({ watu_snapshots: [], call_users: [] });
+  const r = await _FNS.recoveryWeek(d, empty, {});
+  assert.equal(r.points.length, 7);
+  assert.ok(r.points.every(p => p.offJana === null && p.reduced === null),
+    'no upload is null on every day -- "nobody uploaded" must never render as "nobody recovered"');
+});

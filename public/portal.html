@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>HOOP PMO — Portal</title>
 <style>
 :root{ --b950:#081C4A; --b900:#0B2A6B; --b800:#10357F; --b700:#1D4ED8; --b600:#2563EB; --b300:#93C5FD; --b100:#DBEAFE; --b50:#EFF6FF;
@@ -518,6 +518,9 @@ function drawDash(m){
     +'<div class="card"><h2>Locked 7+ — wiki hii / this week</h2>'
     +'<div class="mut" style="margin-bottom:6px">Kila siku ya upload: wateja waliofungiwa wiki+ wakiwa bado ndani ya dirisha la Hoop. Kupanda = mzigo unaongezeka.</div>'
     +'<div id="trendBox"><div class="mut">Inapakia…</div></div></div>'
+    +'<div class="card"><h2>Credit — 7+ recovery kwa wiki / this week</h2>'
+    +'<div class="mut" style="margin-bottom:6px">Kila credit, kila siku: waliopewa OFF JANA (7+ siku jana) na wangapi kati yao walipungua leo.</div>'
+    +'<div id="credRecBox"><div class="mut">Inapakia…</div></div></div>'
     +'<div class="card"><h2>Leo unafanyaje / Today’s path</h2>'
     +'<ol class="road" style="margin:0;padding-left:20px">'
     +'<li><a href="/upload">Pakia orodha ya Watu ya leo</a> — Excel kutoka Watu, kama ilivyo.</li>'
@@ -525,6 +528,88 @@ function drawDash(m){
     +'<li>Kesho asubuhi: pakia ya kesho, kisha angalia <b>Recovery</b> — nani amelipa baada ya simu zetu.</li>'
     +'</ol></div>';
   drawTrend();
+  drawCreditRecovery();
+}
+
+/* ===================================================================================
+   CREDIT RECOVERY, PER PERSON, PER DAY -- THE PICTURE.
+     "at dashboard add credit recovery - graphical ... Monday someone recovered 4 of 15
+      Tuesday 5 of 10 - to sunday"
+
+   One ROW per credit officer, seven small bars across it -- Monday to Sunday, the same
+   fixed week as every other chart here. Each bar's full height is what that officer was
+   DEALT that morning (their cut of the OFF JANA pool, under the same stratified deal the
+   handsets run), and the filled part is how many of those came back. The number under
+   each bar reads exactly as the owner asked for it: 4/15.
+
+   A day the officer was dealt nothing is a gap, not a zero -- an officer who was handed
+   no 7+ customers on Wednesday did not "fail Wednesday", and the chart must not say so. */
+function drawCreditRecovery(){
+  var box=$('#credRecBox'); if(!box) return;
+  srv('recoveryWeek',{}).then(function(d){
+    var b=$('#credRecBox'); if(!b) return;
+    var pts=d.points||[], people=(d.credits||[]);
+    // Only the people who were actually dealt something this week -- a roster member with
+    // an empty week is a blank row that pushes the real ones off the screen.
+    var live=people.filter(function(p){
+      return Object.keys(p.days||{}).some(function(k){ return p.days[k].assigned>0; });
+    });
+    if(!pts.length||!live.length){
+      b.innerHTML='<div class="mut">Hakuna mgao wa 7+ wiki hii bado — chati itajaa baada ya upload mbili au zaidi.</div>';
+      return;
+    }
+    var today=(new Date(Date.now()+3*3600*1000)).toISOString().slice(0,10);
+    var dayShort=function(iso){
+      var wd=['Jumapili','Jumatatu','Jumanne','Jumatano','Alhamisi','Ijumaa','Jumamosi'];
+      var en=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      return en[new Date(iso+'T00:00:00').getDay()];
+    };
+    // One shared ceiling across every officer, so two rows can be compared by eye. Comparing
+    // rows that each scaled to their own maximum would make a light week look like a heavy one.
+    var max=1;
+    live.forEach(function(p){ pts.forEach(function(pt){
+      var c=p.days[pt.date]; if(c&&c.assigned>max) max=c.assigned; }); });
+
+    var head='<div style="display:grid;grid-template-columns:132px repeat(7,1fr);gap:4px;align-items:end;margin-bottom:4px">'
+      +'<div></div>'+pts.map(function(pt){
+        return '<div style="text-align:center;font-size:10.5px;color:var(--mut);font-weight:'
+          +(pt.date===today?'700':'400')+'">'+esc(dayShort(pt.date))+'</div>';
+      }).join('')+'</div>';
+
+    var rows=live.map(function(p){
+      var wkA=0,wkR=0;
+      var cells=pts.map(function(pt){
+        var c=p.days[pt.date];
+        if(!c||!c.assigned){
+          return '<div style="text-align:center"><div style="height:56px;display:flex;align-items:flex-end;justify-content:center">'
+            +'<div style="color:var(--soft);font-size:11px;padding-bottom:18px">—</div></div>'
+            +'<div style="font-size:10px;color:var(--soft);text-align:center">&nbsp;</div></div>';
+        }
+        wkA+=c.assigned; wkR+=c.recovered;
+        var hA=Math.max(3,Math.round(56*c.assigned/max));
+        var hR=Math.max(0,Math.round(56*c.recovered/max));
+        return '<div style="text-align:center">'
+          +'<div style="height:56px;display:flex;align-items:flex-end;justify-content:center">'
+          +'<div style="position:relative;width:22px;height:'+hA+'px;background:var(--b100);border-radius:4px">'
+          +(c.recovered>0?'<div style="position:absolute;left:0;bottom:0;width:100%;height:'+hR+'px;background:var(--ok);border-radius:4px"></div>':'')
+          +'</div></div>'
+          +'<div style="font-size:10px;color:var(--ink);text-align:center;font-weight:600;margin-top:2px">'
+          +money(c.recovered)+'/'+money(c.assigned)+'</div></div>';
+      }).join('');
+      return '<div style="display:grid;grid-template-columns:132px repeat(7,1fr);gap:4px;align-items:end;'
+        +'padding:8px 0;border-top:1px solid var(--line)">'
+        +'<div style="font-size:12.5px"><b>'+esc(p.name||p.userId)+'</b>'
+        +'<div class="mut" style="font-size:10.5px">wiki: '+money(wkR)+'/'+money(wkA)
+        +(wkA?' · '+Math.round(100*wkR/wkA)+'%':'')+'</div></div>'
+        +cells+'</div>';
+    }).join('');
+
+    b.innerHTML=head+rows
+      +'<div class="mut" style="font-size:10.5px;margin-top:8px">'
+      +'Urefu wote = waliopewa (OFF JANA ya jana) · kijani = waliopungua leo · “—” = hakukuwa na mgao siku hiyo.</div>';
+  }).catch(function(e){
+    var b=$('#credRecBox'); if(b) b.innerHTML='<div class="mut">'+esc(String(e.message||e))+'</div>';
+  });
 }
 
 /* THE WEEK'S LOCKED 7+ AS A PICTURE. Plain inline SVG -- no library, no network, and
@@ -642,13 +727,112 @@ function drawRecovery(m){
       +'<div class="tile"><div class="l">Wamezidi kuzama</div><div class="v" style="color:var(--bad)">'+money(c.deeper)+'</div></div>'
       +'<div class="tile"><div class="l">Wametoka kwenye orodha</div><div class="v">'+money(c.leftList)+'</div><div class="s">hawakuwepo leo</div></div>'
       +'</div>'
-      +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Timu</th><th class="r">OFF jana</th><th class="r">OFF leo</th><th></th></tr></thead><tbody>'
+      +'<div id="recTrendBox" style="margin:14px 0"><div class="mut">Inapakia chati…</div></div>'
+      /* BRANCH, not the shop-derived team. watu_snapshots only ever carries KINONDONI for
+         this dealer (teamFromShop turns "Hoop Limited, Kinondoni" into one team name), so
+         this column read the same word on every row. The server now overlays the offline
+         queue's real branch per IMEI; the deck's team stays as the fallback. */
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Mteja</th><th>Branch</th><th class="r">OFF jana</th><th class="r">OFF leo</th><th></th></tr></thead><tbody>'
       +(d.rows||[]).map(function(r){
-        return '<tr><td>'+esc(r.name)+'<div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td><td>'+esc(r.team||'')+'</td>'
+        return '<tr><td>'+esc(r.name)+'<div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td><td>'+esc(r.branch||r.team||'')+'</td>'
           +'<td class="r">'+money(r.was)+'</td><td class="r" style="color:var(--ok)">'+money(r.now)+'</td>'
           +'<td>'+(r.paid?'<span class="chip ok">AMELIPA</span>':'<span class="chip">karibu</span>')+'</td></tr>';
       }).join('')+'</tbody></table></div></div>';
+    drawRecoveryTrend();
   }).catch(function(e){ m.innerHTML='<div class="card">'+esc(String(e.message||e))+'</div>'; });
+}
+
+/* ===================================================================================
+   THE WEEK'S 7+ RECOVERY, AS A PICTURE.
+     "how many 7+ reduced daily on week trend - graphical"
+
+   One bar per day, Monday to Sunday, fixed -- the same week the Locked 7+ chart uses, so
+   the two charts on two screens are always describing the same seven days. The bar's full
+   height is that morning's OFF JANA pool (everyone 7+ on yesterday's upload); the filled
+   part is how many of them had their days_offline actually FALL by today. So the eye reads
+   recovery as "how much of the bar came back", and the caption underneath says it in
+   numbers: 4/15.
+
+   A day with no upload -- or no upload before it to measure against -- is drawn as a gap
+   and SAID so, never as a zero. "Nobody uploaded" and "nobody recovered" are different
+   facts and must never look the same on a chart somebody makes decisions from.
+
+   Plain inline SVG: no library, no network, and it prints. */
+function svgRecoveryBars(pts){
+  var vals=pts.filter(function(p){return p.offJana!=null;}).map(function(p){return p.offJana;});
+  if(!vals.length) return '';
+  var max=Math.max.apply(null,vals)||1, n=pts.length;
+  var W=720,H=200,padL=44,padB=40,padT=16,padR=8;
+  var innerW=W-padL-padR, innerH=H-padT-padB;
+  var slot=innerW/n, bw=Math.min(56,slot*0.62);
+  var yOf=function(v){ return padT+innerH-(max?(v/max)*innerH:0); };
+  var dayName=function(iso){
+    var wd=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    return wd[new Date(iso+'T00:00:00').getDay()];
+  };
+  var today=(new Date(Date.now()+3*3600*1000)).toISOString().slice(0,10);
+  var grid='',bars='',labels='';
+  [0,0.5,1].forEach(function(f){
+    var y=padT+innerH-f*innerH, v=Math.round(max*f);
+    grid+='<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="var(--line)" stroke-width="1"/>'
+      +'<text x="'+(padL-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="var(--mut)">'+money(v)+'</text>';
+  });
+  pts.forEach(function(p,i){
+    var cx=padL+slot*i+slot/2, isToday=(p.date===today);
+    labels+='<text x="'+cx+'" y="'+(H-padB+17)+'" text-anchor="middle" font-size="11" '
+      +'font-weight="'+(isToday?'700':'400')+'" fill="var(--mut)">'+esc(dayName(p.date))+'</text>';
+    if(p.offJana==null){
+      labels+='<text x="'+cx+'" y="'+(padT+innerH-6)+'" text-anchor="middle" font-size="10" fill="var(--soft)">—</text>'
+        +'<text x="'+cx+'" y="'+(H-padB+31)+'" text-anchor="middle" font-size="9.5" fill="var(--soft)">hakuna upload</text>';
+      return;
+    }
+    // The whole pool as a light bar, the recovered part filled over it.
+    var yA=yOf(p.offJana), hA=Math.max(2,padT+innerH-yA);
+    var yR=yOf(p.reduced),  hR=Math.max(0,padT+innerH-yR);
+    bars+='<rect x="'+(cx-bw/2)+'" y="'+yA+'" width="'+bw+'" height="'+hA+'" rx="4" fill="var(--b100)"/>'
+      +(p.reduced>0?'<rect x="'+(cx-bw/2)+'" y="'+yR+'" width="'+bw+'" height="'+hR+'" rx="4" fill="var(--ok)"/>':'');
+    labels+='<text x="'+cx+'" y="'+(yA-5)+'" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">'
+      +money(p.reduced)+'/'+money(p.offJana)+'</text>'
+      +'<text x="'+cx+'" y="'+(H-padB+31)+'" text-anchor="middle" font-size="9.5" fill="var(--soft)">'
+      +(p.offJana?Math.round(100*p.reduced/p.offJana)+'%':'—')+'</text>';
+  });
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto;display:block">'
+    +grid+bars+labels+'</svg>';
+}
+/* THE CUSTOMER CARD HAS TO STAY IN SIGHT WHILE A COMMENT IS BEING TYPED.
+     "when someone wants to comment in app, the customer board doesnt rise, so they type
+      without preview of whats being written"
+
+   On a phone the keyboard covers the bottom of the page, and the comment box sits at the
+   bottom of the customer card -- so the officer was typing into a box they could not see.
+   The viewport meta now asks the browser to shrink the page when the keyboard opens
+   (`interactive-widget=resizes-content`); this brings the box itself back into view once
+   the keyboard's opening animation has finished, for the browsers that ignore the meta.
+   Bound once, globally, so every comment box on every screen gets it. */
+document.addEventListener('focusin', function(e){
+  var t=e.target;
+  if(!t||!/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+  if(!t.closest||!t.closest('#custCard')) return;
+  setTimeout(function(){
+    try{ t.scrollIntoView({block:'center',behavior:'smooth'}); }catch(err){}
+  },300);
+});
+
+function drawRecoveryTrend(){
+  var box=$('#recTrendBox'); if(!box) return;
+  srv('recoveryWeek',{}).then(function(d){
+    var b=$('#recTrendBox'); if(!b) return;
+    var svg=svgRecoveryBars(d.points||[]);
+    if(!svg){
+      b.innerHTML='<div class="mut">Hakuna upload wa wiki hii bado — chati itajaa baada ya upload za kila siku.</div>';
+      return;
+    }
+    b.innerHTML='<div style="font-weight:700;margin-bottom:2px">7+ waliopungua wiki hii / 7+ reduced this week</div>'
+      +'<div class="mut" style="margin-bottom:8px">Urefu wote = OFF JANA (7+ siku kwenye upload ya jana). Kijani = walipungua leo.</div>'
+      +svg;
+  }).catch(function(e){
+    var b=$('#recTrendBox'); if(b) b.innerHTML='<div class="mut">'+esc(String(e.message||e))+'</div>';
+  });
 }
 
 /* ---------- wateja / customers ----------
