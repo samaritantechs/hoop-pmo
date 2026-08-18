@@ -619,3 +619,47 @@ test('recoveryWeek draws a gap, never a zero, for a day nobody uploaded', async 
   assert.ok(r.points.every(p => p.offJana === null && p.reduced === null),
     'no upload is null on every day -- "nobody uploaded" must never render as "nobody recovered"');
 });
+
+test('recoveryDayList names the customers behind a day, with the credit who held them', async () => {
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();
+  const mon = dShift(t, -((dow + 6) % 7));
+  const sun = dShift(mon, -1);
+  const inWin = dShift(mon, -10), past = dShift(mon, -80);
+  const row = (imei, date, off, disb) => ({ imei, client_name: 'C' + imei, team: 'KINONDONI',
+    days_offline: off, has_ever_paid: true, price: 450000, disbursed_date: disb,
+    snapshot_date: date, created_at: date + 'T08:00:00Z' });
+
+  const d = fakeDb({
+    watu_snapshots: [
+      row('A', sun, 9, inWin), row('B', sun, 8, inWin), row('D', sun, 30, past),
+      row('A', mon, 4, inWin), row('B', mon, 8, inWin), row('D', mon, 5, past),
+    ],
+    call_users: [{ user_id: 'u1', name: 'CREDIT ONE', role: 'CREDIT', active: true }],
+  });
+
+  const r = await _FNS.recoveryDayList(d, ADMIN, { date: mon });
+  assert.equal(r.prev, sun, 'measured against the upload before it');
+  assert.equal(r.rows.length, 2, 'only the 7+ inside the 45-day window -- D is past it');
+  assert.ok(!r.rows.some(x => x.imei === 'D'), 'a customer past the window is never listed');
+
+  const a = r.rows.find(x => x.imei === 'A');
+  assert.equal(a.was, 9); assert.equal(a.now, 4);
+  assert.equal(a.recovered, true, 'A fell 9 -> 4');
+  assert.equal(a.credit, 'CREDIT ONE', 'every row says which credit officer held it');
+
+  const b = r.rows.find(x => x.imei === 'B');
+  assert.equal(b.recovered, false, 'B held at 8 and did not recover');
+  assert.equal(r.counts.offJana, 2);
+  assert.equal(r.counts.recovered, 1);
+});
+
+test('recoveryDayList refuses a day with nothing before it to compare against', async () => {
+  const d = fakeDb({ watu_snapshots: [
+    { imei: '1', snapshot_date: '2026-08-14', created_at: '2026-08-14T08:00:00Z' },
+  ], call_users: [] });
+  const r = await _FNS.recoveryDayList(d, ADMIN, { date: '2026-08-14' });
+  assert.equal(r.prev, null, 'the first upload has no yesterday');
+  assert.deepEqual(r.rows, [], 'and so lists nobody, rather than inventing a comparison');
+});

@@ -276,6 +276,71 @@ const FNS = {
     return { ...value, cached: false };
   },
 
+  /* THE EYE ON EACH DAY -- who exactly those customers were.
+       "add an eye/view option ... to show which customers are those - listing them - so it
+        should be placed on end of each dayname to view of each day independently"
+       "i beleive that customer row info will show the credit name too"
+
+     LAZY ON PURPOSE. The chart's own answer carries counts and nothing else; this list is
+     fetched only when somebody actually opens a day. Folding every day's names into
+     recoveryWeek would ship a few thousand rows to EVERY dashboard load to serve a panel
+     that is opened occasionally -- counts are what a chart draws, names are what a question
+     needs, and they should not travel together.
+
+     Every row says who held it: the credit officer comes from the same dealMap cut on the
+     same previous-day book the chart counted, so the name here and the bar there cannot
+     disagree about who was chasing whom.
+
+     Budget: two bounded, team-scoped reads (the day, and the upload before it), plus the
+     already-cached roster and agent index. Nothing at all on the dashboard's own load. */
+  async recoveryDayList(db, user, args) {
+    requireNav(user, 'recovery');
+    const day = String((args && args.date) || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('date is required');
+    const two = await db.from('watu_snapshots').select('snapshot_date')
+      .lt('snapshot_date', day).order('snapshot_date', { ascending: false }).limit(1);
+    if (two.error) throw new Error(two.error.message);
+    const prev = two.data && two.data[0] && String(two.data[0].snapshot_date).slice(0, 10);
+    if (!prev) return { ok: true, date: day, prev: null, rows: [], counts: { offJana: 0, recovered: 0 } };
+
+    const COLS = 'imei, client_name, team, days_offline, created_at, disbursed_date, locked7, locked4';
+    const [cur, old, roster, idx] = await Promise.all([
+      fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', day))),
+      fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', prev))),
+      rosterFull(db),
+      agentIndex(db, Date.now()).catch(() => null),
+    ]);
+    // A same-date re-upload appends; newest row per IMEI wins -- the same rule everywhere else.
+    const newest = list => {
+      const m = new Map();
+      for (const r of list) {
+        const k = String(r.imei), had = m.get(k);
+        if (!had || String(r.created_at) > String(had.created_at)) m.set(k, r);
+      }
+      return m;
+    };
+    const curM = newest(cur), oldM = newest(old);
+    const inWin = r => { const l = lifeDayOf(r.disbursed_date, prev); return l != null && l <= WINDOW_DAYS; };
+    const offJana = [...oldM.values()].filter(r => num(r.days_offline) >= 7 && inWin(r));
+    const deal = dealMap(offJana, roster.ids, prev);
+    const out = offJana.map(o => {
+      const c = curM.get(String(o.imei));
+      const was = num(o.days_offline);
+      const now = c ? num(c.days_offline) : null;
+      const uid = deal[String(o.imei)];
+      const a = idx && idx.byImei && idx.byImei[String(o.imei)];
+      return {
+        imei: o.imei, name: o.client_name || '',
+        branch: (a && a.branch) || o.team || '',
+        credit: (uid && roster.names[String(uid)]) || '',
+        was, now, recovered: now != null && now < was,
+        gone: !c,                       // not on today's upload at all
+      };
+    }).sort((x, y) => (y.recovered - x.recovered) || (y.was - x.was));
+    return { ok: true, date: day, prev, rows: out,
+      counts: { offJana: out.length, recovered: out.filter(r => r.recovered).length } };
+  },
+
   async report(db, user, args) {
     requireNav(user, 'reports');
     const a = args || {};
