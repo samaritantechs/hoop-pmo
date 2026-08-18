@@ -65,6 +65,15 @@ test('a wrong team code is refused; a view-only code cannot register a handset',
   await assert.rejects(() => callApi(d2, 'api_callRegister', ['dev-1', '', '', 'LOOK', '0712000000', ''], NOW), /view-only/);
 });
 
+test('the customer row carries the actual disbursed date, not just the day-of-45 count', async () => {
+  const d = db();
+  await registerOfficer(d);
+  const r = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  const alafati = r.rows.find(x => x.ref === '351929937378664');
+  assert.equal(alafati.disbursedDate, '2026-07-13', 'the raw date, so the credit team can read it, not just count it');
+  assert.ok(alafati.ds && alafati.ds.indexOf('/45') > 0, 'the day-of-45 count still rides alongside it');
+});
+
 test('the list is the NEWEST deck, dealt company-wide -- teams are locations, not fences', async () => {
   const d = db();
   await registerOfficer(d);

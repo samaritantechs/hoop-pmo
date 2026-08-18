@@ -1914,6 +1914,7 @@ function sheetSkeleton(r){
     + '<div class="sheet-sub">' + esc(r.team) + ' \u00B7 IMEI ' + esc(r.ref) + '</div>'
     + (r.model ? '<div class="factrow"><span>Simu / Model</span><span>' + esc(r.model) + '</span></div>' : '')
     + (r.amt ? '<div class="factrow"><span>Bei / Watu price</span><b>TZS ' + money(r.amt) + '</b></div>' : '')
+    + (r.disbursedDate ? '<div class="factrow"><span>Tarehe ya mkopo / Disbursed date</span><span>' + esc(r.disbursedDate) + '</span></div>' : '')
     + (r.ds ? '<div class="factrow"><span>Siku ya mkopo / Day of 45</span><span>' + esc(r.ds)
         + (r.inWindow === false ? ' \u00B7 nje ya dirisha' : '') + '</span></div>' : '')
     + (r.daysOff != null && r.daysOff !== '' ? '<div class="factrow"><span>Siku bila kulipa / Days offline</span><b>' + esc(r.daysOff) + '</b></div>' : '')

@@ -477,6 +477,10 @@ async function list(db, [dev], nowMs) {
       called: hit(r.contact),
       // Hoop's own facts, printed by the adapted page.
       model: r.model || '', lifeDay: life,
+      // The credits want the ACTUAL date, not just the day-of-45 count -- ds already says
+      // "39/45", this says which day that count is counted FROM. Same column, read once,
+      // just carried onto the row instead of being consumed only by lifeDayOf above.
+      disbursedDate: r.disbursed_date ? String(r.disbursed_date).slice(0, 10) : null,
       daysOff: r.days_offline == null ? null : num(r.days_offline),
       locked4: !!r.locked4, locked7: !!r.locked7,
       paid: r.has_ever_paid === true,
