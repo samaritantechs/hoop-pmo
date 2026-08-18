@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>HOOP Calls</title>
 <style>
 :root{
@@ -1752,13 +1753,63 @@ var SHEET_STATE = false;
 function sheetShow(){
   $('#sheet').style.display = 'flex';
   if (!SHEET_STATE){ SHEET_STATE = true; try { history.pushState({ hopeSheet: 1 }, ''); } catch(e){} }
+  fitSheetToKeyboard_();
 }
 function sheetHide(fromBack){
   $('#sheet').style.display = 'none';
+  $('#sheet').style.height = ''; $('#sheet').style.top = '';
   BELL_OPEN = false;            // stop the bell redrawing into a sheet nobody is looking at
   if (SHEET_STATE && !fromBack){ SHEET_STATE = false; try { history.back(); } catch(e){} }
   else SHEET_STATE = false;
 }
+
+/* THE CUSTOMER SHEET DID NOT RISE ABOVE THE KEYBOARD.
+     "when someone wants to comment in app, the customer board doesnt rise, so they type
+      without preview of whats being written"
+
+   #sheet is `position:fixed;inset:0` with `align-items:flex-end` -- the Maoni / Comment box
+   sits flush with the bottom of the PAGE. A phone does NOT shrink that page when its own
+   keyboard opens unless the page asks it to; the keyboard simply draws on top. So the sheet
+   stayed pinned behind the keyboard and whatever the officer typed landed underneath it,
+   invisible until they hit Save and hoped.
+
+   Two fixes, because neither one alone covers every handset in the field:
+     1. `interactive-widget=resizes-content` on the viewport meta -- this page carried NO
+        viewport meta at all, so it was not even asking. Where it is honoured the layout
+        viewport shrinks by itself and the function below never has to do anything.
+     2. This, for the Android WebView the APK ships and older Chrome that ignores the meta:
+        visualViewport reports the REAL visible height once the keyboard is up, so the sheet
+        is sized and pinned to THAT instead of the full page -- it rises, because the space
+        the keyboard occupies has been taken out of the sheet's own height. */
+function fitSheetToKeyboard_(){
+  var vv = window.visualViewport;
+  if (!vv) return;
+  var bg = document.getElementById('sheet');
+  if (!bg) return;
+  bg.style.height = vv.height + 'px';
+  bg.style.top = vv.offsetTop + 'px';
+}
+(function(){
+  var vv = window.visualViewport;
+  if (!vv) return;
+  function refit(){
+    var bg = document.getElementById('sheet');
+    if (bg && bg.style.display !== 'none') fitSheetToKeyboard_();
+  }
+  vv.addEventListener('resize', refit);
+  vv.addEventListener('scroll', refit);
+})();
+/* Belt-and-braces for a WebView slow to fire visualViewport's resize: once the keyboard's
+   own opening animation has had time to run, bring the field being typed into back inside
+   the sheet's visible area -- so even a late resize still ends with the words on screen. */
+document.addEventListener('focusin', function(e){
+  var t = e.target;
+  if (!t || !/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+  if (!t.closest || !t.closest('#sheet')) return;
+  setTimeout(function(){
+    try { t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch(err){}
+  }, 300);
+});
 window.addEventListener('popstate', function(){ if (SHEET_STATE) sheetHide(true); });
 /* Bound at LOAD, not at sign-in. The sheet is part of the page from the first byte, so its way
    out should be too -- bound inside enterApp, a sheet opened before or after a sign-in bounce
