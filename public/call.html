@@ -1789,87 +1789,80 @@ var SHEET_STATE = false;
 function sheetShow(){
   $('#sheet').style.display = 'flex';
   if (!SHEET_STATE){ SHEET_STATE = true; try { history.pushState({ hopeSheet: 1 }, ''); } catch(e){} }
-  fitSheetToKeyboard_();
 }
 function sheetHide(fromBack){
   $('#sheet').style.display = 'none';
-  $('#sheet').style.height = ''; $('#sheet').style.top = '';
+  sheetKbRoom_(false);           // no field to leave room for once the sheet itself is gone
+  SHEET_KB_FOCUS = null;
   BELL_OPEN = false;            // stop the bell redrawing into a sheet nobody is looking at
   if (SHEET_STATE && !fromBack){ SHEET_STATE = false; try { history.back(); } catch(e){} }
   else SHEET_STATE = false;
 }
 
-/* THE CUSTOMER SHEET DID NOT RISE ABOVE THE KEYBOARD.
-     "when someone wants to comment in app, the customer board doesnt rise, so they type
-      without preview of whats being written"
-   then, after a first attempt:
-     "scrolling the customer pannel hasnt worked yet, customers have number of comments and
-      it scrolls just millimiters to get there. it should scroll until the writting pad is
-      top of the keyborad or until user is satfied with the manual scroll"
+/* THE CUSTOMER SHEET DID NOT RISE ABOVE THE KEYBOARD -- three rounds of this, and the first
+   two were both built on the same broken assumption.
+     "when someone wants to comment in app, the customer board doesnt rise..."
+     "scrolling the customer pannel hasnt worked yet ... it scrolls just millimiters"
+     "the pannel still doesnt move to allow preview while writing"
 
-   THE FIRST ATTEMPT LEFT TWO HANDLERS FIGHTING EACH OTHER. There was a second, older
-   keyboard-lift block further down (the one under "THE KEYBOARD MUST NOT SWALLOW THE
-   COMMENT") doing its own scrollIntoView on the same focus event -- and worse, THIS block
-   listened for visualViewport's `scroll` event to reposition #sheet, which fires
-   REPEATEDLY while anything scrolls, including the very scroll meant to lift the box. Each
-   tick re-pinned the backdrop and cancelled most of the movement the tick before it had
-   just made -- net a few millimetres per keystroke of fighting, which is exactly what was
-   reported. Both are gone; there is one handler now.
+   ROUND ONE measured the keyboard with scrollIntoView's own guess (wrong -- it centres in
+   the wrong number, see the removed block's own note below). ROUND TWO measured it properly
+   with visualViewport.height/offsetTop, fixed a real double-handler bug, and STILL did not
+   move -- because that measurement has a precondition neither round questioned: it only
+   updates if `visualViewport`'s `resize` event actually FIRES for the on-screen keyboard.
 
-   #sheet is `position:fixed;inset:0` with `align-items:flex-end` -- the Maoni / Comment box
-   sits flush with the bottom of the PAGE, and .sheet-panel INSIDE it is the thing that
-   actually scrolls (`overflow-y:auto`). The keyboard does not shrink that page unless asked
-   to (`interactive-widget=resizes-content` on the viewport meta, added alongside this), and
-   on the WebView/Chrome that ignores that ask, `max-height:88vh` is measured off the FULL,
-   keyboard-unaware viewport -- so scrollIntoView guessed at a "centre" that was still wrong
-   even once it moved.
+   THAT IS A KNOWN, LONG-STANDING GAP IN ANDROID'S SYSTEM WEBVIEW -- the exact engine this
+   APK runs on -- where opening the soft keyboard changes nothing `visualViewport` reports at
+   all on many builds. Not a bug in the arithmetic; the input to the arithmetic was silently
+   stale. `over` came out small or negative because `vv.height` still read the FULL,
+   keyboard-unaware screen, so `if (over > 1)` correctly found "no overlap" against a number
+   that was simply wrong. Confident math on a broken sensor is still broken.
 
-   So this measures instead of guessing, and moves the PANEL's own scrollTop -- not the
-   window, not the backdrop's position -- directly by however much the field still overlaps
-   the keyboard, plus a margin. That lands the top of the comment box level with the top of
-   the keyboard exactly, on any keyboard height, with a history of ten comments or none.
+   SO THIS ROUND DOES NOT TRY TO MEASURE THE KEYBOARD AT ALL. It moves the focused field to a
+   fixed distance from the TOP of the panel instead of trying to clear the BOTTOM against an
+   edge it cannot see -- a keyboard essentially never covers the top third of a phone screen,
+   so "near the top" is safe regardless of keyboard height, Android version, or whether
+   visualViewport ever reports anything. And the panel is given generous bottom padding the
+   moment a field takes focus, so there is ALWAYS scroll room to move into -- the earlier
+   version could compute a correct answer and still have nowhere to put it if a short customer
+   history left nothing below the form to scroll past.
 
-   Run ONCE per focus (with one retry for a slow-opening keyboard), never on every resize or
-   scroll tick after that -- so a manual adjustment the officer makes afterward is never
-   undone. That is the "or until user is satisfied with the manual scroll" half of the ask:
-   the code moves it into place once and then gets out of the way. */
-function fitSheetToKeyboard_(){
-  var vv = window.visualViewport;
-  if (!vv) return;
-  var bg = document.getElementById('sheet');
-  if (!bg) return;
-  bg.style.height = vv.height + 'px';
-  bg.style.top = vv.offsetTop + 'px';
+   Everything here is getBoundingClientRect() and panel.scrollTop -- both of which reflect
+   actual rendered layout, never a viewport-shrink signal that may not arrive. */
+function sheetKbRoom_(on){
+  var panel = document.getElementById('sheetPanel');
+  if (panel) panel.style.paddingBottom = on ? '55vh' : '';
 }
-(function(){
-  var vv = window.visualViewport;
-  if (!vv) return;
-  // Only a genuine SIZE change repositions the backdrop -- the keyboard opening or closing.
-  // Listening to `scroll` here was the bug: it fires on every scroll tick, including the
-  // one this code itself produces, and kept undoing its own movement.
-  vv.addEventListener('resize', function(){
-    var bg = document.getElementById('sheet');
-    if (bg && bg.style.display !== 'none') fitSheetToKeyboard_();
-  });
-})();
-function liftAboveKeyboard_(el){
+function liftNearTop_(el){
   if (!el || !el.getBoundingClientRect) return;
   var panel = document.getElementById('sheetPanel');
   if (!panel) return;
-  var vv = window.visualViewport;
-  var r = el.getBoundingClientRect();
-  var visibleBottom = vv ? (vv.offsetTop + vv.height) : window.innerHeight;
-  var over = r.bottom + 14 - visibleBottom;     // +14 so it never sits flush on the keys
-  if (over > 1) panel.scrollTop += over;
+  var target = 96;                              // comfortably clear of any keyboard height
+  var delta = (el.getBoundingClientRect().top - panel.getBoundingClientRect().top) - target;
+  if (Math.abs(delta) > 4) panel.scrollTop += delta;
 }
+var SHEET_KB_FOCUS = null;
 document.addEventListener('focusin', function(e){
   var t = e.target;
   if (!t || !/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
   if (!t.closest || !t.closest('#sheet')) return;
-  // Twice: once for a keyboard that is already open, once more after its slide-in animation
-  // (roughly a quarter of a second) has actually finished and the true gap is measurable.
-  liftAboveKeyboard_(t);
-  setTimeout(function(){ liftAboveKeyboard_(t); }, 320);
+  SHEET_KB_FOCUS = t;
+  sheetKbRoom_(true);
+  // Repeated rather than once: the keyboard's own slide-in animation keeps changing what
+  // "near the top" means for a few hundred milliseconds, on the handsets where it visibly
+  // animates at all -- and on the ones where it does not, the extra calls cost nothing
+  // (delta is already under the 4px threshold and each one is a no-op).
+  [0, 120, 260, 420].forEach(function(ms){
+    setTimeout(function(){ if (SHEET_KB_FOCUS === t) liftNearTop_(t); }, ms);
+  });
+});
+document.addEventListener('focusout', function(e){
+  if (SHEET_KB_FOCUS !== e.target) return;
+  SHEET_KB_FOCUS = null;
+  // A short wait, not instant: tapping from one field straight into the next in the same
+  // form fires focusout-then-focusin, and closing the room in between would just force the
+  // very next field to reopen it -- a visible jump for no reason.
+  setTimeout(function(){ if (!SHEET_KB_FOCUS) sheetKbRoom_(false); }, 200);
 });
 window.addEventListener('popstate', function(){ if (SHEET_STATE) sheetHide(true); });
 /* Bound at LOAD, not at sign-in. The sheet is part of the page from the first byte, so its way
@@ -1881,11 +1874,9 @@ document.addEventListener('keydown', function(e){
   if (e.key === 'Escape' && $('#sheet').style.display === 'flex') sheetHide();
 });
 
-/* A second keyboard-lift block used to live here, bound to the same #sheet focus event as
-   fitSheetToKeyboard_/liftAboveKeyboard_ above -- two handlers moving the same box on the
-   same event, one of them re-firing on every visualViewport scroll tick and undoing the
-   other's work. That was the actual cause of "scrolls just millimetres". One handler now,
-   by the sheet's own open/close functions above. */
+/* A second keyboard-lift block used to live here -- a duplicate handler that was one of two
+   fighting over the same box (see the note above liftNearTop_). It is gone; the focusin/
+   focusout pair above is the one handler now. */
 function openSheet(ref){
   var r = null;
   for (var i=0;i<S.rows.length;i++){ if (String(S.rows[i].ref)===String(ref)) { r = S.rows[i]; break; } }
