@@ -575,14 +575,26 @@ function drawCreditRecovery(){
        "who were they" is asked about one day at a time. Drawn only where that day actually
        had a pool; an eye over a day nobody uploaded would open an empty panel and look
        broken. The list itself is fetched on the tap, never with the chart. */
-    var head='<div style="display:grid;grid-template-columns:132px repeat(7,1fr);gap:4px;align-items:end;margin-bottom:4px">'
-      +'<div></div>'+pts.map(function(pt){
-        var any=pts&&pt.offJana;
-        return '<div style="text-align:center;font-size:10.5px;color:var(--mut);font-weight:'
-          +(pt.date===today?'700':'400')+'">'+esc(dayShort(pt.date))
+    /* A REAL HEADER ROW, not seven loose labels floating over the bars. It is banded and
+       ruled like a table head, the first cell is named rather than left blank, each day
+       carries its date under the name, and TODAY's column is tinted the whole way across so
+       the eye finds "where are we now" without counting along. */
+    var head='<div style="display:grid;grid-template-columns:132px repeat(7,1fr);gap:4px;'
+      +'align-items:end;background:var(--b50);border:1px solid var(--line);'
+      +'border-radius:9px 9px 0 0;padding:7px 6px;margin-bottom:0">'
+      +'<div style="font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;'
+      +'letter-spacing:.03em">Credit</div>'
+      +pts.map(function(pt){
+        var any=pt.offJana, isToday=(pt.date===today);
+        return '<div style="text-align:center;'
+          +(isToday?'background:var(--b100);border-radius:6px;':'')+'padding:2px 0">'
+          +'<div style="font-size:10.5px;color:'+(isToday?'var(--ink)':'var(--mut)')+';'
+          +'font-weight:'+(isToday?'700':'600')+'">'+esc(dayShort(pt.date))
           +(any?' <span class="credEye" data-date="'+esc(pt.date)+'" role="button" tabindex="0" '
               +'title="Ona wateja wa siku hii / see this day\'s customers" '
               +'style="cursor:pointer;opacity:.75;font-size:12px">\u{1F441}</span>':'')
+          +'</div>'
+          +'<div style="font-size:9px;color:var(--soft)">'+esc(String(pt.date).slice(5))+'</div>'
           +'</div>';
       }).join('')+'</div>';
 
@@ -607,7 +619,7 @@ function drawCreditRecovery(){
           +money(c.recovered)+'/'+money(c.assigned)+'</div></div>';
       }).join('');
       return '<div style="display:grid;grid-template-columns:132px repeat(7,1fr);gap:4px;align-items:end;'
-        +'padding:8px 0;border-top:1px solid var(--line)">'
+        +'padding:8px 6px;border:1px solid var(--line);border-top:0">'
         +'<div style="font-size:12.5px"><b>'+esc(p.name||p.userId)+'</b>'
         +'<div class="mut" style="font-size:10.5px">wiki: '+money(wkR)+'/'+money(wkA)
         +(wkA?' · '+Math.round(100*wkR/wkA)+'%':'')+'</div></div>'
