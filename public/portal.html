@@ -515,12 +515,80 @@ function drawDash(m){
     +'<div class="tile"><div class="l">Simu leo</div><div class="v">'+n(s.calls)+'</div><div class="s">credit team</div></div>'
     +'<div class="tile"><div class="l">Reached — yesterday</div><div class="v" style="color:var(--ok)">'+(s.reached&&s.reached.pct!=null?pct(s.reached.pct):'—')+'</div><div class="s">'+(s.reached&&s.reached.den?money(s.reached.num)+' / '+money(s.reached.den)+' · ':'')+'last week avg: '+(s.weekAvg&&s.weekAvg.pct!=null?pct(s.weekAvg.pct):'—')+'</div></div>'
     +'</div>'
+    +'<div class="card"><h2>Locked 7+ — wiki hii / this week</h2>'
+    +'<div class="mut" style="margin-bottom:6px">Kila siku ya upload: wateja waliofungiwa wiki+ wakiwa bado ndani ya dirisha la Hoop. Kupanda = mzigo unaongezeka.</div>'
+    +'<div id="trendBox"><div class="mut">Inapakia…</div></div></div>'
     +'<div class="card"><h2>Leo unafanyaje / Today’s path</h2>'
     +'<ol class="road" style="margin:0;padding-left:20px">'
     +'<li><a href="/upload">Pakia orodha ya Watu ya leo</a> — Excel kutoka Watu, kama ilivyo.</li>'
     +'<li>Credit team wanafungua <a href="/call">HOOP Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
     +'<li>Kesho asubuhi: pakia ya kesho, kisha angalia <b>Recovery</b> — nani amelipa baada ya simu zetu.</li>'
     +'</ol></div>';
+  drawTrend();
+}
+
+/* THE WEEK'S LOCKED 7+ AS A PICTURE. Plain inline SVG -- no library, no network, and
+   it prints. One bar per upload day: height is that day's burden against the week's
+   own peak, the newest bar is filled, the rest sit lighter so the eye lands on today.
+   A day with no upload is drawn as a gap and SAID so, never as a zero -- "nobody
+   uploaded" and "nobody was locked" are different facts. The table under it is the
+   same numbers for anyone who wants to read (or export) them. */
+function drawTrend(){
+  var box=$('#trendBox'); if(!box) return;
+  srv('lockedTrend',{days:7}).then(function(d){
+    var pts=d.points||[];
+    var box2=$('#trendBox'); if(!box2) return;
+    var vals=pts.filter(function(p){return p.num!=null;}).map(function(p){return p.num;});
+    if(!vals.length){
+      box2.innerHTML='<div class="mut">Hakuna upload wa wiki hii bado — chati itajaa baada ya upload za kila siku.</div>';
+      return;
+    }
+    var max=Math.max.apply(null,vals), n=pts.length;
+    var W=720,H=190,padL=44,padB=34,padT=16,padR=8;
+    var innerW=W-padL-padR, innerH=H-padT-padB;
+    var slot=innerW/n, bw=Math.min(56,slot*0.62);
+    var yOf=function(v){ return padT+innerH-(max?(v/max)*innerH:0); };
+    var lastIdx=-1; pts.forEach(function(p,i){ if(p.num!=null) lastIdx=i; });
+    var dayName=function(iso){
+      var wd=['Jumapili','Jumatatu','Jumanne','Jumatano','Alhamisi','Ijumaa','Jumamosi'];
+      var dt=new Date(iso+'T00:00:00'); return wd[dt.getDay()].slice(0,3);
+    };
+    var grid='',bars='',labels='';
+    [0,0.5,1].forEach(function(f){
+      var y=padT+innerH-f*innerH, v=Math.round(max*f);
+      grid+='<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="var(--line)" stroke-width="1"/>'
+        +'<text x="'+(padL-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="var(--mut)">'+money(v)+'</text>';
+    });
+    pts.forEach(function(p,i){
+      var cx=padL+slot*i+slot/2;
+      labels+='<text x="'+cx+'" y="'+(H-padB+16)+'" text-anchor="middle" font-size="11" fill="var(--mut)">'+esc(dayName(p.date))+'</text>'
+        +'<text x="'+cx+'" y="'+(H-padB+28)+'" text-anchor="middle" font-size="9.5" fill="var(--soft)">'+esc(p.date.slice(8))+'</text>';
+      if(p.num==null){
+        labels+='<text x="'+cx+'" y="'+(padT+innerH-6)+'" text-anchor="middle" font-size="10" fill="var(--soft)">—</text>';
+        return;
+      }
+      var y=yOf(p.num), h=Math.max(2,padT+innerH-y), on=(i===lastIdx);
+      bars+='<rect x="'+(cx-bw/2)+'" y="'+y+'" width="'+bw+'" height="'+h+'" rx="4" '
+        +'fill="var(--bad)" opacity="'+(on?'1':'0.42')+'"><title>'+esc(p.date)+': '+money(p.num)+' locked 7+</title></rect>'
+        +'<text x="'+cx+'" y="'+(y-5)+'" text-anchor="middle" font-size="11.5" font-weight="700" fill="'+(on?'var(--bad)':'var(--mut)')+'">'+money(p.num)+'</text>';
+    });
+    var first=vals[0], last=vals[vals.length-1], diff=last-first;
+    box2.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" '
+      +'aria-label="Locked 7+ per day this week" style="display:block;max-width:100%">'
+      +'<line x1="'+padL+'" y1="'+(padT+innerH)+'" x2="'+(W-padR)+'" y2="'+(padT+innerH)+'" stroke="var(--line)" stroke-width="1.5"/>'
+      +grid+bars+labels+'</svg>'
+      +'<div class="mut" style="margin-top:6px">'
+      +(vals.length>1
+        ? (diff===0?'Sawa na mwanzo wa wiki.':(diff>0?'⬆ ':'⬇ ')+money(Math.abs(diff))+' kuliko siku ya kwanza yenye upload ('+esc(pts.filter(function(p){return p.num!=null;})[0].date)+').')
+        : 'Siku moja tu ya upload wiki hii.')
+      +' Kilele: '+money(max)+'.</div>'
+      +'<div style="overflow-x:auto;margin-top:8px"><table><thead><tr><th>Siku</th><th class="r">Locked 7+</th></tr></thead><tbody>'
+      +pts.map(function(p){
+        return '<tr><td>'+esc(p.date)+'</td><td class="r">'+(p.num!=null?money(p.num):'<span class="mut">hakuna upload</span>')+'</td></tr>';
+      }).join('')+'</tbody></table></div>';
+  }).catch(function(e){
+    var b=$('#trendBox'); if(b) b.innerHTML='<div class="mut">'+esc(String(e.message||e))+'</div>';
+  });
 }
 
 /* ---------- ripoti ---------- */
@@ -842,17 +910,20 @@ function drawAgents(m){
     m.innerHTML='<div class="card"><h2>Agent scorecards — how their customers behave (Watu)</h2>'
       +mzDates()
       +'<div class="mut" style="margin-bottom:8px">Per Watu agent: how their customers behave on the follow-up lists. Top = chase first (most locked 7+).</div>'
-      +'<div style="overflow-x:auto"><table><thead><tr><th>Agent (Watu)</th><th class="r">Customers</th><th class="r">% paid</th><th class="r">Locked 7+</th><th class="r">Avg OFF</th><th class="r">Past 45</th></tr></thead><tbody>'
+      +'<div style="overflow-x:auto"><table><thead><tr><th>Agent (Watu)</th><th>Branch</th><th class="r">Customers</th><th class="r">% paid</th><th class="r">Locked 7+</th><th class="r">Avg OFF</th><th class="r">Past 45</th></tr></thead><tbody>'
       +(d.watuAgents||[]).map(function(a){
+        var areas=(a.teams||[]).filter(function(t){return t&&t!==a.branch;});
         return '<tr><td><b>'+esc(a.agent||'—')+'</b>'+(a.agentId?' <span class="mut" style="font-size:10px">#'+esc(a.agentId)+'</span>':'')
-          +'<div class="mut" style="font-size:10px">'+esc((a.teams||[]).join(', '))+'</div></td>'
+          +(a.role?'<div class="mut" style="font-size:10px">'+esc(a.role)+(a.phone?' · '+esc(a.phone):'')+'</div>':'')+'</td>'
+          +'<td>'+esc(a.branch||'—')
+          +(areas.length?'<div class="mut" style="font-size:10px">'+esc(areas.join(', '))+'</div>':'')+'</td>'
           +'<td class="r">'+money(a.customers)+'</td>'
           +'<td class="r">'+pct(a.paidPct)+'</td>'
           +'<td class="r"'+(a.locked7?' style="color:var(--bad)"':'')+'>'+money(a.locked7)+' ('+pct(a.locked7Pct)+')</td>'
           +'<td class="r">'+(a.avgOff!=null?money(a.avgOff):'—')+'</td>'
           +'<td class="r">'+money(a.over45)+'</td></tr>';
       }).join('')
-      +((d.watuAgents||[]).length?'':'<tr><td colspan="6" class="mut">No Watu data yet.</td></tr>')
+      +((d.watuAgents||[]).length?'':'<tr><td colspan="7" class="mut">No Watu data yet.</td></tr>')
       +'</tbody></table></div></div>'
       +'<div class="card"><h2>Sellers — commission (hoopltd.shop, '+esc(d.from)+' → '+esc(d.to)+')</h2>'
       +'<div class="mut" style="margin-bottom:8px">Per payout number: how many sales, how much, and who they are in the agents register.</div>'
@@ -860,7 +931,7 @@ function drawAgents(m){
       +(d.sellers||[]).map(function(s){
         return '<tr><td><b>'+esc(s.name||'—')+'</b><div class="mut" style="font-size:10px">'+esc(s.phone||'')+'</div></td>'
           +'<td class="r">'+money(s.sales)+'</td><td class="r">'+money(s.amount)+'</td>'
-          +'<td>'+(s.reg?esc(s.reg.name)+' · '+esc(s.reg.role)+(s.reg.kin?'<div class="mut" style="font-size:10px">kin: '+esc(s.reg.kin)+' '+esc(s.reg.kinPhone)+'</div>':'')
+          +'<td>'+(s.reg?esc(s.reg.name)+' · '+esc(s.reg.role)+(s.reg.branch?' · '+esc(s.reg.branch):'')+(s.reg.kin?'<div class="mut" style="font-size:10px">kin: '+esc(s.reg.kin)+' '+esc(s.reg.kinPhone)+'</div>':'')
                        :'<span class="chip warn">not in register</span>')+'</td></tr>';
       }).join('')
       +((d.sellers||[]).length?'':'<tr><td colspan="4" class="mut">No sales report yet — upload one at /upload.</td></tr>')

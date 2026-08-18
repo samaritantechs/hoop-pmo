@@ -518,3 +518,30 @@ test('globalSearch finds a customer by any spelling of the number, plus office a
   assert.equal(s.stock.length, 1);
   assert.equal(s.stock[0].asOf, '2026-08-16');
 });
+
+test('lockedTrend counts one point per upload day, deduped, window-checked per day', async () => {
+  const today = todayKey();
+  const y = dayShift(today, -1), y2 = dayShift(today, -2);
+  const fresh = dayShift(today, -5);      // well inside the window on any of these days
+  const old = dayShift(today, -300);      // far outside it
+  const d = fakeDb({
+    watu_snapshots: [
+      // yesterday: two distinct locked-7 customers in window, one of them uploaded TWICE
+      { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: y },
+      { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: y },
+      { imei: 'B', locked7: true, disbursed_date: fresh, snapshot_date: y },
+      // and one locked 7+ but long past the window -- not Hoop's burden
+      { imei: 'C', locked7: true, disbursed_date: old, snapshot_date: y },
+      // two days ago: one
+      { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: y2 },
+    ],
+    settings: [],
+  });
+  const r = await _FNS.lockedTrend(d, ADMIN, { days: 7 });
+  assert.equal(r.points.length, 7, 'one point per day of the window, upload or not');
+  const py = r.points.find(p => p.date === y);
+  assert.equal(py.num, 2, 'the re-upload does not double the bar; the past-window row is out');
+  assert.equal(r.points.find(p => p.date === y2).num, 1);
+  const gap = r.points.find(p => p.date === dayShift(today, -6));
+  assert.equal(gap.num, null, 'a day with no upload is a GAP, never a zero');
+});

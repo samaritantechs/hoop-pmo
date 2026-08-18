@@ -113,6 +113,10 @@ function mintCode(existing) {
   throw new Error('Could not mint a unique team code.');
 }
 
+/* A dashboard is opened in bursts (everyone at 8am); the trend is the same answer for
+   all of them, so it is computed once every five minutes, not once per open. */
+const trendCache = new Map();
+
 const FNS = {
   async boot(db, user) {
     const [summary, teams] = await Promise.all([
@@ -130,6 +134,40 @@ const FNS = {
       summary,
       today: todayKey(),
     };
+  },
+
+  /** THE WEEK'S LOCKED 7+ TREND, for the dashboard graph: one point per upload day --
+      how many customers were locked a week or more AND still inside Hoop's window that
+      day. Deduped per (day, IMEI) so a same-day re-upload cannot double a bar; the
+      window rule is applied per day, not per today, so history stays honest.
+      Budget: ONE read, date-bounded at the database and narrowed to locked7 rows only,
+      three columns; cached 5 minutes because a dashboard is opened in bursts. */
+  async lockedTrend(db, user, args) {
+    const days = Math.max(2, Math.min(31, parseInt((args && args.days), 10) || 7));
+    const to = todayKey();
+    const from = dayShift(to, -(days - 1));
+    const ck = 'trend:' + from + ':' + to;
+    const hit = trendCache.get(ck);
+    if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
+    const rows = await fetchAll(() => scopeQ(user, db.from('watu_snapshots')
+      .select('imei, snapshot_date, disbursed_date')
+      .eq('locked7', true).gte('snapshot_date', from).lte('snapshot_date', to)));
+    const seen = new Map();
+    for (const r of rows) {
+      const d = String(r.snapshot_date).slice(0, 10);
+      const l = lifeDayOf(r.disbursed_date, d);
+      if (!(l != null && l <= WINDOW_DAYS)) continue;      // Hoop's burden that day only
+      if (!seen.has(d)) seen.set(d, new Set());
+      seen.get(d).add(String(r.imei));
+    }
+    const points = [];
+    for (let i = 0; i < days; i++) {
+      const d = dayShift(from, i);
+      points.push({ date: d, num: seen.has(d) ? seen.get(d).size : null });
+    }
+    const value = { ok: true, from, to, points };
+    trendCache.set(ck, { at: Date.now(), value });
+    return { ...value, cached: false };
   },
 
   async report(db, user, args) {
@@ -390,13 +428,21 @@ const FNS = {
     const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? a.to : today;
     const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? a.from : dayShift(today, -90);
     const [reg, sales, agents] = await Promise.all([
+      // BRANCH, not the deck's shop-derived team: "Kinondoni" is a company location, and
+      // the real branch rides the offline queue. Pre-migration databases fall back.
       fetchAll(() => scopeQ(user, db.from('watu_loans')
-        .select('imei, agent, agent_id, team, has_ever_paid, locked4, locked7, days_offline, disbursed_date'))),
+        .select('imei, agent, agent_id, team, branch, has_ever_paid, locked4, locked7, days_offline, disbursed_date')))
+        .catch(() => fetchAll(() => scopeQ(user, db.from('watu_loans')
+          .select('imei, agent, agent_id, team, has_ever_paid, locked4, locked7, days_offline, disbursed_date')))),
       fetchAll(() => db.from('hoop_sales')
         .select('commission_agent, commission_phone, sale_date, price')
         .gte('sale_date', from).lte('sale_date', to)),
       fetchAll(() => db.from('hoop_agents').select('phone, name, role, branch, kin_name, kin_phone')),
     ]);
+    // The agent's OWN location is what Sipho's register says (token-sorted match, so a
+    // name written in either order still finds them); their customers' branches are the
+    // fallback and the second line of the story.
+    const regByName = new Map(agents.filter(a => a.name).map(a => [nameKey(a.name), a]));
     const byAgent = new Map();
     for (const r of reg) {
       const key = String(r.agent_id || K(r.agent) || '?');
@@ -404,7 +450,7 @@ const FNS = {
       if (!g) { g = { agent: r.agent || '', agentId: r.agent_id || '', teams: new Set(),
         customers: 0, paid: 0, locked4: 0, locked7: 0, offSum: 0, offN: 0, over45: 0 }; byAgent.set(key, g); }
       g.customers++;
-      if (r.team) g.teams.add(r.team);
+      if (r.branch || r.team) g.teams.add(r.branch || r.team);
       if (r.has_ever_paid === true) g.paid++;
       if (r.locked4 === true) g.locked4++;
       if (r.locked7 === true) g.locked7++;
@@ -412,15 +458,21 @@ const FNS = {
       const l = lifeDayOf(r.disbursed_date, today);
       if (l != null && l > 45) g.over45++;
     }
-    const watuAgents = [...byAgent.values()].map(g => ({
-      agent: g.agent, agentId: g.agentId, teams: [...g.teams].sort(),
+    const watuAgents = [...byAgent.values()].map(g => {
+      const rg = regByName.get(nameKey(g.agent)) || null;
+      const areas = [...g.teams].sort();
+      return {
+      agent: g.agent, agentId: g.agentId, teams: areas,
+      // Their location: the register's branch first, else where their customers are.
+      branch: (rg && rg.branch) || areas[0] || '',
+      role: rg ? (rg.role || '') : '', phone: rg ? (rg.phone || '') : '',
       customers: g.customers,
       paidPct: g.customers ? g.paid / g.customers : null,
       locked4: g.locked4, locked7: g.locked7,
       locked7Pct: g.customers ? g.locked7 / g.customers : null,
       avgOff: g.offN ? Math.round(g.offSum / g.offN) : null,
       over45: g.over45,
-    })).sort((x, y) => (y.locked7Pct || 0) - (x.locked7Pct || 0) || y.customers - x.customers);
+    }; }).sort((x, y) => (y.locked7Pct || 0) - (x.locked7Pct || 0) || y.customers - x.customers);
     const bySeller = new Map();
     for (const s of sales) {
       const key = pnorm(s.commission_phone) || K(s.commission_agent) || '?';
@@ -455,10 +507,10 @@ const FNS = {
     let asOf = null;
     for (const r of all) if (r.as_of && (!asOf || String(r.as_of) > String(asOf))) asOf = String(r.as_of).slice(0, 10);
     const rows = all.filter(r => String(r.as_of).slice(0, 10) === asOf);
-    const regBy = new Map(agents.map(a => [K(a.name), a]));
+    const regBy = new Map(agents.filter(a => a.name).map(a => [nameKey(a.name), a]));
     const by = new Map();
     for (const r of rows) {
-      const k = K(r.agent) || '?';
+      const k = nameKey(r.agent) || '?';
       let g = by.get(k);
       if (!g) { g = { agent: r.agent || '—', pieces: 0, ageSum: 0, ageN: 0, maxAge: 0, items: {} }; by.set(k, g); }
       g.pieces++;
