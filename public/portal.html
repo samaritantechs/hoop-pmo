@@ -702,16 +702,18 @@ function drawCreditRecovery(){
             +'<div style="color:var(--soft);font-size:11px;padding-bottom:18px">—</div></div>'
             +'<div style="font-size:10px;color:var(--soft);text-align:center">&nbsp;</div></div>';
         }
-        wkA+=c.assigned; wkR+=c.recovered;
+        wkA+=c.assigned; if(!c.pending) wkR+=c.recovered;
         var hA=Math.max(3,Math.round(56*c.assigned/max));
-        var hR=Math.max(0,Math.round(56*c.recovered/max));
+        var hR=c.pending?0:Math.max(0,Math.round(56*c.recovered/max));
         return '<div style="text-align:center">'
           +'<div style="height:56px;display:flex;align-items:flex-end;justify-content:center">'
           +'<div style="position:relative;width:22px;height:'+hA+'px;background:var(--b100);border-radius:4px">'
-          +(c.recovered>0?'<div style="position:absolute;left:0;bottom:0;width:100%;height:'+hR+'px;background:var(--ok);border-radius:4px"></div>':'')
+          +(!c.pending&&c.recovered>0?'<div style="position:absolute;left:0;bottom:0;width:100%;height:'+hR+'px;background:var(--ok);border-radius:4px"></div>':'')
           +'</div></div>'
-          +'<div style="font-size:10px;color:var(--ink);text-align:center;font-weight:600;margin-top:2px">'
-          +money(c.recovered)+'/'+money(c.assigned)+'</div></div>';
+          +'<div style="font-size:10px;text-align:center;font-weight:600;margin-top:2px;color:'
+          +(c.pending?'var(--soft)':'var(--ink)')+'">'
+          +(c.pending?money(c.assigned)+' \u00B7 kesho':money(c.recovered)+'/'+money(c.assigned))
+          +'</div></div>';
       }).join('');
       return '<div style="display:grid;grid-template-columns:132px repeat(7,1fr);gap:4px;align-items:end;'
         +'padding:8px 6px;border:1px solid var(--line);border-top:0">'
@@ -915,9 +917,18 @@ function svgRecoveryBars(pts){
     }
     // The whole pool as a light bar, the recovered part filled over it.
     var yA=yOf(p.offJana), hA=Math.max(2,padT+innerH-yA);
-    var yR=yOf(p.reduced),  hR=Math.max(0,padT+innerH-yR);
-    bars+='<rect x="'+(cx-bw/2)+'" y="'+yA+'" width="'+bw+'" height="'+hA+'" rx="4" fill="var(--b100)"/>'
-      +(p.reduced>0?'<rect x="'+(cx-bw/2)+'" y="'+yR+'" width="'+bw+'" height="'+hR+'" rx="4" fill="var(--ok)"/>':'');
+    bars+='<rect x="'+(cx-bw/2)+'" y="'+yA+'" width="'+bw+'" height="'+hA+'" rx="4" fill="var(--b100)"/>';
+    if(p.pending){
+      /* The list was worked today; the answer arrives with TOMORROW's upload. Showing 0
+         recovered here would put a zero against people who have done the work and are
+         waiting on a file that does not exist yet. */
+      labels+='<text x="'+cx+'" y="'+(yA-5)+'" text-anchor="middle" font-size="11" font-weight="700" fill="var(--mut)">'
+        +money(p.offJana)+'</text>'
+        +'<text x="'+cx+'" y="'+(H-padB+31)+'" text-anchor="middle" font-size="9.5" fill="var(--soft)">kesho</text>';
+      return;
+    }
+    var yR=yOf(p.reduced), hR=Math.max(0,padT+innerH-yR);
+    bars+=(p.reduced>0?'<rect x="'+(cx-bw/2)+'" y="'+yR+'" width="'+bw+'" height="'+hR+'" rx="4" fill="var(--ok)"/>':'');
     labels+='<text x="'+cx+'" y="'+(yA-5)+'" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">'
       +money(p.reduced)+'/'+money(p.offJana)+'</text>'
       +'<text x="'+cx+'" y="'+(H-padB+31)+'" text-anchor="middle" font-size="9.5" fill="var(--soft)">'
@@ -983,7 +994,8 @@ function credDayOpen(date, dayShort){
       +'<div><b>'+esc(dayShort(date))+' · '+esc(date)+'</b>'
       +'<div class="mut" style="font-size:11px">OFF JANA '+money(c.offJana)+' · walipungua '+money(c.recovered)
       +(c.offJana?' ('+Math.round(100*c.recovered/c.offJana)+'%)':'')
-      +' · ikilinganishwa na upload ya '+esc(d.prev||'—')+'</div></div>'
+      +(d.pending?' \u00B7 matokeo yatakuja na upload ijayo'
+                 :' \u00B7 ikilinganishwa na upload ya '+esc(d.next||'\u2014'))+'</div></div>'
       +'<button class="btn sm" id="credDayClose">Funga</button></div>'
       +'<div style="overflow-x:auto;max-height:340px;overflow-y:auto"><table>'
       +'<thead><tr><th>Mteja</th><th>Branch</th><th>Credit</th>'
