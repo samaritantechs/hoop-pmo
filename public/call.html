@@ -78,6 +78,13 @@ header.top .who span{display:block;font-size:11px;color:var(--b300)}
   display:flex;align-items:center;justify-content:center}
 .bellBtn{position:relative;flex:0 0 auto;width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.1);
   border:0;color:#fff;font-size:15px;line-height:1;cursor:pointer}
+/* The deck-day chip: today reads calm, an older deck reads amber -- an officer must be able
+   to SEE they are on yesterday's list without opening anything. */
+.dayBtn{flex:0 0 auto;height:34px;padding:0 10px;border-radius:99px;background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.16);color:#fff;font-size:11.5px;font-weight:700;line-height:1;
+  cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
+.dayBtn.old{background:#FEF3C7;border-color:#FCD34D;color:#92400E}
+.dayBtn.spin{opacity:.55}
 /* The dot is the whole point: it has to be visible at arm's length, on a bright phone, outdoors. */
 .bellBtn .bdot{position:absolute;top:2px;right:2px;min-width:15px;height:15px;padding:0 3px;border-radius:999px;
   background:var(--bad);color:#fff;font-size:9.5px;font-weight:800;line-height:15px;text-align:center}
@@ -299,6 +306,10 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
       </span><img class="logo hide" id="appLogo" alt="Menu"></a>
       <div class="who"><b id="appName">&#x2014;</b><span id="appTeam">&#x2014;</span></div>
       <span class="pill" id="syncPill" title="Sync status &#x2014; gusa kusawazisha / tap to sync"><span class="dot"></span></span>
+      <!-- THE ANSWER TO "IS THIS TODAY'S LIST?" -- the deck's own date, on screen, always,
+           and tapping it forces a fresh pull. An officer who doubts their list had no way
+           to act on the doubt; now it is one tap, and the date says whether it worked. -->
+      <button type="button" class="dayBtn" id="deckBtn" title="Orodha ya tarehe gani &#x2014; gusa kusasisha / which day is this list &#x2014; tap to refresh">&#8635; <span id="deckDay">&mdash;</span></button>
       <!-- The bell. An officer had no way to learn that a complaint had been raised against a
            customer on their round, or that a colleague had left a note, except by being
            telephoned about it. Same updates the portal shows, scoped to this handset's teams. -->
@@ -615,6 +626,34 @@ function versionPing_(){
   srv('api_callSync', DEV, []).then(function(r){ if (r && r.ok) { summaryVersionCheck_(r.dataVersion); listVersionCheck_(r.dataVersion); } })
     .catch(function(){});
 }
+
+/* WHICH DAY AM I HOLDING? The deck's own date, in the header, on every screen. Amber the
+   moment it is not today -- because "the office uploaded and my phone did not" has to be
+   visible to the person holding the phone, not deduced from an empty tab. */
+function paintDeckDay_(){
+  var el = $('#deckDay'), btn = $('#deckBtn');
+  if (!el || !btn) return;
+  var a = S.asOf && S.asOf.today;
+  var d = a && a.date;
+  if (!d) { el.textContent = '—'; btn.classList.remove('old'); return; }
+  var t = isoToday(0);
+  el.textContent = (d === t) ? 'Leo' : d.slice(5);
+  btn.classList.toggle('old', d !== t);
+  btn.title = 'Orodha ya ' + d + (d === t ? ' (leo)' : ' — SI ya leo') + ' · gusa kusasisha / tap to refresh';
+}
+/** THE FORCED PULL. Ignores every cooldown and every version check: the officer asked.
+    One bounded read for the list plus the strip -- the cheapest possible answer to "am I
+    looking at today?", and the only thing they could not do before. */
+function forceRefresh_(){
+  var btn = $('#deckBtn');
+  if (btn) btn.classList.add('spin');
+  S.cacheAt = {};                      // nothing is trusted; the server decides
+  var src = LIST_SOURCE[S.view] || 'today';
+  fetchSource_(src, !(S.cache[src] && S.cache[src].length));
+  loadDaySummary(true);
+  doSync();
+  setTimeout(function(){ if (btn) btn.classList.remove('spin'); }, 1200);
+}
 function doSync(){
   if (!S.boot) return Promise.resolve({ ok:true, added:0 });
   var nb = nativeBridge();
@@ -646,7 +685,18 @@ function startSyncLoop(){
   S.syncTimer = setInterval(function(){ if (!document.hidden) doSync(); }, Math.max(60, S.syncEverySec||300) * 1000);
   if (!syncVisListenerAdded) {
     syncVisListenerAdded = true;
-    document.addEventListener('visibilitychange', function(){ if (!document.hidden && S.boot) doSync(); });
+    /* COMING BACK TO THE APP IS A REASON TO LOOK AGAIN. doSync only refetches when it
+       NOTICES a version change -- a phone that slept through the upload has nothing to
+       notice, which is exactly how a handset sat on yesterday's list. So a foreground
+       return also refetches the visible list once its own cooldown has elapsed: one
+       bounded read, only when the officer is actually looking. */
+    document.addEventListener('visibilitychange', function(){
+      if (document.hidden || !S.boot) return;
+      doSync();
+      if (!S.entered) return;
+      var src = LIST_SOURCE[S.view];
+      if (src && !sourceFresh_(src)) fetchSource_(src, false);
+    });
   }
   $('#syncPill').onclick = doSync;
 }
@@ -739,7 +789,12 @@ function wireBackgroundPrompt_(){
     own last fetch, whenever that was. Persisted to localStorage so reopening the app (even after
     fully closing it) can render instantly from the last sync -- no network wait, no blank screen
     -- rather than starting from zero every time the page loads. */
-var CACHE_COOLDOWN_MS = 60 * 60 * 1000;
+/* ONE HOUR WAS TOO LONG FOR A BOOK THAT CHANGES EVERY MORNING. A handset that slept
+   through the upload trusted its stored list for up to an hour -- "credit uploaded, the
+   handsets did not" -- because the only other trigger was NOTICING a version change,
+   which a sleeping phone cannot do. Five minutes: one bounded read, and the deck an
+   officer works is never more than five minutes behind the office. */
+var CACHE_COOLDOWN_MS = 5 * 60 * 1000;
 var CACHE_LS_KEY = 'hcListCache_v1';
 /* Who this handset belongs to, kept on the handset. Tapping a customer's number hands the
    phone to the dialler, and Android is free to throw this page away while the officer talks --
@@ -1076,6 +1131,8 @@ function enterApp(d){
   startSyncLoop();
   loadDaySummary(true);                                     // team % strip -- load once on entry
   $('#syncPill').onclick = function(){ doSync(); loadDaySummary(true); };   // manual sync refreshes the strip too
+  $('#deckBtn').onclick = forceRefresh_;                                    // "is this today's list?" -> one tap
+  paintDeckDay_();
   /* AND TAPPING THE FIGURES REFRESHES THEM. The one thing an officer can do when they doubt a
      number is ask for it again, and there was no way to. */
   $('#dayStrip').onclick = function(){
@@ -1516,6 +1573,7 @@ function fetchSource_(src, showSpinner){
     if (src === 'expdf') S.expdf = d.expdf || null;
     S.cacheAt[src] = Date.now();
     saveCacheToDevice_();
+    paintDeckDay_();
     if (S.q.trim()) { S.rows = globalSearchRows_(S.q); drawList(); return; }
     if (LIST_SOURCE[S.view] !== src) return;   // user moved to a tab backed by a different source while this was loading
     S.rows = filterForView_(S.cache[src], S.view);
