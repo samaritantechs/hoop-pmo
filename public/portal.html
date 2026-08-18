@@ -225,6 +225,12 @@ function paneLoading(m, title){
   if(!m) return;
   m.innerHTML='<div class="card">'+(title?'<h2>'+esc(title)+'</h2>':'')+'<div class="sk"></div></div>';
 }
+/** Is this the APK, rather than a browser? The bridge is injected by the Android wrapper
+    (the same object HOOP Calls reads its device id from), so its presence IS the proof --
+    a user agent string can be typed by anyone, an injected object cannot. */
+function fromApp_(){
+  return !!(window.HopeCalls && window.HopeCalls.getDeviceId);
+}
 function safeErr(e){
   var raw=String((e&&e.message)||e||'');
   var looksLikeData=raw.charAt(0)==='['||raw.charAt(0)==='{'||raw.length>300;
@@ -955,12 +961,40 @@ function svgRecoveryBars(pts){
    and the viewport shrinks in steps: a single measurement taken mid-animation is wrong by
    however much was still moving. */
 var KB_FOCUS=null;
+/* WHY MEASURING ALONE WAS NOT ENOUGH -- the difference between HOPE and here.
+
+   HOPE's comment box lives in a DRAWER: `.drawer-bg` is position:fixed;inset:0 with
+   align-items:flex-end, and `.drawer` inside it is max-height:90vh;overflow:auto. A fixed
+   element re-anchors to the visible area on its own when the keyboard opens, and the drawer
+   scrolls INTERNALLY, so there is always somewhere for the field to go.
+
+   HOOP's #custCard is an ordinary card in the page flow. window.scrollBy can only move it
+   while the DOCUMENT still has room to scroll -- and the card is usually the last thing on
+   the page, so there is nothing underneath it to scroll into. The page hit its own bottom
+   and stopped, which is exactly "doesnt rise enough": the scroll was correct and simply had
+   nowhere to go.
+
+   So make room first. While a field is focused, the page is given bottom padding the height
+   of the keyboard; now the scroll has somewhere to travel, and the measured amount lands the
+   box above the keys. The padding is removed the moment focus leaves, so nothing about the
+   ordinary page changes. */
+function kbHeight_(){
+  var vv=window.visualViewport;
+  if(!vv) return 0;
+  return Math.max(0, (window.innerHeight||0) - vv.height - (vv.offsetTop||0));
+}
+function kbRoom_(on){
+  var m=document.querySelector('main');
+  if(!m) return;
+  m.style.paddingBottom = on ? (kbHeight_()+120)+'px' : '';
+}
 function keepAboveKeyboard(el){
   if(!el||!el.getBoundingClientRect) return;
+  kbRoom_(true);                               // room to scroll into, before measuring
   var vv=window.visualViewport;
   var r=el.getBoundingClientRect();
   var visibleBottom=vv?(vv.offsetTop+vv.height):window.innerHeight;
-  var over=r.bottom+16-visibleBottom;        // +16 so it never sits flush on the keys
+  var over=r.bottom+16-visibleBottom;          // +16 so it never sits flush on the keys
   if(over>1){ try{ window.scrollBy({top:over,behavior:'smooth'}); }catch(err){ window.scrollBy(0,over); } }
 }
 document.addEventListener('focusin', function(e){
@@ -970,7 +1004,9 @@ document.addEventListener('focusin', function(e){
   KB_FOCUS=t;
   [120,300,520].forEach(function(ms){ setTimeout(function(){ if(KB_FOCUS===t) keepAboveKeyboard(t); },ms); });
 });
-document.addEventListener('focusout', function(e){ if(KB_FOCUS===e.target) KB_FOCUS=null; });
+document.addEventListener('focusout', function(e){
+  if(KB_FOCUS===e.target){ KB_FOCUS=null; setTimeout(function(){ if(!KB_FOCUS) kbRoom_(false); },80); }
+});
 if(window.visualViewport){
   window.visualViewport.addEventListener('resize', function(){ keepAboveKeyboard(KB_FOCUS); });
 }
@@ -1120,7 +1156,20 @@ function openCust(c){
   var box=$('#custDetail'); if(!box||!c) return;
   CUST.sel=c;
   var d=CUST.data||{};
-  var canW=!BOOT.readOnly;
+  /* THE FOLLOW-UP IS WRITTEN FROM THE PHONE, OR NOT AT ALL.
+       "Allow commenting only by phone ... if we allow commenting in computers for hoop, the
+        hoop guys are lazy so we should detect visit type to be from app to allow commenting
+        if its not just dont show the writing space without giving reason"
+
+     A comment typed at a desk says nothing about whether anybody went and called the
+     customer; one typed in the app was typed by somebody holding the phone that made the
+     call. So the writing space is drawn only when the Android bridge is actually present --
+     the object the APK injects, which a desktop browser cannot have.
+
+     SILENTLY, as asked: no banner, no "you cannot do this here". The history still reads
+     everywhere; only the box to write in is absent. A reason on screen is an invitation to
+     argue with it. */
+  var canW=!BOOT.readOnly && fromApp_();
   var h=telHref(c.phone);
   var fus=d.fuStatuses||[];
   box.innerHTML=
