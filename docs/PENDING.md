@@ -15,7 +15,7 @@ daily deck file still has no guarantor columns, so followup_status / watu_snapsh
 untouched — header-presence rule); the offline-queue upload kind at /upload (merge, never
 lose); the guarantor beside the agent on the phone card with tap-to-call, on the Wateja
 tab and the register search. The sheet's Last Action comments were imported ONCE into
-followup_comments (owner: commenting lives in HOOP Calls now — never pull them again).
+followup_comments (owner: commenting lives in HOOPLOAN Calls now — never pull them again).
 
 ## 2. Payment reference = the CUSTOMER'S PHONE NUMBER
 

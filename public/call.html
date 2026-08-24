@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<title>HOOP Calls</title>
+<title>HOOPLOAN Calls</title>
 <style>
 :root{
   --b950:#081C4A; --b900:#0B2A6B; --b800:#10357F; --b700:#1D4ED8; --b600:#2563EB;
@@ -250,7 +250,7 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
 <body>
 
 <div id="scrBoot" class="center">
-  <div class="brand" id="bootBrand">HOOP Calls</div>
+  <div class="brand" id="bootBrand">HOOPLOAN Calls</div>
   <div class="sk" id="bootSpin"></div>
   <!-- Shown only if the server does not answer. Without it the officer has a blue screen, no
        message, and nothing to press -- so they restart the app over and over instead. -->
@@ -266,7 +266,7 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
     <span class="reg-logo mark" id="regMark">
       <svg viewBox="0 0 64 64" aria-hidden="true"><text x="32" y="33" text-anchor="middle" font-size="21" font-weight="800" letter-spacing="-1.4" fill="#2E2B7A">HOOP</text><path d="M18 38 A 14 14 0 0 0 46 38" fill="none" stroke="#35A8E1" stroke-width="5" stroke-linecap="round"/></svg>
     </span><img class="reg-logo hide" id="regLogo" alt="">
-    <div class="reg-title" id="regTitle">Karibu HOOP Calls</div>
+    <div class="reg-title" id="regTitle">Karibu HOOPLOAN Calls</div>
     <div class="reg-sub">Jaza jina lako na timu ili uanze kupokea orodha za simu. / Enter your name and team to start receiving your call lists.</div>
     <div id="regErr"></div>
     <div class="fld">
@@ -367,7 +367,7 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
   <div class="sheet-card" style="max-width:330px;margin:0 24px;padding:22px;border-radius:16px">
     <div style="font-size:17px;font-weight:800;line-height:1.35;margin-bottom:8px">🔋 Ruhusu comment kusave automatic</div>
     <div style="font-size:13.5px;color:var(--mut);line-height:1.5;margin-bottom:18px">
-      Simu yako inazima HOOP Calls ikiwa nyuma. Ukiruhusu, maoni na simu zako zinahifadhika zenyewe
+      Simu yako inazima HOOPLOAN Calls ikiwa nyuma. Ukiruhusu, maoni na simu zako zinahifadhika zenyewe
       bila kusubiri. Bonyeza <b>Ruhusu</b>, kisha kwenye dirisha la simu chagua <b>Allow</b>.
     </div>
     <div style="display:flex;gap:10px">
@@ -715,15 +715,15 @@ function batteryGuidanceHtml_(){
   try { ignoring = !nb.isIgnoringBatteryOptimizations || nb.isIgnoringBatteryOptimizations() === '1'; } catch(e){}
   var extra = '';
   if (mfr.indexOf('xiaomi') >= 0 || mfr.indexOf('redmi') >= 0 || mfr.indexOf('poco') >= 0)
-    extra = ' Kwenye Xiaomi/Redmi/POCO: fungua Settings \u2192 Apps \u2192 HOOP Calls, ruhusu Autostart, na weka Battery saver kuwa "No restrictions".';
+    extra = ' Kwenye Xiaomi/Redmi/POCO: fungua Settings \u2192 Apps \u2192 HOOPLOAN Calls, ruhusu Autostart, na weka Battery saver kuwa "No restrictions".';
   else if (mfr.indexOf('oppo') >= 0 || mfr.indexOf('realme') >= 0)
-    extra = ' Kwenye Oppo/Realme: Settings \u2192 Battery \u2192 HOOP Calls \u2192 ruhusu "Allow background activity".';
+    extra = ' Kwenye Oppo/Realme: Settings \u2192 Battery \u2192 HOOPLOAN Calls \u2192 ruhusu "Allow background activity".';
   else if (mfr.indexOf('vivo') >= 0)
-    extra = ' Kwenye Vivo: Settings \u2192 Battery \u2192 Background power consumption \u2192 ruhusu HOOP Calls.';
+    extra = ' Kwenye Vivo: Settings \u2192 Battery \u2192 Background power consumption \u2192 ruhusu HOOPLOAN Calls.';
   else if (mfr.indexOf('huawei') >= 0 || mfr.indexOf('honor') >= 0)
-    extra = ' Kwenye Huawei/Honor: Settings \u2192 Battery \u2192 App launch \u2192 HOOP Calls \u2192 chagua "Manage manually" na washa vyote.';
+    extra = ' Kwenye Huawei/Honor: Settings \u2192 Battery \u2192 App launch \u2192 HOOPLOAN Calls \u2192 chagua "Manage manually" na washa vyote.';
   else if (mfr.indexOf('samsung') >= 0)
-    extra = ' Kwenye Samsung: Settings \u2192 Battery \u2192 Background usage limits \u2192 toa HOOP Calls kwenye orodha ya "Put unused apps to sleep".';
+    extra = ' Kwenye Samsung: Settings \u2192 Battery \u2192 Background usage limits \u2192 toa HOOPLOAN Calls kwenye orodha ya "Put unused apps to sleep".';
   /* THE BUTTON IS GONE FROM HERE ON PURPOSE. Asking is now something the app DOES when it
      opens (see askBackground_) rather than something an officer has to notice on a list and
      decide to press -- the same way the call-log permission and the update check have always
@@ -736,7 +736,7 @@ function batteryGuidanceHtml_(){
 /* ---------------------------------------------------------------- RUHUSU KUFANYA KAZI CHINI CHINI
  *
  * Android stops an app that is not on screen, and on most of the handsets in the field it does
- * so aggressively. For HOOP Calls that means a comment typed at a customer's door, and the call
+ * so aggressively. For HOOPLOAN Calls that means a comment typed at a customer's door, and the call
  * that goes with it, may never reach the server -- the officer did their work and the system
  * does not know it.
  *
@@ -1718,8 +1718,8 @@ function drawList(){
   var nb = nativeBridge();
   var banner = !nb ? (isIOS_()
       ? '<div class="banner">\uD83D\uDCF1 iPhone haiwezi kusoma kumbukumbu za simu moja kwa moja (kizuizi cha Apple, si tatizo la programu hii). Bofya "Piga" hapa chini kupiga \u2014 orodha na maoni yanafanya kazi kama kawaida, lakini muda wa simu hautarekodiwa kiotomatiki.</div>'
-      : '<div class="banner">\uD83D\uDCF1 Sakinisha programu ya HOOP Calls (APK) ili simu zako zirekodiwe kiotomatiki. Bofya "Piga" hapa chini bado kinafanya kazi.</div>')
-    : (S.permOk === false ? '<div class="banner" style="background:var(--badbg);border-color:var(--badline);color:var(--bad)">\u26A0 Taarifa zinachelewa kuupdate. Nenda Settings \u2192 Apps \u2192 HOOP Calls \u2192 Permissions kuwasha ruhusa ili ziupdate zenyewe.</div>'
+      : '<div class="banner">\uD83D\uDCF1 Sakinisha programu ya HOOPLOAN Calls (APK) ili simu zako zirekodiwe kiotomatiki. Bofya "Piga" hapa chini bado kinafanya kazi.</div>')
+    : (S.permOk === false ? '<div class="banner" style="background:var(--badbg);border-color:var(--badline);color:var(--bad)">\u26A0 Taarifa zinachelewa kuupdate. Nenda Settings \u2192 Apps \u2192 HOOPLOAN Calls \u2192 Permissions kuwasha ruhusa ili ziupdate zenyewe.</div>'
        : batteryGuidanceHtml_());
   var searching = !!S.q.trim();
   body.innerHTML = banner

@@ -359,6 +359,81 @@ test('salesAudit judges every sale: OK, DRIFT, PENDING, BULK, HAKUNA_WATU', asyn
     /no access to the fraud pane/, 'a blank non-viewer is refused; the AUDITOR itself sees every pane');
 });
 
+test('stockAccount judges every departure three ways and names the last holder of the unaccounted', async () => {
+  const today = todayKey();
+  const prev = dayShift(today, -1);
+  const st = (serial, agent, as_of, age) => ({ serial, agent, item: 'A07', age_days: age, as_of,
+    received: dayShift(as_of, -(age || 0)) });
+  const d = fakeDb({
+    hoop_aged_stock: [
+      // Yesterday's report: Sipho held 3, RSM ONE held 2, AGENT X held 2.
+      st('S1', 'SIPHO STORE', prev, 3), st('S2', 'SIPHO STORE', prev, 60), st('S3', 'SIPHO STORE', prev, 5),
+      st('R1', 'RSM ONE', prev, 10), st('R2', 'RSM ONE', prev, 12),
+      st('A1', 'AGENT X', prev, 8), st('A2', 'AGENT X', prev, 9),
+      // Today's report: S1 stayed (and aged), R1 stayed. S2, S3, R2, A1, A2 all LEFT.
+      st('S1', 'SIPHO STORE', today, 4), st('S2', 'SIPHO STORE', today, 61),
+      st('R1', 'RSM ONE', today, 11),
+    ],
+    // S3 was sold. R2 is in Watu but never booked as a sale. A1 and A2 are in NEITHER.
+    hoop_sales: [{ sale_key: 'K1', imei: 'S3', sale_date: today, commission_agent: 'AGENT X' }],
+    watu_loans: [{ imei: 'R2', agent: 'RSM ONE' }],
+    hoop_agents: [
+      { name: 'SIPHO STORE', role: 'STORE', branch: 'Dar' },
+      { name: 'RSM ONE', role: 'RSM', branch: 'Dar' },
+      { name: 'AGENT X', role: 'Field_Officer', branch: 'Dar' },
+    ],
+  });
+  const r = await _FNS.stockAccount(d, ADMIN, {});
+  assert.equal(r.asOf, today);
+  assert.equal(r.prevAsOf, prev);
+
+  // COMPANY: 3 held today; 4 departed (S3, R2, A1, A2); 1 sold, 1 kwa Watu, 2 unaccounted.
+  assert.equal(r.company.totals.held, 3);
+  assert.equal(r.company.totals.gone, 4, 'S3, R2, A1 and A2 all left between the two reports');
+  assert.equal(r.company.totals.sold, 1, 'S3 is in the sales book');
+  assert.equal(r.company.totals.watu, 1, 'R2 is financed but never booked -- paperwork, not theft');
+  assert.equal(r.company.totals.unaccounted, 2, 'A1 and A2 are in neither -- the shrinkage line');
+
+  // PIVOTS classify from hoop_agents.role, so each altitude sees only its own kind.
+  assert.deepEqual(r.store.rows.map(x => x.holder), ['SIPHO STORE']);
+  assert.deepEqual(r.rsm.rows.map(x => x.holder), ['RSM ONE']);
+  assert.deepEqual(r.agent.rows.map(x => x.holder), ['AGENT X']);
+  assert.equal(r.store.totals.unaccounted, 0, 'the store lost nothing it cannot explain');
+  assert.equal(r.rsm.totals.unaccounted, 0, 'R2 is with Watu, so the RSM is not accused of it');
+  assert.equal(r.agent.totals.unaccounted, 2, 'both unexplained phones sit with the agent who last held them');
+
+  // The named IMEIs ride along so a human can go and ask about a specific phone.
+  const ax = r.agent.rows[0];
+  assert.deepEqual(ax.unaccountedList.map(x => x.serial).sort(), ['A1', 'A2']);
+
+  // STALE: held now and past the age limit. S2 at 61 days is the only one over 45.
+  assert.equal(r.company.totals.stale, 1);
+  assert.equal(r.store.rows[0].stale, 1, 'and it is the store sitting on it');
+
+  // Worst first -- the row a manager must look at is the top one.
+  assert.equal(r.company.rows[0].holder, 'AGENT X');
+});
+
+test('stockAccount reports departures it could not judge rather than under-counting a theft', async () => {
+  const today = todayKey();
+  const prev = dayShift(today, -1);
+  // 500 phones leave at once -- past the 400 keyed-lookup cap.
+  const rows = [];
+  for (let i = 0; i < 500; i++) {
+    rows.push({ serial: 'X' + i, agent: 'AGENT X', item: 'A07', age_days: 5, as_of: prev });
+  }
+  rows.push({ serial: 'KEEP', agent: 'AGENT X', item: 'A07', age_days: 5, as_of: prev });
+  rows.push({ serial: 'KEEP', agent: 'AGENT X', item: 'A07', age_days: 6, as_of: today });
+  const d = fakeDb({ hoop_aged_stock: rows, hoop_sales: [], watu_loans: [],
+    hoop_agents: [{ name: 'AGENT X', role: 'Field_Officer' }] });
+  /* A DISTINCT SCOPE ON PURPOSE -- stockAccount memoises per report-pair AND per team
+     scope, and this test uses the same two dates as the one above, so an identical scope
+     would be answered by that test's cached value instead of this database. */
+  const r = await _FNS.stockAccount(d, { ...ADMIN, teams: ['CAPTEST'] }, {});
+  assert.equal(r.notChecked, 100, 'the 100 beyond the cap are NAMED as unjudged');
+  assert.equal(r.company.totals.unaccounted, 400, 'and the 400 it did judge are all counted');
+});
+
 test('salesWeek pivots one week four ways and measures each against the daily target', async () => {
   const { todayKey } = await import('../api/_lib/time.js');
   const t = todayKey();

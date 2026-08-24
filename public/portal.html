@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<title>HOOP PMO — Portal</title>
+<title>HOOPLOAN — Portal</title>
 <style>
 :root{ --b950:#081C4A; --b900:#0B2A6B; --b800:#10357F; --b700:#1D4ED8; --b600:#2563EB; --b300:#93C5FD; --b100:#DBEAFE; --b50:#EFF6FF;
   --bg:#F6F8FC; --card:#fff; --ink:#0F172A; --mut:#64748B; --soft:#94A3B8; --line:#E2E8F0;
@@ -153,7 +153,7 @@ tbody tr:hover{background:var(--b50)}
 <div id="scrIn">
   <div class="incard">
     <svg class="mark" viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#EFF6FF"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
-    <h1>HOOP PMO</h1>
+    <h1>HOOPLOAN</h1>
     <p>Mfumo wa ufuatiliaji — watu simu. Ingia na msimbo wako. / Sign in with your access code.</p>
     <input class="inp" type="password" id="inCode" placeholder="Access code" autocomplete="off">
     <div class="err" id="inErr"></div>
@@ -187,13 +187,14 @@ tbody tr:hover{background:var(--b50)}
       <button data-t="fraud">Fraud audit</button>
       <button data-t="score">Agent scorecards</button>
       <button data-t="stock">Stock</button>
+      <button data-t="acct">Stock accountability</button>
       <button data-t="move">Stock movement</button>
       <button data-t="staff">Staff</button>
       <button data-t="codes" id="tabCodes">Access codes</button>
       <button data-t="settings" id="tabSettings">Settings</button>
       <div class="sep"></div>
       <a class="lnk" href="/upload">Upload &nearr;</a>
-      <a class="lnk" href="/call">HOOP Calls &nearr;</a>
+      <a class="lnk" href="/call">HOOPLOAN Calls &nearr;</a>
     </div>
       </aside>
     <main id="main"></main>
@@ -227,7 +228,7 @@ function paneLoading(m, title){
   m.innerHTML='<div class="card">'+(title?'<h2>'+esc(title)+'</h2>':'')+'<div class="sk"></div></div>';
 }
 /** Is this the APK, rather than a browser? The bridge is injected by the Android wrapper
-    (the same object HOOP Calls reads its device id from), so its presence IS the proof --
+    (the same object HOOPLOAN Calls reads its device id from), so its presence IS the proof --
     a user agent string can be typed by anyone, an injected object cannot. */
 function fromApp_(){
   return !!(window.HopeCalls && window.HopeCalls.getDeviceId);
@@ -559,7 +560,7 @@ function enter(){
      every button -- the same rule the endpoints enforce. A pane added later shows up
      here the moment the server lists it. */
   var NAVKEY={dash:'dashboard',cust:'customers',ripoti:'reports',recovery:'recovery',
-    sales:'scorecards',fraud:'fraud',score:'scorecards',stock:'stock',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
+    sales:'scorecards',fraud:'fraud',score:'scorecards',stock:'stock',acct:'stock',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
   var NAVS=BOOT.navs||[];
   $all('#tabs button').forEach(function(b){
     var k=NAVKEY[b.getAttribute('data-t')];
@@ -598,6 +599,7 @@ function draw(){
   if(TAB==='score') return drawAgents(m);
   if(TAB==='stock') return drawStock(m);
   if(TAB==='move') return drawMove(m);
+  if(TAB==='acct') return drawStockAccount(m);
   if(TAB==='sales') return drawSalesPerf(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
@@ -628,7 +630,7 @@ function drawDash(m){
     +'<div class="card"><h2>Leo unafanyaje / Today’s path</h2>'
     +'<ol class="road" style="margin:0;padding-left:20px">'
     +'<li><a href="/upload">Pakia orodha ya Watu ya leo</a> — Excel kutoka Watu, kama ilivyo.</li>'
-    +'<li>Credit team wanafungua <a href="/call">HOOP Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
+    +'<li>Credit team wanafungua <a href="/call">HOOPLOAN Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
     +'<li>Kesho asubuhi: pakia ya kesho, kisha angalia <b>Recovery</b> — nani amelipa baada ya simu zetu.</li>'
     +'</ol></div>';
   drawTrend();
@@ -684,9 +686,16 @@ function drawCreditRecovery(){
       return Object.keys(p.days||{}).some(function(k){ return p.days[k].assigned>0; });
     });
     if(!pts.length||!live.length){
-      // The bar stays even on an empty week -- it is the way back OUT of one.
+      /* The bar stays even on an empty week -- it is the way back OUT of one, and this is
+         the message the owner actually meets on a MONDAY: a fresh Mon-Sun week holds one
+         upload at most, and recovery needs the NEXT upload before it can show anything.
+         So the empty state names the reason and points at the button rather than reading
+         as "the chart is broken". */
       b.innerHTML=recWeekBar(d)
-        +'<div class="mut">Hakuna mgao wa 7+ wiki hii — chati hujaa pale upload za wiki husika zilipo.</div>';
+        +'<div class="mut">Hakuna mgao wa 7+ kwa wiki hii bado'
+        +(d.thisWeek?' — wiki huanza Jumatatu, na recovery huonekana baada ya upload ya siku inayofuata. Bonyeza ◀ kuona wiki iliyopita.':' — hakuna upload wa wiki hiyo.')
+        +' / No 7+ pool for this week yet'+(d.thisWeek?' — a week starts Monday and recovery only shows after the NEXT day\'s upload. Press ◀ for last week.':'.')
+        +'</div>';
       wireRecWeekBar(d);
       return;
     }
@@ -1102,6 +1111,83 @@ function drawRecoveryTrend(){
   }).catch(function(e){
     var b=$('#recTrendBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';
   });
+}
+
+/* ---------- stock accountability ----------
+   "the stock is too large and hoop agents are stealing stock"
+
+   Four pivots over the same answer -- company, the store (Sipho), RSMs, agents -- because
+   the same question is asked at four different altitudes. Every row is one holder and what
+   they are answerable for: held now, held too long, and what LEFT their hands. A departure
+   is judged three ways -- sold (in our sales book), kwa Watu (financed but no sale record),
+   or UNACCOUNTED, which is the line that matters and is deliberately not called theft. */
+var STOCKACCT={pivot:'company',open:null};
+function drawStockAccount(m){
+  m.innerHTML='<div class="card"><h2>Stock accountability</h2><div class="sk"></div></div>';
+  srv('stockAccount',{}).then(function(d){
+    var pivots=[['company','Company'],['store','Store (Sipho)'],['rsm','RSMs'],['agent','Agents']];
+    var sec=d[STOCKACCT.pivot]||{rows:[],totals:{}};
+    var t=sec.totals||{};
+    if(!d.asOf){
+      m.innerHTML='<div class="card"><h2>Stock accountability</h2>'
+        +'<div class="mut">Hakuna ripoti ya stock bado — pakia ripoti ya SyscoPos ya Sipho kwenye /upload. '
+        +'/ No stock report uploaded yet.</div></div>';
+      return;
+    }
+    var tabs='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+      +pivots.map(function(p){
+        return '<button class="btn sm'+(STOCKACCT.pivot===p[0]?'':' ghost')+'" data-sa="'+p[0]+'">'+p[1]+'</button>';
+      }).join('')+'</div>';
+    var head='<div class="tiles">'
+      +'<div class="tile"><div class="l">Zilizopo / held now</div><div class="v">'+money(t.held||0)+'</div>'
+        +'<div class="s">'+money(t.holders||0)+' holders · ripoti '+esc(d.asOf)+'</div></div>'
+      +'<div class="tile"><div class="l">Zimekaa sana / stale</div><div class="v"'+((t.stale||0)?' style="color:var(--bad)"':'')+'>'+money(t.stale||0)+'</div>'
+        +'<div class="s">'+money(d.staleDays)+'+ siku mkononi</div></div>'
+      +'<div class="tile"><div class="l">Zilizotoka / left stock</div><div class="v">'+money(t.gone||0)+'</div>'
+        +'<div class="s">tangu ripoti ya '+esc(d.prevAsOf||'—')+'</div></div>'
+      +'<div class="tile"><div class="l">Zimeuzwa / sold</div><div class="v" style="color:var(--ok)">'+money(t.sold||0)+'</div>'
+        +'<div class="s">zipo kwenye kitabu cha mauzo</div></div>'
+      +'<div class="tile"><div class="l">HAZIJULIKANI / unaccounted</div><div class="v"'+((t.unaccounted||0)?' style="color:var(--bad)"':'')+'>'+money(t.unaccounted||0)+'</div>'
+        +'<div class="s">hazipo mauzoni wala Watu</div></div>'
+      +'</div>';
+    var note='<div class="mut" style="margin:8px 0">Simu iliyotoka kwenye stock ina njia tatu za kweli: '
+      +'<b>imeuzwa</b> (ipo kwenye kitabu cha mauzo), <b>kwa Watu</b> (imefadhiliwa lakini haipo mauzoni — hilo ni kosa la karatasi, si wizi), '
+      +'au <b>haijulikani</b> — haipo popote. Safu ya mwisho ndiyo ya kuulizia, na inaonyesha aliyekuwa nayo mwisho. '
+      +'/ Unaccounted = left stock and appears in neither the sales book nor the Watu register.'
+      +(d.notChecked?' <b style="color:var(--bad)">'+money(d.notChecked)+' departures were not judged this run (cap reached) — they are NOT counted above.</b>':'')
+      +'</div>';
+    var rows=sec.rows||[];
+    var table=rows.length
+      ? '<div class="scroll"><table><thead><tr><th>Holder</th><th>Role</th><th class="r">Held</th><th class="r">Stale</th>'
+        +'<th class="r">Left</th><th class="r">Sold</th><th class="r">Kwa Watu</th><th class="r">Unaccounted</th><th></th></tr></thead><tbody>'
+        +rows.map(function(r,i){
+          return '<tr><td><b>'+esc(r.holder)+'</b>'+(r.branch?'<div class="mut" style="font-size:10px">'+esc(r.branch)+'</div>':'')+'</td>'
+            +'<td>'+esc(r.role||'—')+'</td>'
+            +'<td class="r">'+money(r.held)+'</td>'
+            +'<td class="r"'+(r.stale?' style="color:var(--bad)"':'')+'>'+money(r.stale)+'</td>'
+            +'<td class="r">'+money(r.gone)+'</td>'
+            +'<td class="r" style="color:var(--ok)">'+money(r.sold)+'</td>'
+            +'<td class="r">'+money(r.watu)+'</td>'
+            +'<td class="r"'+(r.unaccounted?' style="color:var(--bad);font-weight:700"':'')+'>'+money(r.unaccounted)+'</td>'
+            +'<td class="r">'+(r.unaccounted?'<button class="btn sm ghost" data-sax="'+i+'">IMEI</button>':'')+'</td></tr>'
+            +(STOCKACCT.open===i&&r.unaccountedList.length
+              ? '<tr><td colspan="9" style="background:var(--b50)"><b style="font-size:12px">Hazijulikani — '+esc(r.holder)+'</b>'
+                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th class="r">Age</th></tr></thead><tbody>'
+                +r.unaccountedList.map(function(s){
+                  return '<tr><td style="font-size:11px">'+esc(s.serial)+'</td><td>'+esc(s.item||'—')+'</td>'
+                    +'<td class="r">'+(s.age!=null?money(s.age):'—')+'</td></tr>';
+                }).join('')+'</tbody></table></div></td></tr>'
+              : '');
+        }).join('')+'</tbody></table></div>'
+      : '<div class="mut">Hakuna mwenye stock kwenye kundi hili. / Nobody in this pivot holds stock.</div>';
+    m.innerHTML='<div class="card"><h2>Stock accountability</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Ripoti ya '+esc(d.asOf)+' ikilinganishwa na ya '+esc(d.prevAsOf||'—')
+      +'. / Newest stock report against the one before it.</div>'
+      +tabs+head+note+table+'</div>';
+    $all('[data-sa]').forEach(function(b){ b.onclick=function(){ STOCKACCT.pivot=b.getAttribute('data-sa'); STOCKACCT.open=null; drawStockAccount(m); }; });
+    $all('[data-sax]').forEach(function(b){ b.onclick=function(){
+      var i=Number(b.getAttribute('data-sax')); STOCKACCT.open=(STOCKACCT.open===i?null:i); drawStockAccount(m); }; });
+  }).catch(function(e){ paneFailed(m,e); });
 }
 
 /* ---------- daily sales performance ----------
@@ -1654,7 +1740,7 @@ function drawCodes(m){
       +'"Upload (action)" is permission to send files at /upload. ADMIN always holds everything; AUDITOR sees all, changes nothing. '
       +'A role nobody holds carries <b>×</b> to delete it.</div>'
       +'</div>'
-      +'<div class="card"><h2>App users — HOOP Calls logins</h2>'
+      +'<div class="card"><h2>App users — HOOPLOAN Calls logins</h2>'
       +'<div class="mut" style="margin-bottom:10px">Who is signed in on the phones. Switching one person off does not touch the team code — only their account.</div>'
       +'<div class="scroll"><table><thead><tr><th>Name</th><th>Branch</th><th>Phone</th><th>Last sync</th><th>Status</th><th></th></tr></thead><tbody>'
       +((off.officers||[]).length?(off.officers||[]).map(function(o){
@@ -1685,7 +1771,7 @@ function drawCodes(m){
             +'</div>';
         };
         return card('HOOP','App sign-in code — staff',
-            'ONE code for the whole company — every credit user registers on HOOP Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.',
+            'ONE code for the whole company — every credit user registers on HOOPLOAN Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.',
             'Create the company code')
           +card('AGENT','App sign-in code — agents',
             'ONE shared code for ALL sales agents — share it in the WhatsApp group and rotate it here when somebody leaves. An agent signs in with just their registered phone number and this code; their name and branch are read from the agents register, and the app shows them ONLY the customers they sold. A number that is not on the register cannot sign in at all.',

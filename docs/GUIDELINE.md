@@ -1,4 +1,4 @@
-# Mwongozo wa HOOP PMO — the staff briefing
+# Mwongozo wa HOOPLOAN — the staff briefing
 
 Shareable page: the owner holds the artifact link; this file is the same content, kept
 with the code so it evolves with the system.
@@ -7,11 +7,11 @@ with the code so it evolves with the system.
 
 | Door | Nani / kwa nini | URL |
 |---|---|---|
-| **HOOP Calls** | Credit team — orodha ya kupiga | hoop-pmo.vercel.app/call |
+| **HOOPLOAN Calls** | Credit team — orodha ya kupiga | hoop-pmo.vercel.app/call |
 | **Upload** | Faili zote: Watu daily, sales, kurasa za Sipho | hoop-pmo.vercel.app/upload |
 | **Portal** | Uongozi: dashboard, wateja, mauzo, ripoti | hoop-pmo.vercel.app/portal |
 
-**APK:** sakinisha mara moja kutoka `hoop-pmo.vercel.app/HOOP-Calls.apk` — inajisasisha
+**APK:** sakinisha mara moja kutoka `hoop-pmo.vercel.app/HOOPLOAN-Calls.apk` — inajisasisha
 yenyewe; simu zinarekodiwa kiotomatiki (Android).
 
 ## Mzunguko wa siku / The daily rhythm

@@ -97,6 +97,18 @@ function requireNav(user, k) {
     e.status = 403; throw e;
   }
 }
+/* Same rule, any ONE of several panes -- for an answer that legitimately appears on more
+   than one screen. recoveryWeek is the first: it draws the Recovery pane's own trend AND
+   the credit chart that sits on the DASHBOARD, so gating it on 'recovery' alone put an
+   error string on the dashboard of anyone who holds dashboard without recovery. The data
+   is the same team-scoped data either way; what differs is only which screen asked. */
+function requireAnyNav(user, keys) {
+  const have = navsFor(user);
+  if (!keys.some(k => have.includes(k))) {
+    const e = new Error('Your role has no access to the ' + keys[0] + ' pane.');
+    e.status = 403; throw e;
+  }
+}
 
 
 const dayShift = (key, days) =>
@@ -199,7 +211,8 @@ const FNS = {
      out that morning. So the assignment shown here is the assignment the officer actually
      had, not a fresh guess made at report time. */
   async recoveryWeek(db, user, args) {
-    requireNav(user, 'recovery');
+    // Drawn on the Recovery pane AND on the dashboard -- see requireAnyNav.
+    requireAnyNav(user, ['recovery', 'dashboard']);
     const t = todayKey();
     const mondayOf = d => dayShift(d, -((new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay() + 6) % 7));
     const thisMon = mondayOf(t);
@@ -876,6 +889,141 @@ const FNS = {
       Watu's book. Defaults are the newest two dates of each source.
       Budget: 2 tiny ordered date lookups per source + 4 date-keyed bounded reads;
       the aged table's own dates come from the read it already makes. */
+  /* =====================================================================================
+     STOCK ACCOUNTABILITY -- what each holder is answerable for, and what cannot be
+     accounted for at all.
+     =====================================================================================
+       "the stock is too large and hoop agents are stealing stock"
+
+     A phone that leaves Sipho's stock report has exactly three honest destinations:
+
+       SOLD        its IMEI turns up in hoop_sales -- the shop booked it
+       KWA WATU    its IMEI turns up in the Watu register but NOT in our sales book --
+                   financed without a sale record (salesAudit's own WATU-ONLY case; named
+                   here as a separate column rather than folded into theft, because it is
+                   a paperwork failure, not a missing phone)
+       HAIJULIKANI it is in neither. The phone left the building and nothing anywhere says
+                   where it went. THIS is the shrinkage line, and it is attributed to the
+                   LAST HOLDER the stock report showed it with.
+
+     Deliberately NOT called theft in the UI. A serial can leave a report for dull reasons
+     (a swap, a warranty return, a mis-keyed serial), and a report that accuses people by
+     name had better be one the numbers can carry. It says "unaccounted", names the holder,
+     and lets a human ask -- which is what actually recovers a phone.
+
+     PIVOTED FOUR WAYS, per the owner: company grand total, the STORE (Sipho), the RSMs,
+     and the agents -- classified from hoop_agents.role, so a person who changes role
+     changes pivot on their next report with nothing to rewire here.
+
+     BOUNDED ON PURPOSE. Only the newest stock report and the one before it are read whole
+     (stock-sized, not history-sized); the departures between them are then looked up by
+     IMEI in sales and in the register with an `in` filter, so those two reads carry the
+     handful that actually left rather than the whole book. If a single day's departures
+     ever exceed the cap the answer SAYS so rather than quietly under-reporting a theft.
+
+     Budget: 2 stock reads (newest + previous report), 2 keyed `in` reads bounded by the
+     departure list, 1 bounded hoop_agents read. Memoised five minutes per report pair. */
+  async stockAccount(db, user, args) {
+    requireNav(user, 'stock');
+    const a = args || {};
+    const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null;
+    const latestOf = async (before) => {
+      let q = db.from('hoop_aged_stock').select('as_of').not('as_of', 'is', null)
+        .order('as_of', { ascending: false }).limit(1);
+      if (before) q = q.lt('as_of', before);
+      const { data } = await q;
+      return data && data[0] ? String(data[0].as_of).slice(0, 10) : null;
+    };
+    const nowDate = day(a.asOf) || await latestOf(null);
+    const prevDate = nowDate ? await latestOf(nowDate) : null;
+    const ck = 'stockacct:' + nowDate + ':' + prevDate + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    const hit = trendCache.get(ck);
+    if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
+
+    const COLS = 'serial, agent, item, age_days, received, as_of';
+    const [now, prev, agents] = await Promise.all([
+      nowDate ? fetchAll(() => db.from('hoop_aged_stock').select(COLS).eq('as_of', nowDate)) : [],
+      prevDate ? fetchAll(() => db.from('hoop_aged_stock').select(COLS).eq('as_of', prevDate)) : [],
+      fetchAll(() => db.from('hoop_agents').select('name, role, branch')),
+    ]);
+
+    const nowSet = new Set(now.map(r => String(r.serial)));
+    const gone = prev.filter(r => !nowSet.has(String(r.serial)));
+    // NO SILENT CAP: if the departures outrun one keyed read, the answer says how many it
+    // could not judge rather than reporting a smaller theft than actually happened.
+    const LOOKUP_CAP = 400;
+    const checking = gone.slice(0, LOOKUP_CAP);
+    const notChecked = gone.length - checking.length;
+    const ids = checking.map(r => String(r.serial));
+    const [soldRows, watuRows] = ids.length ? await Promise.all([
+      fetchAll(() => db.from('hoop_sales').select('imei, sale_date, commission_agent').in('imei', ids)),
+      fetchAll(() => db.from('watu_loans').select('imei').in('imei', ids)),
+    ]) : [[], []];
+    const soldBy = new Map(soldRows.map(r => [String(r.imei), r]));
+    const inWatu = new Set(watuRows.map(r => String(r.imei)));
+
+    // Role decides the pivot; hoop_agents is the roster, matched on the same token-sorted
+    // name key the rest of the system uses so spelling drift cannot split a person in two.
+    const regBy = new Map(agents.filter(x => x.name).map(x => [nameKey(x.name), x]));
+    const kindOf = (holder) => {
+      const reg = regBy.get(nameKey(holder || ''));
+      const role = K((reg && reg.role) || '');
+      if (/STORE|GHALA|SIPHO/.test(role)) return 'store';
+      if (/RSM/.test(role)) return 'rsm';
+      return 'agent';
+    };
+    const STALE_DAYS = num(a.staleDays) || 45;
+
+    const by = new Map();
+    const slot = (holder) => {
+      const k = nameKey(holder || '') || '?';
+      let g = by.get(k);
+      if (!g) {
+        const reg = regBy.get(k);
+        g = { holder: holder || '—', kind: kindOf(holder),
+          role: (reg && reg.role) || '', branch: (reg && reg.branch) || '',
+          held: 0, stale: 0, maxAge: 0, gone: 0, sold: 0, watu: 0, unaccounted: 0, unaccountedList: [] };
+        by.set(k, g);
+      }
+      return g;
+    };
+    for (const r of now) {
+      const g = slot(r.agent);
+      g.held++;
+      const age = num(r.age_days);
+      if (age > g.maxAge) g.maxAge = age;
+      if (age >= STALE_DAYS) g.stale++;
+    }
+    for (const r of checking) {
+      const g = slot(r.agent);
+      const id = String(r.serial);
+      g.gone++;
+      if (soldBy.has(id)) g.sold++;
+      else if (inWatu.has(id)) g.watu++;
+      else {
+        g.unaccounted++;
+        if (g.unaccountedList.length < 50) {
+          g.unaccountedList.push({ serial: id, item: r.item || '', age: r.age_days == null ? null : num(r.age_days) });
+        }
+      }
+    }
+    const rows = [...by.values()].sort((x, y) => y.unaccounted - x.unaccounted || y.stale - x.stale || y.held - x.held);
+    const sum = (list, f) => list.reduce((s, x) => s + x[f], 0);
+    const totalsOf = list => ({ holders: list.length, held: sum(list, 'held'), stale: sum(list, 'stale'),
+      gone: sum(list, 'gone'), sold: sum(list, 'sold'), watu: sum(list, 'watu'), unaccounted: sum(list, 'unaccounted') });
+    const pick = k => rows.filter(r => r.kind === k);
+    const value = {
+      ok: true, asOf: nowDate, prevAsOf: prevDate, staleDays: STALE_DAYS,
+      notChecked,
+      company: { rows, totals: totalsOf(rows) },
+      store: { rows: pick('store'), totals: totalsOf(pick('store')) },
+      rsm: { rows: pick('rsm'), totals: totalsOf(pick('rsm')) },
+      agent: { rows: pick('agent'), totals: totalsOf(pick('agent')) },
+    };
+    trendCache.set(ck, { at: Date.now(), value });
+    return { ...value, cached: false };
+  },
+
   async stockMovement(db, user, args) {
     requireNav(user, 'movement');
     const a = args || {};
