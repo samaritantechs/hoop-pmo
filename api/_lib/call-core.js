@@ -335,20 +335,55 @@ const inWindowOf = (r, day) => { const l = lifeDayOf(r.disbursed_date, day); ret
    credits should get equal distribution") yet the owner saw "3 got 12 and one got 9" on
    a tab: an officer's share can happen to hold fewer locked-7 customers. So the deal is
    cut per stratum -- locked 7+ in window, locked 4-6 in window, the rest of the window,
-   beyond the window -- each dealt round-robin by IMEI. Every officer's every TAB is now
-   equal, plus-minus one. Nothing is stored; the deal still re-cuts itself the moment
-   the roster changes. Exported: the portal's Wateja must run the SAME deal. */
+   beyond the window -- each dealt round-robin. Every officer's every TAB is equal,
+   plus-minus one. Nothing is stored; the deal still re-cuts itself the moment the
+   roster changes. Exported: the portal's Wateja must run the SAME deal.
+
+   AND THE DEAL RESHUFFLES WITH EVERY DECK. "The credits should always get random
+   customers so have random assignement model during distribution per each watu deck
+   upload." Dealing each stratum in plain IMEI order was fair in COUNT but frozen in
+   IDENTITY: IMEIs never change, so the same officer caught roughly the same customers
+   every day of the 45-day window. Each stratum is now ordered by a hash of the deck's
+   own date plus the IMEI -- a seeded shuffle, a different arrangement for every
+   upload -- and the round-robin's STARTING officer rotates with the deck too, so even
+   the first card lands somewhere new each day.
+
+   WHY A SEEDED HASH AND NOT Math.random(): the deal is never stored, so every screen
+   that shows "who holds whom" -- the handset's list, the portal's Wateja, Recovery's
+   per-credit bars, the reached-% bar -- RECOMPUTES it, some of them from thinner
+   historical snapshot rows that carry only imei/flags/dates. A hash of (deck date,
+   IMEI) needs nothing but those two facts, so every screen derives the identical deal
+   from whatever columns it already reads; a live random draw, or a sort on name/amount
+   that half the reconstruction paths do not fetch, would let two screens disagree
+   about who was chasing whom -- the exact fault the stratified deal exists to prevent.
+
+   KEYED ON THE DECK'S OWN DATE, not the viewing day: rows carry deck_date
+   (followup_status) or snapshot_date (watu_snapshots); the day argument is only the
+   fallback. A stale deck viewed the morning after keeps yesterday's arrangement -- the
+   deal belongs to the UPLOAD, exactly as asked -- and a same-date re-upload changes
+   nothing, so the book cannot reshuffle mid-morning under an officer already out
+   calling. */
+function deckKeyOf(rows, day) {
+  const r = rows && rows[0];
+  return String((r && (r.deck_date || r.snapshot_date)) || day || '').slice(0, 10);
+}
 export function dealMap(rows, rosterIds, day) {
   const out = {};
   if (!rosterIds || !rosterIds.length) return out;
+  const dk = deckKeyOf(rows, day);
+  const seed = imei => h36(dk + '|' + imei);
+  const rot = parseInt(h36('deal|' + dk), 36) % rosterIds.length;
   const strata = { L7: [], L4: [], IN: [], OUT: [] };
   for (const r of rows) {
     const k = !inWindowOf(r, day) ? 'OUT' : (r.locked7 === true ? 'L7' : (r.locked4 === true ? 'L4' : 'IN'));
     strata[k].push(r);
   }
   for (const k of ['L7', 'L4', 'IN', 'OUT']) {
-    strata[k].sort((a, b) => (String(a.imei) < String(b.imei) ? -1 : 1))
-      .forEach((r, i) => { out[String(r.imei)] = String(rosterIds[i % rosterIds.length]); });
+    strata[k].sort((a, b) => {
+      const sa = seed(String(a.imei)), sb = seed(String(b.imei));
+      if (sa !== sb) return sa < sb ? -1 : 1;
+      return String(a.imei) < String(b.imei) ? -1 : 1;      // two IMEIs, one hash: still one order
+    }).forEach((r, i) => { out[String(r.imei)] = String(rosterIds[(i + rot) % rosterIds.length]); });
   }
   return out;
 }
@@ -779,8 +814,10 @@ async function summaryForOfficer(db, cu, nowMs) {
   const today = todayKey(nowMs);
   const deckDate = await latestDeckDate(db);
   const [deck, roster, myLogs, hist] = await Promise.all([
+    // deck_date rides along so the deal's shuffle keys on the DECK's date, not today --
+    // a stale deck must cut this tile the same share the officer's list actually shows.
     deckDate ? fetchAll(() => db.from('followup_status')
-      .select('imei, contact, disbursed_date, locked4, locked7, days_offline').eq('deck_date', deckDate)) : [],
+      .select('imei, contact, disbursed_date, locked4, locked7, days_offline, deck_date').eq('deck_date', deckDate)) : [],
     activeRoster(db),
     fetchAll(() => db.from('call_logs').select('id, duration')
       .eq('call_date', today).eq('user_id', String(cu.user_id))),
