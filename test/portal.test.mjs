@@ -359,6 +359,79 @@ test('salesAudit judges every sale: OK, DRIFT, PENDING, BULK, HAKUNA_WATU', asyn
     /no access to the fraud pane/, 'a blank non-viewer is refused; the AUDITOR itself sees every pane');
 });
 
+test('salesWeek pivots one week four ways and measures each against the daily target', async () => {
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const mon = dayShift(t, -((new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+  const tue = dayShift(mon, 1);
+  const sale = (k, date, rsm, agent, price, up, rec) => ({ sale_key: k, sale_date: date, imei: 'IM' + k,
+    price, agent: rsm, commission_agent: agent, uploaded_by: up, recorded_by: rec, team: 'PIVOTTEST' });
+  const d = fakeDb({
+    settings: [{ key: 'SALES_DAILY_TARGET', value: '1000000' }],
+    hoop_sales: [
+      // Monday: Mwinyi loaded two (one names its recorder), Sara loaded one. Two RSMs, two agents.
+      sale('A', mon, 'RSM ONE', 'AGENT X', 500000, 'Mwinyi', null),
+      sale('B', mon, 'RSM ONE', 'AGENT Y', 700000, 'Mwinyi', 'Juma GD'),
+      sale('C', mon, 'RSM TWO', 'AGENT X', 400000, 'Sara', null),
+      // Tuesday: one more from Mwinyi, RSM ONE, AGENT X.
+      sale('D', tue, 'RSM ONE', 'AGENT X', 900000, 'Mwinyi', null),
+    ],
+  });
+  const scoped = { ...ADMIN, teams: ['PIVOTTEST'] };
+  const r = await _FNS.salesWeek(d, scoped, {});
+  assert.equal(r.from, mon);
+  assert.equal(r.dailyTarget, 1000000);
+  assert.equal(r.weekTarget, 7000000);
+
+  // GENERAL DUTY: recorded_by wins where present, else uploaded_by. So B -> "Juma GD",
+  // A/C/D fall back to whoever uploaded (Mwinyi x2 incl D, Sara x1).
+  const gd = Object.fromEntries(r.general.map(x => [x.name, x]));
+  assert.equal(gd['Mwinyi'].count, 2, 'A and D fell back to their uploader');
+  assert.equal(gd['Mwinyi'].amount, 1400000);
+  assert.equal(gd['Juma GD'].count, 1, 'B named its recorder, so it is credited to them, not the uploader');
+  assert.equal(gd['Sara'].count, 1);
+
+  // RSM: the AGENT column. RSM ONE = A,B,D; RSM TWO = C.
+  const rsm = Object.fromEntries(r.rsm.map(x => [x.name, x]));
+  assert.equal(rsm['RSM ONE'].count, 3);
+  assert.equal(rsm['RSM ONE'].days[mon].count, 2, 'two on Monday');
+  assert.equal(rsm['RSM ONE'].days[tue].count, 1, 'one on Tuesday');
+  assert.equal(rsm['RSM TWO'].count, 1);
+
+  // COMMISSION AGENT: AGENT X = A,C,D; AGENT Y = B.
+  const ag = Object.fromEntries(r.agent.map(x => [x.name, x]));
+  assert.equal(ag['AGENT X'].count, 3);
+  assert.equal(ag['AGENT Y'].amount, 700000);
+
+  // COMPANY: one synthetic row, every sale.
+  assert.equal(r.company.count, 4);
+  assert.equal(r.company.amount, 2500000);
+  assert.equal(r.company.days[mon].count, 3);
+  assert.equal(r.company.days[tue].amount, 900000);
+
+  // The 7-day frame is fixed and the week slides + falls back like recoveryWeek.
+  assert.equal(r.days.length, 7);
+  assert.equal(r.thisWeek, true);
+  const last = await _FNS.salesWeek(d, { ...ADMIN, teams: ['PIVOTTEST2'] }, { week: dayShift(mon, -5) });
+  assert.equal(last.thisWeek, false, 'a prior date lands in its own week');
+});
+
+test('salesWeek survives a pre-migration database (no recorded_by / uploaded_by columns)', async () => {
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const mon = dayShift(t, -((new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+  // A fake whose hoop_sales rows simply lack the new columns -- the select must fall back.
+  const d = fakeDb({
+    settings: [],
+    hoop_sales: [{ sale_key: 'Z', sale_date: mon, imei: 'IMZ', price: 500000,
+      agent: 'RSM ONE', commission_agent: 'AGENT X', team: 'PREMIG' }],
+  }, { missingColumns: { hoop_sales: ['recorded_by', 'uploaded_by'] } });
+  const r = await _FNS.salesWeek(d, { ...ADMIN, teams: ['PREMIG'] }, {});
+  assert.equal(r.company.count, 1, 'the read fell back and still answered');
+  assert.equal(r.general[0].name, '(haijulikani / unknown)', 'no recorder and no uploader column -> unknown, not a crash');
+  assert.equal(r.dailyTarget, null, 'no target set -> null, chart draws no line');
+});
+
 test('agentScore scores Watu agents by their customers and sellers by their payouts', async () => {
   const today = todayKey();
   const d = mauzoDb(today);

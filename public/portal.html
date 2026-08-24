@@ -183,6 +183,7 @@ tbody tr:hover{background:var(--b50)}
       <button data-t="cust">Wateja / Customers</button>
       <button data-t="ripoti">Call reports</button>
       <button data-t="recovery">Recovery</button>
+      <button data-t="sales">Sales performance</button>
       <button data-t="fraud">Fraud audit</button>
       <button data-t="score">Agent scorecards</button>
       <button data-t="stock">Stock</button>
@@ -558,7 +559,7 @@ function enter(){
      every button -- the same rule the endpoints enforce. A pane added later shows up
      here the moment the server lists it. */
   var NAVKEY={dash:'dashboard',cust:'customers',ripoti:'reports',recovery:'recovery',
-    fraud:'fraud',score:'scorecards',stock:'stock',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
+    sales:'scorecards',fraud:'fraud',score:'scorecards',stock:'stock',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
   var NAVS=BOOT.navs||[];
   $all('#tabs button').forEach(function(b){
     var k=NAVKEY[b.getAttribute('data-t')];
@@ -597,6 +598,7 @@ function draw(){
   if(TAB==='score') return drawAgents(m);
   if(TAB==='stock') return drawStock(m);
   if(TAB==='move') return drawMove(m);
+  if(TAB==='sales') return drawSalesPerf(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
   if(TAB==='staff') return drawStaff(m);
@@ -1100,6 +1102,109 @@ function drawRecoveryTrend(){
   }).catch(function(e){
     var b=$('#recTrendBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';
   });
+}
+
+/* ---------- daily sales performance ----------
+   "Pivot for all: for General duty person, RSMs, Commission agents and company grand
+    totals ... target in settings so we see sales performances over set target."
+
+   One week, four pivots, one shared week slider (the same pattern the recovery charts
+   use). Each pivot is a per-person grid -- one row, seven day-columns Mon-Sun, count and
+   TZS per day -- plus the week total; the company pivot is the same shape with one row.
+   The target line is SALES_DAILY_TARGET (TZS/day) from settings: each day is measured
+   against it, and the row total against target x 7. */
+var SALESPERF={week:'',pivot:'general'};
+function drawSalesPerf(m){
+  m.innerHTML='<div class="card"><h2>Sales performance</h2><div class="sk"></div></div>';
+  srv('salesWeek',{week:SALESPERF.week}).then(function(d){
+    var target=d.dailyTarget||0;
+    var pivots=[['general','General duty'],['rsm','RSM'],['agent','Commission agent'],['company','Company']];
+    var bar='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'
+      +'<button class="btn sm ghost" id="spPrev" title="previous week">◀</button>'
+      +'<span style="font-size:12px;font-weight:600">'+esc(d.from||'')+' → '+esc(d.to||'')+'</span>'
+      +'<button class="btn sm ghost" id="spNext" title="next week">▶</button>'
+      +(d.thisWeek?'<span class="chip">wiki hii / this week</span>'
+        :'<button class="btn sm" id="spNow">Rudi wiki hii / this week</button>')
+      +'<span style="flex:1"></span>'
+      +'<span class="mut" style="font-size:11.5px">Lengo / target: '
+        +(target?money(target)+' TZS/siku · '+money(d.weekTarget)+' /wiki':'—')+'</span>'
+      +'</div>';
+    var tabs='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+      +pivots.map(function(p){
+        return '<button class="btn sm'+(SALESPERF.pivot===p[0]?'':' ghost')+'" data-sp="'+p[0]+'">'+p[1]+'</button>';
+      }).join('')+'</div>';
+
+    // Company is one synthetic row so the grid renders it identically to a per-person pivot.
+    var rows = SALESPERF.pivot==='company'
+      ? [{ name:'Company / jumla', days:d.company.days, count:d.company.count, amount:d.company.amount }]
+      : (d[SALESPERF.pivot]||[]);
+
+    var body;
+    if(!rows.length){
+      body='<div class="mut">Hakuna mauzo kwa wiki hii — pakia faili la mauzo (hoopltd.shop) kisha rudi hapa. '
+        +'/ No sales for this week yet; upload the sales file and come back.</div>';
+    } else {
+      // One ceiling across every row and day, so bars compare by eye. The daily target,
+      // if set, is drawn as a reference line inside each day cell.
+      var max=1;
+      rows.forEach(function(r){ d.days.forEach(function(dd){ var c=r.days[dd]; if(c&&c.amount>max) max=c.amount; }); });
+      if(target>max) max=target;
+      var dayName=function(iso){ return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(iso+'T00:00:00').getDay()]; };
+      var head='<div style="display:grid;grid-template-columns:150px repeat(7,1fr) 92px;gap:4px;'
+        +'background:var(--b50);border:1px solid var(--line);border-radius:9px 9px 0 0;padding:7px 6px;'
+        +'font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase">'
+        +'<div>'+esc(pivots.filter(function(p){return p[0]===SALESPERF.pivot;})[0][1])+'</div>'
+        +d.days.map(function(dd){ return '<div style="text-align:center">'+esc(dayName(dd))
+          +'<div style="font-size:9px;color:var(--soft);font-weight:600">'+esc(dd.slice(5))+'</div></div>'; }).join('')
+        +'<div style="text-align:right">Wiki / week</div></div>';
+      var grid=rows.map(function(r){
+        var cells=d.days.map(function(dd){
+          var c=r.days[dd];
+          if(!c||!c.amount){
+            return '<div style="text-align:center"><div style="height:46px;display:flex;align-items:flex-end;justify-content:center">'
+              +'<div style="color:var(--soft);font-size:11px;padding-bottom:14px">—</div></div>'
+              +'<div style="font-size:9.5px;color:var(--soft);text-align:center">&nbsp;</div></div>';
+          }
+          var h=Math.max(3,Math.round(46*c.amount/max));
+          var hit=target&&c.amount>=target;
+          var tLine=target?'<div style="position:absolute;left:-2px;right:-2px;bottom:'+Math.round(46*target/max)
+            +'px;border-top:1.5px dashed var(--mut);opacity:.5"></div>':'';
+          return '<div style="text-align:center">'
+            +'<div style="height:46px;display:flex;align-items:flex-end;justify-content:center;position:relative">'
+            +tLine+'<div style="width:20px;height:'+h+'px;background:'+(hit?'var(--ok)':'var(--b100)')+';border-radius:4px"></div></div>'
+            +'<div style="font-size:9.5px;text-align:center;font-weight:600;margin-top:2px">'+money(c.count)+'</div></div>';
+        }).join('');
+        var overTarget=target?(r.amount>=d.weekTarget):null;
+        return '<div style="display:grid;grid-template-columns:150px repeat(7,1fr) 92px;gap:4px;align-items:end;'
+          +'padding:8px 6px;border:1px solid var(--line);border-top:0">'
+          +'<div style="font-size:12.5px"><b>'+esc(r.name)+'</b>'
+          +'<div class="mut" style="font-size:10.5px">'+money(r.count)+' simu</div></div>'
+          +cells
+          +'<div style="text-align:right;align-self:center"><b style="font-size:12.5px'
+            +(overTarget===true?';color:var(--ok)':(overTarget===false?';color:var(--mut)':''))+'">'
+            +money(r.amount)+'</b>'
+          +(target?'<div class="mut" style="font-size:9.5px">'+(overTarget?'✓ lengo':Math.round(100*r.amount/d.weekTarget)+'%')+'</div>':'')
+          +'</div></div>';
+      }).join('');
+      body=head+grid
+        +'<div class="mut" style="font-size:10.5px;margin-top:8px">Nambari chini ya kila baa = idadi ya simu siku hiyo · '
+        +'urefu = thamani (TZS) · kijani = imefika lengo la siku · mstari wa vitone = lengo la siku. '
+        +(target?'':'Weka <b>SALES_DAILY_TARGET</b> kwenye Settings ili uone mstari wa lengo.')
+        +'</div>';
+    }
+    m.innerHTML='<div class="card"><h2>Sales performance</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Mauzo ya kila siku, yaliyofuatiliwa kwa: mhudumu (general duty), RSM, wakala wa komisheni, na jumla ya kampuni. '
+      +'/ Daily sales pivoted by general duty, RSM, commission agent, and company.</div>'
+      +bar+tabs+body+'</div>';
+    var step=function(n){
+      var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
+      base.setUTCDate(base.getUTCDate()+7*n); SALESPERF.week=base.toISOString().slice(0,10); drawSalesPerf(m);
+    };
+    var p=$('#spPrev'); if(p) p.onclick=function(){ step(-1); };
+    var nx=$('#spNext'); if(nx) nx.onclick=function(){ step(1); };
+    var nw=$('#spNow'); if(nw) nw.onclick=function(){ SALESPERF.week=''; drawSalesPerf(m); };
+    $all('[data-sp]').forEach(function(b){ b.onclick=function(){ SALESPERF.pivot=b.getAttribute('data-sp'); drawSalesPerf(m); }; });
+  }).catch(function(e){ paneFailed(m,e); });
 }
 
 /* ---------- wateja / customers ----------
@@ -1685,7 +1790,8 @@ function drawSettings(m){
           +'<input class="inp" id="st'+i+'" value="'+esc(s.value)+'">'
           +'<button class="btn sm" data-sv="'+esc(s.key)+'" data-i="'+i+'">Save</button></div>';
       }).join('')
-      +'<div class="mut">SYSTEM_OPEN=YES hufungua mfumo. CALL_BRAND ni jina kwenye app. FU_STATUSES: hali za ufuatiliaji — tenganisha kwa comma (au mstari mpya).</div>'
+      +'<div class="mut">SYSTEM_OPEN=YES hufungua mfumo. CALL_BRAND ni jina kwenye app. FU_STATUSES: hali za ufuatiliaji — tenganisha kwa comma (au mstari mpya). '
+      +'<b>SALES_DAILY_TARGET</b>: lengo la mauzo kwa siku (TZS) — linaonekana kama mstari kwenye chati ya Sales performance. / daily sales target in TZS, drawn as the target line on the Sales performance chart.</div>'
       +'</div>';
     $all('[data-sv]',m).forEach(function(b){
       b.onclick=function(){

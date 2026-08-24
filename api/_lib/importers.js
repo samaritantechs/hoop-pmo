@@ -147,6 +147,11 @@ const SALES_COLS = [
   ['commission_agent', v => textOrNull(v), 'COMMISSION_AGENT', 'COMMISSION AGENT'],
   ['commission_phone', v => textOrNull(v), 'COMMISSION_PHONE', 'COMMISSION PHONE'],
   ['price',            v => num(v),        'PRICE', 'TOTAL', 'GROSS_TOTAL'],
+  // The hoopltd.shop USER who entered the sale -- the general-duty person. Absent from
+  // today's export, so this stays null until that export grows the column; the moment it
+  // does, any of these spellings is picked up with no other change. Meanwhile general-duty
+  // attribution comes from uploaded_by (stamped at /upload from the signed-in code).
+  ['recorded_by',      v => textOrNull(v), 'RECORDED_BY', 'RECORDED BY', 'USER', 'USERNAME', 'CASHIER', 'SERVED_BY', 'SERVED BY', 'SOLD_BY', 'SOLD BY'],
 ];
 const SALES_IMEI_HEADERS = ['IMEI', 'IMEI NUMBER', 'IMEI NO', 'SERIAL'];
 

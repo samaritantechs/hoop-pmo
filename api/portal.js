@@ -381,6 +381,106 @@ const FNS = {
     return out;
   },
 
+  /* =====================================================================================
+     DAILY SALES PERFORMANCE -- one week, pivoted four ways, against a target.
+     =====================================================================================
+       "Pivot for all: for General duty person, RSMs, Commission agents and company grand
+        totals. i want to set up target in settings so we see sales performances over set
+        target"
+
+     One read of the week's hoop_sales rows answers all four pivots -- the whole point of
+     a pivot is that it is the SAME rows counted by a different key, so this must never be
+     four reads. Each pivot returns one row per name with a per-weekday count and amount
+     (Mon-Sun, the same fixed week the credit charts use, so the two dashboards read alike)
+     plus the week total; the company pivot is the same shape with one row.
+
+     THE TARGET is SALES_DAILY_TARGET from settings (TZS/day, blank = none). It is a DAILY
+     figure, so a week's target is target x (the number of days that actually had a sale is
+     NOT how it works -- a target is a standing daily expectation), i.e. target x 7 for the
+     week, and each day's bar is measured against the one daily target. Sent alongside so
+     every screen draws the same line without re-reading the setting.
+
+     Attribution, per the answer:
+       general duty  recorded_by if the shop export ever carries it, else uploaded_by (who
+                     LOADED the day's book) -- the honest general-duty signal there is today
+       rsm           the AGENT column (the record-holding RSM / team leader)
+       agent         commission_agent (the seller owed the commission)
+       company       every sale, one row
+
+     Roster follows the DATA, not a stored list -- a name appears the first day it sells and
+     leaves when it stops, so "they will auto update by role assignements made" needs no
+     wiring here: whoever the shop books credit is whoever shows up.
+
+     Budget: one team-scoped, date-bounded read of hoop_sales (nine columns) + one settings
+     read for the target. Memoised five minutes per week and scope, exactly like the trend. */
+  async salesWeek(db, user, args) {
+    requireNav(user, 'scorecards');
+    const mondayOf = d => dayShift(d, -((new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+    const thisMon = mondayOf(todayKey());
+    const asked = String((args && args.week) || '').slice(0, 10);
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? mondayOf(asked) : thisMon;
+    const to = dayShift(from, 6);
+    const ck = 'salesweek:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    const hit = trendCache.get(ck);
+    if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
+
+    // recorded_by / uploaded_by exist only after the migration; a pre-migration database
+    // refuses the whole select for them, so fall back to the columns that were always there.
+    const FULL = 'imei, sale_date, price, branch, agent, commission_agent, recorded_by, uploaded_by';
+    const BARE = 'imei, sale_date, price, branch, agent, commission_agent';
+    let rows;
+    try {
+      rows = await fetchAll(() => scopeQ(user, db.from('hoop_sales').select(FULL)
+        .gte('sale_date', from).lte('sale_date', to)));
+    } catch (e) {
+      if (!/recorded_by|uploaded_by/i.test(String(e && e.message))) throw e;
+      rows = await fetchAll(() => scopeQ(user, db.from('hoop_sales').select(BARE)
+        .gte('sale_date', from).lte('sale_date', to)));
+    }
+    const { data: sRows } = await db.from('settings').select('value').eq('key', 'SALES_DAILY_TARGET').maybeSingle();
+    const dailyTarget = num((sRows && sRows.value) || 0) || null;
+
+    const days = [];
+    for (let i = 0; i < 7; i++) days.push(dayShift(from, i));
+    const txt = v => { const s = String(v == null ? '' : v).trim(); return s || null; };
+    const keyFns = {
+      general: r => txt(r.recorded_by) || txt(r.uploaded_by) || '(haijulikani / unknown)',
+      rsm:     r => txt(r.agent) || '(no RSM)',
+      agent:   r => txt(r.commission_agent) || '(no agent)',
+    };
+    const pivot = keyFn => {
+      const by = new Map();
+      for (const r of rows) {
+        const name = keyFn(r);
+        const d = String(r.sale_date).slice(0, 10);
+        if (!by.has(name)) by.set(name, { name, days: {}, count: 0, amount: 0 });
+        const slot = by.get(name);
+        if (!slot.days[d]) slot.days[d] = { count: 0, amount: 0 };
+        slot.days[d].count++; slot.days[d].amount += num(r.price);
+        slot.count++; slot.amount += num(r.price);
+      }
+      return [...by.values()].sort((a, b) => b.amount - a.amount);
+    };
+    // The company pivot: the same shape with one row, so the screen draws it identically.
+    const companyDays = {};
+    for (const r of rows) {
+      const d = String(r.sale_date).slice(0, 10);
+      if (!companyDays[d]) companyDays[d] = { count: 0, amount: 0 };
+      companyDays[d].count++; companyDays[d].amount += num(r.price);
+    }
+    const value = {
+      ok: true, from, to, days, thisWeek: from === thisMon,
+      dailyTarget, weekTarget: dailyTarget ? dailyTarget * 7 : null,
+      general: pivot(keyFns.general),
+      rsm: pivot(keyFns.rsm),
+      agent: pivot(keyFns.agent),
+      company: { days: companyDays,
+        count: rows.length, amount: rows.reduce((s, r) => s + num(r.price), 0) },
+    };
+    trendCache.set(ck, { at: Date.now(), value });
+    return { ...value, cached: false };
+  },
+
   /* RECOVERY -- who came back after our calls. The newest two uploads, diffed per IMEI:
      paid for the first time, reconnected (days_offline fell), or sank deeper. */
   async recovery(db, user) {
@@ -1093,7 +1193,7 @@ const FNS = {
   async settings(db, user) {
     requireSettings(user);
     const KEYS = ['SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
-      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK'];
+      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET'];
     const rows = await fetchAll(() => db.from('settings').select('key, value').in('key', KEYS));
     const by = {}; rows.forEach(r => { by[r.key] = r.value; });
     // An empty FU_STATUSES box looked like "there is no list" when the list simply
@@ -1106,7 +1206,7 @@ const FNS = {
     requireWrite(user); requireSettings(user);
     const key = K(args && args.key);
     const ALLOWED = new Set(['SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
-      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK']);
+      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET']);
     if (!ALLOWED.has(key)) throw new Error('That setting is not editable here: ' + key);
     const { error } = await db.from('settings')
       .upsert({ key, value: String((args && args.value) || '') }, { onConflict: 'key' });
