@@ -1,7 +1,8 @@
-# Builds the HOOP Calls APK and commits it into public/, where Vercel serves it at
-# /HOOP-Calls.apk -- the URL app-version.json advertises to phones. Runs in Actions
-# because the APK needs the Android toolchain; the web app itself never needs a build.
-name: Build HOOP Calls APK
+# Builds both Android apps and commits them into public/, where Vercel serves them at
+# /HOOP-Calls.apk and /HOOPLOAN-Lock.apk -- the URLs app-version.json and lock-version.json
+# advertise to phones. Runs in Actions because the APKs need the Android toolchain; the web
+# app itself never needs a build.
+name: Build HOOP APKs
 on:
   workflow_dispatch:
   push:
@@ -9,11 +10,20 @@ on:
     paths:
       - 'android/**'
       - 'app-version.json'
+      - 'lock-version.json'
+      - '.github/workflows/build-apk.yml'
+  # Compiling is the only real check these apps get -- there is no Android device anywhere in
+  # this loop -- so it has to run on the pull request, not after the merge.
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'app-version.json'
+      - 'lock-version.json'
       - '.github/workflows/build-apk.yml'
 permissions:
   contents: write
 concurrency:
-  group: apk-build
+  group: apk-build-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
@@ -24,21 +34,51 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Build release APK
+
+      - name: Build both release APKs
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew --no-daemon assembleRelease
-      - name: Publish the APK into the site
+          ./gradlew --no-daemon :app:assembleRelease :lock:assembleRelease
+
+      # THE PROVISIONING CHECKSUM. A QR-provisioned phone refuses an admin APK whose signing
+      # certificate does not match the checksum in the QR, so that checksum is derived here
+      # from the very key that just signed the build -- rather than pasted in by hand once and
+      # left to go stale, which would strand a whole batch at the setup wizard with no
+      # explanation. base64url, unpadded: the exact form Android's provisioning expects.
+      - name: Stamp the provisioning payload
+        run: |
+          CKSUM=$(keytool -exportcert -keystore android/sideload.keystore \
+                    -alias hopecalls -storepass hopecalls 2>/dev/null \
+                  | openssl dgst -binary -sha256 | openssl base64 | tr '+/' '-_' | tr -d '=\n')
+          node -e '
+            const fs = require("fs");
+            const v = JSON.parse(fs.readFileSync("lock-version.json", "utf8"));
+            fs.writeFileSync("public/lock-provisioning.json", JSON.stringify({
+              checksum: process.argv[1],
+              apkUrl: v.apkUrl,
+              component: "com.samaritantechs.hooploanlock/.LockAdmin",
+              builtFrom: process.argv[2],
+            }, null, 2) + "\n");
+          ' "$CKSUM" "${GITHUB_SHA::9}"
+          echo "signing certificate checksum: $CKSUM"
+
+      - name: Publish the APKs into the site
+        if: github.event_name != 'pull_request'
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk public/HOOP-Calls.apk
+          cp android/lock/build/outputs/apk/release/lock-release.apk public/HOOPLOAN-Lock.apk
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/HOOP-Calls.apk
-          git commit -m "HOOP-Calls.apk built from ${GITHUB_SHA::9}" || exit 0
+          git add public/HOOP-Calls.apk public/HOOPLOAN-Lock.apk public/lock-provisioning.json
+          git commit -m "APKs built from ${GITHUB_SHA::9}" || exit 0
           git pull --rebase origin main
           git push origin main
+
       - uses: actions/upload-artifact@v4
         with:
-          name: HOOP-Calls-apk
-          path: public/HOOP-Calls.apk
+          name: hoop-apks
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/lock/build/outputs/apk/release/lock-release.apk
+            public/lock-provisioning.json

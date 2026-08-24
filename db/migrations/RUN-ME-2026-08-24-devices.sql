@@ -62,6 +62,15 @@ create index if not exists idx_devices_holder    on devices(holder);
 -- this file stays safe to re-run over a registry that was created before the phone half
 -- existed. It is a secret: never select it onto a screen or an export.
 alter table devices add column if not exists enrol_token text;
+-- The token is what a beating phone presents, so it is the column those reads land on.
+create unique index if not exists idx_devices_enrol_token on devices(enrol_token)
+  where enrol_token is not null;
+
+-- WHAT THE HANDSET THINKS ITS OWN IMEI IS -- kept beside ours, never checked against it.
+-- A dual-SIM phone has two IMEIs and getImei() is not consistent across the Android
+-- versions this stock spans, so a difference is a thing for a person to look at, not a
+-- fact to act on. Surfaced on the device's own screen; it raises no event by itself.
+alter table devices add column if not exists reported_imei text;
 
 -- EVERY STATE CHANGE, KEPT. A lock is an act against somebody's phone; who ordered it and
 -- why must survive the next change of state, so the registry above holds only the CURRENT

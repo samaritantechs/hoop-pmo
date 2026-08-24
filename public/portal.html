@@ -664,6 +664,9 @@ function recWeekBar(d){
     +(d.thisWeek
       ? '<span class="chip">wiki hii / this week</span>'
       : '<button class="btn sm" id="recWkNow">Rudi wiki hii / back to this week</button>')
+    // Landed here on its own rather than by somebody pressing an arrow -- say so, so the
+    // week on screen is never mistaken for the current one.
+    +(d.fellBack ? '<span class="chip warn">bado hakuna upload wa wiki hii / no uploads yet this week</span>' : '')
     +'</div>';
 }
 function wireRecWeekBar(d){
@@ -802,9 +805,16 @@ function drawTrend(){
     var box2=$('#trendBox'); if(!box2) return;
     var vals=pts.filter(function(p){return p.num!=null;}).map(function(p){return p.num;});
     if(!vals.length){
-      box2.innerHTML='<div class="mut">Hakuna upload wa wiki hii bado — chati itajaa baada ya upload za kila siku.</div>';
+      box2.innerHTML='<div class="mut">Hakuna upload bado — chati itajaa baada ya upload za kila siku.</div>';
       return;
     }
+    /* WHICH WEEK AM I LOOKING AT. Shown whenever the chart has fallen back off the current
+       week -- a Monday-morning dashboard quietly drawing LAST week under a heading that says
+       "wiki hii" would be worse than the blank card it replaced. */
+    var wkNote=d.fellBack
+      ? '<div class="chip warn" style="margin-bottom:6px">Wiki ya '+esc(d.from||'')+' → '+esc(d.to||'')
+        +' — bado hakuna upload wa wiki hii. / showing the latest week with uploads, not this one.</div>'
+      : '';
     var max=Math.max.apply(null,vals), n=pts.length;
     var W=720,H=182,padL=44,padB=26,padT=16,padR=8;
     var innerW=W-padL-padR, innerH=H-padT-padB;
@@ -836,7 +846,8 @@ function drawTrend(){
         +'<text x="'+cx+'" y="'+(y-5)+'" text-anchor="middle" font-size="11.5" font-weight="700" fill="'+(on?'var(--bad)':'var(--mut)')+'">'+money(p.num)+'</text>';
     });
     var first=vals[0], last=vals[vals.length-1], diff=last-first;
-    box2.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" '
+    box2.innerHTML=wkNote
+      +'<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" '
       +'aria-label="Locked 7+ per day this week" style="display:block;max-width:100%">'
       +'<line x1="'+padL+'" y1="'+(padT+innerH)+'" x2="'+(W-padR)+'" y2="'+(padT+innerH)+'" stroke="var(--line)" stroke-width="1.5"/>'
       +grid+bars+labels+'</svg>'
@@ -1214,34 +1225,68 @@ function devEnrolForm(m){
     }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
   };
 }
+/* THE STATION'S SCRIPT. A token on its own is a string nobody can act on -- what the bench
+   needs is the two lines that put it into the handset in front of them. So the commands are
+   built here, with the token already in them, rather than left in a document to be copied
+   out and edited by hand fifty times. */
+var DEVCMP='com.samaritantechs.hooploanlock/.LockAdmin';
+function devAdbLines(token){
+  var base=location.origin;
+  return 'adb install HOOPLOAN-Lock.apk\n'
+    +'adb shell dpm set-device-owner '+DEVCMP+'\n'
+    +'adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \\\n'
+    +'  -n com.samaritantechs.hooploanlock/.EnrolReceiver \\\n'
+    +'  -e server '+base+' -e token '+token;
+}
+function devCopyBox(id){
+  var t=$('#'+id); if(!t) return; t.select();
+  try{ document.execCommand('copy'); toast('Imenakiliwa / copied'); }
+  catch(e){ toast('Chagua na nakili mwenyewe. / Select and copy manually.', true); }
+}
 function devProvision(m, r){
   var p=r.provision||[];
   if(!p.length){ closeDrawer(); drawDevices(m); return; }
   var lines=p.map(function(x){ return x.imei+'\t'+x.token; }).join('\n');
   drawer('<h3>Token za kuweka kwenye simu</h3>'
-    +'<div class="sub">Kila simu ina token yake — ndiyo kitambulisho chake. Iweke kwenye simu husika sasa; '
-    +'baadaye inasomwa moja moja kwa kitufe cha <b>Token</b>. '
-    +'/ One token per phone, written into that handset at provisioning.</div>'
-    +'<textarea id="dvTok" rows="'+Math.min(14,Math.max(3,p.length))+'" readonly '
+    +'<div class="sub">Kila simu ina token yake — ndiyo kitambulisho chake, na inaonyeshwa <b>mara moja tu</b>. '
+    +'Simu lazima iwe mpya au imefutwa (bila akaunti yoyote) ndipo iweze kufungwa. '
+    +'/ One token per phone, shown once. The handset must have no accounts on it — box-fresh or '
+    +'factory reset — before it can be made Device Owner.</div>'
+    +'<textarea id="dvTok" rows="'+Math.min(12,Math.max(3,p.length))+'" readonly '
     +'style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'+esc(lines)+'</textarea>'
-    +'<button class="btn w" id="dvTokCopy">Nakili / Copy</button>'
+    +'<button class="btn w" id="dvTokCopy">Nakili orodha / Copy the list</button>'
+    +'<div class="sub" style="margin-top:12px">Kwa kila simu, kwenye laptop ya kituo — badilisha token: '
+    +'/ Per phone, on the station laptop — swap in that phone\'s token:</div>'
+    +'<textarea id="dvAdb" rows="6" readonly style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
+    +esc(devAdbLines('<TOKEN>'))+'</textarea>'
+    +'<button class="btn w ghost" id="dvAdbCopy">Nakili amri / Copy the commands</button>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
-  $('#dvTokCopy').onclick=function(){
-    var t=$('#dvTok'); t.select();
-    try{ document.execCommand('copy'); toast('Zimenakiliwa / copied'); }
-    catch(e){ toast('Chagua na nakili mwenyewe. / Select and copy manually.', true); }
-  };
+  $('#dvTokCopy').onclick=function(){ devCopyBox('dvTok'); };
+  $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
   $('#dvTokDone').onclick=function(){ closeDrawer(); drawDevices(m); };
 }
 function devToken(imei){
   srv('deviceToken',{imei:imei}).then(function(r){
+    if(!r.token){
+      drawer('<h3>Token · '+esc(imei)+'</h3>'
+        +'<div class="mut">Simu hii haina token — ilisajiliwa kabla ya sehemu ya simu kujengwa. '
+        +'Isajili upya baada ya migration ili ipewe token. '
+        +'/ Enrolled before the phone half existed; re-enrol after the migration to mint one.</div>');
+      return;
+    }
     drawer('<h3>Token · '+esc(imei)+'</h3>'
       +'<div class="sub">Kwa simu iliyofutwa na kuwekwa app upya. Usiisambaze. '
       +'/ For re-provisioning a wiped handset. Do not share it.</div>'
-      +'<textarea readonly rows="2" style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'
-      +esc(r.token||'')+'</textarea>'
-      +(r.token?'':'<div class="mut">Simu hii haina token — ilisajiliwa kabla ya sehemu ya simu kujengwa. '
-        +'/ Enrolled before the phone half existed; re-enrol after the migration to mint one.</div>'));
+      +'<textarea id="dvOne" readonly rows="2" style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'
+      +esc(r.token)+'</textarea>'
+      +'<button class="btn w ghost" id="dvOneCopy">Nakili token / Copy</button>'
+      +'<div class="sub" style="margin-top:12px">Amri za kituo, tayari na token yake: '
+      +'/ The station commands, with this phone\'s token already in them:</div>'
+      +'<textarea id="dvOneAdb" readonly rows="6" style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
+      +esc(devAdbLines(r.token))+'</textarea>'
+      +'<button class="btn w" id="dvOneAdbCopy">Nakili amri / Copy the commands</button>');
+    $('#dvOneCopy').onclick=function(){ devCopyBox('dvOne'); };
+    $('#dvOneAdbCopy').onclick=function(){ devCopyBox('dvOneAdb'); };
   }).catch(function(e){ toast(safeErr(e), true); });
 }
 function devHistory(imei){
@@ -1251,7 +1296,17 @@ function devHistory(imei){
     var dev=d.device||{};
     h.innerHTML='<div class="card" style="padding:12px"><b style="font-size:13px">'+esc(imei)+'</b>'
       +'<div class="mut" style="font-size:11px;margin-bottom:6px">'+esc(dev.item||'—')+' · '+esc(dev.holder||'—')
-      +(dev.customer?' · mteja: '+esc(dev.customer):'')+'</div>'
+      +(dev.customer?' · mteja: '+esc(dev.customer):'')
+      +(dev.app_version?' · app '+esc(dev.app_version):'')
+      +(dev.battery!=null&&dev.battery!==''?' · betri '+esc(dev.battery)+'%':'')+'</div>'
+      /* The handset's own idea of its IMEI, shown ONLY when it disagrees with ours -- and
+         shown as a question, not a verdict. Dual-SIM phones have two, so this is a thing for
+         a person to look into, never grounds on its own to call anything theft. */
+      +(dev.reported_imei&&String(dev.reported_imei)!==String(imei)
+        ? '<div class="chip warn" style="margin-bottom:6px">Simu inajitambulisha kama '+esc(dev.reported_imei)
+          +' — inaweza kuwa SIM ya pili, au token imehamishwa. Angalia. '
+          +'/ handset reports a different IMEI; could be the second SIM slot, or a token that moved.</div>'
+        : '')
       +((d.events||[]).length
         ? '<div class="scroll"><table><thead><tr><th>Lini</th><th>Tukio</th><th>Kutoka → kwenda</th><th>Sababu</th><th>Nani</th></tr></thead><tbody>'
           +d.events.map(function(e){
@@ -1363,6 +1418,7 @@ function drawSalesPerf(m){
       +'<button class="btn sm ghost" id="spNext" title="next week">▶</button>'
       +(d.thisWeek?'<span class="chip">wiki hii / this week</span>'
         :'<button class="btn sm" id="spNow">Rudi wiki hii / this week</button>')
+      +(d.fellBack ? '<span class="chip warn">bado hakuna mauzo wiki hii / no sales yet this week</span>' : '')
       +'<span style="flex:1"></span>'
       +'<span class="mut" style="font-size:11.5px">Lengo / target: '
         +(target?money(target)+' TZS/siku · '+money(d.weekTarget)+' /wiki':'—')+'</span>'

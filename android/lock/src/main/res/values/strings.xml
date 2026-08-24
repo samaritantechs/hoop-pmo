@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HOOPLOAN</string>
+    <!-- The default words on a locked screen. The server overrides these on every beat
+         (DEVICE_LOCK_MESSAGE / DEVICE_HELP_PHONE in settings), so these are only what a
+         handset shows before it has ever heard from us. -->
+    <string name="lock_default">Simu hii imefungwa na HOOPLOAN.\nWasiliana nasi kumaliza malipo.\n\nThis phone is locked by HOOPLOAN. Contact us to clear your balance.</string>
+</resources>

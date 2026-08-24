@@ -38,3 +38,41 @@ test('package identity', () => {
   assert.equal(pkg.name, 'hoop-pmo');
   assert.equal(pkg.type, 'module');
 });
+
+/* The Android manifests and resources are XML, and nothing in `npm test` used to look at
+   them -- so a malformed one only surfaced as a gradle failure minutes later in CI, with
+   "Error parsing AndroidManifest.xml" and no line number. This is the cheap guard for the
+   one mistake that is easy to make here: `--` cannot appear INSIDE an XML comment, and the
+   prose style in this repo uses it constantly. */
+test('every android XML is well-formed enough to parse', () => {
+  const files = [];
+  const walk = dir => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = `${dir}/${e.name}`;
+      if (e.isDirectory()) { if (e.name !== 'build') walk(p); }
+      else if (e.name.endsWith('.xml')) files.push(p);
+    }
+  };
+  walk(new URL('../android', import.meta.url).pathname);
+  assert.ok(files.length > 0, 'no android XML found -- the guard is looking in the wrong place');
+
+  for (const f of files) {
+    const src = fs.readFileSync(f, 'utf8');
+    // Comments first: strip them, checking each for the `--` that makes it invalid.
+    let i = 0;
+    while ((i = src.indexOf('<!--', i)) !== -1) {
+      const end = src.indexOf('-->', i + 4);
+      assert.notEqual(end, -1, `${f}: unterminated XML comment`);
+      const body = src.slice(i + 4, end);
+      assert.ok(!body.includes('--'),
+        `${f}: "--" inside an XML comment is invalid XML (near: ${body.trim().slice(0, 60)}...)`);
+      i = end + 3;
+    }
+    // Then the crude tag balance that catches a dropped closing tag.
+    const opens = (src.match(/<[A-Za-z][^>]*[^/]>/g) || []).length;
+    const closes = (src.match(/<\/[A-Za-z][^>]*>/g) || []).length;
+    const selfClosed = (src.match(/<[A-Za-z][^>]*\/>/g) || []).length;
+    assert.ok(opens >= closes, `${f}: more closing tags than opening ones`);
+    assert.ok(selfClosed >= 0);
+  }
+});

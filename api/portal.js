@@ -139,6 +139,49 @@ function mintCode(existing) {
    all of them, so it is computed once every five minutes, not once per open. */
 const trendCache = new Map();
 
+/* =========================================================================================
+   THE MONDAY PROBLEM -- why every weekly chart went blank this morning.
+
+     "Locked 7+ -- wiki hii and Credit -- 7+ recovery kwa wiki are no longer dropping their
+      graphs at dashboard, sales too"
+
+   All three charts show a FIXED Monday-to-Sunday week, which is the right call: a rolling
+   seven days shifts its own start every morning, so two people comparing the chart on
+   different days would be comparing different weeks. But it has one ugly consequence nobody
+   sees until it happens -- at 09:00 on a Monday the current week contains nothing at all,
+   and every one of these cards renders empty. Sunday evening they were full. Nothing broke;
+   the week simply turned over, and a dashboard that goes blank every Monday morning until
+   somebody remembers to upload is a dashboard people stop opening.
+
+   So: when nobody asked for a particular week and the current one has no data yet, these
+   fall back to the newest week that DOES -- and say which week they are showing rather than
+   quietly pretending it is this one. `weekOf` is that decision, made once here so the three
+   charts cannot drift into disagreeing about which week the dashboard is looking at.
+
+   Costs one bounded read (newest row, one column, indexed) and only when the caller did not
+   name a week. An explicitly requested week is never overridden -- sliding back to a genuinely
+   empty week must still show it empty, or the arrows would lie. */
+const mondayOf = d => dayShift(d, -((new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+
+async function weekOf(db, user, args, table, col) {
+  const asked = String((args && args.week) || '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(asked)) {
+    const from = mondayOf(asked);
+    return { from, to: dayShift(from, 6), thisWeek: from === mondayOf(todayKey()), fellBack: false };
+  }
+  const thisMon = mondayOf(todayKey());
+  let latest = null;
+  try {
+    const { data } = await scopeQ(user, db.from(table).select(col)
+      .not(col, 'is', null).order(col, { ascending: false }).limit(1));
+    latest = data && data[0] ? String(data[0][col]).slice(0, 10) : null;
+  } catch (e) { latest = null; }        // never let the peek break the chart
+  // Only ever slides BACKWARD. A stray future-dated row must not drag the dashboard
+  // forward into a week that has not happened.
+  const from = (latest && mondayOf(latest) < thisMon) ? mondayOf(latest) : thisMon;
+  return { from, to: dayShift(from, 6), thisWeek: from === thisMon, fellBack: from !== thisMon };
+}
+
 const FNS = {
   async boot(db, user) {
     const [summary, teams] = await Promise.all([
@@ -169,12 +212,9 @@ const FNS = {
        start every morning. Monday is always the first bar, so two people comparing the
        chart on different days are comparing the same week. Days not yet uploaded come
        back null and the chart draws them as gaps. */
-    const t = todayKey();
-    const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();   // 0 = Sunday
-    const from = dayShift(t, -((dow + 6) % 7));                        // this week's Monday
-    const days = 7;
-    const to = dayShift(from, days - 1);                               // ...through Sunday
-    const ck = 'trend:' + from + ':' + to;
+    const wk = await weekOf(db, user, args, 'watu_snapshots', 'snapshot_date');
+    const from = wk.from, to = wk.to, days = 7;
+    const ck = 'trend:' + from + ':' + to + ':' + (user.teams ? user.teams.join(',') : 'ALL');
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
     const rows = await fetchAll(() => scopeQ(user, db.from('watu_snapshots')
@@ -193,7 +233,7 @@ const FNS = {
       const d = dayShift(from, i);
       points.push({ date: d, num: seen.has(d) ? seen.get(d).size : null });
     }
-    const value = { ok: true, from, to, points };
+    const value = { ok: true, from, to, points, thisWeek: wk.thisWeek, fellBack: wk.fellBack };
     trendCache.set(ck, { at: Date.now(), value });
     return { ...value, cached: false };
   },
@@ -223,17 +263,16 @@ const FNS = {
   async recoveryWeek(db, user, args) {
     // Drawn on the Recovery pane AND on the dashboard -- see requireAnyNav.
     requireAnyNav(user, ['recovery', 'dashboard']);
-    const t = todayKey();
-    const mondayOf = d => dayShift(d, -((new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay() + 6) % 7));
-    const thisMon = mondayOf(t);
     /* THE WEEK SLIDES, BACKWARD AND FORWARD -- the same rule Hope's dashboard settled on:
        any date is accepted and snapped to its own Monday, and a FUTURE week is not clamped
        back to this one -- it simply reads whatever has been uploaded for it and shows gaps
        where nothing has landed yet. The chosen Monday is echoed back (from/to/thisWeek) so
-       the screen can label where it is standing and offer the way back. */
-    const asked = String((args && args.week) || '').slice(0, 10);
-    const from = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? mondayOf(asked) : thisMon;
-    const to = dayShift(from, 6);                                        // ...through Sunday
+       the screen can label where it is standing and offer the way back.
+
+       When NOBODY asked, weekOf falls back to the newest week with uploads -- see the note
+       on the Monday problem above. An explicit week is always honoured as given. */
+    const wk = await weekOf(db, user, args, 'watu_snapshots', 'snapshot_date');
+    const from = wk.from, to = wk.to;
     /* THE BAR IS THE DAY THE WORK WAS DONE, NOT THE DAY THE RESULT LANDED.
          "since the reduced customers we saw today are of monday put them on monday, those we
           observe tomorrow will be of tuesday. its confusing to see yesterdays work on tuesday
@@ -318,7 +357,7 @@ const FNS = {
       }
     }
 
-    const value = { ok: true, from, to, points, credits: [...credits.values()], thisWeek: from === thisMon };
+    const value = { ok: true, from, to, points, credits: [...credits.values()], thisWeek: wk.thisWeek, fellBack: wk.fellBack };
     trendCache.set(ck, { at: Date.now(), value });
     return { ...value, cached: false };
   },
@@ -438,11 +477,10 @@ const FNS = {
      read for the target. Memoised five minutes per week and scope, exactly like the trend. */
   async salesWeek(db, user, args) {
     requireNav(user, 'scorecards');
-    const mondayOf = d => dayShift(d, -((new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay() + 6) % 7));
-    const thisMon = mondayOf(todayKey());
-    const asked = String((args && args.week) || '').slice(0, 10);
-    const from = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? mondayOf(asked) : thisMon;
-    const to = dayShift(from, 6);
+    // Same Monday-problem fallback as the two recovery charts: a sales board that reads blank
+    // every Monday morning until somebody uploads is one people stop opening.
+    const wk = await weekOf(db, user, args, 'hoop_sales', 'sale_date');
+    const from = wk.from, to = wk.to;
     const ck = 'salesweek:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
@@ -492,7 +530,7 @@ const FNS = {
       companyDays[d].count++; companyDays[d].amount += num(r.price);
     }
     const value = {
-      ok: true, from, to, days, thisWeek: from === thisMon,
+      ok: true, from, to, days, thisWeek: wk.thisWeek, fellBack: wk.fellBack,
       dailyTarget, weekTarget: dailyTarget ? dailyTarget * 7 : null,
       general: pivot(keyFns.general),
       rsm: pivot(keyFns.rsm),
@@ -1217,7 +1255,7 @@ const FNS = {
     const [devRows, events] = await Promise.all([
       fetchAll(() => db.from('devices').select(
         'imei, item, holder, state, state_reason, state_by, state_at, reported, last_seen, '
-        + 'app_version, battery, android, sold_ref, customer, released_at, '
+        + 'app_version, battery, android, sold_ref, customer, released_at, reported_imei, '
         + 'enrolled_at, enrolled_by, enrol_batch, updated_at').eq('imei', imei)),
       fetchAll(() => db.from('device_events').select('*').eq('imei', imei).order('at', { ascending: false }).limit(100)),
     ]);
