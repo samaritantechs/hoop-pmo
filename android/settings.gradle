@@ -13,3 +13,7 @@ dependencyResolutionManagement {
 }
 rootProject.name = "HOPE Calls"
 include ':app'
+// The lock app is a SEPARATE APK on purpose. It is a Device Owner -- unremovable, kiosked,
+// with no launcher icon -- and that is the last thing an officer's working phone should
+// become. One app for the people who work here, one for the stock we have taken control of.
+include ':lock'

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the admin is allowed to do. Kept to the minimum that locking actually needs: this
+     app never reads messages, never wipes a customer's data, and never touches their photos.
+     It pins the screen and it reports whether it is pinned. -->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <!-- Needed to lock the screen and to set the user restrictions that stop a locked
+             phone being factory-reset or safe-booted out of our hands. -->
+        <force-lock />
+    </uses-policies>
+</device-admin>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Full screen, no action bar, no system bar colours to fight with. A lock screen that
+         looks like a half-drawn app invites somebody to try to get behind it. -->
+    <style name="Theme.Lock" parent="android:Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">#0B2A6B</item>
+        <item name="android:statusBarColor">#0B2A6B</item>
+        <item name="android:navigationBarColor">#0B2A6B</item>
+    </style>
+</resources>

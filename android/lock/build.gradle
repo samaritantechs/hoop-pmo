@@ -1,0 +1,64 @@
+plugins {
+    id 'com.android.application'
+}
+
+// ../../lock-version.json is the single place this app's version is set, exactly as
+// app-version.json is for HOOP Calls -- api/lock-version.js serves the same file back to the
+// installed app so it can update itself. Two separate files because the two apps ship on
+// their own clocks: an officer's calls build has nothing to do with a locked handset's.
+def lockVersion = new groovy.json.JsonSlurper().parse(rootProject.file('../lock-version.json'))
+
+def serverUrl = project.hasProperty('serverUrl') ? project.property('serverUrl') : 'https://hoop-pmo.vercel.app'
+
+android {
+    namespace 'com.samaritantechs.hooploanlock'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.samaritantechs.hooploanlock'
+        // API 23. Device Owner provisioning by QR needs 23+, and everything this app relies
+        // on (lock task without exit, user restrictions, silent install) is 23-and-up too.
+        minSdk 23
+        targetSdk 35
+        versionCode lockVersion.versionCode
+        versionName lockVersion.versionName
+        // A fallback only. The real server URL arrives in the provisioning bundle, so one
+        // APK can serve any deployment; this is what a hand-installed test build falls back on.
+        buildConfigField 'String', 'DEFAULT_SERVER', "\"${serverUrl}\""
+    }
+
+    // The SAME sideload key as the calls app. Device Owner provisioning pins the admin to a
+    // signing certificate checksum, so re-signing with a different key would strand every
+    // phone already provisioned -- they would refuse the update and could not be re-enrolled
+    // without a factory reset. Losing this key is the one unrecoverable mistake here.
+    signingConfigs {
+        sideload {
+            storeFile rootProject.file('sideload.keystore')
+            storePassword 'hopecalls'
+            keyAlias 'hopecalls'
+            keyPassword 'hopecalls'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.sideload
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // Platform APIs only, same as the calls app: JobScheduler, DevicePolicyManager and
+    // HttpURLConnection are all in the framework. No androidx means nothing to resolve,
+    // which is what keeps this buildable in a restricted CI environment.
+}

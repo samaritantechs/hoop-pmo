@@ -1217,7 +1217,7 @@ const FNS = {
     const [devRows, events] = await Promise.all([
       fetchAll(() => db.from('devices').select(
         'imei, item, holder, state, state_reason, state_by, state_at, reported, last_seen, '
-        + 'app_version, battery, android, sold_ref, customer, released_at, '
+        + 'app_version, battery, android, sold_ref, customer, released_at, reported_imei, '
         + 'enrolled_at, enrolled_by, enrol_batch, updated_at').eq('imei', imei)),
       fetchAll(() => db.from('device_events').select('*').eq('imei', imei).order('at', { ascending: false }).limit(100)),
     ]);

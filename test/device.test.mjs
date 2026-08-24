@@ -26,7 +26,7 @@ test('a heartbeat records what the phone says and returns what the office decide
     [{ key: 'DEVICE_HELP_PHONE', value: '0700000000' }]);
 
   const r = await deviceApi(d, 'dev_beat',
-    [{ imei: 'D1', token: 'tok1', locked: true, battery: 84, android: '13', appVersion: '1.0.2' }], NOW);
+    [{ token: 'tok1', locked: true, battery: 84, android: '13', appVersion: '1.0.2' }], NOW);
 
   assert.equal(r.command, 'lock');
   assert.equal(r.reason, 'Stock unaccounted', 'the phone is told WHY, so the lock screen can say it');
@@ -69,19 +69,24 @@ test('history keeps the transition, not the heartbeat', async () => {
 test('a phone can only ever speak for itself, and cannot talk its way free', async () => {
   const d = fleet([
     { imei: 'D1', state: 'locked', state_reason: 'unpaid', enrol_token: 'tok1' },
-    { imei: 'D2', state: 'locked', state_reason: 'unpaid', enrol_token: 'tok2' },
+    { imei: 'D2', state: 'enrolled', enrol_token: 'tok2' },
   ]);
 
-  // Wrong token, unknown IMEI, and a missing token all give the SAME answer -- otherwise
-  // this endpoint becomes an oracle for guessing which IMEIs are real.
-  const refused = /Not enrolled/;
-  await assert.rejects(() => deviceApi(d, 'dev_beat', [{ imei: 'D1', token: 'tok2' }], NOW), refused,
-    'another phone\'s token does not open this one');
-  await assert.rejects(() => deviceApi(d, 'dev_beat', [{ imei: 'GHOST', token: 'tok1' }], NOW), refused);
-  await assert.rejects(() => deviceApi(d, 'dev_beat', [{ imei: 'D1', token: '' }], NOW), /required/);
+  // An unknown token and a missing one give the SAME answer -- otherwise this endpoint
+  // becomes an oracle for probing which tokens are real.
+  await assert.rejects(() => deviceApi(d, 'dev_beat', [{ token: 'nope' }], NOW), /Not enrolled/);
+  await assert.rejects(() => deviceApi(d, 'dev_beat', [{ token: '' }], NOW), /required/);
+  // A row that never got a token cannot be spoken for at all.
+  const bare = fleet([{ imei: 'D9', state: 'locked', enrol_token: null }]);
+  await assert.rejects(() => deviceApi(bare, 'dev_beat', [{ token: 'anything' }], NOW), /Not enrolled/);
+
+  // A token answers for its OWN row and no other: tok2 cannot touch D1's state.
+  await deviceApi(d, 'dev_beat', [{ token: 'tok2', locked: false }], NOW);
+  assert.equal(d._dump('devices').find(x => x.imei === 'D1').reported, undefined,
+    'D2\'s token left D1 completely untouched');
 
   // A phone claiming to be unlocked is still told to lock: state is the office's, not its.
-  const r = await deviceApi(d, 'dev_beat', [{ imei: 'D1', token: 'tok1', locked: false }], NOW);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: false }], NOW);
   assert.equal(r.command, 'lock');
   assert.equal(d._dump('devices').find(x => x.imei === 'D1').state, 'locked');
 
@@ -89,6 +94,40 @@ test('a phone can only ever speak for itself, and cannot talk its way free', asy
   const list = await _FNS.deviceList(d, ADMIN, {});
   assert.equal(list.rows.find(x => x.imei === 'D1').lockState, 'pending',
     'ordered locked, reporting unlocked -- that is pending, and someone must look at it');
+});
+
+test('the handset\'s idea of its own IMEI is recorded, never acted on', async () => {
+  // Dual-SIM phones have two IMEIs and getImei() differs by Android version -- so a
+  // mismatch is a thing for a person to look at, not grounds to refuse the beat.
+  const d = fleet([{ imei: 'D1', state: 'enrolled', enrol_token: 'tok1' }]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: false, imei: 'OTHER' }], NOW);
+  assert.equal(r.command, 'unlock', 'the beat is served regardless');
+  const row = d._dump('devices')[0];
+  assert.equal(row.reported_imei, 'OTHER', 'kept, so somebody can see it');
+  assert.equal(row.imei, 'D1', 'the registry\'s own key is never overwritten by the phone');
+  assert.equal(d._dump('device_events').filter(e => /imei/i.test(e.event || '')).length, 0,
+    'and it raises no event of its own -- that would cry wolf on ordinary hardware');
+});
+
+test('stock never self-locks in the dark; a phone with a customer does', async () => {
+  // A shelf of boxed handsets is offline for weeks by design. Locking themselves there would
+  // be a self-inflicted wound with no upside, so stock is told "never".
+  const stock = fleet([{ imei: 'D1', state: 'enrolled', enrol_token: 'tok1' }]);
+  const s = await deviceApi(stock, 'dev_beat', [{ token: 'tok1', locked: false }], NOW);
+  assert.equal(s.graceHours, -1, 'still stock -- never self-lock');
+
+  // Once it has gone out to somebody, silence has to mean something or airplane mode wins.
+  const sold = fleet([{ imei: 'D2', state: 'enrolled', enrol_token: 'tok2', customer: 'Yuda' }]);
+  const r = await deviceApi(sold, 'dev_beat', [{ token: 'tok2', locked: false }], NOW);
+  assert.equal(r.graceHours, 24 * 7, 'a week by default -- generous, but not forever');
+
+  // ...and the office can change that without shipping a new APK to every handset.
+  const tuned = fakeDb({
+    devices: [{ imei: 'D3', state: 'enrolled', enrol_token: 'tok3', sold_ref: 'R99' }],
+    device_events: [], settings: [{ key: 'DEVICE_OFFLINE_GRACE_HOURS', value: '72' }],
+  });
+  const t = await deviceApi(tuned, 'dev_beat', [{ token: 'tok3', locked: false }], NOW);
+  assert.equal(t.graceHours, 72);
 });
 
 test('a released phone is told to stop calling home', async () => {
@@ -131,7 +170,7 @@ test('enrolment mints one token per phone and hands it back only to the station'
 
   // The minted token is the one the handset must present.
   const tok = r.provision.find(p => p.imei === 'D1').token;
-  const beat = await deviceApi(d, 'dev_beat', [{ imei: 'D1', token: tok, locked: false }], NOW);
+  const beat = await deviceApi(d, 'dev_beat', [{ token: tok, locked: false }], NOW);
   assert.equal(beat.command, 'unlock');
 
   // It must NOT come back on the screen most likely to be open across a counter.

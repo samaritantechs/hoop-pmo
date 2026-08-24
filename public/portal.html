@@ -1214,34 +1214,68 @@ function devEnrolForm(m){
     }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
   };
 }
+/* THE STATION'S SCRIPT. A token on its own is a string nobody can act on -- what the bench
+   needs is the two lines that put it into the handset in front of them. So the commands are
+   built here, with the token already in them, rather than left in a document to be copied
+   out and edited by hand fifty times. */
+var DEVCMP='com.samaritantechs.hooploanlock/.LockAdmin';
+function devAdbLines(token){
+  var base=location.origin;
+  return 'adb install HOOPLOAN-Lock.apk\n'
+    +'adb shell dpm set-device-owner '+DEVCMP+'\n'
+    +'adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \\\n'
+    +'  -n com.samaritantechs.hooploanlock/.EnrolReceiver \\\n'
+    +'  -e server '+base+' -e token '+token;
+}
+function devCopyBox(id){
+  var t=$('#'+id); if(!t) return; t.select();
+  try{ document.execCommand('copy'); toast('Imenakiliwa / copied'); }
+  catch(e){ toast('Chagua na nakili mwenyewe. / Select and copy manually.', true); }
+}
 function devProvision(m, r){
   var p=r.provision||[];
   if(!p.length){ closeDrawer(); drawDevices(m); return; }
   var lines=p.map(function(x){ return x.imei+'\t'+x.token; }).join('\n');
   drawer('<h3>Token za kuweka kwenye simu</h3>'
-    +'<div class="sub">Kila simu ina token yake — ndiyo kitambulisho chake. Iweke kwenye simu husika sasa; '
-    +'baadaye inasomwa moja moja kwa kitufe cha <b>Token</b>. '
-    +'/ One token per phone, written into that handset at provisioning.</div>'
-    +'<textarea id="dvTok" rows="'+Math.min(14,Math.max(3,p.length))+'" readonly '
+    +'<div class="sub">Kila simu ina token yake — ndiyo kitambulisho chake, na inaonyeshwa <b>mara moja tu</b>. '
+    +'Simu lazima iwe mpya au imefutwa (bila akaunti yoyote) ndipo iweze kufungwa. '
+    +'/ One token per phone, shown once. The handset must have no accounts on it — box-fresh or '
+    +'factory reset — before it can be made Device Owner.</div>'
+    +'<textarea id="dvTok" rows="'+Math.min(12,Math.max(3,p.length))+'" readonly '
     +'style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'+esc(lines)+'</textarea>'
-    +'<button class="btn w" id="dvTokCopy">Nakili / Copy</button>'
+    +'<button class="btn w" id="dvTokCopy">Nakili orodha / Copy the list</button>'
+    +'<div class="sub" style="margin-top:12px">Kwa kila simu, kwenye laptop ya kituo — badilisha token: '
+    +'/ Per phone, on the station laptop — swap in that phone\'s token:</div>'
+    +'<textarea id="dvAdb" rows="6" readonly style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
+    +esc(devAdbLines('<TOKEN>'))+'</textarea>'
+    +'<button class="btn w ghost" id="dvAdbCopy">Nakili amri / Copy the commands</button>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
-  $('#dvTokCopy').onclick=function(){
-    var t=$('#dvTok'); t.select();
-    try{ document.execCommand('copy'); toast('Zimenakiliwa / copied'); }
-    catch(e){ toast('Chagua na nakili mwenyewe. / Select and copy manually.', true); }
-  };
+  $('#dvTokCopy').onclick=function(){ devCopyBox('dvTok'); };
+  $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
   $('#dvTokDone').onclick=function(){ closeDrawer(); drawDevices(m); };
 }
 function devToken(imei){
   srv('deviceToken',{imei:imei}).then(function(r){
+    if(!r.token){
+      drawer('<h3>Token · '+esc(imei)+'</h3>'
+        +'<div class="mut">Simu hii haina token — ilisajiliwa kabla ya sehemu ya simu kujengwa. '
+        +'Isajili upya baada ya migration ili ipewe token. '
+        +'/ Enrolled before the phone half existed; re-enrol after the migration to mint one.</div>');
+      return;
+    }
     drawer('<h3>Token · '+esc(imei)+'</h3>'
       +'<div class="sub">Kwa simu iliyofutwa na kuwekwa app upya. Usiisambaze. '
       +'/ For re-provisioning a wiped handset. Do not share it.</div>'
-      +'<textarea readonly rows="2" style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'
-      +esc(r.token||'')+'</textarea>'
-      +(r.token?'':'<div class="mut">Simu hii haina token — ilisajiliwa kabla ya sehemu ya simu kujengwa. '
-        +'/ Enrolled before the phone half existed; re-enrol after the migration to mint one.</div>'));
+      +'<textarea id="dvOne" readonly rows="2" style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'
+      +esc(r.token)+'</textarea>'
+      +'<button class="btn w ghost" id="dvOneCopy">Nakili token / Copy</button>'
+      +'<div class="sub" style="margin-top:12px">Amri za kituo, tayari na token yake: '
+      +'/ The station commands, with this phone\'s token already in them:</div>'
+      +'<textarea id="dvOneAdb" readonly rows="6" style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
+      +esc(devAdbLines(r.token))+'</textarea>'
+      +'<button class="btn w" id="dvOneAdbCopy">Nakili amri / Copy the commands</button>');
+    $('#dvOneCopy').onclick=function(){ devCopyBox('dvOne'); };
+    $('#dvOneAdbCopy').onclick=function(){ devCopyBox('dvOneAdb'); };
   }).catch(function(e){ toast(safeErr(e), true); });
 }
 function devHistory(imei){
@@ -1251,7 +1285,17 @@ function devHistory(imei){
     var dev=d.device||{};
     h.innerHTML='<div class="card" style="padding:12px"><b style="font-size:13px">'+esc(imei)+'</b>'
       +'<div class="mut" style="font-size:11px;margin-bottom:6px">'+esc(dev.item||'—')+' · '+esc(dev.holder||'—')
-      +(dev.customer?' · mteja: '+esc(dev.customer):'')+'</div>'
+      +(dev.customer?' · mteja: '+esc(dev.customer):'')
+      +(dev.app_version?' · app '+esc(dev.app_version):'')
+      +(dev.battery!=null&&dev.battery!==''?' · betri '+esc(dev.battery)+'%':'')+'</div>'
+      /* The handset's own idea of its IMEI, shown ONLY when it disagrees with ours -- and
+         shown as a question, not a verdict. Dual-SIM phones have two, so this is a thing for
+         a person to look into, never grounds on its own to call anything theft. */
+      +(dev.reported_imei&&String(dev.reported_imei)!==String(imei)
+        ? '<div class="chip warn" style="margin-bottom:6px">Simu inajitambulisha kama '+esc(dev.reported_imei)
+          +' — inaweza kuwa SIM ya pili, au token imehamishwa. Angalia. '
+          +'/ handset reports a different IMEI; could be the second SIM slot, or a token that moved.</div>'
+        : '')
       +((d.events||[]).length
         ? '<div class="scroll"><table><thead><tr><th>Lini</th><th>Tukio</th><th>Kutoka → kwenda</th><th>Sababu</th><th>Nani</th></tr></thead><tbody>'
           +d.events.map(function(e){
