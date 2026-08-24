@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeDb } from './fake-db.mjs';
-import { callApi, pnorm, lifeDayOf, _clearSummaryCache } from '../api/_lib/call-core.js';
+import { callApi, pnorm, lifeDayOf, dealMap, _clearSummaryCache } from '../api/_lib/call-core.js';
 
 /* The whole officer day, end to end, against the fake PostgREST client: sign in with the
    team code, see the deck, sync calls, log a follow-up. Pinned clock: 2026-08-14 EAT. */
@@ -226,6 +226,11 @@ test('registering another credit user re-deals the pool automatically', async ()
 test('the bar: own yesterday % and last-week average for a credit user; company for a leader', async () => {
   _clearSummaryCache();
   const NOWF = Date.parse('2026-08-14T09:00:00+03:00');          // Friday; last week = Mon 03 .. Sun 09
+  // Who the per-deck shuffle deals X1 and W1 to, computed with the very function every
+  // screen shares -- the fixture then attributes the calls to whoever actually held them.
+  const roster = ['U1', 'U2'];
+  const yHolder = dealMap([{ imei: 'X1', snapshot_date: '2026-08-13' }, { imei: 'X2', snapshot_date: '2026-08-13' }], roster, '2026-08-13').X1;
+  const wHolder = dealMap([{ imei: 'W1', snapshot_date: '2026-08-05' }], roster, '2026-08-05').W1;
   const d = fakeDb({
     settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
     teams: [{ team: 'KINONDONI', team_code: 'AB2C3D' }],
@@ -238,27 +243,36 @@ test('the bar: own yesterday % and last-week average for a credit user; company 
       { user_id: 'U2', device_id: 'dev-2', name: 'Baraka', team: 'KINONDONI', role: 'CREDIT', is_leader: true, active: true },
       { user_id: 'U9', device_id: 'dev-9', name: 'Bosi', team: 'KINONDONI', role: 'MANAGER', is_leader: true, active: true },
     ],
-    // Yesterday's book: two customers. Sorted by IMEI, X1 deals to U1, X2 to U2.
+    /* Yesterday's book: two customers. The deal RESHUFFLES per deck now, so who holds
+       X1 is derived from dealMap below rather than assumed from IMEI order -- the test
+       pins the SEMANTICS (each bar measures the share its officer actually held), not
+       one arrangement's accident. */
     watu_snapshots: [
       { imei: 'X1', client_mobile: '255716111111', snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
       { imei: 'X2', client_mobile: '255716222222', snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
-      // One day of last week, one customer -- dealt to U1 (index 0).
+      // One day of last week, one customer.
       { imei: 'W1', client_mobile: '255716333333', snapshot_date: '2026-08-05', created_at: '2026-08-05T08:00:00Z' },
     ],
     call_logs: [
-      // U1 reached their yesterday customer; U2 called NOBODY.
-      { id: 'L1', user_id: 'U1', phone: '255716111111', duration: 95, call_date: '2026-08-13' },
-      // U1 also reached their last-week customer.
-      { id: 'L2', user_id: 'U1', phone: '255716333333', duration: 60, call_date: '2026-08-05' },
+      // The holder of X1 reached them; the holder of X2 called NOBODY.
+      { id: 'L1', user_id: yHolder, phone: '255716111111', duration: 95, call_date: '2026-08-13' },
+      // Whoever was dealt the last-week customer reached them too.
+      { id: 'L2', user_id: wHolder, phone: '255716333333', duration: 60, call_date: '2026-08-05' },
     ],
   });
-  const s1 = await callApi(d, 'api_callDailySummary', ['dev-1'], NOWF);
-  assert.equal(s1.reached.pct, 1, 'U1 reached 1 of their 1 dealt yesterday customer');
-  assert.equal(s1.asOfReached, '2026-08-13');
-  assert.equal(s1.weekAvg.pct, 1, 'their one worked last-week day averaged 100%');
-  const s2 = await callApi(d, 'api_callDailySummary', ['dev-2'], NOWF);
-  assert.equal(s2.reached.pct, 0, 'U2 reached 0 of their 1 -- the bar does not hide it');
-  assert.equal(s2.weekAvg.pct, null, 'no last-week customer was dealt to U2');
+  const devOf = { U1: 'dev-1', U2: 'dev-2' };
+  const sA = await callApi(d, 'api_callDailySummary', [devOf[yHolder]], NOWF);
+  assert.equal(sA.reached.pct, 1, 'the holder of X1 reached 1 of their 1 dealt yesterday customer');
+  assert.equal(sA.asOfReached, '2026-08-13');
+  const other = yHolder === 'U1' ? 'U2' : 'U1';
+  const sB = await callApi(d, 'api_callDailySummary', [devOf[other]], NOWF);
+  assert.equal(sB.reached.pct, 0, 'the holder of X2 reached 0 of their 1 -- the bar does not hide it');
+  // The one last-week customer was dealt to exactly one of them: their worked day
+  // averages 100%, the other has no dealt last-week day at all.
+  const sW = wHolder === yHolder ? sA : sB;
+  const sN = wHolder === yHolder ? sB : sA;
+  assert.equal(sW.weekAvg.pct, 1, 'the holder of W1\'s one worked last-week day averaged 100%');
+  assert.equal(sN.weekAvg.pct, null, 'no last-week customer was dealt to the other officer');
   _clearSummaryCache();
   const s9 = await callApi(d, 'api_callDailySummary', ['dev-9'], NOWF);
   assert.equal(s9.reached.den, 2, 'the leader sees the COMPANY: everyone\'s yesterday book');
@@ -486,4 +500,58 @@ test('guarantor and agent calls are PORTFOLIO calls', async () => {
   const ag = logs.find(l => l.match_type === 'AGENT');
   assert.equal(ag.portfolio, true);
   assert.match(ag.customer, /Agent: Anord Sawe/);
+});
+
+/* =====================================================================================
+   THE DEAL RESHUFFLES WITH EVERY DECK -- "The credits should always get random customers
+   so have random assignement model during distribution per each watu deck upload."
+   ===================================================================================== */
+
+test('the same deck date always cuts the same deal -- a re-upload cannot reshuffle mid-morning', () => {
+  const rows = 'ABCDEFGH'.split('').map(x => ({ imei: 'IM' + x, deck_date: '2026-08-14' }));
+  const a = dealMap(rows, ['U1', 'U2'], '2026-08-14');
+  const b = dealMap(rows.slice().reverse(), ['U1', 'U2'], '2026-08-14');
+  assert.deepEqual(a, b, 'row arrival order and repeat calls change nothing within one deck');
+});
+
+test('consecutive decks deal the same customers to DIFFERENT officers', () => {
+  const mk = day => 'ABCDEFGHJK'.split('').map(x => ({ imei: 'IM' + x, deck_date: day }));
+  const roster = ['U1', 'U2'];
+  const days = ['2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14'];
+  const deals = days.map(day => dealMap(mk(day), roster, day));
+  let moved = 0;
+  for (let i = 1; i < deals.length; i++) {
+    for (const imei of Object.keys(deals[i])) if (deals[i][imei] !== deals[i - 1][imei]) moved++;
+  }
+  assert.ok(moved > 0, 'at least some customers change hands between decks -- the arrangement is not frozen');
+  // And every deck is still fair: half the book each, plus-minus one.
+  for (const deal of deals) {
+    const n1 = Object.values(deal).filter(u => u === 'U1').length;
+    assert.ok(Math.abs(n1 - (10 - n1)) <= 1, 'the shuffle never costs the equal cut: ' + n1 + ' vs ' + (10 - n1));
+  }
+});
+
+test('the deal keys on the DECK\'S own date, not the viewing day -- a stale deck keeps its arrangement', () => {
+  const rows = 'ABCDEF'.split('').map(x => ({ imei: 'IM' + x, deck_date: '2026-08-13' }));
+  const monday = dealMap(rows, ['U1', 'U2'], '2026-08-13');
+  const tuesdayStillStale = dealMap(rows, ['U1', 'U2'], '2026-08-14');
+  assert.deepEqual(monday, tuesdayStillStale, 'the deal belongs to the upload, not the calendar');
+});
+
+test('followup rows (deck_date) and snapshot rows (snapshot_date) cut the SAME deal for one date', () => {
+  const imeis = 'ABCDEFGH'.split('');
+  const fu = imeis.map(x => ({ imei: 'IM' + x, deck_date: '2026-08-13' }));
+  const snap = imeis.map(x => ({ imei: 'IM' + x, snapshot_date: '2026-08-13' }));
+  assert.deepEqual(dealMap(fu, ['U1', 'U2'], '2026-08-14'), dealMap(snap, ['U1', 'U2'], '2026-08-13'),
+    'the phone\'s deck and Recovery\'s reconstruction can never disagree about who held whom');
+});
+
+test('the round-robin\'s starting officer rotates too -- one customer does not live with one officer', () => {
+  const roster = ['U1', 'U2', 'U3'];
+  const holders = new Set();
+  for (let i = 1; i <= 9; i++) {
+    const day = '2026-08-0' + ((i % 9) + 1);
+    holders.add(dealMap([{ imei: 'LONER', deck_date: day }], roster, day).LONER);
+  }
+  assert.ok(holders.size > 1, 'across nine decks a lone customer is chased by more than one officer');
 });

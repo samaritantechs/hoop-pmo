@@ -461,8 +461,10 @@ const FNS = {
       prevDate = d2.data && d2.data[0] ? String(d2.data[0].snapshot_date).slice(0, 10) : null;
     }
     const [deck, prev, agents, hoopAgents, fu] = await Promise.all([
+      // deck_date rides along so the deal's per-deck shuffle keys on the DECK's date --
+      // Wateja must name the same holders the handsets show, stale deck included.
       deckDate ? fetchAll(() => scopeQ(user, db.from('followup_status')
-        .select('imei, client_name, contact, team, model, price, disbursed_date, days_offline, locked4, locked7, has_ever_paid, fu_status, comment_by')
+        .select('imei, client_name, contact, team, model, price, disbursed_date, days_offline, locked4, locked7, has_ever_paid, fu_status, comment_by, deck_date')
         .eq('deck_date', deckDate))) : [],
       prevDate ? fetchAll(() => scopeQ(user, db.from('watu_snapshots')
         .select('imei, client_name, client_mobile, team, model, price, disbursed_date, days_offline, locked4, locked7, has_ever_paid, agent, created_at')
