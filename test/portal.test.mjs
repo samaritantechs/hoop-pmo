@@ -626,6 +626,35 @@ test('recoveryWeek draws a gap, never a zero, for a day nobody uploaded', async 
     'no upload is null on every day -- "nobody uploaded" must never render as "nobody recovered"');
 });
 
+test('recoveryWeek slides: a past week is read as ITS OWN week, and any date snaps to its Monday', async () => {
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();
+  const thisMon = dShift(t, -((dow + 6) % 7));
+  const lastMon = dShift(thisMon, -7);
+  const lastTue = dShift(lastMon, 1);
+  const inWin = dShift(lastMon, -10);
+  const row = (imei, date, off) => ({ imei, client_name: 'C' + imei, team: 'SLIDETEST',
+    days_offline: off, disbursed_date: inWin, snapshot_date: date, created_at: date + 'T08:00:00Z' });
+  // Distinct scope so the five-minute week memo from the tests above cannot answer for us.
+  const scoped = { ...ADMIN, teams: ['SLIDETEST'] };
+  const d = fakeDb({
+    watu_snapshots: [row('A', lastMon, 9), row('A', lastTue, 4)],
+    call_users: [{ user_id: 'u1', name: 'CREDIT ONE', role: 'CREDIT', active: true }],
+  });
+  // Asked with a mid-week date -- Wednesday of last week -- it must snap back to that Monday.
+  const r = await _FNS.recoveryWeek(d, scoped, { week: dShift(lastMon, 2) });
+  assert.equal(r.from, lastMon, 'any date resolves to its own Monday');
+  assert.equal(r.thisWeek, false, 'and the answer says it is standing in another week');
+  assert.equal(r.points[0].date, lastMon);
+  assert.equal(r.points[0].offJana, 1, 'last week\'s own pool, from last week\'s own uploads');
+  assert.equal(r.points[0].reduced, 1, 'and its result, read from the next upload as ever');
+  // Junk falls back to this week rather than erroring -- the screen always has somewhere to stand.
+  const now = await _FNS.recoveryWeek(d, { ...ADMIN, teams: ['SLIDETEST2'] }, { week: 'not-a-date' });
+  assert.equal(now.from, thisMon);
+  assert.equal(now.thisWeek, true);
+});
+
 test('recoveryDayList names the customers behind a day, with the credit who held them', async () => {
   const { todayKey } = await import('../api/_lib/time.js');
   const t = todayKey();

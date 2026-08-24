@@ -646,9 +646,34 @@ function drawDash(m){
 
    A day the officer was dealt nothing is a gap, not a zero -- an officer who was handed
    no 7+ customers on Wednesday did not "fail Wednesday", and the chart must not say so. */
+/* THE WEEK SLIDES. One shared choice for BOTH recovery charts (the per-person grid and
+   the 7+ trend), so sliding back a week moves the whole picture together, never half of
+   it. Empty string = this week; anything else is a Monday the server snapped to. */
+var RECWEEK='';
+function recWeekBar(d){
+  return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">'
+    +'<button class="btn sm ghost" id="recWkPrev" title="Wiki iliyopita / previous week">◀</button>'
+    +'<span style="font-size:12px;font-weight:600">'+esc(d.from||'')+' → '+esc(d.to||'')+'</span>'
+    +'<button class="btn sm ghost" id="recWkNext" title="Wiki ijayo / next week">▶</button>'
+    +(d.thisWeek
+      ? '<span class="chip">wiki hii / this week</span>'
+      : '<button class="btn sm" id="recWkNow">Rudi wiki hii / back to this week</button>')
+    +'</div>';
+}
+function wireRecWeekBar(d){
+  var step=function(n){
+    var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
+    base.setUTCDate(base.getUTCDate()+7*n);
+    RECWEEK=base.toISOString().slice(0,10);
+    drawCreditRecovery(); drawRecoveryTrend();
+  };
+  var p=$('#recWkPrev'); if(p) p.onclick=function(){ step(-1); };
+  var n=$('#recWkNext'); if(n) n.onclick=function(){ step(1); };
+  var now=$('#recWkNow'); if(now) now.onclick=function(){ RECWEEK=''; drawCreditRecovery(); drawRecoveryTrend(); };
+}
 function drawCreditRecovery(){
   var box=$('#credRecBox'); if(!box) return;
-  srv('recoveryWeek',{}).then(function(d){
+  srv('recoveryWeek',{week:RECWEEK}).then(function(d){
     var b=$('#credRecBox'); if(!b) return;
     var pts=d.points||[], people=(d.credits||[]);
     // Only the people who were actually dealt something this week -- a roster member with
@@ -657,7 +682,10 @@ function drawCreditRecovery(){
       return Object.keys(p.days||{}).some(function(k){ return p.days[k].assigned>0; });
     });
     if(!pts.length||!live.length){
-      b.innerHTML='<div class="mut">Hakuna mgao wa 7+ wiki hii bado — chati itajaa baada ya upload mbili au zaidi.</div>';
+      // The bar stays even on an empty week -- it is the way back OUT of one.
+      b.innerHTML=recWeekBar(d)
+        +'<div class="mut">Hakuna mgao wa 7+ wiki hii — chati hujaa pale upload za wiki husika zilipo.</div>';
+      wireRecWeekBar(d);
       return;
     }
     var today=(new Date(Date.now()+3*3600*1000)).toISOString().slice(0,10);
@@ -729,11 +757,12 @@ function drawCreditRecovery(){
         +cells+'</div>';
     }).join('');
 
-    b.innerHTML=head+rows
+    b.innerHTML=recWeekBar(d)+head+rows
       +'<div class="mut" style="font-size:10.5px;margin-top:8px">'
       +'Urefu wote = waliopewa (OFF JANA ya jana) · kijani = waliopungua leo · “—” = hakukuwa na mgao siku hiyo. '
       +'Bonyeza \u{1F441} juu ya siku kuona wateja wenyewe.</div>'
       +'<div id="credDayBox" style="margin-top:10px"></div>';
+    wireRecWeekBar(d);
 
     // One handler per eye. Each day opens on its own and replaces whatever was open, so the
     // panel never becomes a stack of days nobody closed.
@@ -1055,16 +1084,18 @@ function credDayOpen(date, dayShort){
 
 function drawRecoveryTrend(){
   var box=$('#recTrendBox'); if(!box) return;
-  srv('recoveryWeek',{}).then(function(d){
+  // The SAME chosen week as the per-person grid -- the two charts slide together.
+  srv('recoveryWeek',{week:RECWEEK}).then(function(d){
     var b=$('#recTrendBox'); if(!b) return;
+    var wk=d.thisWeek?'wiki hii':(esc(d.from||'')+' → '+esc(d.to||''));
     var svg=svgRecoveryBars(d.points||[]);
     if(!svg){
-      b.innerHTML='<div class="mut">Hakuna upload wa wiki hii bado — chati itajaa baada ya upload za kila siku.</div>';
+      b.innerHTML='<div class="mut">Hakuna upload wa wiki hii ('+wk+') — chati hujaa pale upload zilipo.</div>';
       return;
     }
-    b.innerHTML='<div style="font-weight:700;margin-bottom:2px">7+ waliopungua wiki hii / 7+ reduced this week</div>'
+    b.innerHTML='<div style="font-weight:700;margin-bottom:2px">7+ waliopungua / 7+ reduced · '+wk+'</div>'
       +'<div class="mut" style="margin-bottom:8px">Ndani ya siku 45 pekee (dirisha la Hoop). '
-      +'Urefu wote = OFF JANA (7+ siku kwenye upload ya jana). Kijani = walipungua leo.</div>'
+      +'Urefu wote = OFF JANA (7+ siku kwenye upload ya jana). Kijani = walipungua siku husika.</div>'
       +svg;
   }).catch(function(e){
     var b=$('#recTrendBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';

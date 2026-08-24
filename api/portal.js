@@ -198,11 +198,18 @@ const FNS = {
      the book by -- cut on the PREVIOUS day's rows, because that is the book that was handed
      out that morning. So the assignment shown here is the assignment the officer actually
      had, not a fresh guess made at report time. */
-  async recoveryWeek(db, user) {
+  async recoveryWeek(db, user, args) {
     requireNav(user, 'recovery');
     const t = todayKey();
-    const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();     // 0 = Sunday
-    const from = dayShift(t, -((dow + 6) % 7));                          // this week's Monday
+    const mondayOf = d => dayShift(d, -((new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+    const thisMon = mondayOf(t);
+    /* THE WEEK SLIDES, BACKWARD AND FORWARD -- the same rule Hope's dashboard settled on:
+       any date is accepted and snapped to its own Monday, and a FUTURE week is not clamped
+       back to this one -- it simply reads whatever has been uploaded for it and shows gaps
+       where nothing has landed yet. The chosen Monday is echoed back (from/to/thisWeek) so
+       the screen can label where it is standing and offer the way back. */
+    const asked = String((args && args.week) || '').slice(0, 10);
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? mondayOf(asked) : thisMon;
     const to = dayShift(from, 6);                                        // ...through Sunday
     /* THE BAR IS THE DAY THE WORK WAS DONE, NOT THE DAY THE RESULT LANDED.
          "since the reduced customers we saw today are of monday put them on monday, those we
@@ -288,7 +295,7 @@ const FNS = {
       }
     }
 
-    const value = { ok: true, from, to, points, credits: [...credits.values()] };
+    const value = { ok: true, from, to, points, credits: [...credits.values()], thisWeek: from === thisMon };
     trendCache.set(ck, { at: Date.now(), value });
     return { ...value, cached: false };
   },
