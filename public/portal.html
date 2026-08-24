@@ -664,6 +664,9 @@ function recWeekBar(d){
     +(d.thisWeek
       ? '<span class="chip">wiki hii / this week</span>'
       : '<button class="btn sm" id="recWkNow">Rudi wiki hii / back to this week</button>')
+    // Landed here on its own rather than by somebody pressing an arrow -- say so, so the
+    // week on screen is never mistaken for the current one.
+    +(d.fellBack ? '<span class="chip warn">bado hakuna upload wa wiki hii / no uploads yet this week</span>' : '')
     +'</div>';
 }
 function wireRecWeekBar(d){
@@ -802,9 +805,16 @@ function drawTrend(){
     var box2=$('#trendBox'); if(!box2) return;
     var vals=pts.filter(function(p){return p.num!=null;}).map(function(p){return p.num;});
     if(!vals.length){
-      box2.innerHTML='<div class="mut">Hakuna upload wa wiki hii bado — chati itajaa baada ya upload za kila siku.</div>';
+      box2.innerHTML='<div class="mut">Hakuna upload bado — chati itajaa baada ya upload za kila siku.</div>';
       return;
     }
+    /* WHICH WEEK AM I LOOKING AT. Shown whenever the chart has fallen back off the current
+       week -- a Monday-morning dashboard quietly drawing LAST week under a heading that says
+       "wiki hii" would be worse than the blank card it replaced. */
+    var wkNote=d.fellBack
+      ? '<div class="chip warn" style="margin-bottom:6px">Wiki ya '+esc(d.from||'')+' → '+esc(d.to||'')
+        +' — bado hakuna upload wa wiki hii. / showing the latest week with uploads, not this one.</div>'
+      : '';
     var max=Math.max.apply(null,vals), n=pts.length;
     var W=720,H=182,padL=44,padB=26,padT=16,padR=8;
     var innerW=W-padL-padR, innerH=H-padT-padB;
@@ -836,7 +846,8 @@ function drawTrend(){
         +'<text x="'+cx+'" y="'+(y-5)+'" text-anchor="middle" font-size="11.5" font-weight="700" fill="'+(on?'var(--bad)':'var(--mut)')+'">'+money(p.num)+'</text>';
     });
     var first=vals[0], last=vals[vals.length-1], diff=last-first;
-    box2.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" '
+    box2.innerHTML=wkNote
+      +'<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" '
       +'aria-label="Locked 7+ per day this week" style="display:block;max-width:100%">'
       +'<line x1="'+padL+'" y1="'+(padT+innerH)+'" x2="'+(W-padR)+'" y2="'+(padT+innerH)+'" stroke="var(--line)" stroke-width="1.5"/>'
       +grid+bars+labels+'</svg>'
@@ -1407,6 +1418,7 @@ function drawSalesPerf(m){
       +'<button class="btn sm ghost" id="spNext" title="next week">▶</button>'
       +(d.thisWeek?'<span class="chip">wiki hii / this week</span>'
         :'<button class="btn sm" id="spNow">Rudi wiki hii / this week</button>')
+      +(d.fellBack ? '<span class="chip warn">bado hakuna mauzo wiki hii / no sales yet this week</span>' : '')
       +'<span style="flex:1"></span>'
       +'<span class="mut" style="font-size:11.5px">Lengo / target: '
         +(target?money(target)+' TZS/siku · '+money(d.weekTarget)+' /wiki':'—')+'</span>'

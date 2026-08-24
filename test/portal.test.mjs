@@ -946,3 +946,63 @@ test('recoveryDayList marks a day pending when no later upload exists yet', asyn
   assert.equal(r.next, null, 'nothing uploaded after it yet');
   assert.equal(r.pending, true, 'so the day is pending, not a day on which nobody recovered');
 });
+
+/* ---------- the Monday problem ----------
+   "Locked 7+ -- wiki hii and Credit -- 7+ recovery kwa wiki are no longer dropping their
+    graphs at dashboard, sales too"
+
+   The weekly charts show a fixed Monday-to-Sunday week, which is right -- but it means that
+   on a Monday morning, before anybody has uploaded, every one of those cards renders empty.
+   Nothing is broken; the week just turned over. These pin the fallback that keeps a dashboard
+   worth opening on a Monday, and the labelling that stops it lying about which week it drew. */
+
+const mondayOfT = d => dayShift(d, -((new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+
+test('a weekly chart with nothing this week falls back to the newest week that has data', async () => {
+  const thisMon = mondayOfT(todayKey());
+  const lastMon = dayShift(thisMon, -7);          // the week before, which DOES have uploads
+  const d = fakeDb({
+    watu_snapshots: [
+      { imei: 'A1', snapshot_date: lastMon, disbursed_date: lastMon, locked7: true,
+        created_at: lastMon + 'T08:00:00Z', team: 'MONDAYTEST' },
+      { imei: 'A2', snapshot_date: dayShift(lastMon, 1), disbursed_date: lastMon, locked7: true,
+        created_at: dayShift(lastMon, 1) + 'T08:00:00Z', team: 'MONDAYTEST' },
+    ],
+  });
+  const r = await _FNS.lockedTrend(d, { ...ADMIN, teams: ['MONDAYTEST'] }, {});
+  assert.equal(r.from, lastMon, 'slid back to the week that actually has uploads');
+  assert.equal(r.fellBack, true, 'and says so, so the heading cannot claim it is this week');
+  assert.equal(r.thisWeek, false);
+  assert.equal(r.points.filter(p => p.num != null).length, 2, 'the bars people came to see');
+});
+
+test('a week somebody ASKED for is shown as-is, empty or not', async () => {
+  // Otherwise the back-arrow would lie: stepping into a quiet week must show it quiet.
+  const thisMon = mondayOfT(todayKey());
+  const lastMon = dayShift(thisMon, -7);
+  const quiet = dayShift(thisMon, -21);
+  const d = fakeDb({
+    watu_snapshots: [
+      { imei: 'A1', snapshot_date: lastMon, disbursed_date: lastMon, locked7: true,
+        created_at: lastMon + 'T08:00:00Z', team: 'ASKTEST' },
+    ],
+  });
+  const r = await _FNS.lockedTrend(d, { ...ADMIN, teams: ['ASKTEST'] }, { week: quiet });
+  assert.equal(r.from, quiet, 'the asked-for week wins over the fallback');
+  assert.equal(r.fellBack, false);
+  assert.equal(r.points.every(p => p.num == null), true, 'and it is honestly empty');
+});
+
+test('a future-dated row never drags the dashboard into a week that has not happened', async () => {
+  const thisMon = mondayOfT(todayKey());
+  const future = dayShift(thisMon, 21);
+  const d = fakeDb({
+    watu_snapshots: [
+      { imei: 'A1', snapshot_date: future, disbursed_date: future, locked7: true,
+        created_at: future + 'T08:00:00Z', team: 'FUTURETEST' },
+    ],
+  });
+  const r = await _FNS.lockedTrend(d, { ...ADMIN, teams: ['FUTURETEST'] }, {});
+  assert.equal(r.from, thisMon, 'stays put; the fallback only ever slides backward');
+  assert.equal(r.fellBack, false);
+});

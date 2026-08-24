@@ -5,7 +5,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Held so the app can install its own updates. As Device Owner Android performs that
-         install without prompting anybody -- which is the point: there is nobody at a locked
+         install without prompting anybody, which is the point: there is nobody at a locked
          handset who should be tapping "install". -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
