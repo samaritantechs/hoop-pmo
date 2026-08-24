@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
@@ -42,6 +43,11 @@ AUDITED.add('officerActive');
 AUDITED.add('renameAccessCode');
 AUDITED.add('portalAddComment');
 AUDITED.add('deleteRole');
+/* Locking somebody's phone is the most consequential write this system has. */
+AUDITED.add('deviceEnrol');
+AUDITED.add('deviceSetState');
+/* A read, audited: it hands out a handset credential, so who asked for which one is kept. */
+AUDITED.add('deviceToken');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -75,7 +81,11 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    THREE first-class panes (the owner's call), each grantable on its own; the retired
    'sales' key remains a stored alias that grants all three, so roles saved under it
    keep every door they had. */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'staff', 'codes', 'settings'];
+/* 'devices' is the phone-locking registry's own pane. It is NOT folded into the 'sales'
+   alias below with fraud/scorecards/stock/movement: locking somebody's phone is a
+   different power from reading a stock report, and it is granted on purpose or not at
+   all. ADMIN and AUDITOR still see every pane, as everywhere. */
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 function navsFor(user) {
   if (isAdminRole(user) || isReadOnly(user)) return NAV_TABS.slice();
@@ -1022,6 +1032,213 @@ const FNS = {
     };
     trendCache.set(ck, { at: Date.now(), value });
     return { ...value, cached: false };
+  },
+
+  /* =====================================================================================
+     THE DEVICE REGISTRY -- the server half of phone locking.
+     =====================================================================================
+       "lets solve by building an app to install in those phones then"
+       "and in our hoopcalls system we can get stats of those devices too"
+
+     One row per phone we have taken control of, keyed by IMEI -- the one identifier every
+     other book here already shares (Sipho's stock serial, the Watu register, the sales
+     book, the officers' deck), so a device joins to everything we know with no new
+     plumbing. That is what lets the accountability report turn an unaccounted IMEI into a
+     lock command rather than just a name on a list.
+
+     TWO DIFFERENT FACTS, KEPT APART ON PURPOSE:
+       state     what the OFFICE has decided this phone should be (enrolled/locked/
+                 released/lost)
+       reported  what the PHONE last said about itself, at last_seen
+
+     A phone ordered to lock that has not checked in yet is neither locked nor a failure --
+     it is PENDING, and a screen that blurs those two cannot be trusted to chase anything.
+     deviceList counts them separately for exactly that reason.
+
+     THE ANDROID APP DOES NOT EXIST YET, and nothing here assumes it does: with an empty
+     table every screen reads "hakuna kifaa bado" and the enrolment path still works, so
+     the registry can be filled from the stock report while the app is still being written.
+
+     Budget: one bounded read of `devices` (the enrolled fleet, not the whole register),
+     plus one keyed read per write. No caching -- a lock screen that shows a stale state
+     is the one thing this must never do. */
+  async deviceList(db, user, args) {
+    requireNav(user, 'devices');
+    const a = args || {};
+    const want = String(a.state || '').trim();
+    let q = db.from('devices').select(
+      'imei, item, holder, state, state_reason, state_at, reported, last_seen, app_version, battery, android, sold_ref, customer, enrolled_at');
+    if (['enrolled', 'locked', 'released', 'lost'].includes(want)) q = q.eq('state', want);
+    const rows = await fetchAll(() => q);
+    const now = Date.now();
+    const HOURS = 36 * 3600 * 1000;      // silent longer than this and it is worth asking why
+    const out = rows.map(r => {
+      const seen = r.last_seen ? Date.parse(r.last_seen) : null;
+      return { ...r,
+        neverSeen: !seen,
+        silentHours: seen ? Math.round((now - seen) / 3600000) : null,
+        stale: !seen || (now - seen) > HOURS,
+        // The honest three-way reading of a lock order, never collapsed into a boolean.
+        lockState: r.state !== 'locked' ? null
+          : (r.reported === 'locked' ? 'confirmed' : 'pending'),
+      };
+    }).sort((x, y) => {
+      const rank = d => (d.state === 'lost' ? 0 : d.state === 'locked' && d.lockState === 'pending' ? 1
+        : d.stale ? 2 : d.state === 'locked' ? 3 : 4);
+      return rank(x) - rank(y) || String(x.imei).localeCompare(String(y.imei));
+    });
+    const count = f => out.filter(f).length;
+    return { ok: true, rows: out.slice(0, 500), total: out.length,
+      counts: {
+        enrolled: count(r => r.state === 'enrolled'),
+        locked: count(r => r.state === 'locked'),
+        lockPending: count(r => r.lockState === 'pending'),
+        released: count(r => r.state === 'released'),
+        lost: count(r => r.state === 'lost'),
+        neverSeen: count(r => r.neverSeen),
+        stale: count(r => r.stale && !r.neverSeen),
+      } };
+  },
+
+  /* ENROL -- take control of phones that are sitting in stock. Fed by IMEI, so the
+     enrolment station can scan a box or paste a column straight out of Sipho's report;
+     the stock report itself fills in model and holder where it knows them.
+     Idempotent: re-enrolling a phone already on the registry is a no-op that reports
+     itself, never a duplicate and never a silent state reset. */
+  async deviceEnrol(db, user, args) {
+    requireWrite(user); requireNav(user, 'devices');
+    const a = args || {};
+    const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : String(a.imeis || '').split(/[\s,;]+/))
+      .map(x => String(x || '').trim()).filter(Boolean))];
+    if (!list.length) throw new Error('Weka angalau IMEI moja. / At least one IMEI is required.');
+    if (list.length > 500) throw new Error('IMEI nyingi mno kwa mara moja (kikomo 500). / Too many at once — 500 max.');
+
+    const [already, stock] = await Promise.all([
+      fetchAll(() => db.from('devices').select('imei').in('imei', list)),
+      fetchAll(() => db.from('hoop_aged_stock').select('serial, item, agent, as_of').in('serial', list)),
+    ]);
+    const have = new Set(already.map(r => String(r.imei)));
+    // Newest stock row per serial, so model/holder come from the latest count, not the first.
+    const stockBy = new Map();
+    for (const s of stock) {
+      const k = String(s.serial), had = stockBy.get(k);
+      if (!had || String(s.as_of) > String(had.as_of)) stockBy.set(k, s);
+    }
+    const fresh = list.filter(i => !have.has(i));
+    const at = new Date().toISOString();
+    const batch = randomUUID();
+    /* ONE TOKEN PER PHONE, minted here and nowhere else. This is the credential the handset
+       will carry -- it has no access code and never will -- so it is generated at the only
+       moment the phone is physically in our hands, and returned ONCE, to the station that
+       is about to write it into that phone. It is never read back onto a list screen. */
+    const token = () => randomUUID().replace(/-/g, '');
+    const minted = new Map(fresh.map(imei => [imei, token()]));
+    if (fresh.length) {
+      const rows = fresh.map(imei => {
+        const s = stockBy.get(imei);
+        return { imei, enrolled_at: at, enrolled_by: user.name, enrol_batch: batch,
+          item: (s && s.item) || null, holder: (s && s.agent) || null,
+          enrol_token: minted.get(imei),
+          state: 'enrolled', state_by: user.name, state_at: at, updated_at: at };
+      });
+      // Pre-migration: a registry created before the phone half existed has no enrol_token,
+      // and PostgREST refuses the whole insert for one unknown column. Enrol still works --
+      // those phones simply cannot beat until the alter in RUN-ME-2026-08-24-devices.sql runs.
+      let { error } = await db.from('devices').insert(rows);
+      if (error && /enrol_token/.test(String(error.message || ''))) {
+        minted.clear();
+        ({ error } = await db.from('devices').insert(
+          rows.map(({ enrol_token, ...rest }) => rest)));
+      }
+      if (error) throw new Error(error.message);
+      const { error: eErr } = await db.from('device_events').insert(fresh.map(imei => ({
+        imei, event: 'enrolled', from_state: null, to_state: 'enrolled', actor: user.name, at })));
+      if (eErr) throw new Error(eErr.message);
+    }
+    return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length,
+      unknownToStock: fresh.filter(i => !stockBy.has(i)).length, batch,
+      // For the provisioning station only. Empty when the token column is not there yet.
+      provision: fresh.map(imei => ({ imei, token: minted.get(imei) || null }))
+        .filter(p => p.token) };
+  },
+
+  /* SET STATE -- lock, unlock, release or write off. One door for every state change, so
+     the event trail cannot be bypassed by whichever screen happens to call it.
+
+     A REASON IS REQUIRED to lock or to write a phone off. Locking somebody's phone is an
+     act with a person on the other end of it; six months later "why is this locked" has to
+     have an answer, and the only reliable moment to capture one is now. */
+  async deviceSetState(db, user, args) {
+    requireWrite(user); requireNav(user, 'devices');
+    const a = args || {};
+    const to = String(a.state || '').trim();
+    if (!['enrolled', 'locked', 'released', 'lost'].includes(to)) {
+      throw new Error('Hali si sahihi. / Unknown device state: ' + to);
+    }
+    const reason = String(a.reason || '').trim();
+    if ((to === 'locked' || to === 'lost') && !reason) {
+      throw new Error('Sababu inahitajika. / A reason is required to lock or write off a phone.');
+    }
+    const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : [a.imei || a.imeis])
+      .map(x => String(x || '').trim()).filter(Boolean))];
+    if (!list.length) throw new Error('Weka IMEI. / An IMEI is required.');
+
+    const current = await fetchAll(() => db.from('devices').select('imei, state').in('imei', list));
+    const known = new Map(current.map(r => [String(r.imei), r.state]));
+    const missing = list.filter(i => !known.has(i));
+    const changing = list.filter(i => known.has(i) && known.get(i) !== to);
+    const at = new Date().toISOString();
+    if (changing.length) {
+      const patch = { state: to, state_reason: reason || null, state_by: user.name,
+        state_at: at, updated_at: at };
+      if (to === 'released') patch.released_at = at;
+      const { error } = await db.from('devices').update(patch).in('imei', changing);
+      if (error) throw new Error(error.message);
+      const { error: eErr } = await db.from('device_events').insert(changing.map(imei => ({
+        imei, event: to === 'locked' ? 'lock' : to === 'released' ? 'release' : to === 'lost' ? 'lost' : 'unlock',
+        from_state: known.get(imei), to_state: to, reason: reason || null, actor: user.name, at })));
+      if (eErr) throw new Error(eErr.message);
+    }
+    return { ok: true, changed: changing.length,
+      alreadyThere: list.length - changing.length - missing.length,
+      notEnrolled: missing.length, notEnrolledList: missing.slice(0, 20) };
+  },
+
+  /* ONE PHONE'S WHOLE STORY -- its current row and every state change ever ordered against
+     it. This is what somebody opens when a customer is standing in front of them asking
+     why their phone is locked. */
+  async deviceHistory(db, user, args) {
+    requireNav(user, 'devices');
+    const imei = String((args && args.imei) || '').trim();
+    if (!imei) throw new Error('IMEI inahitajika. / An IMEI is required.');
+    /* Columns named rather than `*` for one reason: `*` would carry enrol_token onto this
+       screen. The handset's credential is a secret and this is the screen most likely to be
+       open with a stranger looking over the counter. */
+    const [devRows, events] = await Promise.all([
+      fetchAll(() => db.from('devices').select(
+        'imei, item, holder, state, state_reason, state_by, state_at, reported, last_seen, '
+        + 'app_version, battery, android, sold_ref, customer, released_at, '
+        + 'enrolled_at, enrolled_by, enrol_batch, updated_at').eq('imei', imei)),
+      fetchAll(() => db.from('device_events').select('*').eq('imei', imei).order('at', { ascending: false }).limit(100)),
+    ]);
+    return { ok: true, imei, device: devRows[0] || null, events };
+  },
+
+  /* THE TOKEN, HANDED BACK -- for one phone, on purpose, when it is re-flashed and has to
+     be provisioned again. Enrolment shows a token once; a wiped handset needs it a second
+     time, and the alternative (re-enrolling to mint a fresh one) would throw away that
+     phone's whole history to solve a five-second problem.
+
+     Treated as a WRITE even though it reads: it discloses a credential, so it takes the
+     write permission and lands in the audit log with the IMEI attached. Nobody should be
+     able to walk the fleet collecting tokens without that being visible afterwards. */
+  async deviceToken(db, user, args) {
+    requireWrite(user); requireNav(user, 'devices');
+    const imei = String((args && args.imei) || '').trim();
+    if (!imei) throw new Error('IMEI inahitajika. / An IMEI is required.');
+    const rows = await fetchAll(() => db.from('devices').select('imei, enrol_token').eq('imei', imei));
+    if (!rows.length) throw new Error('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
+    return { ok: true, imei, token: rows[0].enrol_token || null };
   },
 
   async stockMovement(db, user, args) {

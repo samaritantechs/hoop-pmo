@@ -359,6 +359,106 @@ test('salesAudit judges every sale: OK, DRIFT, PENDING, BULK, HAKUNA_WATU', asyn
     /no access to the fraud pane/, 'a blank non-viewer is refused; the AUDITOR itself sees every pane');
 });
 
+/* ---------- the device registry ---------- */
+
+test('deviceEnrol takes phones from the stock report, is idempotent, and names what it did not know', async () => {
+  const today = todayKey();
+  const d = fakeDb({
+    hoop_aged_stock: [
+      { serial: 'D1', agent: 'SIPHO STORE', item: 'A07', as_of: dayShift(today, -1) },
+      // A newer count moved D1 to an agent -- the newest row must win for holder/model.
+      { serial: 'D1', agent: 'AGENT X', item: 'A07', as_of: today },
+      { serial: 'D2', agent: 'SIPHO STORE', item: 'A16', as_of: today },
+    ],
+    devices: [], device_events: [],
+  });
+  const r = await _FNS.deviceEnrol(d, ADMIN, { imeis: 'D1, D2, D3' });
+  assert.equal(r.enrolled, 3);
+  assert.equal(r.alreadyOn, 0);
+  assert.equal(r.unknownToStock, 1, 'D3 is on no stock report -- said plainly, not dropped');
+
+  const rows = d._dump('devices');
+  const d1 = rows.find(x => x.imei === 'D1');
+  assert.equal(d1.holder, 'AGENT X', 'the NEWEST stock row decides the holder');
+  assert.equal(d1.item, 'A07');
+  assert.equal(d1.state, 'enrolled');
+  assert.equal(rows.find(x => x.imei === 'D3').holder, null, 'unknown to stock -> no invented holder');
+  assert.equal(d._dump('device_events').filter(e => e.event === 'enrolled').length, 3);
+
+  // Enrolling again must not duplicate, and must not reset anybody's state.
+  const again = await _FNS.deviceEnrol(d, ADMIN, { imeis: ['D1', 'D2'] });
+  assert.equal(again.enrolled, 0);
+  assert.equal(again.alreadyOn, 2);
+  assert.equal(d._dump('devices').length, 3, 'no duplicate rows');
+});
+
+test('a lock ORDERED is not a lock CONFIRMED until the phone says so', async () => {
+  const d = fakeDb({
+    devices: [
+      // Ordered locked, and the phone has since confirmed it.
+      { imei: 'L1', state: 'locked', reported: 'locked', last_seen: new Date().toISOString() },
+      // Ordered locked, but the phone has never checked in -- pending, NOT a failure.
+      { imei: 'L2', state: 'locked', reported: null, last_seen: null },
+      { imei: 'E1', state: 'enrolled', reported: 'unlocked', last_seen: new Date().toISOString() },
+    ],
+    device_events: [],
+  });
+  const r = await _FNS.deviceList(d, ADMIN, {});
+  const by = Object.fromEntries(r.rows.map(x => [x.imei, x]));
+  assert.equal(by.L1.lockState, 'confirmed');
+  assert.equal(by.L2.lockState, 'pending', 'ordered but unheard-from is pending, never "locked"');
+  assert.equal(by.E1.lockState, null, 'a phone nobody locked has no lock state at all');
+  assert.equal(r.counts.locked, 2, 'both are locked as far as the OFFICE is concerned');
+  assert.equal(r.counts.lockPending, 1, 'but only one of them is unconfirmed');
+  assert.equal(by.L2.neverSeen, true);
+  assert.equal(by.L2.stale, true, 'never seen counts as stale -- it has never spoken');
+  // Worst first: the pending lock outranks the quiet ones.
+  assert.equal(r.rows[0].imei, 'L2');
+});
+
+test('locking requires a reason, and every state change lands in the event trail', async () => {
+  const d = fakeDb({
+    devices: [{ imei: 'D1', state: 'enrolled' }, { imei: 'D2', state: 'enrolled' }],
+    device_events: [],
+  });
+  await assert.rejects(() => _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'locked' }),
+    /reason is required/i, 'a lock with no reason is refused -- somebody is on the other end of it');
+  await assert.rejects(() => _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'melted' }),
+    /Unknown device state/);
+
+  const r = await _FNS.deviceSetState(d, ADMIN, { imeis: ['D1', 'D2', 'NOPE'], state: 'locked', reason: 'Stock unaccounted' });
+  assert.equal(r.changed, 2);
+  assert.equal(r.notEnrolled, 1, 'an IMEI nobody enrolled is reported, not silently locked');
+  assert.deepEqual(r.notEnrolledList, ['NOPE']);
+  const ev = d._dump('device_events');
+  assert.equal(ev.length, 2);
+  assert.equal(ev[0].event, 'lock');
+  assert.equal(ev[0].from_state, 'enrolled');
+  assert.equal(ev[0].to_state, 'locked');
+  assert.equal(ev[0].reason, 'Stock unaccounted');
+  assert.equal(ev[0].actor, ADMIN.name);
+
+  // Setting the same state again changes nothing and writes no event.
+  const same = await _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'locked', reason: 'again' });
+  assert.equal(same.changed, 0);
+  assert.equal(same.alreadyThere, 1);
+  assert.equal(d._dump('device_events').length, 2, 'no event for a state that did not move');
+
+  // Releasing needs no reason -- setting somebody free is not the act that needs justifying.
+  const rel = await _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'released' });
+  assert.equal(rel.changed, 1);
+  assert.ok(d._dump('devices').find(x => x.imei === 'D1').released_at);
+});
+
+test('the devices pane is granted on purpose -- the sales alias does not open it', async () => {
+  const d = fakeDb({ devices: [], device_events: [] });
+  const salesOnly = { code: 'S', name: 'Sales person', role: 'RSM', tabs: ['sales'], teams: null };
+  await assert.rejects(() => _FNS.deviceList(d, salesOnly, {}), /no access to the devices pane/,
+    'reading a stock report and locking a phone are different powers');
+  // ADMIN holds every pane, as everywhere else.
+  assert.equal((await _FNS.deviceList(d, ADMIN, {})).ok, true);
+});
+
 test('stockAccount judges every departure three ways and names the last holder of the unaccounted', async () => {
   const today = todayKey();
   const prev = dayShift(today, -1);
