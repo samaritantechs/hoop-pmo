@@ -46,6 +46,8 @@ AUDITED.add('deleteRole');
 /* Locking somebody's phone is the most consequential write this system has. */
 AUDITED.add('deviceEnrol');
 AUDITED.add('deviceSetState');
+/* A read, audited: it hands out a handset credential, so who asked for which one is kept. */
+AUDITED.add('deviceToken');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -1125,21 +1127,39 @@ const FNS = {
     const fresh = list.filter(i => !have.has(i));
     const at = new Date().toISOString();
     const batch = randomUUID();
+    /* ONE TOKEN PER PHONE, minted here and nowhere else. This is the credential the handset
+       will carry -- it has no access code and never will -- so it is generated at the only
+       moment the phone is physically in our hands, and returned ONCE, to the station that
+       is about to write it into that phone. It is never read back onto a list screen. */
+    const token = () => randomUUID().replace(/-/g, '');
+    const minted = new Map(fresh.map(imei => [imei, token()]));
     if (fresh.length) {
       const rows = fresh.map(imei => {
         const s = stockBy.get(imei);
         return { imei, enrolled_at: at, enrolled_by: user.name, enrol_batch: batch,
           item: (s && s.item) || null, holder: (s && s.agent) || null,
+          enrol_token: minted.get(imei),
           state: 'enrolled', state_by: user.name, state_at: at, updated_at: at };
       });
-      const { error } = await db.from('devices').insert(rows);
+      // Pre-migration: a registry created before the phone half existed has no enrol_token,
+      // and PostgREST refuses the whole insert for one unknown column. Enrol still works --
+      // those phones simply cannot beat until the alter in RUN-ME-2026-08-24-devices.sql runs.
+      let { error } = await db.from('devices').insert(rows);
+      if (error && /enrol_token/.test(String(error.message || ''))) {
+        minted.clear();
+        ({ error } = await db.from('devices').insert(
+          rows.map(({ enrol_token, ...rest }) => rest)));
+      }
       if (error) throw new Error(error.message);
       const { error: eErr } = await db.from('device_events').insert(fresh.map(imei => ({
         imei, event: 'enrolled', from_state: null, to_state: 'enrolled', actor: user.name, at })));
       if (eErr) throw new Error(eErr.message);
     }
     return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length,
-      unknownToStock: fresh.filter(i => !stockBy.has(i)).length, batch };
+      unknownToStock: fresh.filter(i => !stockBy.has(i)).length, batch,
+      // For the provisioning station only. Empty when the token column is not there yet.
+      provision: fresh.map(imei => ({ imei, token: minted.get(imei) || null }))
+        .filter(p => p.token) };
   },
 
   /* SET STATE -- lock, unlock, release or write off. One door for every state change, so
@@ -1191,11 +1211,34 @@ const FNS = {
     requireNav(user, 'devices');
     const imei = String((args && args.imei) || '').trim();
     if (!imei) throw new Error('IMEI inahitajika. / An IMEI is required.');
+    /* Columns named rather than `*` for one reason: `*` would carry enrol_token onto this
+       screen. The handset's credential is a secret and this is the screen most likely to be
+       open with a stranger looking over the counter. */
     const [devRows, events] = await Promise.all([
-      fetchAll(() => db.from('devices').select('*').eq('imei', imei)),
+      fetchAll(() => db.from('devices').select(
+        'imei, item, holder, state, state_reason, state_by, state_at, reported, last_seen, '
+        + 'app_version, battery, android, sold_ref, customer, released_at, '
+        + 'enrolled_at, enrolled_by, enrol_batch, updated_at').eq('imei', imei)),
       fetchAll(() => db.from('device_events').select('*').eq('imei', imei).order('at', { ascending: false }).limit(100)),
     ]);
     return { ok: true, imei, device: devRows[0] || null, events };
+  },
+
+  /* THE TOKEN, HANDED BACK -- for one phone, on purpose, when it is re-flashed and has to
+     be provisioned again. Enrolment shows a token once; a wiped handset needs it a second
+     time, and the alternative (re-enrolling to mint a fresh one) would throw away that
+     phone's whole history to solve a five-second problem.
+
+     Treated as a WRITE even though it reads: it discloses a credential, so it takes the
+     write permission and lands in the audit log with the IMEI attached. Nobody should be
+     able to walk the fleet collecting tokens without that being visible afterwards. */
+  async deviceToken(db, user, args) {
+    requireWrite(user); requireNav(user, 'devices');
+    const imei = String((args && args.imei) || '').trim();
+    if (!imei) throw new Error('IMEI inahitajika. / An IMEI is required.');
+    const rows = await fetchAll(() => db.from('devices').select('imei, enrol_token').eq('imei', imei));
+    if (!rows.length) throw new Error('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
+    return { ok: true, imei, token: rows[0].enrol_token || null };
   },
 
   async stockMovement(db, user, args) {

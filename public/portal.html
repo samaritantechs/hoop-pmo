@@ -1154,7 +1154,8 @@ function drawDevices(m){
             +'<td style="font-size:11px">'+esc(r.imei)+'</td><td>'+esc(r.item||'—')+'</td>'
             +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
             +'<td>'+esc(r.reported||'—')+'</td><td>'+seen+'</td>'
-            +'<td class="r"><button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button></td></tr>';
+            +'<td class="r"><button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> '
+            +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button></td></tr>';
         }).join('')+'</tbody></table></div>'
         +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">'
         +'<b style="font-size:12px">Zilizochaguliwa:</b>'
@@ -1173,6 +1174,7 @@ function drawDevices(m){
     $('#dvEnrol').onclick=function(){ devEnrolForm(m); };
     $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
     $all('[data-dvh]').forEach(function(b){ b.onclick=function(){ devHistory(b.getAttribute('data-dvh')); }; });
+    $all('[data-dvt]').forEach(function(b){ b.onclick=function(){ devToken(b.getAttribute('data-dvt')); }; });
   }).catch(function(e){ paneFailed(m,e); });
 }
 function devPicked(){ return $all('.dvck').filter(function(c){ return c.checked; }).map(function(c){ return c.value; }); }
@@ -1205,9 +1207,42 @@ function devEnrolForm(m){
       toast('Zimesajiliwa '+money(r.enrolled)
         +(r.alreadyOn?' · '+money(r.alreadyOn)+' zilikuwepo':'')
         +(r.unknownToStock?' · '+money(r.unknownToStock)+' hazipo kwenye stock':''));
-      closeDrawer(); drawDevices(m);
+      /* THE TOKENS, ONCE. Each phone's credential goes into that phone at provisioning, so
+         the station needs them at exactly this moment and nowhere else. They are not put on
+         the register screen; a phone that gets wiped is re-read one at a time, deliberately. */
+      devProvision(m, r);
     }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
   };
+}
+function devProvision(m, r){
+  var p=r.provision||[];
+  if(!p.length){ closeDrawer(); drawDevices(m); return; }
+  var lines=p.map(function(x){ return x.imei+'\t'+x.token; }).join('\n');
+  drawer('<h3>Token za kuweka kwenye simu</h3>'
+    +'<div class="sub">Kila simu ina token yake — ndiyo kitambulisho chake. Iweke kwenye simu husika sasa; '
+    +'baadaye inasomwa moja moja kwa kitufe cha <b>Token</b>. '
+    +'/ One token per phone, written into that handset at provisioning.</div>'
+    +'<textarea id="dvTok" rows="'+Math.min(14,Math.max(3,p.length))+'" readonly '
+    +'style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'+esc(lines)+'</textarea>'
+    +'<button class="btn w" id="dvTokCopy">Nakili / Copy</button>'
+    +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
+  $('#dvTokCopy').onclick=function(){
+    var t=$('#dvTok'); t.select();
+    try{ document.execCommand('copy'); toast('Zimenakiliwa / copied'); }
+    catch(e){ toast('Chagua na nakili mwenyewe. / Select and copy manually.', true); }
+  };
+  $('#dvTokDone').onclick=function(){ closeDrawer(); drawDevices(m); };
+}
+function devToken(imei){
+  srv('deviceToken',{imei:imei}).then(function(r){
+    drawer('<h3>Token · '+esc(imei)+'</h3>'
+      +'<div class="sub">Kwa simu iliyofutwa na kuwekwa app upya. Usiisambaze. '
+      +'/ For re-provisioning a wiped handset. Do not share it.</div>'
+      +'<textarea readonly rows="2" style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'
+      +esc(r.token||'')+'</textarea>'
+      +(r.token?'':'<div class="mut">Simu hii haina token — ilisajiliwa kabla ya sehemu ya simu kujengwa. '
+        +'/ Enrolled before the phone half existed; re-enrol after the migration to mint one.</div>'));
+  }).catch(function(e){ toast(safeErr(e), true); });
 }
 function devHistory(imei){
   var h=$('#dvHist'); if(!h) return;

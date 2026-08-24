@@ -56,6 +56,13 @@ create index if not exists idx_devices_state     on devices(state);
 create index if not exists idx_devices_last_seen on devices(last_seen);
 create index if not exists idx_devices_holder    on devices(holder);
 
+-- THE HANDSET'S CREDENTIAL. A phone in a customer's hand has no access code and never will,
+-- so enrolment mints one random token per device; it is placed in that one phone at
+-- provisioning and authorises exactly one IMEI against /api/device. Added separately so
+-- this file stays safe to re-run over a registry that was created before the phone half
+-- existed. It is a secret: never select it onto a screen or an export.
+alter table devices add column if not exists enrol_token text;
+
 -- EVERY STATE CHANGE, KEPT. A lock is an act against somebody's phone; who ordered it and
 -- why must survive the next change of state, so the registry above holds only the CURRENT
 -- state and this holds the history. Append-only, never updated.
