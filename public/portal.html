@@ -188,6 +188,7 @@ tbody tr:hover{background:var(--b50)}
       <button data-t="score">Agent scorecards</button>
       <button data-t="stock">Stock</button>
       <button data-t="acct">Stock accountability</button>
+      <button data-t="dev">Devices / Kufunga simu</button>
       <button data-t="move">Stock movement</button>
       <button data-t="staff">Staff</button>
       <button data-t="codes" id="tabCodes">Access codes</button>
@@ -560,7 +561,7 @@ function enter(){
      every button -- the same rule the endpoints enforce. A pane added later shows up
      here the moment the server lists it. */
   var NAVKEY={dash:'dashboard',cust:'customers',ripoti:'reports',recovery:'recovery',
-    sales:'scorecards',fraud:'fraud',score:'scorecards',stock:'stock',acct:'stock',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
+    sales:'scorecards',fraud:'fraud',score:'scorecards',stock:'stock',acct:'stock',dev:'devices',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
   var NAVS=BOOT.navs||[];
   $all('#tabs button').forEach(function(b){
     var k=NAVKEY[b.getAttribute('data-t')];
@@ -600,6 +601,7 @@ function draw(){
   if(TAB==='stock') return drawStock(m);
   if(TAB==='move') return drawMove(m);
   if(TAB==='acct') return drawStockAccount(m);
+  if(TAB==='dev') return drawDevices(m);
   if(TAB==='sales') return drawSalesPerf(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
@@ -1111,6 +1113,121 @@ function drawRecoveryTrend(){
   }).catch(function(e){
     var b=$('#recTrendBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';
   });
+}
+
+/* ---------- devices: the phone-locking registry ----------
+   The SERVER half of locking. The Android app that draws the lock screen is a separate
+   build; until it exists every phone reads "hajawahi kuongea" (never spoke) -- the honest
+   state, not an error.
+
+   THE DISTINCTION THIS SCREEN EXISTS TO KEEP: a lock ORDERED is not a lock CONFIRMED. The
+   office's intent and the phone's own last word are two different facts, so a phone told
+   to lock that has not checked in reads PENDING -- never "locked", and never a failure. */
+var DEV={filter:''};
+function drawDevices(m){
+  m.innerHTML='<div class="card"><h2>Devices</h2><div class="sk"></div></div>';
+  srv('deviceList',{state:DEV.filter}).then(function(d){
+    var c=d.counts||{};
+    var chips=[['','Zote / all'],['enrolled','Enrolled'],['locked','Locked'],['released','Released'],['lost','Lost']];
+    var tiles='<div class="tiles">'
+      +'<div class="tile"><div class="l">Zimesajiliwa</div><div class="v">'+money(c.enrolled||0)+'</div><div class="s">tayari, hazijafungwa</div></div>'
+      +'<div class="tile"><div class="l">Zimefungwa</div><div class="v"'+((c.locked||0)?' style="color:var(--bad)"':'')+'>'+money(c.locked||0)+'</div>'
+        +'<div class="s">'+((c.lockPending||0)?money(c.lockPending)+' bado hazijathibitisha':'zote zimethibitisha')+'</div></div>'
+      +'<div class="tile"><div class="l">Hazijawahi kuongea</div><div class="v">'+money(c.neverSeen||0)+'</div><div class="s">app haijafunguliwa</div></div>'
+      +'<div class="tile"><div class="l">Kimya / silent</div><div class="v">'+money(c.stale||0)+'</div><div class="s">zaidi ya saa 36</div></div>'
+      +'<div class="tile"><div class="l">Zimeachiwa</div><div class="v" style="color:var(--ok)">'+money(c.released||0)+'</div><div class="s">mkopo umeisha</div></div>'
+      +'</div>';
+    var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
+      +chips.map(function(x){ return '<button class="btn sm'+(DEV.filter===x[0]?'':' ghost')+'" data-dvf="'+x[0]+'">'+x[1]+'</button>'; }).join('')
+      +'<span style="flex:1"></span><button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button></div>';
+    var rows=d.rows||[];
+    var table=rows.length
+      ? '<div class="scroll"><table><thead><tr><th></th><th>IMEI</th><th>Item</th><th>Holder</th><th>Hali / state</th>'
+        +'<th>Simu inasema</th><th>Iliongea lini</th><th></th></tr></thead><tbody>'
+        +rows.map(function(r){
+          var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
+            :r.state==='released'?'<span class="chip ok">imeachiwa</span>'
+            :r.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
+          var seen=r.neverSeen?'<span class="mut">hajawahi</span>'
+            :(r.stale?'<span style="color:var(--bad)">':'<span>')+money(r.silentHours)+'h</span>';
+          return '<tr><td><input type="checkbox" class="dvck" value="'+esc(r.imei)+'"></td>'
+            +'<td style="font-size:11px">'+esc(r.imei)+'</td><td>'+esc(r.item||'—')+'</td>'
+            +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
+            +'<td>'+esc(r.reported||'—')+'</td><td>'+seen+'</td>'
+            +'<td class="r"><button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button></td></tr>';
+        }).join('')+'</tbody></table></div>'
+        +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">'
+        +'<b style="font-size:12px">Zilizochaguliwa:</b>'
+        +'<button class="btn sm danger" data-dvs="locked">Funga / Lock</button>'
+        +'<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
+        +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'
+        +'<button class="btn sm ghost" data-dvs="lost">Imepotea / Write off</button></div>'
+      : '<div class="mut">Hakuna kifaa kwenye kundi hili. Bofya "Sajili simu" — weka IMEI kutoka ripoti ya stock. '
+        +'/ No devices here yet; enrol IMEIs from the stock report to begin.</div>';
+    m.innerHTML='<div class="card"><h2>Devices / Kufunga simu</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Simu tulizozidhibiti, kwa IMEI. <b>Kuagiza kufunga si sawa na kufungwa</b> — '
+      +'simu ikishathibitisha ndipo inasomeka "imefungwa". App ya simu ikiwa bado haijajengwa, zote zitasoma "hajawahi kuongea". '
+      +'/ Ordering a lock is not the same as a confirmed lock.</div>'
+      +tiles+bar+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
+    $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); drawDevices(m); }; });
+    $('#dvEnrol').onclick=function(){ devEnrolForm(m); };
+    $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
+    $all('[data-dvh]').forEach(function(b){ b.onclick=function(){ devHistory(b.getAttribute('data-dvh')); }; });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+function devPicked(){ return $all('.dvck').filter(function(c){ return c.checked; }).map(function(c){ return c.value; }); }
+function devSetState(m, state){
+  var imeis=devPicked();
+  if(!imeis.length){ toast('Chagua simu kwanza. / Pick some phones first.', true); return; }
+  var reason='';
+  if(state==='locked'||state==='lost'){
+    reason=prompt((state==='locked'?'Sababu ya kufunga':'Sababu')+' / Reason (required):')||'';
+    if(!reason.trim()){ toast('Sababu inahitajika. / A reason is required.', true); return; }
+  }
+  srv('deviceSetState',{imeis:imeis,state:state,reason:reason.trim()}).then(function(r){
+    toast('Zimebadilishwa: '+money(r.changed)
+      +(r.notEnrolled?' · '+money(r.notEnrolled)+' hazijasajiliwa':'')
+      +(r.alreadyThere?' · '+money(r.alreadyThere)+' zilikuwa hivyo':''));
+    drawDevices(m);
+  }).catch(function(e){ toast(safeErr(e), true); });
+}
+function devEnrolForm(m){
+  drawer('<h3>Sajili simu / Enrol phones</h3>'
+    +'<div class="sub">Weka IMEI — moja kwa mstari au kwa comma. Model na mwenye nazo hujazwa kutoka ripoti ya stock ya karibuni. '
+    +'/ Paste IMEIs; model and holder fill in from the newest stock report.</div>'
+    +'<div class="fld"><label>IMEI</label><textarea id="dvImeis" rows="8" style="width:100%;font-family:ui-monospace,monospace;font-size:12px"></textarea></div>'
+    +'<button class="btn w" id="dvEnrolGo">Sajili / Enrol</button>');
+  $('#dvEnrolGo').onclick=function(){
+    var v=$('#dvImeis').value.trim();
+    if(!v){ toast('Weka IMEI. / Paste at least one IMEI.', true); return; }
+    var b=$('#dvEnrolGo'); b.disabled=true;
+    srv('deviceEnrol',{imeis:v}).then(function(r){
+      toast('Zimesajiliwa '+money(r.enrolled)
+        +(r.alreadyOn?' · '+money(r.alreadyOn)+' zilikuwepo':'')
+        +(r.unknownToStock?' · '+money(r.unknownToStock)+' hazipo kwenye stock':''));
+      closeDrawer(); drawDevices(m);
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+function devHistory(imei){
+  var h=$('#dvHist'); if(!h) return;
+  h.innerHTML='<div class="sk"></div>';
+  srv('deviceHistory',{imei:imei}).then(function(d){
+    var dev=d.device||{};
+    h.innerHTML='<div class="card" style="padding:12px"><b style="font-size:13px">'+esc(imei)+'</b>'
+      +'<div class="mut" style="font-size:11px;margin-bottom:6px">'+esc(dev.item||'—')+' · '+esc(dev.holder||'—')
+      +(dev.customer?' · mteja: '+esc(dev.customer):'')+'</div>'
+      +((d.events||[]).length
+        ? '<div class="scroll"><table><thead><tr><th>Lini</th><th>Tukio</th><th>Kutoka → kwenda</th><th>Sababu</th><th>Nani</th></tr></thead><tbody>'
+          +d.events.map(function(e){
+            return '<tr><td style="font-size:11px">'+esc(String(e.at||'').replace('T',' ').slice(0,16))+'</td>'
+              +'<td>'+esc(e.event)+'</td><td>'+esc(e.from_state||'—')+' → '+esc(e.to_state||'—')+'</td>'
+              +'<td>'+esc(e.reason||'—')+'</td><td>'+esc(e.actor||'—')+'</td></tr>';
+          }).join('')+'</tbody></table></div>'
+        : '<div class="mut">Hakuna historia.</div>')
+      +'<button class="btn sm ghost" id="dvHistClose" style="margin-top:8px">Funga</button></div>';
+    var x=$('#dvHistClose'); if(x) x.onclick=function(){ h.innerHTML=''; };
+  }).catch(function(e){ h.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
 }
 
 /* ---------- stock accountability ----------
@@ -1731,7 +1848,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',movement:'Stock movement',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',movement:'Stock movement',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
             +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';
