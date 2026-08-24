@@ -359,6 +359,154 @@ test('salesAudit judges every sale: OK, DRIFT, PENDING, BULK, HAKUNA_WATU', asyn
     /no access to the fraud pane/, 'a blank non-viewer is refused; the AUDITOR itself sees every pane');
 });
 
+test('stockAccount judges every departure three ways and names the last holder of the unaccounted', async () => {
+  const today = todayKey();
+  const prev = dayShift(today, -1);
+  const st = (serial, agent, as_of, age) => ({ serial, agent, item: 'A07', age_days: age, as_of,
+    received: dayShift(as_of, -(age || 0)) });
+  const d = fakeDb({
+    hoop_aged_stock: [
+      // Yesterday's report: Sipho held 3, RSM ONE held 2, AGENT X held 2.
+      st('S1', 'SIPHO STORE', prev, 3), st('S2', 'SIPHO STORE', prev, 60), st('S3', 'SIPHO STORE', prev, 5),
+      st('R1', 'RSM ONE', prev, 10), st('R2', 'RSM ONE', prev, 12),
+      st('A1', 'AGENT X', prev, 8), st('A2', 'AGENT X', prev, 9),
+      // Today's report: S1 stayed (and aged), R1 stayed. S2, S3, R2, A1, A2 all LEFT.
+      st('S1', 'SIPHO STORE', today, 4), st('S2', 'SIPHO STORE', today, 61),
+      st('R1', 'RSM ONE', today, 11),
+    ],
+    // S3 was sold. R2 is in Watu but never booked as a sale. A1 and A2 are in NEITHER.
+    hoop_sales: [{ sale_key: 'K1', imei: 'S3', sale_date: today, commission_agent: 'AGENT X' }],
+    watu_loans: [{ imei: 'R2', agent: 'RSM ONE' }],
+    hoop_agents: [
+      { name: 'SIPHO STORE', role: 'STORE', branch: 'Dar' },
+      { name: 'RSM ONE', role: 'RSM', branch: 'Dar' },
+      { name: 'AGENT X', role: 'Field_Officer', branch: 'Dar' },
+    ],
+  });
+  const r = await _FNS.stockAccount(d, ADMIN, {});
+  assert.equal(r.asOf, today);
+  assert.equal(r.prevAsOf, prev);
+
+  // COMPANY: 3 held today; 4 departed (S3, R2, A1, A2); 1 sold, 1 kwa Watu, 2 unaccounted.
+  assert.equal(r.company.totals.held, 3);
+  assert.equal(r.company.totals.gone, 4, 'S3, R2, A1 and A2 all left between the two reports');
+  assert.equal(r.company.totals.sold, 1, 'S3 is in the sales book');
+  assert.equal(r.company.totals.watu, 1, 'R2 is financed but never booked -- paperwork, not theft');
+  assert.equal(r.company.totals.unaccounted, 2, 'A1 and A2 are in neither -- the shrinkage line');
+
+  // PIVOTS classify from hoop_agents.role, so each altitude sees only its own kind.
+  assert.deepEqual(r.store.rows.map(x => x.holder), ['SIPHO STORE']);
+  assert.deepEqual(r.rsm.rows.map(x => x.holder), ['RSM ONE']);
+  assert.deepEqual(r.agent.rows.map(x => x.holder), ['AGENT X']);
+  assert.equal(r.store.totals.unaccounted, 0, 'the store lost nothing it cannot explain');
+  assert.equal(r.rsm.totals.unaccounted, 0, 'R2 is with Watu, so the RSM is not accused of it');
+  assert.equal(r.agent.totals.unaccounted, 2, 'both unexplained phones sit with the agent who last held them');
+
+  // The named IMEIs ride along so a human can go and ask about a specific phone.
+  const ax = r.agent.rows[0];
+  assert.deepEqual(ax.unaccountedList.map(x => x.serial).sort(), ['A1', 'A2']);
+
+  // STALE: held now and past the age limit. S2 at 61 days is the only one over 45.
+  assert.equal(r.company.totals.stale, 1);
+  assert.equal(r.store.rows[0].stale, 1, 'and it is the store sitting on it');
+
+  // Worst first -- the row a manager must look at is the top one.
+  assert.equal(r.company.rows[0].holder, 'AGENT X');
+});
+
+test('stockAccount reports departures it could not judge rather than under-counting a theft', async () => {
+  const today = todayKey();
+  const prev = dayShift(today, -1);
+  // 500 phones leave at once -- past the 400 keyed-lookup cap.
+  const rows = [];
+  for (let i = 0; i < 500; i++) {
+    rows.push({ serial: 'X' + i, agent: 'AGENT X', item: 'A07', age_days: 5, as_of: prev });
+  }
+  rows.push({ serial: 'KEEP', agent: 'AGENT X', item: 'A07', age_days: 5, as_of: prev });
+  rows.push({ serial: 'KEEP', agent: 'AGENT X', item: 'A07', age_days: 6, as_of: today });
+  const d = fakeDb({ hoop_aged_stock: rows, hoop_sales: [], watu_loans: [],
+    hoop_agents: [{ name: 'AGENT X', role: 'Field_Officer' }] });
+  /* A DISTINCT SCOPE ON PURPOSE -- stockAccount memoises per report-pair AND per team
+     scope, and this test uses the same two dates as the one above, so an identical scope
+     would be answered by that test's cached value instead of this database. */
+  const r = await _FNS.stockAccount(d, { ...ADMIN, teams: ['CAPTEST'] }, {});
+  assert.equal(r.notChecked, 100, 'the 100 beyond the cap are NAMED as unjudged');
+  assert.equal(r.company.totals.unaccounted, 400, 'and the 400 it did judge are all counted');
+});
+
+test('salesWeek pivots one week four ways and measures each against the daily target', async () => {
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const mon = dayShift(t, -((new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+  const tue = dayShift(mon, 1);
+  const sale = (k, date, rsm, agent, price, up, rec) => ({ sale_key: k, sale_date: date, imei: 'IM' + k,
+    price, agent: rsm, commission_agent: agent, uploaded_by: up, recorded_by: rec, team: 'PIVOTTEST' });
+  const d = fakeDb({
+    settings: [{ key: 'SALES_DAILY_TARGET', value: '1000000' }],
+    hoop_sales: [
+      // Monday: Mwinyi loaded two (one names its recorder), Sara loaded one. Two RSMs, two agents.
+      sale('A', mon, 'RSM ONE', 'AGENT X', 500000, 'Mwinyi', null),
+      sale('B', mon, 'RSM ONE', 'AGENT Y', 700000, 'Mwinyi', 'Juma GD'),
+      sale('C', mon, 'RSM TWO', 'AGENT X', 400000, 'Sara', null),
+      // Tuesday: one more from Mwinyi, RSM ONE, AGENT X.
+      sale('D', tue, 'RSM ONE', 'AGENT X', 900000, 'Mwinyi', null),
+    ],
+  });
+  const scoped = { ...ADMIN, teams: ['PIVOTTEST'] };
+  const r = await _FNS.salesWeek(d, scoped, {});
+  assert.equal(r.from, mon);
+  assert.equal(r.dailyTarget, 1000000);
+  assert.equal(r.weekTarget, 7000000);
+
+  // GENERAL DUTY: recorded_by wins where present, else uploaded_by. So B -> "Juma GD",
+  // A/C/D fall back to whoever uploaded (Mwinyi x2 incl D, Sara x1).
+  const gd = Object.fromEntries(r.general.map(x => [x.name, x]));
+  assert.equal(gd['Mwinyi'].count, 2, 'A and D fell back to their uploader');
+  assert.equal(gd['Mwinyi'].amount, 1400000);
+  assert.equal(gd['Juma GD'].count, 1, 'B named its recorder, so it is credited to them, not the uploader');
+  assert.equal(gd['Sara'].count, 1);
+
+  // RSM: the AGENT column. RSM ONE = A,B,D; RSM TWO = C.
+  const rsm = Object.fromEntries(r.rsm.map(x => [x.name, x]));
+  assert.equal(rsm['RSM ONE'].count, 3);
+  assert.equal(rsm['RSM ONE'].days[mon].count, 2, 'two on Monday');
+  assert.equal(rsm['RSM ONE'].days[tue].count, 1, 'one on Tuesday');
+  assert.equal(rsm['RSM TWO'].count, 1);
+
+  // COMMISSION AGENT: AGENT X = A,C,D; AGENT Y = B.
+  const ag = Object.fromEntries(r.agent.map(x => [x.name, x]));
+  assert.equal(ag['AGENT X'].count, 3);
+  assert.equal(ag['AGENT Y'].amount, 700000);
+
+  // COMPANY: one synthetic row, every sale.
+  assert.equal(r.company.count, 4);
+  assert.equal(r.company.amount, 2500000);
+  assert.equal(r.company.days[mon].count, 3);
+  assert.equal(r.company.days[tue].amount, 900000);
+
+  // The 7-day frame is fixed and the week slides + falls back like recoveryWeek.
+  assert.equal(r.days.length, 7);
+  assert.equal(r.thisWeek, true);
+  const last = await _FNS.salesWeek(d, { ...ADMIN, teams: ['PIVOTTEST2'] }, { week: dayShift(mon, -5) });
+  assert.equal(last.thisWeek, false, 'a prior date lands in its own week');
+});
+
+test('salesWeek survives a pre-migration database (no recorded_by / uploaded_by columns)', async () => {
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const mon = dayShift(t, -((new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+  // A fake whose hoop_sales rows simply lack the new columns -- the select must fall back.
+  const d = fakeDb({
+    settings: [],
+    hoop_sales: [{ sale_key: 'Z', sale_date: mon, imei: 'IMZ', price: 500000,
+      agent: 'RSM ONE', commission_agent: 'AGENT X', team: 'PREMIG' }],
+  }, { missingColumns: { hoop_sales: ['recorded_by', 'uploaded_by'] } });
+  const r = await _FNS.salesWeek(d, { ...ADMIN, teams: ['PREMIG'] }, {});
+  assert.equal(r.company.count, 1, 'the read fell back and still answered');
+  assert.equal(r.general[0].name, '(haijulikani / unknown)', 'no recorder and no uploader column -> unknown, not a crash');
+  assert.equal(r.dailyTarget, null, 'no target set -> null, chart draws no line');
+});
+
 test('agentScore scores Watu agents by their customers and sellers by their payouts', async () => {
   const today = todayKey();
   const d = mauzoDb(today);
@@ -624,6 +772,35 @@ test('recoveryWeek draws a gap, never a zero, for a day nobody uploaded', async 
   assert.equal(r.points.length, 7);
   assert.ok(r.points.every(p => p.offJana === null && p.reduced === null),
     'no upload is null on every day -- "nobody uploaded" must never render as "nobody recovered"');
+});
+
+test('recoveryWeek slides: a past week is read as ITS OWN week, and any date snaps to its Monday', async () => {
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();
+  const thisMon = dShift(t, -((dow + 6) % 7));
+  const lastMon = dShift(thisMon, -7);
+  const lastTue = dShift(lastMon, 1);
+  const inWin = dShift(lastMon, -10);
+  const row = (imei, date, off) => ({ imei, client_name: 'C' + imei, team: 'SLIDETEST',
+    days_offline: off, disbursed_date: inWin, snapshot_date: date, created_at: date + 'T08:00:00Z' });
+  // Distinct scope so the five-minute week memo from the tests above cannot answer for us.
+  const scoped = { ...ADMIN, teams: ['SLIDETEST'] };
+  const d = fakeDb({
+    watu_snapshots: [row('A', lastMon, 9), row('A', lastTue, 4)],
+    call_users: [{ user_id: 'u1', name: 'CREDIT ONE', role: 'CREDIT', active: true }],
+  });
+  // Asked with a mid-week date -- Wednesday of last week -- it must snap back to that Monday.
+  const r = await _FNS.recoveryWeek(d, scoped, { week: dShift(lastMon, 2) });
+  assert.equal(r.from, lastMon, 'any date resolves to its own Monday');
+  assert.equal(r.thisWeek, false, 'and the answer says it is standing in another week');
+  assert.equal(r.points[0].date, lastMon);
+  assert.equal(r.points[0].offJana, 1, 'last week\'s own pool, from last week\'s own uploads');
+  assert.equal(r.points[0].reduced, 1, 'and its result, read from the next upload as ever');
+  // Junk falls back to this week rather than erroring -- the screen always has somewhere to stand.
+  const now = await _FNS.recoveryWeek(d, { ...ADMIN, teams: ['SLIDETEST2'] }, { week: 'not-a-date' });
+  assert.equal(now.from, thisMon);
+  assert.equal(now.thisWeek, true);
 });
 
 test('recoveryDayList names the customers behind a day, with the credit who held them', async () => {

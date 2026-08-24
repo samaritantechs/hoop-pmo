@@ -29,7 +29,7 @@ import { isSystemOpen } from './system-gate.js';
    except the leader report, which is date-bounded and team-scoped at the database.
    ===================================================================================== */
 
-export const APP = { BRAND: 'HOOP LTD', MOTTO: 'WATU SIMU' };
+export const APP = { BRAND: 'HOOPLOAN', MOTTO: 'WATU SIMU' };
 
 /* The follow-up vocabulary of THIS trade: a locked phone, a promise, a new number. Same
    behaviour wiring as Hope -- a promise opens a date, a new number opens a number box,

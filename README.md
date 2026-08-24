@@ -1,4 +1,4 @@
-# HOOP PMO
+# HOOPLOAN
 
 Follow-up system for **Hoop Ltd** — a phone dealership agent for Watu Credit (watu simu).
 Hoop's credit team owns locked-phone customers for 45 days from disbursement; this system
@@ -12,7 +12,7 @@ it reuses. **The specification is [`docs/HOOP-STARTER.md`](docs/HOOP-STARTER.md)
 |---|---|
 | `/` | launcher |
 | `/upload` | the daily Watu list (Excel/CSV, the 16 standard columns), sliced, batch-stamped |
-| `/call` | **HOOP Calls** — credit team's app: the day's locked list scoped by team code, tap-to-call, follow-ups + promises, offline-tolerant, Ripoti for leaders |
+| `/call` | **HOOPLOAN Calls** — credit team's app: the day's locked list scoped by team code, tap-to-call, follow-ups + promises, offline-tolerant, Ripoti for leaders |
 | `/portal` | tiles (list, locked 7+, inside-45, calls, % reached), Ripoti, **Recovery** (upload-vs-upload: who paid / reconnected after our calls), Teams & codes, Staff on/off, access codes, settings, roadmap |
 | `/api/health` | env sanity |
 
@@ -46,7 +46,7 @@ credit team calls → tomorrow's upload → Recovery shows what the calls bought
   copied verbatim from hope-pmo-v2 (the proven layer).
 - `api/_lib/importers.js` — the Watu importer: `13-Jul-26` dates, TRUE/FALSE booleans,
   IMEI as text end to end, team from the Shop column, header-presence rule.
-- `api/_lib/call-core.js` — the HOOP Calls backend (Hope's, translated to the Watu book).
+- `api/_lib/call-core.js` — the HOOPLOAN Calls backend (Hope's, translated to the Watu book).
 - `api/upload.js` / `api/call.js` / `api/portal.js` — the three doors.
 - `db/schema.sql` — idempotent; verified against Postgres 16 before it ever reached
   Supabase. Phase 2/3 tables (sales audit watu×hoop, commissions, stock) are designed in

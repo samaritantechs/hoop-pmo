@@ -97,6 +97,18 @@ function requireNav(user, k) {
     e.status = 403; throw e;
   }
 }
+/* Same rule, any ONE of several panes -- for an answer that legitimately appears on more
+   than one screen. recoveryWeek is the first: it draws the Recovery pane's own trend AND
+   the credit chart that sits on the DASHBOARD, so gating it on 'recovery' alone put an
+   error string on the dashboard of anyone who holds dashboard without recovery. The data
+   is the same team-scoped data either way; what differs is only which screen asked. */
+function requireAnyNav(user, keys) {
+  const have = navsFor(user);
+  if (!keys.some(k => have.includes(k))) {
+    const e = new Error('Your role has no access to the ' + keys[0] + ' pane.');
+    e.status = 403; throw e;
+  }
+}
 
 
 const dayShift = (key, days) =>
@@ -198,11 +210,19 @@ const FNS = {
      the book by -- cut on the PREVIOUS day's rows, because that is the book that was handed
      out that morning. So the assignment shown here is the assignment the officer actually
      had, not a fresh guess made at report time. */
-  async recoveryWeek(db, user) {
-    requireNav(user, 'recovery');
+  async recoveryWeek(db, user, args) {
+    // Drawn on the Recovery pane AND on the dashboard -- see requireAnyNav.
+    requireAnyNav(user, ['recovery', 'dashboard']);
     const t = todayKey();
-    const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();     // 0 = Sunday
-    const from = dayShift(t, -((dow + 6) % 7));                          // this week's Monday
+    const mondayOf = d => dayShift(d, -((new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+    const thisMon = mondayOf(t);
+    /* THE WEEK SLIDES, BACKWARD AND FORWARD -- the same rule Hope's dashboard settled on:
+       any date is accepted and snapped to its own Monday, and a FUTURE week is not clamped
+       back to this one -- it simply reads whatever has been uploaded for it and shows gaps
+       where nothing has landed yet. The chosen Monday is echoed back (from/to/thisWeek) so
+       the screen can label where it is standing and offer the way back. */
+    const asked = String((args && args.week) || '').slice(0, 10);
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? mondayOf(asked) : thisMon;
     const to = dayShift(from, 6);                                        // ...through Sunday
     /* THE BAR IS THE DAY THE WORK WAS DONE, NOT THE DAY THE RESULT LANDED.
          "since the reduced customers we saw today are of monday put them on monday, those we
@@ -288,7 +308,7 @@ const FNS = {
       }
     }
 
-    const value = { ok: true, from, to, points, credits: [...credits.values()] };
+    const value = { ok: true, from, to, points, credits: [...credits.values()], thisWeek: from === thisMon };
     trendCache.set(ck, { at: Date.now(), value });
     return { ...value, cached: false };
   },
@@ -372,6 +392,106 @@ const FNS = {
     const out = await reportCore(db, scope, a.from, a.to, null, Date.now());
     out.scope = scope || 'ALL';
     return out;
+  },
+
+  /* =====================================================================================
+     DAILY SALES PERFORMANCE -- one week, pivoted four ways, against a target.
+     =====================================================================================
+       "Pivot for all: for General duty person, RSMs, Commission agents and company grand
+        totals. i want to set up target in settings so we see sales performances over set
+        target"
+
+     One read of the week's hoop_sales rows answers all four pivots -- the whole point of
+     a pivot is that it is the SAME rows counted by a different key, so this must never be
+     four reads. Each pivot returns one row per name with a per-weekday count and amount
+     (Mon-Sun, the same fixed week the credit charts use, so the two dashboards read alike)
+     plus the week total; the company pivot is the same shape with one row.
+
+     THE TARGET is SALES_DAILY_TARGET from settings (TZS/day, blank = none). It is a DAILY
+     figure, so a week's target is target x (the number of days that actually had a sale is
+     NOT how it works -- a target is a standing daily expectation), i.e. target x 7 for the
+     week, and each day's bar is measured against the one daily target. Sent alongside so
+     every screen draws the same line without re-reading the setting.
+
+     Attribution, per the answer:
+       general duty  recorded_by if the shop export ever carries it, else uploaded_by (who
+                     LOADED the day's book) -- the honest general-duty signal there is today
+       rsm           the AGENT column (the record-holding RSM / team leader)
+       agent         commission_agent (the seller owed the commission)
+       company       every sale, one row
+
+     Roster follows the DATA, not a stored list -- a name appears the first day it sells and
+     leaves when it stops, so "they will auto update by role assignements made" needs no
+     wiring here: whoever the shop books credit is whoever shows up.
+
+     Budget: one team-scoped, date-bounded read of hoop_sales (nine columns) + one settings
+     read for the target. Memoised five minutes per week and scope, exactly like the trend. */
+  async salesWeek(db, user, args) {
+    requireNav(user, 'scorecards');
+    const mondayOf = d => dayShift(d, -((new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay() + 6) % 7));
+    const thisMon = mondayOf(todayKey());
+    const asked = String((args && args.week) || '').slice(0, 10);
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? mondayOf(asked) : thisMon;
+    const to = dayShift(from, 6);
+    const ck = 'salesweek:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    const hit = trendCache.get(ck);
+    if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
+
+    // recorded_by / uploaded_by exist only after the migration; a pre-migration database
+    // refuses the whole select for them, so fall back to the columns that were always there.
+    const FULL = 'imei, sale_date, price, branch, agent, commission_agent, recorded_by, uploaded_by';
+    const BARE = 'imei, sale_date, price, branch, agent, commission_agent';
+    let rows;
+    try {
+      rows = await fetchAll(() => scopeQ(user, db.from('hoop_sales').select(FULL)
+        .gte('sale_date', from).lte('sale_date', to)));
+    } catch (e) {
+      if (!/recorded_by|uploaded_by/i.test(String(e && e.message))) throw e;
+      rows = await fetchAll(() => scopeQ(user, db.from('hoop_sales').select(BARE)
+        .gte('sale_date', from).lte('sale_date', to)));
+    }
+    const { data: sRows } = await db.from('settings').select('value').eq('key', 'SALES_DAILY_TARGET').maybeSingle();
+    const dailyTarget = num((sRows && sRows.value) || 0) || null;
+
+    const days = [];
+    for (let i = 0; i < 7; i++) days.push(dayShift(from, i));
+    const txt = v => { const s = String(v == null ? '' : v).trim(); return s || null; };
+    const keyFns = {
+      general: r => txt(r.recorded_by) || txt(r.uploaded_by) || '(haijulikani / unknown)',
+      rsm:     r => txt(r.agent) || '(no RSM)',
+      agent:   r => txt(r.commission_agent) || '(no agent)',
+    };
+    const pivot = keyFn => {
+      const by = new Map();
+      for (const r of rows) {
+        const name = keyFn(r);
+        const d = String(r.sale_date).slice(0, 10);
+        if (!by.has(name)) by.set(name, { name, days: {}, count: 0, amount: 0 });
+        const slot = by.get(name);
+        if (!slot.days[d]) slot.days[d] = { count: 0, amount: 0 };
+        slot.days[d].count++; slot.days[d].amount += num(r.price);
+        slot.count++; slot.amount += num(r.price);
+      }
+      return [...by.values()].sort((a, b) => b.amount - a.amount);
+    };
+    // The company pivot: the same shape with one row, so the screen draws it identically.
+    const companyDays = {};
+    for (const r of rows) {
+      const d = String(r.sale_date).slice(0, 10);
+      if (!companyDays[d]) companyDays[d] = { count: 0, amount: 0 };
+      companyDays[d].count++; companyDays[d].amount += num(r.price);
+    }
+    const value = {
+      ok: true, from, to, days, thisWeek: from === thisMon,
+      dailyTarget, weekTarget: dailyTarget ? dailyTarget * 7 : null,
+      general: pivot(keyFns.general),
+      rsm: pivot(keyFns.rsm),
+      agent: pivot(keyFns.agent),
+      company: { days: companyDays,
+        count: rows.length, amount: rows.reduce((s, r) => s + num(r.price), 0) },
+    };
+    trendCache.set(ck, { at: Date.now(), value });
+    return { ...value, cached: false };
   },
 
   /* RECOVERY -- who came back after our calls. The newest two uploads, diffed per IMEI:
@@ -769,6 +889,141 @@ const FNS = {
       Watu's book. Defaults are the newest two dates of each source.
       Budget: 2 tiny ordered date lookups per source + 4 date-keyed bounded reads;
       the aged table's own dates come from the read it already makes. */
+  /* =====================================================================================
+     STOCK ACCOUNTABILITY -- what each holder is answerable for, and what cannot be
+     accounted for at all.
+     =====================================================================================
+       "the stock is too large and hoop agents are stealing stock"
+
+     A phone that leaves Sipho's stock report has exactly three honest destinations:
+
+       SOLD        its IMEI turns up in hoop_sales -- the shop booked it
+       KWA WATU    its IMEI turns up in the Watu register but NOT in our sales book --
+                   financed without a sale record (salesAudit's own WATU-ONLY case; named
+                   here as a separate column rather than folded into theft, because it is
+                   a paperwork failure, not a missing phone)
+       HAIJULIKANI it is in neither. The phone left the building and nothing anywhere says
+                   where it went. THIS is the shrinkage line, and it is attributed to the
+                   LAST HOLDER the stock report showed it with.
+
+     Deliberately NOT called theft in the UI. A serial can leave a report for dull reasons
+     (a swap, a warranty return, a mis-keyed serial), and a report that accuses people by
+     name had better be one the numbers can carry. It says "unaccounted", names the holder,
+     and lets a human ask -- which is what actually recovers a phone.
+
+     PIVOTED FOUR WAYS, per the owner: company grand total, the STORE (Sipho), the RSMs,
+     and the agents -- classified from hoop_agents.role, so a person who changes role
+     changes pivot on their next report with nothing to rewire here.
+
+     BOUNDED ON PURPOSE. Only the newest stock report and the one before it are read whole
+     (stock-sized, not history-sized); the departures between them are then looked up by
+     IMEI in sales and in the register with an `in` filter, so those two reads carry the
+     handful that actually left rather than the whole book. If a single day's departures
+     ever exceed the cap the answer SAYS so rather than quietly under-reporting a theft.
+
+     Budget: 2 stock reads (newest + previous report), 2 keyed `in` reads bounded by the
+     departure list, 1 bounded hoop_agents read. Memoised five minutes per report pair. */
+  async stockAccount(db, user, args) {
+    requireNav(user, 'stock');
+    const a = args || {};
+    const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null;
+    const latestOf = async (before) => {
+      let q = db.from('hoop_aged_stock').select('as_of').not('as_of', 'is', null)
+        .order('as_of', { ascending: false }).limit(1);
+      if (before) q = q.lt('as_of', before);
+      const { data } = await q;
+      return data && data[0] ? String(data[0].as_of).slice(0, 10) : null;
+    };
+    const nowDate = day(a.asOf) || await latestOf(null);
+    const prevDate = nowDate ? await latestOf(nowDate) : null;
+    const ck = 'stockacct:' + nowDate + ':' + prevDate + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    const hit = trendCache.get(ck);
+    if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
+
+    const COLS = 'serial, agent, item, age_days, received, as_of';
+    const [now, prev, agents] = await Promise.all([
+      nowDate ? fetchAll(() => db.from('hoop_aged_stock').select(COLS).eq('as_of', nowDate)) : [],
+      prevDate ? fetchAll(() => db.from('hoop_aged_stock').select(COLS).eq('as_of', prevDate)) : [],
+      fetchAll(() => db.from('hoop_agents').select('name, role, branch')),
+    ]);
+
+    const nowSet = new Set(now.map(r => String(r.serial)));
+    const gone = prev.filter(r => !nowSet.has(String(r.serial)));
+    // NO SILENT CAP: if the departures outrun one keyed read, the answer says how many it
+    // could not judge rather than reporting a smaller theft than actually happened.
+    const LOOKUP_CAP = 400;
+    const checking = gone.slice(0, LOOKUP_CAP);
+    const notChecked = gone.length - checking.length;
+    const ids = checking.map(r => String(r.serial));
+    const [soldRows, watuRows] = ids.length ? await Promise.all([
+      fetchAll(() => db.from('hoop_sales').select('imei, sale_date, commission_agent').in('imei', ids)),
+      fetchAll(() => db.from('watu_loans').select('imei').in('imei', ids)),
+    ]) : [[], []];
+    const soldBy = new Map(soldRows.map(r => [String(r.imei), r]));
+    const inWatu = new Set(watuRows.map(r => String(r.imei)));
+
+    // Role decides the pivot; hoop_agents is the roster, matched on the same token-sorted
+    // name key the rest of the system uses so spelling drift cannot split a person in two.
+    const regBy = new Map(agents.filter(x => x.name).map(x => [nameKey(x.name), x]));
+    const kindOf = (holder) => {
+      const reg = regBy.get(nameKey(holder || ''));
+      const role = K((reg && reg.role) || '');
+      if (/STORE|GHALA|SIPHO/.test(role)) return 'store';
+      if (/RSM/.test(role)) return 'rsm';
+      return 'agent';
+    };
+    const STALE_DAYS = num(a.staleDays) || 45;
+
+    const by = new Map();
+    const slot = (holder) => {
+      const k = nameKey(holder || '') || '?';
+      let g = by.get(k);
+      if (!g) {
+        const reg = regBy.get(k);
+        g = { holder: holder || '—', kind: kindOf(holder),
+          role: (reg && reg.role) || '', branch: (reg && reg.branch) || '',
+          held: 0, stale: 0, maxAge: 0, gone: 0, sold: 0, watu: 0, unaccounted: 0, unaccountedList: [] };
+        by.set(k, g);
+      }
+      return g;
+    };
+    for (const r of now) {
+      const g = slot(r.agent);
+      g.held++;
+      const age = num(r.age_days);
+      if (age > g.maxAge) g.maxAge = age;
+      if (age >= STALE_DAYS) g.stale++;
+    }
+    for (const r of checking) {
+      const g = slot(r.agent);
+      const id = String(r.serial);
+      g.gone++;
+      if (soldBy.has(id)) g.sold++;
+      else if (inWatu.has(id)) g.watu++;
+      else {
+        g.unaccounted++;
+        if (g.unaccountedList.length < 50) {
+          g.unaccountedList.push({ serial: id, item: r.item || '', age: r.age_days == null ? null : num(r.age_days) });
+        }
+      }
+    }
+    const rows = [...by.values()].sort((x, y) => y.unaccounted - x.unaccounted || y.stale - x.stale || y.held - x.held);
+    const sum = (list, f) => list.reduce((s, x) => s + x[f], 0);
+    const totalsOf = list => ({ holders: list.length, held: sum(list, 'held'), stale: sum(list, 'stale'),
+      gone: sum(list, 'gone'), sold: sum(list, 'sold'), watu: sum(list, 'watu'), unaccounted: sum(list, 'unaccounted') });
+    const pick = k => rows.filter(r => r.kind === k);
+    const value = {
+      ok: true, asOf: nowDate, prevAsOf: prevDate, staleDays: STALE_DAYS,
+      notChecked,
+      company: { rows, totals: totalsOf(rows) },
+      store: { rows: pick('store'), totals: totalsOf(pick('store')) },
+      rsm: { rows: pick('rsm'), totals: totalsOf(pick('rsm')) },
+      agent: { rows: pick('agent'), totals: totalsOf(pick('agent')) },
+    };
+    trendCache.set(ck, { at: Date.now(), value });
+    return { ...value, cached: false };
+  },
+
   async stockMovement(db, user, args) {
     requireNav(user, 'movement');
     const a = args || {};
@@ -1086,7 +1341,7 @@ const FNS = {
   async settings(db, user) {
     requireSettings(user);
     const KEYS = ['SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
-      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK'];
+      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET'];
     const rows = await fetchAll(() => db.from('settings').select('key, value').in('key', KEYS));
     const by = {}; rows.forEach(r => { by[r.key] = r.value; });
     // An empty FU_STATUSES box looked like "there is no list" when the list simply
@@ -1099,7 +1354,7 @@ const FNS = {
     requireWrite(user); requireSettings(user);
     const key = K(args && args.key);
     const ALLOWED = new Set(['SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
-      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK']);
+      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET']);
     if (!ALLOWED.has(key)) throw new Error('That setting is not editable here: ' + key);
     const { error } = await db.from('settings')
       .upsert({ key, value: String((args && args.value) || '') }, { onConflict: 'key' });

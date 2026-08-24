@@ -1,4 +1,4 @@
-# HOOP PMO — Starter Pack
+# HOOPLOAN — Starter Pack
 
 **Paste this whole file as the FIRST message of the new Claude Code session for the `hoop-pmo`
 repo.** It carries everything that session needs: what Hoop is, how it maps onto the HOPE
@@ -92,7 +92,7 @@ files from it rather than rewriting from memory.
 | credit analysts | general duty | sale verification |
 | count 1-6 window | **45-day lifetime window** | computed from `disbursed_date` |
 | defaulter status | **days offline / locked 4+/7+** | no defaulting concept — locking instead |
-| HOPE Calls (`/call`) | **HOOP Calls** | same app, rebranded, list = today's watu upload |
+| HOPE Calls (`/call`) | **HOOPLOAN Calls** | same app, rebranded, list = today's watu upload |
 | Ripoti (COL/REC/%pf + call icon) | same | carries over as-is |
 
 ### Standing rules — carried over verbatim, they are conditions not preferences
@@ -126,7 +126,7 @@ Must land (in order):
    (see §4). Run schema in Supabase SQL editor.
 2. **Hour 1–3: the watu importer + upload page.** Columns in §5. Key on IMEI. Slice at 1000
    rows/request like Hope. Replace-by-day semantics: today's upload IS today's list.
-3. **Hour 3–5: HOOP Calls.** Copy `call.html`, rebrand (HOOP Calls, colors when provided),
+3. **Hour 3–5: HOOPLOAN Calls.** Copy `call.html`, rebrand (HOOPLOAN Calls, colors when provided),
    point Leo at the uploaded day list: name, phone, model, price, days offline, locked
    badge, days-in-lifetime (45 − days since disbursement), call + log + comment + promise.
    Registration by team code = RSM/region code.
@@ -298,7 +298,7 @@ of the Claude subscription while being actively developed.
 
 ## 9. Paste-ready first prompt for the new session
 
-> This repo is HOOP PMO — read the HOOP-STARTER.md I am pasting below in full, it is the
+> This repo is HOOPLOAN — read the HOOP-STARTER.md I am pasting below in full, it is the
 > specification. Add repo samaritantechs/hope-pmo-v2 with read access: it is the parent
 > system, copy its architecture and files as the starter instructs rather than rewriting.
 > Standing rules: additive only, whole files, npm test is the gate, server logic in

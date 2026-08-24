@@ -255,10 +255,20 @@ export default withApi(async (req) => {
       const e = new Error('No sales rows could be read from the file.'); e.status = 400; throw e;
     }
     const now = new Date().toISOString();
-    await writeChunks(supabase, 'hoop_sales',
-      sales.records.map(r => ({ ...r, sale_date: r.sale_date || snapshotDate,
-        upload_batch: batch, updated_at: now })),
-      'sale_key');
+    // uploaded_by is who LOADED the day's book -- the honest general-duty attribution until
+    // the shop export grows a recorded_by column. Written only if the migration has run:
+    // PostgREST refuses the WHOLE insert for an unknown column, so a deployment that has not
+    // yet run 2026-08-24-sales-performance.sql must fall back to the old shape rather than
+    // failing every sales upload -- the same pre-migration fallback the guarantor columns use.
+    const stamp = r => ({ ...r, sale_date: r.sale_date || snapshotDate,
+      uploaded_by: user.name || null, upload_batch: batch, updated_at: now });
+    const bare = r => { const x = stamp(r); delete x.uploaded_by; delete x.recorded_by; return x; };
+    try {
+      await writeChunks(supabase, 'hoop_sales', sales.records.map(stamp), 'sale_key');
+    } catch (err) {
+      if (!/uploaded_by|recorded_by/i.test(String(err && err.message))) throw err;
+      await writeChunks(supabase, 'hoop_sales', sales.records.map(bare), 'sale_key');
+    }
     if (isLast) await logUpload(user, 'upload:sales', snapshotDate + ' · rows ' + sales.records.length);
     return {
       kind: 'sales',

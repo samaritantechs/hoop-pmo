@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<title>HOOP PMO — Portal</title>
+<title>HOOPLOAN — Portal</title>
 <style>
 :root{ --b950:#081C4A; --b900:#0B2A6B; --b800:#10357F; --b700:#1D4ED8; --b600:#2563EB; --b300:#93C5FD; --b100:#DBEAFE; --b50:#EFF6FF;
   --bg:#F6F8FC; --card:#fff; --ink:#0F172A; --mut:#64748B; --soft:#94A3B8; --line:#E2E8F0;
@@ -153,7 +153,7 @@ tbody tr:hover{background:var(--b50)}
 <div id="scrIn">
   <div class="incard">
     <svg class="mark" viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#EFF6FF"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
-    <h1>HOOP PMO</h1>
+    <h1>HOOPLOAN</h1>
     <p>Mfumo wa ufuatiliaji — watu simu. Ingia na msimbo wako. / Sign in with your access code.</p>
     <input class="inp" type="password" id="inCode" placeholder="Access code" autocomplete="off">
     <div class="err" id="inErr"></div>
@@ -183,16 +183,18 @@ tbody tr:hover{background:var(--b50)}
       <button data-t="cust">Wateja / Customers</button>
       <button data-t="ripoti">Call reports</button>
       <button data-t="recovery">Recovery</button>
+      <button data-t="sales">Sales performance</button>
       <button data-t="fraud">Fraud audit</button>
       <button data-t="score">Agent scorecards</button>
       <button data-t="stock">Stock</button>
+      <button data-t="acct">Stock accountability</button>
       <button data-t="move">Stock movement</button>
       <button data-t="staff">Staff</button>
       <button data-t="codes" id="tabCodes">Access codes</button>
       <button data-t="settings" id="tabSettings">Settings</button>
       <div class="sep"></div>
       <a class="lnk" href="/upload">Upload &nearr;</a>
-      <a class="lnk" href="/call">HOOP Calls &nearr;</a>
+      <a class="lnk" href="/call">HOOPLOAN Calls &nearr;</a>
     </div>
       </aside>
     <main id="main"></main>
@@ -226,7 +228,7 @@ function paneLoading(m, title){
   m.innerHTML='<div class="card">'+(title?'<h2>'+esc(title)+'</h2>':'')+'<div class="sk"></div></div>';
 }
 /** Is this the APK, rather than a browser? The bridge is injected by the Android wrapper
-    (the same object HOOP Calls reads its device id from), so its presence IS the proof --
+    (the same object HOOPLOAN Calls reads its device id from), so its presence IS the proof --
     a user agent string can be typed by anyone, an injected object cannot. */
 function fromApp_(){
   return !!(window.HopeCalls && window.HopeCalls.getDeviceId);
@@ -558,7 +560,7 @@ function enter(){
      every button -- the same rule the endpoints enforce. A pane added later shows up
      here the moment the server lists it. */
   var NAVKEY={dash:'dashboard',cust:'customers',ripoti:'reports',recovery:'recovery',
-    fraud:'fraud',score:'scorecards',stock:'stock',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
+    sales:'scorecards',fraud:'fraud',score:'scorecards',stock:'stock',acct:'stock',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
   var NAVS=BOOT.navs||[];
   $all('#tabs button').forEach(function(b){
     var k=NAVKEY[b.getAttribute('data-t')];
@@ -597,6 +599,8 @@ function draw(){
   if(TAB==='score') return drawAgents(m);
   if(TAB==='stock') return drawStock(m);
   if(TAB==='move') return drawMove(m);
+  if(TAB==='acct') return drawStockAccount(m);
+  if(TAB==='sales') return drawSalesPerf(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
   if(TAB==='staff') return drawStaff(m);
@@ -626,7 +630,7 @@ function drawDash(m){
     +'<div class="card"><h2>Leo unafanyaje / Today’s path</h2>'
     +'<ol class="road" style="margin:0;padding-left:20px">'
     +'<li><a href="/upload">Pakia orodha ya Watu ya leo</a> — Excel kutoka Watu, kama ilivyo.</li>'
-    +'<li>Credit team wanafungua <a href="/call">HOOP Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
+    +'<li>Credit team wanafungua <a href="/call">HOOPLOAN Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
     +'<li>Kesho asubuhi: pakia ya kesho, kisha angalia <b>Recovery</b> — nani amelipa baada ya simu zetu.</li>'
     +'</ol></div>';
   drawTrend();
@@ -646,9 +650,34 @@ function drawDash(m){
 
    A day the officer was dealt nothing is a gap, not a zero -- an officer who was handed
    no 7+ customers on Wednesday did not "fail Wednesday", and the chart must not say so. */
+/* THE WEEK SLIDES. One shared choice for BOTH recovery charts (the per-person grid and
+   the 7+ trend), so sliding back a week moves the whole picture together, never half of
+   it. Empty string = this week; anything else is a Monday the server snapped to. */
+var RECWEEK='';
+function recWeekBar(d){
+  return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">'
+    +'<button class="btn sm ghost" id="recWkPrev" title="Wiki iliyopita / previous week">◀</button>'
+    +'<span style="font-size:12px;font-weight:600">'+esc(d.from||'')+' → '+esc(d.to||'')+'</span>'
+    +'<button class="btn sm ghost" id="recWkNext" title="Wiki ijayo / next week">▶</button>'
+    +(d.thisWeek
+      ? '<span class="chip">wiki hii / this week</span>'
+      : '<button class="btn sm" id="recWkNow">Rudi wiki hii / back to this week</button>')
+    +'</div>';
+}
+function wireRecWeekBar(d){
+  var step=function(n){
+    var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
+    base.setUTCDate(base.getUTCDate()+7*n);
+    RECWEEK=base.toISOString().slice(0,10);
+    drawCreditRecovery(); drawRecoveryTrend();
+  };
+  var p=$('#recWkPrev'); if(p) p.onclick=function(){ step(-1); };
+  var n=$('#recWkNext'); if(n) n.onclick=function(){ step(1); };
+  var now=$('#recWkNow'); if(now) now.onclick=function(){ RECWEEK=''; drawCreditRecovery(); drawRecoveryTrend(); };
+}
 function drawCreditRecovery(){
   var box=$('#credRecBox'); if(!box) return;
-  srv('recoveryWeek',{}).then(function(d){
+  srv('recoveryWeek',{week:RECWEEK}).then(function(d){
     var b=$('#credRecBox'); if(!b) return;
     var pts=d.points||[], people=(d.credits||[]);
     // Only the people who were actually dealt something this week -- a roster member with
@@ -657,7 +686,17 @@ function drawCreditRecovery(){
       return Object.keys(p.days||{}).some(function(k){ return p.days[k].assigned>0; });
     });
     if(!pts.length||!live.length){
-      b.innerHTML='<div class="mut">Hakuna mgao wa 7+ wiki hii bado — chati itajaa baada ya upload mbili au zaidi.</div>';
+      /* The bar stays even on an empty week -- it is the way back OUT of one, and this is
+         the message the owner actually meets on a MONDAY: a fresh Mon-Sun week holds one
+         upload at most, and recovery needs the NEXT upload before it can show anything.
+         So the empty state names the reason and points at the button rather than reading
+         as "the chart is broken". */
+      b.innerHTML=recWeekBar(d)
+        +'<div class="mut">Hakuna mgao wa 7+ kwa wiki hii bado'
+        +(d.thisWeek?' — wiki huanza Jumatatu, na recovery huonekana baada ya upload ya siku inayofuata. Bonyeza ◀ kuona wiki iliyopita.':' — hakuna upload wa wiki hiyo.')
+        +' / No 7+ pool for this week yet'+(d.thisWeek?' — a week starts Monday and recovery only shows after the NEXT day\'s upload. Press ◀ for last week.':'.')
+        +'</div>';
+      wireRecWeekBar(d);
       return;
     }
     var today=(new Date(Date.now()+3*3600*1000)).toISOString().slice(0,10);
@@ -729,11 +768,12 @@ function drawCreditRecovery(){
         +cells+'</div>';
     }).join('');
 
-    b.innerHTML=head+rows
+    b.innerHTML=recWeekBar(d)+head+rows
       +'<div class="mut" style="font-size:10.5px;margin-top:8px">'
       +'Urefu wote = waliopewa (OFF JANA ya jana) · kijani = waliopungua leo · “—” = hakukuwa na mgao siku hiyo. '
       +'Bonyeza \u{1F441} juu ya siku kuona wateja wenyewe.</div>'
       +'<div id="credDayBox" style="margin-top:10px"></div>';
+    wireRecWeekBar(d);
 
     // One handler per eye. Each day opens on its own and replaces whatever was open, so the
     // panel never becomes a stack of days nobody closed.
@@ -1055,20 +1095,202 @@ function credDayOpen(date, dayShort){
 
 function drawRecoveryTrend(){
   var box=$('#recTrendBox'); if(!box) return;
-  srv('recoveryWeek',{}).then(function(d){
+  // The SAME chosen week as the per-person grid -- the two charts slide together.
+  srv('recoveryWeek',{week:RECWEEK}).then(function(d){
     var b=$('#recTrendBox'); if(!b) return;
+    var wk=d.thisWeek?'wiki hii':(esc(d.from||'')+' → '+esc(d.to||''));
     var svg=svgRecoveryBars(d.points||[]);
     if(!svg){
-      b.innerHTML='<div class="mut">Hakuna upload wa wiki hii bado — chati itajaa baada ya upload za kila siku.</div>';
+      b.innerHTML='<div class="mut">Hakuna upload wa wiki hii ('+wk+') — chati hujaa pale upload zilipo.</div>';
       return;
     }
-    b.innerHTML='<div style="font-weight:700;margin-bottom:2px">7+ waliopungua wiki hii / 7+ reduced this week</div>'
+    b.innerHTML='<div style="font-weight:700;margin-bottom:2px">7+ waliopungua / 7+ reduced · '+wk+'</div>'
       +'<div class="mut" style="margin-bottom:8px">Ndani ya siku 45 pekee (dirisha la Hoop). '
-      +'Urefu wote = OFF JANA (7+ siku kwenye upload ya jana). Kijani = walipungua leo.</div>'
+      +'Urefu wote = OFF JANA (7+ siku kwenye upload ya jana). Kijani = walipungua siku husika.</div>'
       +svg;
   }).catch(function(e){
     var b=$('#recTrendBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';
   });
+}
+
+/* ---------- stock accountability ----------
+   "the stock is too large and hoop agents are stealing stock"
+
+   Four pivots over the same answer -- company, the store (Sipho), RSMs, agents -- because
+   the same question is asked at four different altitudes. Every row is one holder and what
+   they are answerable for: held now, held too long, and what LEFT their hands. A departure
+   is judged three ways -- sold (in our sales book), kwa Watu (financed but no sale record),
+   or UNACCOUNTED, which is the line that matters and is deliberately not called theft. */
+var STOCKACCT={pivot:'company',open:null};
+function drawStockAccount(m){
+  m.innerHTML='<div class="card"><h2>Stock accountability</h2><div class="sk"></div></div>';
+  srv('stockAccount',{}).then(function(d){
+    var pivots=[['company','Company'],['store','Store (Sipho)'],['rsm','RSMs'],['agent','Agents']];
+    var sec=d[STOCKACCT.pivot]||{rows:[],totals:{}};
+    var t=sec.totals||{};
+    if(!d.asOf){
+      m.innerHTML='<div class="card"><h2>Stock accountability</h2>'
+        +'<div class="mut">Hakuna ripoti ya stock bado — pakia ripoti ya SyscoPos ya Sipho kwenye /upload. '
+        +'/ No stock report uploaded yet.</div></div>';
+      return;
+    }
+    var tabs='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+      +pivots.map(function(p){
+        return '<button class="btn sm'+(STOCKACCT.pivot===p[0]?'':' ghost')+'" data-sa="'+p[0]+'">'+p[1]+'</button>';
+      }).join('')+'</div>';
+    var head='<div class="tiles">'
+      +'<div class="tile"><div class="l">Zilizopo / held now</div><div class="v">'+money(t.held||0)+'</div>'
+        +'<div class="s">'+money(t.holders||0)+' holders · ripoti '+esc(d.asOf)+'</div></div>'
+      +'<div class="tile"><div class="l">Zimekaa sana / stale</div><div class="v"'+((t.stale||0)?' style="color:var(--bad)"':'')+'>'+money(t.stale||0)+'</div>'
+        +'<div class="s">'+money(d.staleDays)+'+ siku mkononi</div></div>'
+      +'<div class="tile"><div class="l">Zilizotoka / left stock</div><div class="v">'+money(t.gone||0)+'</div>'
+        +'<div class="s">tangu ripoti ya '+esc(d.prevAsOf||'—')+'</div></div>'
+      +'<div class="tile"><div class="l">Zimeuzwa / sold</div><div class="v" style="color:var(--ok)">'+money(t.sold||0)+'</div>'
+        +'<div class="s">zipo kwenye kitabu cha mauzo</div></div>'
+      +'<div class="tile"><div class="l">HAZIJULIKANI / unaccounted</div><div class="v"'+((t.unaccounted||0)?' style="color:var(--bad)"':'')+'>'+money(t.unaccounted||0)+'</div>'
+        +'<div class="s">hazipo mauzoni wala Watu</div></div>'
+      +'</div>';
+    var note='<div class="mut" style="margin:8px 0">Simu iliyotoka kwenye stock ina njia tatu za kweli: '
+      +'<b>imeuzwa</b> (ipo kwenye kitabu cha mauzo), <b>kwa Watu</b> (imefadhiliwa lakini haipo mauzoni — hilo ni kosa la karatasi, si wizi), '
+      +'au <b>haijulikani</b> — haipo popote. Safu ya mwisho ndiyo ya kuulizia, na inaonyesha aliyekuwa nayo mwisho. '
+      +'/ Unaccounted = left stock and appears in neither the sales book nor the Watu register.'
+      +(d.notChecked?' <b style="color:var(--bad)">'+money(d.notChecked)+' departures were not judged this run (cap reached) — they are NOT counted above.</b>':'')
+      +'</div>';
+    var rows=sec.rows||[];
+    var table=rows.length
+      ? '<div class="scroll"><table><thead><tr><th>Holder</th><th>Role</th><th class="r">Held</th><th class="r">Stale</th>'
+        +'<th class="r">Left</th><th class="r">Sold</th><th class="r">Kwa Watu</th><th class="r">Unaccounted</th><th></th></tr></thead><tbody>'
+        +rows.map(function(r,i){
+          return '<tr><td><b>'+esc(r.holder)+'</b>'+(r.branch?'<div class="mut" style="font-size:10px">'+esc(r.branch)+'</div>':'')+'</td>'
+            +'<td>'+esc(r.role||'—')+'</td>'
+            +'<td class="r">'+money(r.held)+'</td>'
+            +'<td class="r"'+(r.stale?' style="color:var(--bad)"':'')+'>'+money(r.stale)+'</td>'
+            +'<td class="r">'+money(r.gone)+'</td>'
+            +'<td class="r" style="color:var(--ok)">'+money(r.sold)+'</td>'
+            +'<td class="r">'+money(r.watu)+'</td>'
+            +'<td class="r"'+(r.unaccounted?' style="color:var(--bad);font-weight:700"':'')+'>'+money(r.unaccounted)+'</td>'
+            +'<td class="r">'+(r.unaccounted?'<button class="btn sm ghost" data-sax="'+i+'">IMEI</button>':'')+'</td></tr>'
+            +(STOCKACCT.open===i&&r.unaccountedList.length
+              ? '<tr><td colspan="9" style="background:var(--b50)"><b style="font-size:12px">Hazijulikani — '+esc(r.holder)+'</b>'
+                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th class="r">Age</th></tr></thead><tbody>'
+                +r.unaccountedList.map(function(s){
+                  return '<tr><td style="font-size:11px">'+esc(s.serial)+'</td><td>'+esc(s.item||'—')+'</td>'
+                    +'<td class="r">'+(s.age!=null?money(s.age):'—')+'</td></tr>';
+                }).join('')+'</tbody></table></div></td></tr>'
+              : '');
+        }).join('')+'</tbody></table></div>'
+      : '<div class="mut">Hakuna mwenye stock kwenye kundi hili. / Nobody in this pivot holds stock.</div>';
+    m.innerHTML='<div class="card"><h2>Stock accountability</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Ripoti ya '+esc(d.asOf)+' ikilinganishwa na ya '+esc(d.prevAsOf||'—')
+      +'. / Newest stock report against the one before it.</div>'
+      +tabs+head+note+table+'</div>';
+    $all('[data-sa]').forEach(function(b){ b.onclick=function(){ STOCKACCT.pivot=b.getAttribute('data-sa'); STOCKACCT.open=null; drawStockAccount(m); }; });
+    $all('[data-sax]').forEach(function(b){ b.onclick=function(){
+      var i=Number(b.getAttribute('data-sax')); STOCKACCT.open=(STOCKACCT.open===i?null:i); drawStockAccount(m); }; });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
+/* ---------- daily sales performance ----------
+   "Pivot for all: for General duty person, RSMs, Commission agents and company grand
+    totals ... target in settings so we see sales performances over set target."
+
+   One week, four pivots, one shared week slider (the same pattern the recovery charts
+   use). Each pivot is a per-person grid -- one row, seven day-columns Mon-Sun, count and
+   TZS per day -- plus the week total; the company pivot is the same shape with one row.
+   The target line is SALES_DAILY_TARGET (TZS/day) from settings: each day is measured
+   against it, and the row total against target x 7. */
+var SALESPERF={week:'',pivot:'general'};
+function drawSalesPerf(m){
+  m.innerHTML='<div class="card"><h2>Sales performance</h2><div class="sk"></div></div>';
+  srv('salesWeek',{week:SALESPERF.week}).then(function(d){
+    var target=d.dailyTarget||0;
+    var pivots=[['general','General duty'],['rsm','RSM'],['agent','Commission agent'],['company','Company']];
+    var bar='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'
+      +'<button class="btn sm ghost" id="spPrev" title="previous week">◀</button>'
+      +'<span style="font-size:12px;font-weight:600">'+esc(d.from||'')+' → '+esc(d.to||'')+'</span>'
+      +'<button class="btn sm ghost" id="spNext" title="next week">▶</button>'
+      +(d.thisWeek?'<span class="chip">wiki hii / this week</span>'
+        :'<button class="btn sm" id="spNow">Rudi wiki hii / this week</button>')
+      +'<span style="flex:1"></span>'
+      +'<span class="mut" style="font-size:11.5px">Lengo / target: '
+        +(target?money(target)+' TZS/siku · '+money(d.weekTarget)+' /wiki':'—')+'</span>'
+      +'</div>';
+    var tabs='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+      +pivots.map(function(p){
+        return '<button class="btn sm'+(SALESPERF.pivot===p[0]?'':' ghost')+'" data-sp="'+p[0]+'">'+p[1]+'</button>';
+      }).join('')+'</div>';
+
+    // Company is one synthetic row so the grid renders it identically to a per-person pivot.
+    var rows = SALESPERF.pivot==='company'
+      ? [{ name:'Company / jumla', days:d.company.days, count:d.company.count, amount:d.company.amount }]
+      : (d[SALESPERF.pivot]||[]);
+
+    var body;
+    if(!rows.length){
+      body='<div class="mut">Hakuna mauzo kwa wiki hii — pakia faili la mauzo (hoopltd.shop) kisha rudi hapa. '
+        +'/ No sales for this week yet; upload the sales file and come back.</div>';
+    } else {
+      // One ceiling across every row and day, so bars compare by eye. The daily target,
+      // if set, is drawn as a reference line inside each day cell.
+      var max=1;
+      rows.forEach(function(r){ d.days.forEach(function(dd){ var c=r.days[dd]; if(c&&c.amount>max) max=c.amount; }); });
+      if(target>max) max=target;
+      var dayName=function(iso){ return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(iso+'T00:00:00').getDay()]; };
+      var head='<div style="display:grid;grid-template-columns:150px repeat(7,1fr) 92px;gap:4px;'
+        +'background:var(--b50);border:1px solid var(--line);border-radius:9px 9px 0 0;padding:7px 6px;'
+        +'font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase">'
+        +'<div>'+esc(pivots.filter(function(p){return p[0]===SALESPERF.pivot;})[0][1])+'</div>'
+        +d.days.map(function(dd){ return '<div style="text-align:center">'+esc(dayName(dd))
+          +'<div style="font-size:9px;color:var(--soft);font-weight:600">'+esc(dd.slice(5))+'</div></div>'; }).join('')
+        +'<div style="text-align:right">Wiki / week</div></div>';
+      var grid=rows.map(function(r){
+        var cells=d.days.map(function(dd){
+          var c=r.days[dd];
+          if(!c||!c.amount){
+            return '<div style="text-align:center"><div style="height:46px;display:flex;align-items:flex-end;justify-content:center">'
+              +'<div style="color:var(--soft);font-size:11px;padding-bottom:14px">—</div></div>'
+              +'<div style="font-size:9.5px;color:var(--soft);text-align:center">&nbsp;</div></div>';
+          }
+          var h=Math.max(3,Math.round(46*c.amount/max));
+          var hit=target&&c.amount>=target;
+          var tLine=target?'<div style="position:absolute;left:-2px;right:-2px;bottom:'+Math.round(46*target/max)
+            +'px;border-top:1.5px dashed var(--mut);opacity:.5"></div>':'';
+          return '<div style="text-align:center">'
+            +'<div style="height:46px;display:flex;align-items:flex-end;justify-content:center;position:relative">'
+            +tLine+'<div style="width:20px;height:'+h+'px;background:'+(hit?'var(--ok)':'var(--b100)')+';border-radius:4px"></div></div>'
+            +'<div style="font-size:9.5px;text-align:center;font-weight:600;margin-top:2px">'+money(c.count)+'</div></div>';
+        }).join('');
+        var overTarget=target?(r.amount>=d.weekTarget):null;
+        return '<div style="display:grid;grid-template-columns:150px repeat(7,1fr) 92px;gap:4px;align-items:end;'
+          +'padding:8px 6px;border:1px solid var(--line);border-top:0">'
+          +'<div style="font-size:12.5px"><b>'+esc(r.name)+'</b>'
+          +'<div class="mut" style="font-size:10.5px">'+money(r.count)+' simu</div></div>'
+          +cells
+          +'<div style="text-align:right;align-self:center"><b style="font-size:12.5px'
+            +(overTarget===true?';color:var(--ok)':(overTarget===false?';color:var(--mut)':''))+'">'
+            +money(r.amount)+'</b>'
+          +(target?'<div class="mut" style="font-size:9.5px">'+(overTarget?'✓ lengo':Math.round(100*r.amount/d.weekTarget)+'%')+'</div>':'')
+          +'</div></div>';
+      }).join('');
+      body=head+grid
+        +'<div class="mut" style="font-size:10.5px;margin-top:8px">Nambari chini ya kila baa = idadi ya simu siku hiyo · '
+        +'urefu = thamani (TZS) · kijani = imefika lengo la siku · mstari wa vitone = lengo la siku. '
+        +(target?'':'Weka <b>SALES_DAILY_TARGET</b> kwenye Settings ili uone mstari wa lengo.')
+        +'</div>';
+    }
+    m.innerHTML='<div class="card"><h2>Sales performance</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Mauzo ya kila siku, yaliyofuatiliwa kwa: mhudumu (general duty), RSM, wakala wa komisheni, na jumla ya kampuni. '
+      +'/ Daily sales pivoted by general duty, RSM, commission agent, and company.</div>'
+      +bar+tabs+body+'</div>';
+    var step=function(n){
+      var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
+      base.setUTCDate(base.getUTCDate()+7*n); SALESPERF.week=base.toISOString().slice(0,10); drawSalesPerf(m);
+    };
+    var p=$('#spPrev'); if(p) p.onclick=function(){ step(-1); };
+    var nx=$('#spNext'); if(nx) nx.onclick=function(){ step(1); };
+    var nw=$('#spNow'); if(nw) nw.onclick=function(){ SALESPERF.week=''; drawSalesPerf(m); };
+    $all('[data-sp]').forEach(function(b){ b.onclick=function(){ SALESPERF.pivot=b.getAttribute('data-sp'); drawSalesPerf(m); }; });
+  }).catch(function(e){ paneFailed(m,e); });
 }
 
 /* ---------- wateja / customers ----------
@@ -1518,7 +1740,7 @@ function drawCodes(m){
       +'"Upload (action)" is permission to send files at /upload. ADMIN always holds everything; AUDITOR sees all, changes nothing. '
       +'A role nobody holds carries <b>×</b> to delete it.</div>'
       +'</div>'
-      +'<div class="card"><h2>App users — HOOP Calls logins</h2>'
+      +'<div class="card"><h2>App users — HOOPLOAN Calls logins</h2>'
       +'<div class="mut" style="margin-bottom:10px">Who is signed in on the phones. Switching one person off does not touch the team code — only their account.</div>'
       +'<div class="scroll"><table><thead><tr><th>Name</th><th>Branch</th><th>Phone</th><th>Last sync</th><th>Status</th><th></th></tr></thead><tbody>'
       +((off.officers||[]).length?(off.officers||[]).map(function(o){
@@ -1549,7 +1771,7 @@ function drawCodes(m){
             +'</div>';
         };
         return card('HOOP','App sign-in code — staff',
-            'ONE code for the whole company — every credit user registers on HOOP Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.',
+            'ONE code for the whole company — every credit user registers on HOOPLOAN Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.',
             'Create the company code')
           +card('AGENT','App sign-in code — agents',
             'ONE shared code for ALL sales agents — share it in the WhatsApp group and rotate it here when somebody leaves. An agent signs in with just their registered phone number and this code; their name and branch are read from the agents register, and the app shows them ONLY the customers they sold. A number that is not on the register cannot sign in at all.',
@@ -1654,7 +1876,8 @@ function drawSettings(m){
           +'<input class="inp" id="st'+i+'" value="'+esc(s.value)+'">'
           +'<button class="btn sm" data-sv="'+esc(s.key)+'" data-i="'+i+'">Save</button></div>';
       }).join('')
-      +'<div class="mut">SYSTEM_OPEN=YES hufungua mfumo. CALL_BRAND ni jina kwenye app. FU_STATUSES: hali za ufuatiliaji — tenganisha kwa comma (au mstari mpya).</div>'
+      +'<div class="mut">SYSTEM_OPEN=YES hufungua mfumo. CALL_BRAND ni jina kwenye app. FU_STATUSES: hali za ufuatiliaji — tenganisha kwa comma (au mstari mpya). '
+      +'<b>SALES_DAILY_TARGET</b>: lengo la mauzo kwa siku (TZS) — linaonekana kama mstari kwenye chati ya Sales performance. / daily sales target in TZS, drawn as the target line on the Sales performance chart.</div>'
       +'</div>';
     $all('[data-sv]',m).forEach(function(b){
       b.onclick=function(){
