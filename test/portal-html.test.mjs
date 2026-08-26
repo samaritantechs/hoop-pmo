@@ -162,3 +162,31 @@ for (const page of PAGES) {
       'called but never defined -- this is exactly the drawer() bug');
   });
 }
+
+/* =========================================================================================
+   NO BARS INSIDE TABLE ROWS.
+
+     "I intended to see graphs but the bars are killing it better use numbers within
+      b/se the variance of the lenghts makes them ugly"
+
+   Twice now the same defect has been built: a per-day bar drawn inside each cell of a
+   per-person row, scaled against the busiest person of the week. One officer dealt 40 and
+   another dealt 2 puts a full-height block beside a 3px stub on the same row, and the tall
+   one is usually the WORSE day -- 1 of 2 recovered beats 12 of 40. Sales performance had it,
+   the credit grid had it, and both are gone.
+
+   The two week charts are NOT this and must stay: they are single-series SVG with a shared
+   baseline, gridlines and an axis. Those are the graphs that were wanted. This guards the
+   pattern, not the concept -- an inline pixel height computed per row.
+   ========================================================================================= */
+test('portal.html: no per-row inline bars, only the real week charts', () => {
+  const src = read('portal.html');
+  const html = src.replace(/<style[\s\S]*?<\/style>/g, ' ');
+  // A height in px computed from a ratio, written into an inline style: the bar-in-a-cell.
+  const inline = [...html.matchAll(/style="[^"]*height:'\s*\+/g)];
+  assert.deepEqual(inline.map(m => m[0]), [],
+    'a bar drawn inside a table cell is back -- use a tinted number cell instead');
+  // ...while the two SVG week charts keep their bars, because those were never the problem.
+  assert.match(src, /<rect x="'\+\(cx-bw\/2\)/,
+    'the single-series week charts must keep their bars');
+});
