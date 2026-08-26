@@ -92,10 +92,28 @@ class FakeQuery {
   // PostgREST spells "everything with a value here" as .not(col, 'is', null) -- the idiom for
   // a delete-all, which needs a filter to be accepted at all.
   not(k, op, v) { this.filters.push(r => !(op === 'is' && v === null ? r[k] == null : String(r[k]) === String(v))); return this; }
-  gte(k, v) { this.filters.push(r => r[k] != null && String(r[k]) >= String(v)); return this; }
-  lte(k, v) { this.filters.push(r => r[k] != null && String(r[k]) <= String(v)); return this; }
-  gt(k, v) { this.filters.push(r => r[k] != null && String(r[k]) > String(v)); return this; }
-  lt(k, v) { this.filters.push(r => r[k] != null && String(r[k]) < String(v)); return this; }
+  /* ORDER, AND WHY IT CANNOT ALWAYS BE STRING ORDER.
+
+     These four used to compare String(a) against String(b) always, which is right for the
+     dates this fake is mostly asked about ('2026-08-26' sorts correctly as text) and WRONG
+     for every integer column: "200" <= "47" is true as text and false as arithmetic. A count
+     of "rows inside day 47" then matched a row at day 200 and the test that was written to
+     prove the window works passed for a reason that had nothing to do with the window.
+
+     Postgres decides by the COLUMN'S type. The fake has no schema, so it uses the one signal
+     it does have: if both sides read as finite numbers, compare as numbers. Dates and
+     timestamps are NaN under Number(), so they keep text order, which is the order they
+     want. */
+  static #cmp(a, b) {
+    const x = Number(a), y = Number(b);
+    if (a !== '' && b !== '' && Number.isFinite(x) && Number.isFinite(y)) return x < y ? -1 : x > y ? 1 : 0;
+    const s = String(a), t = String(b);
+    return s < t ? -1 : s > t ? 1 : 0;
+  }
+  gte(k, v) { this.filters.push(r => r[k] != null && FakeQuery.#cmp(r[k], v) >= 0); return this; }
+  lte(k, v) { this.filters.push(r => r[k] != null && FakeQuery.#cmp(r[k], v) <= 0); return this; }
+  gt(k, v) { this.filters.push(r => r[k] != null && FakeQuery.#cmp(r[k], v) > 0); return this; }
+  lt(k, v) { this.filters.push(r => r[k] != null && FakeQuery.#cmp(r[k], v) < 0); return this; }
   in(k, arr) { this.filters.push(r => arr.map(String).includes(String(r[k]))); return this; }
   // Case-insensitive LIKE, with % meaning "anything". What a search box compiles to.
   ilike(k, pat) { this.filters.push(r => likeMatch(r[k], pat)); return this; }

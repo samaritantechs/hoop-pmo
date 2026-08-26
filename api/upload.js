@@ -5,6 +5,7 @@ import { todayKey } from './_lib/time.js';
 import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
   importAgedStock, isAgedStockFile, importOfflineQueue, isOfflineQueueFile,
   looksLikeHeader, lifetimeDay } from './_lib/importers.js';
+import { WINDOW_DAYS } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/upload -- the daily Watu list, AND the hoopltd.shop sales export. The header
@@ -17,10 +18,12 @@ import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
    THE POSTGRES BUDGET (the permanent rule -- stated per change, forever):
    Per slice, warm: 1 auth read + 1 gate read (cached 30s) + 4 writes -- teams upsert
    (ignoreDuplicates), watu_snapshots insert, watu_loans upsert, followup_status upsert --
-   each chunked at 1000 rows/statement. Last slice adds 1 settings upsert (DATA_VERSION).
+   each chunked at 1000 rows/statement. Last slice adds 1 settings upsert (DATA_VERSION)
+   and, for a Watu deck, 3 HEAD counts over followup_status (deckStats) -- head:true, so
+   they transfer no rows at all and run once per upload rather than once per slice.
    Row bounds: every write is bounded by the file's own row count; nothing here reads the
-   register back. No read is repeated across slices; nothing is fetched to be merged --
-   the header-presence upsert IS the merge.
+   register's ROWS back. No read is repeated across slices; nothing is fetched to be
+   merged -- the header-presence upsert IS the merge.
 
    REPLACE-BY-DAY, WITHOUT DELETING ANYTHING: snapshots append under a fresh batch uuid;
    the register upserts in place; followup_status rows get deck_date = this upload's date,
@@ -36,6 +39,44 @@ import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CHUNK = 1000;
+
+/* THE WINDOW THE DECK REPORT COUNTS BY. Imported rather than restated so the number the
+   upload screen shows and the number the dashboard tile shows can never be two different
+   rules -- see call-core.js for why it is 45 + 2. */
+const DECK_WINDOW = WINDOW_DAYS;
+
+/* ==========================================================================================
+   WHAT ACTUALLY LANDED ON THE DECK -- read back, not inferred.
+
+     "the credits tell me they uploaded well yet 7+ people aint seen in the distribution"
+
+   The upload screen could only ever report what it had just PARSED. When the deck then came
+   up wrong there was no way to tell, from anything anybody could see, whether the file was
+   short, the parse was wrong, or the write did not finish -- and the argument that follows
+   ("we uploaded it") has no evidence on either side. So the last slice asks the database the
+   same three questions the dashboard asks, and prints the answers next to the file's own
+   numbers. A deck that is short, or that carries no 7+ customers inside the window, now says
+   so at the moment of upload, to the person who can re-run it.
+
+   Three HEAD counts, no rows transferred, once per upload -- not per slice.
+   ========================================================================================== */
+export async function deckStats(db, day) {
+  const base = () => db.from('followup_status')
+    .select('imei', { count: 'exact', head: true }).eq('deck_date', day);
+  const n = async q => {
+    const { count, error } = await q;
+    if (error) throw new Error(error.message);
+    return count || 0;
+  };
+  const [rows, locked7, locked7InWindow] = await Promise.all([
+    n(base()),
+    n(base().eq('locked7', true)),
+    // lifetime_day is stamped at upload time against this same snapshotDate, so this is
+    // exactly inWindowOf() evaluated on the day the deck was built.
+    n(base().eq('locked7', true).lte('lifetime_day', DECK_WINDOW)),
+  ]);
+  return { rows, locked7, locked7InWindow, window: DECK_WINDOW };
+}
 
 async function writeChunks(db, table, records, onConflict) {
   let written = 0;
@@ -341,11 +382,17 @@ export default withApi(async (req) => {
 
   // 5. Last slice: move DATA_VERSION so every handset drops its hour-long cache at once
   //    (Hope's mechanism, one settings row by primary key).
+  let deck = null;
   if (isLast) {
     const { error } = await supabase.from('settings')
       .upsert({ key: 'DATA_VERSION', value: batch }, { onConflict: 'key' });
     if (error) throw new Error('settings: ' + error.message);
-    await logUpload(user, 'upload:watu-deck', snapshotDate + ' · rows ' + records.length);
+    /* The read-back is a REPORT, never a gate. Every row above is already committed by
+       this point, so a hiccup counting them must not turn a finished upload into a failed
+       one -- the page simply shows the file's own numbers without the deck's. */
+    try { deck = await deckStats(supabase, snapshotDate); } catch (e) { deck = null; }
+    await logUpload(user, 'upload:watu-deck', snapshotDate + ' · rows ' + records.length
+      + (deck ? ' · deck ' + deck.rows + ' · 7+ in window ' + deck.locked7InWindow : ''));
   }
 
   return {
@@ -364,6 +411,9 @@ export default withApi(async (req) => {
        distribution while the upload reported a clean 2,689 rows. */
     columns,
     critical,
+    /* WHAT THE DECK HOLDS NOW, straight from the table the phones read. Present on the last
+       slice only; null if the count itself failed. See deckStats() above. */
+    deck,
     part: { index, total, last: isLast },
   };
 });

@@ -190,3 +190,47 @@ test('portal.html: no per-row inline bars, only the real week charts', () => {
   assert.match(src, /<rect x="'\+\(cx-bw\/2\)/,
     'the single-series week charts must keep their bars');
 });
+
+/* =========================================================================================
+   THE SIGN-IN BOX HAS TO BE ABLE TO MOVE.
+
+     "at login page it doesnt slide up to see whats beeing filled"
+
+   fitPanelToKeyboard_ was already pointed at #scrIn and could not shift it, for two reasons
+   that both lived in the one CSS line: a `min-height:100vh` that an inline height cannot
+   shrink past, and `position:static`, on which `top` means nothing at all. Neither is
+   visible in a diff as a bug -- they read as ordinary layout -- so they are pinned here.
+   ========================================================================================= */
+test('portal.html: the sign-in panel can be shrunk and moved by the keyboard fit', () => {
+  const src = read('portal.html');
+  const rule = src.match(/(^|\n)#scrIn\{[^}]*\}/m);
+  assert.ok(rule, '#scrIn rule not found');
+  assert.match(rule[0], /position:fixed/,
+    '`top` is ignored on a static box, so half of fitPanelToKeyboard_ does nothing');
+  assert.doesNotMatch(rule[0], /min-height:100(vh|dvh)/,
+    'a stylesheet min-height outranks the inline height -- the panel cannot shrink for the keys');
+  assert.match(rule[0], /overflow:auto/,
+    'with the keyboard up the button must still be reachable');
+  // Both halves, or neither works: the height that shrinks and the min-height that permits it.
+  const fit = src.match(/function fitPanelToKeyboard_\(id\)\{[\s\S]*?\n\}/);
+  assert.ok(fit, 'fitPanelToKeyboard_ not found');
+  assert.match(fit[0], /style\.minHeight\s*=\s*vv\.height/,
+    'setting height without minHeight leaves the panel exactly as tall as it was');
+});
+
+/* The APK draws the page inside a WebView whose top edge can sit under the status bar.
+     "the apk interfaces both callap and system are too high to touch the top bar functions"
+   The wrapper pads for the system bars on API 30+, but only there; env(safe-area-inset-top)
+   covers every other path and costs nothing where the native padding already worked -- the
+   inset is 0 and the calc() adds 0. It needs viewport-fit=cover to have a value at all. */
+for (const [page, sel] of [['portal.html', '\\.top'], ['call.html', 'header\\.top']]) {
+  test(`${page}: the top bar clears the phone's status bar`, () => {
+    const src = read(page);
+    assert.match(src, /viewport-fit=cover/,
+      'without viewport-fit=cover, env(safe-area-inset-top) is always 0');
+    const rule = src.match(new RegExp('(^|\\n)' + sel + '\\{[^}]*\\}', 'm'));
+    assert.ok(rule, `${sel} rule not found`);
+    assert.match(rule[0], /padding:calc\(\d+px \+ env\(safe-area-inset-top,0px\)\)/,
+      'the top bar needs the safe-area inset added to its own padding');
+  });
+}

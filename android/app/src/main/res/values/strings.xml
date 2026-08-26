@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The app now opens the whole portal (Calls + dashboard + uploads), so it is named for
-         the system rather than just the calls half. Package id is unchanged, so this installs
-         as an UPDATE over the earlier "HOOP Calls" build. -->
-    <string name="app_name">HOOP Calls</string>
+    <!-- The launcher label, and the one name officers actually see. The app opens the whole
+         system (Calls + dashboard + uploads), so it is named for the system rather than for
+         the calls half it started as: "HOOP Calls" becomes "HOOPLOAN".
+
+         The package id under it is deliberately NOT renamed. Android identifies an install by
+         applicationId, so changing it would put a SECOND app on every phone rather than
+         updating the one already there: old icon still on the launcher, old data still
+         inside it, and every registered handset orphaned. A label is a string; an id is an
+         identity. This installs as an update, and the icon simply changes its name. -->
+    <string name="app_name">HOOPLOAN</string>
 </resources>

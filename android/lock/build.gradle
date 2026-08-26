@@ -3,7 +3,7 @@ plugins {
 }
 
 // ../../lock-version.json is the single place this app's version is set, exactly as
-// app-version.json is for HOOP Calls -- api/lock-version.js serves the same file back to the
+// app-version.json is for the HOOPLOAN app -- api/lock-version.js serves the same file back to the
 // installed app so it can update itself. Two separate files because the two apps ship on
 // their own clocks: an officer's calls build has nothing to do with a locked handset's.
 def lockVersion = new groovy.json.JsonSlurper().parse(rootProject.file('../lock-version.json'))

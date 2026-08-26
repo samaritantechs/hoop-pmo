@@ -16,7 +16,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 /**
- * Self-update, the same shape as HOOP Calls' -- one version file at the repo root, served
+ * Self-update, the same shape as the HOOPLOAN app's -- one version file at the repo root, served
  * back to the installed app so the two can never drift -- with one deliberate difference:
  * this one does not ask.
  *

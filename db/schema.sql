@@ -1,5 +1,5 @@
 -- =====================================================================================
--- HOOP PMO -- PostgreSQL schema v1 (Supabase)
+-- HOOPLOAN -- PostgreSQL schema v1 (Supabase)
 -- =====================================================================================
 -- Hoop Ltd is a phone dealership agent for Watu Credit: phones sold on daily-installment
 -- lock contracts. Watu sends a daily follow-up list; Hoop's credit team owns each

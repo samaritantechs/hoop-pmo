@@ -1,8 +1,8 @@
 # Builds both Android apps and commits them into public/, where Vercel serves them at
-# /HOOP-Calls.apk and /HOOPLOAN-Lock.apk -- the URLs app-version.json and lock-version.json
+# /HOOPLOAN.apk and /HOOPLOAN-Lock.apk -- the URLs app-version.json and lock-version.json
 # advertise to phones. Runs in Actions because the APKs need the Android toolchain; the web
 # app itself never needs a build.
-name: Build HOOP APKs
+name: Build HOOPLOAN APKs
 on:
   workflow_dispatch:
   push:
@@ -66,18 +66,25 @@ jobs:
       - name: Publish the APKs into the site
         if: github.event_name != 'pull_request'
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk public/HOOP-Calls.apk
+          # TWO NAMES FOR THE SAME BUILD, and the old one is not dead weight. Installed apps
+          # take their download URL from /api/app-version at runtime, so they follow the
+          # rename by themselves -- but a link that was written down, printed on a setup
+          # sheet or turned into a QR for the sales desks points at /HOOP-Calls.apk forever,
+          # and a 404 there reads as "the system is down". It costs 100KB in the repo to
+          # keep every one of those working, and nothing at all to serve.
+          cp android/app/build/outputs/apk/release/app-release.apk public/HOOPLOAN.apk
+          cp public/HOOPLOAN.apk public/HOOP-Calls.apk
           cp android/lock/build/outputs/apk/release/lock-release.apk public/HOOPLOAN-Lock.apk
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/HOOP-Calls.apk public/HOOPLOAN-Lock.apk public/lock-provisioning.json
+          git add public/HOOPLOAN.apk public/HOOP-Calls.apk public/HOOPLOAN-Lock.apk public/lock-provisioning.json
           git commit -m "APKs built from ${GITHUB_SHA::9}" || exit 0
           git pull --rebase origin main
           git push origin main
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hoop-apks
+          name: hooploan-apks
           path: |
             android/app/build/outputs/apk/release/app-release.apk
             android/lock/build/outputs/apk/release/lock-release.apk

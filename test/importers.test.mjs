@@ -325,3 +325,60 @@ test('a merged company banner above the real header is recognized, never a refus
   assert.equal(looksLikeHeader(['AGENT', 'ITEM', 'SERIAL', 'RECEIVED', 'AGE']), true, 'aged stock is known');
   assert.equal(looksLikeHeader(['Shop', 'Agent', 'IMEI', 'Client Name']), true, 'a deck header is known by its IMEI');
 });
+
+/* =========================================================================================
+   THE DECK REPORT: WHAT LANDED, NOT WHAT WAS PARSED.
+
+     "the credits tell me they uploaded well yet 7+ people aint seen in the distribution"
+
+   Everything the upload screen used to say described the FILE. So a deck that came out
+   perfect and a deck that came out empty printed the same sentence, and the argument that
+   followed ("we uploaded it") had no evidence on either side. deckStats asks the table the
+   phones actually read, using the same window rule the dashboard tile uses, and the page
+   prints it beside the file's own numbers.
+   ========================================================================================= */
+import { deckStats } from '../api/upload.js';
+import { WINDOW_DAYS } from '../api/_lib/call-core.js';
+import { fakeDb } from './fake-db.mjs';
+
+const deckRow = (imei, o) => ({ imei, deck_date: '2026-08-26', locked7: false, ...o });
+
+test('the deck report counts what is on the deck, by the dashboard\'s own window', async () => {
+  const db = fakeDb({ followup_status: [
+    deckRow('A', { locked7: true, lifetime_day: 12 }),
+    deckRow('B', { locked7: true, lifetime_day: WINDOW_DAYS }),      // last day inside
+    deckRow('C', { locked7: true, lifetime_day: WINDOW_DAYS + 1 }),  // first day out
+    deckRow('D', { locked7: false, lifetime_day: 5 }),
+    deckRow('E', { locked7: true, lifetime_day: 90, deck_date: '2026-08-25' }), // yesterday's
+  ] });
+  const s = await deckStats(db, '2026-08-26');
+  assert.equal(s.rows, 4, 'only rows carrying THIS deck_date are on today\'s deck');
+  assert.equal(s.locked7, 3);
+  assert.equal(s.locked7InWindow, 2, 'day 47 is inside the window; day 48 is Watu\'s problem');
+  assert.equal(s.window, WINDOW_DAYS,
+    'the report and the tile must never be counting by two different windows');
+});
+
+test('the deck report can say zero without pretending it could not count', async () => {
+  /* The shape the owner actually hit: a file full of locked customers, not one of them
+     inside the window. Distinguishable from "the count failed" only because it returns
+     numbers -- which is why the upload page treats a null deck and a zero deck differently. */
+  const db = fakeDb({ followup_status: [
+    deckRow('A', { locked7: true, lifetime_day: 200 }),
+    deckRow('B', { locked7: true, lifetime_day: 300 }),
+  ] });
+  const s = await deckStats(db, '2026-08-26');
+  assert.deepEqual([s.rows, s.locked7, s.locked7InWindow], [2, 2, 0]);
+});
+
+test('a row whose disbursed date never parsed is counted as outside the window', async () => {
+  /* lifetime_day is null when disbursed_date is null -- which is precisely what "Aug 17,
+     2026" produced for 2,689 rows before the parser learned to read it. A null must never
+     be counted as inside; that would replace an empty 7+ list with a wrong one. */
+  const db = fakeDb({ followup_status: [
+    deckRow('A', { locked7: true, lifetime_day: null }),
+    deckRow('B', { locked7: true, lifetime_day: 10 }),
+  ] });
+  const s = await deckStats(db, '2026-08-26');
+  assert.equal(s.locked7InWindow, 1);
+});
