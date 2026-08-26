@@ -60,20 +60,21 @@ a{color:var(--b600)}
 
 /* ---- app shell ---- */
 #scrApp{display:none;flex-direction:column;height:100%}
-/* THE TOP BAR SAT UNDER THE STATUS BAR ON SOME HANDSETS.
-     "the apk interfaces both callap and system are too high to touch the top bar functions"
+/* THE STATUS BAR IS THE WRAPPER'S JOB, NOT THIS FILE'S -- exactly as it is in HOPE, whose
+   header has sat below the clock in production every day.
 
-   The wrapper pads the WebView below the system bars itself on API 30+, but that is one
-   mechanism on one code path, and where it does not land the page draws edge-to-edge and
-   the buttons end up beneath the clock -- visible, and not reachable.
+   This rule briefly read `calc(14px + env(safe-area-inset-top,0px))`, added to keep the
+   buttons clear of the clock. It could never have done anything. env(safe-area-inset-top)
+   is the inset of the VIEWPORT, and the wrapper hands this page a viewport that already
+   starts below the status bar -- so the value is 0, the calc resolves to 14px, and the rule
+   was character-for-character the padding that was already there. It looked like a fix in
+   the diff and was a no-op on the handset, which is worse than leaving it alone: it made a
+   real bug look addressed.
 
-   env(safe-area-inset-top) is the belt to that brace, and it costs nothing when it is not
-   needed: if the native padding already moved the viewport clear of the status bar, the
-   inset is 0 and this line changes nothing at all. It only ever adds room where room is
-   actually missing. (viewport-fit=cover is already on the meta, which is what makes the
-   value available.) */
-header.top{background:var(--b900);color:#fff;flex:0 0 auto;
-  padding:calc(14px + env(safe-area-inset-top,0px)) 16px 12px}
+   The bug was in the wrapper (see MainActivity: a listener that disabled the very
+   fitsSystemWindows it was meant to reinforce), and it is fixed there. Here, plain padding,
+   matching HOPE byte for byte. */
+header.top{background:var(--b900);color:#fff;padding:14px 16px 12px;flex:0 0 auto}
 header.top .row1{display:flex;align-items:center;gap:10px}
 header.top .logo{width:30px;height:30px;border-radius:8px;background:#fff;object-fit:cover;display:block}
 header.top a{flex:0 0 auto;line-height:0}

@@ -251,3 +251,54 @@ test('the wrapper is syntactically valid Java', () => {
     .filter(l => /error:/.test(l) && !EXPECTED_WITHOUT_THE_SDK.test(l));
   assert.deepEqual(syntax, [], 'javac reported something that is not a missing Android class');
 });
+
+/* =========================================================================================
+   ONE STATUS-BAR MECHANISM, AND IT IS fitsSystemWindows.
+
+     "the apk interfaces both callap and system are too high to touch the top bar functions
+      (solve as we did with hopeloan)"
+     "you didn't solve the interface haven't buttons on top battery and network positions"
+
+   Reported twice, because the first fix was not one. Two mistakes, both worth a guard:
+
+     THE WRAPPER. setFitsSystemWindows(true) works by way of View.onApplyWindowInsets(), and
+     setOnApplyWindowInsetsListener REPLACES that method outright. A listener added to
+     REINFORCE fitsSystemWindows is therefore the thing that switches it off. Its guard made
+     it worse -- SDK_INT >= 30 is Android 11, so every handset from 11 up lost the working
+     path, not the Android 15 ones it was aimed at. HOPE runs the same theme, the same
+     targetSdk and the same WebView-as-content-view with fitsSystemWindows alone, in
+     production, every day.
+
+     THE PAGE. `padding:calc(14px + env(safe-area-inset-top,0px))` cannot help either, and
+     this is the subtler trap: the wrapper hands the page a viewport that ALREADY starts
+     below the status bar, so that inset is 0 and the calc resolves to the padding that was
+     already there. It reads like a fix in a diff and is a no-op on the handset -- which is
+     worse than nothing, because it makes a live bug look closed.
+   ========================================================================================= */
+test('the wrapper keeps exactly one status-bar mechanism', () => {
+  const main = javaCode('app/src/main/java/com/samaritantechs/hoopcalls/MainActivity.java');
+  assert.match(main, /web\.setFitsSystemWindows\(true\)/,
+    'this is the mechanism HOPE uses, and the one that works');
+  assert.doesNotMatch(main, /setOnApplyWindowInsetsListener/,
+    'an inset listener REPLACES onApplyWindowInsets, which is how fitsSystemWindows works -- '
+    + 'adding one disables the very thing it looks like it is helping');
+  assert.doesNotMatch(main, /web\.setBackgroundColor/,
+    'the navy WebView background only ever tinted the strip that listener created; without '
+    + 'it, it just turns an empty WebView into a featureless blue screen');
+});
+
+test('no page pads itself for a status bar the wrapper already cleared', () => {
+  /* Guarded across every page, not just the two that had it: the next person to meet this
+     bug will reach for the same inset, and it will be just as inert. */
+  for (const f of ['call.html', 'portal.html', 'upload.html', 'index.html']) {
+    const url = new URL('../public/' + f, import.meta.url);
+    if (!fs.existsSync(url)) continue;
+    /* Comments stripped first. The note explaining why this inset is useless NAMES it, so a
+       check against the raw file fails on its own documentation -- which is how the reader
+       ends up deleting the explanation to make the test pass. */
+    const shipped = fs.readFileSync(url, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ');
+    assert.doesNotMatch(shipped, /env\(safe-area-inset-top/,
+      `${f}: the wrapper's viewport already starts below the status bar, so this inset is `
+      + 'always 0 -- it is a no-op that reads as a fix');
+  }
+});

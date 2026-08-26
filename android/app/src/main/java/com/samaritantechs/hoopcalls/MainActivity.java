@@ -8,7 +8,6 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.webkit.CookieManager;
@@ -74,21 +73,37 @@ public class MainActivity extends Activity {
         // Leave the phone's own status bar (clock, battery, signal) visible and untouched:
         // without this the page draws underneath it, so the time and battery sit on top of
         // the app's header. fitsSystemWindows insets the WebView below the system bars.
+        /* ONE MECHANISM, AND IT IS THE ONE THAT WORKS IN THE FIELD.
+
+             "the apk interfaces both callap and system are too high to touch the top bar
+              functions (solve as we did with hopeloan)"
+             "you didn't solve the interface haven't buttons on top battery and network
+              positions"
+
+           There used to be a second mechanism stacked on top of this line: an
+           OnApplyWindowInsetsListener that padded the WebView by the system-bar insets,
+           added to work around a belief that Android 15 forces edge-to-edge and ignores
+           fitsSystemWindows.
+
+           It cannot help, because installing that listener is what BREAKS this line.
+           View.onApplyWindowInsets() is the method that implements fitsSystemWindows
+           padding, and setOnApplyWindowInsetsListener REPLACES it outright -- the default
+           never runs again. So the app had fitsSystemWindows switched off by the very code
+           meant to reinforce it, and was relying entirely on a hand-rolled substitute. Its
+           guard made that worse: SDK_INT >= 30 is Android 11, so every handset from 11
+           upward lost the working path, not just the Android 15 ones it was written for.
+
+           HOPE runs the same theme, the same targetSdk 35, the same WebView-as-content-view,
+           with this line and nothing else -- and its header sits below the clock every day
+           in production. That is not a theory about inset dispatch; it is a working system
+           to copy. Copy it.
+
+           setBackgroundColor went with the listener on purpose. Painting the WebView navy
+           only ever mattered to tint the strip that padding created; with no padding there
+           is no strip, and a navy WebView background is exactly what turns an empty WebView
+           into a featureless blue screen. */
         web.setFitsSystemWindows(true);
         setContentView(web);
-        // Android 15 (targetSdk 35) forces edge-to-edge and IGNORES fitsSystemWindows, so
-        // the clock, battery and signal sat on top of the app's header. Pad the WebView
-        // below the system bars ourselves; the padded strip is painted the header's navy,
-        // so the status bar reads as part of the app -- the same look older Android gives.
-        if (Build.VERSION.SDK_INT >= 30) {
-            web.setBackgroundColor(0xFF0B2A6B);
-            web.setOnApplyWindowInsetsListener((v, insets) -> {
-                android.graphics.Insets bars =
-                        insets.getInsets(android.view.WindowInsets.Type.systemBars());
-                v.setPadding(0, bars.top, 0, bars.bottom);
-                return insets;
-            });
-        }
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);          // localStorage holds the access code, device id, list cache

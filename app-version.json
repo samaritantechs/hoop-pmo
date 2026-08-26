@@ -1,6 +1,6 @@
 {
   "versionCode": 6,
   "versionName": "1.0.5",
-  "notes": "App haiwezi tena kukwama kwenye skrini ya buluu bila ujumbe — sasa inakuambia kinachoendelea na kukupa kitufe. / The app can no longer sit on a blank blue screen with no message: it now says what is happening and gives you a button.",
+  "notes": "Vitufe vya juu havifichwi tena chini ya saa na betri, na app haiwezi kukwama kwenye skrini ya buluu bila ujumbe. / The top-bar buttons are no longer hidden under the clock and battery, and the app can no longer sit on a blank blue screen with no message.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN.apk"
 }
