@@ -315,3 +315,33 @@ test('no page pads itself with an inset it never checked', () => {
       + 'and pad only when the measurement says the page is under the clock.');
   }
 });
+
+/* =========================================================================================
+   THE NAME LIVES IN ONE PLACE.
+
+     "set CALL_BRAND to HOOPLOAN"
+
+   Every file in the repo said HOOPLOAN, the launcher said HOOPLOAN, and /api/call went on
+   answering {"brand":"HOOP CALLS"} -- because the name was ALSO a row in the settings table,
+   planted by db/seed.sql before the rename, and a settings row outranks the constant in
+   call-core.js. A rename that greps the source can never find that, which is why it survived
+   an APK rebuild, a full-text sweep and three deployments.
+
+   Seeding a setting whose only value is a copy of the code default is the whole trap: it is
+   invisible until the default changes, and then it silently wins. The setting still exists
+   for a deployment that wants a genuinely different brand -- it is simply not planted.
+   ========================================================================================= */
+test('the calls app brand is a constant, not a seeded copy of one', () => {
+  const seed = fs.readFileSync(new URL('../db/seed.sql', import.meta.url), 'utf8')
+    .replace(/^\s*--.*$/gm, '');            // the note explaining this NAMES the key
+  assert.doesNotMatch(seed, /insert into settings[\s\S]{0,120}?'CALL_BRAND'/i,
+    'seeding CALL_BRAND plants a copy of the name that outranks APP.BRAND and goes stale '
+    + 'the moment the code default changes -- which is exactly what happened');
+
+  const core = fs.readFileSync(new URL('../api/_lib/call-core.js', import.meta.url), 'utf8');
+  assert.match(core, /BRAND:\s*'HOOPLOAN'/, 'APP.BRAND is the single source of the name');
+  // Both readers must fall back to it, or removing the row would blank the brand instead.
+  assert.equal((core.match(/CALL_BRAND'\)\s*\|\|\s*APP\.BRAND|CALL_BRAND'\)\s*\|\|\s*APP\.BRAND/g) || []).length
+    + (core.match(/setting\('CALL_BRAND'\)\s*\|\|\s*APP\.BRAND/g) || []).length, 2,
+    'every reader of CALL_BRAND must fall back to APP.BRAND when the row is absent');
+});
