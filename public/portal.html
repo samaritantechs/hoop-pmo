@@ -82,9 +82,7 @@ input,select,textarea{font-family:inherit}
    ramp. A near-black column the full height of the screen next to a white page is what
    makes a system read as hard; one step lighter is the colour it was meant to match. */
 aside.side{width:236px;flex:0 0 auto;background:var(--b900);color:#cfe0ff;
-  display:flex;flex-direction:column;min-height:0;
-  /* Same inset as the white bar beside it, or the brand sits under the clock. */
-  padding:calc(14px + env(safe-area-inset-top,0px)) 12px 14px}
+  display:flex;flex-direction:column;padding:14px 12px;min-height:0}
 /* Neither of these may be squeezed: the brand anchors the top and the foot holds Logout. */
 .side .brand,.side .foot{flex:0 0 auto}
 .side .brand{display:flex;align-items:center;gap:9px;color:#fff;font-weight:800;font-size:14px;line-height:1.3}
@@ -127,20 +125,11 @@ aside.side{width:236px;flex:0 0 auto;background:var(--b900);color:#cfe0ff;
 .side .foot a:hover,.side .foot button:hover{background:rgba(255,255,255,.18)}
 
 main.main{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column}
-/* THE TOP BAR SAT UNDER THE STATUS BAR ON SOME HANDSETS.
-     "the apk interfaces both callap and system are too high to touch the top bar functions"
-
-   The wrapper pads the WebView below the system bars itself on API 30+, but that is one
-   mechanism on one code path, and where it does not land the page draws edge-to-edge and
-   the buttons end up beneath the clock -- visible, and not reachable.
-
-   env(safe-area-inset-top) is the belt to that brace, and it costs nothing when it is not
-   needed: if the native padding already moved the viewport clear of the status bar, the
-   inset is 0 and this line changes nothing at all. It only ever adds room where room is
-   actually missing. (viewport-fit=cover is already on the meta, which is what makes the
-   value available.) */
-.top{background:#fff;border-bottom:1px solid var(--line);
-  padding:calc(11px + env(safe-area-inset-top,0px)) 16px 11px;
+/* Plain padding. Keeping the page clear of the clock is the WRAPPER's job -- it hands this
+   page a viewport that already starts below the status bar, which is why the
+   env(safe-area-inset-top) that briefly sat in this rule resolved to 0 and changed nothing.
+   See the note on header.top in call.html, and MainActivity for the actual fix. */
+.top{background:#fff;border-bottom:1px solid var(--line);padding:11px 16px;
   display:flex;align-items:center;gap:10px;flex:0 0 auto}
 .top h1{margin:0;font-size:16.5px;font-weight:800;min-width:0;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}

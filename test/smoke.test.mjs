@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import * as spawnMod from 'node:child_process';
 
 const schema = fs.readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -166,4 +167,138 @@ test('the APK the version file advertises is a file that exists', () => {
   // the sales desks point at it forever, and a 404 there reads as "the system is down".
   assert.ok(fs.existsSync(new URL('../public/HOOP-Calls.apk', import.meta.url)),
     'the pre-rename download path must keep working for links already in circulation');
+});
+
+/* =========================================================================================
+   THE BLUE SCREEN WITH NOTHING ON IT.
+
+     "app is blanking blue not opening"
+
+   The WebView's background is painted navy so the status-bar strip matches the header, which
+   means an empty WebView IS a full navy screen. Two separate things could produce one, and
+   neither had anything watching it:
+
+     1. NATIVE. onReceivedError fires on an error. A load that simply never finishes is not an
+        error, and neither is an HTTP 500 on the main frame -- so the fallback screen, the one
+        thing in this app with a Retry button, was unreachable in exactly the cases that
+        needed it.
+     2. THE PAGE. srv() gives each attempt 25 seconds and retries twice. A merely slow server
+        therefore kept #scrBoot mute for over a minute before #bootErr appeared. A screen that
+        says nothing for that long is indistinguishable from a broken app, so the officer
+        force-stops it -- and starts the whole wait again.
+   ========================================================================================= */
+test('no load in the wrapper can end in a silent navy screen', () => {
+  const main = javaCode('app/src/main/java/com/samaritantechs/hoopcalls/MainActivity.java');
+  assert.match(main, /web\.postDelayed\(loadWatchdog, LOAD_TIMEOUT_MS\)/,
+    'every page load must be racing a watchdog');
+  /* Matched with the argument list, not just the name. `/onPageFinished/` alone also matches
+     `onPageFinishedX` -- so renaming the override, which is exactly how it would stop being an
+     override, sailed through the first version of this check. */
+  assert.match(main, /public void onPageFinished\(WebView [\s\S]{0,200}?removeCallbacks\(loadWatchdog\)/,
+    'the watchdog must be called off, by that exact override, when the page does arrive');
+  assert.match(main, /public void onReceivedHttpError\(WebView /,
+    'a 500 on the main frame is not onReceivedError -- it needs its own path to the fallback');
+
+  /* The one that would actually be reintroduced: a NEW load added later, straight through
+     web.loadUrl, with nothing watching it. Retry is the dangerous one -- it is pressed FROM
+     the fallback screen, so an unwatched retry is a dead end reached by trying to escape one. */
+  const bare = [...main.matchAll(/web\.loadUrl\(/g)];
+  assert.equal(bare.length, 1,
+    'web.loadUrl belongs only inside loadWatched() -- every other load must go through it');
+  assert.ok(/private void loadWatched\(String url\)\{?[\s\S]{0,600}?web\.loadUrl\(url\)/.test(main),
+    'the single web.loadUrl must be the one inside loadWatched');
+});
+
+test('the boot screen speaks up long before the retries run out', () => {
+  const src = fs.readFileSync(new URL('../public/call.html', import.meta.url), 'utf8');
+  const slow = Number((src.match(/var BOOT_SLOW_MS = (\d+)/) || [])[1]);
+  const perTry = Number((src.match(/\}, (\d+)\);\s*\n\s*fetch\(/) || [])[1]);
+  assert.ok(slow > 0, 'BOOT_SLOW_MS not found');
+  assert.ok(perTry > 0, 'the srv() abort deadline not found');
+  assert.ok(slow < perTry,
+    `the boot screen must say something (${slow}ms) before even the FIRST attempt times out `
+    + `(${perTry}ms) -- waiting for all three is the minute of silence that was reported`);
+  // Slow is not failure: the spinner keeps turning and the request is never cancelled.
+  assert.ok(/if \(S\.entered\) return;[\s\S]{0,400}?bootErr'\)\.classList\.remove\('hide'\)/.test(src),
+    'a handset already working from its own cache must never be shown this');
+  assert.match(src, /bootSlowStop_\(true\)/, 'a boot that succeeds must take the notice back down');
+  assert.match(src, /bootSlowStop_\(false\)/, 'a boot that fails must leave the failure showing');
+});
+
+test('the wrapper is syntactically valid Java', () => {
+  /* CI compiles it properly, with the SDK. That feedback arrives minutes later and has cost a
+     round trip before now (a missing `import android.os.Build` once did exactly that), so this
+     catches the cheap half here: javac without the Android platform still PARSES every file,
+     and reports a syntax slip -- a dropped brace, a stray paren, a malformed lambda -- as a
+     syntax error rather than as a missing symbol.
+
+     BE CLEAR ABOUT WHAT THIS IS NOT. Without android.jar every Android type is unknown, so
+     three whole classes of real error are indistinguishable from the expected noise and are
+     filtered out below: a missing import and a genuine typo both read "cannot find symbol",
+     and every @Override on an Android supertype reads "does not override" because the
+     supertype itself is absent. This is a PARSE check. Only CI compiles this for real. */
+  const { spawnSync } = spawnMod;
+  const dir = new URL('../android/app/src/main/java/', import.meta.url).pathname;
+  const probe = spawnSync('javac', ['-version'], { encoding: 'utf8' });
+  if (probe.error) return;                       // no JDK here; CI still compiles it for real
+  const r = spawnSync('javac', ['-d', '/tmp/javac-parse-check', '-nowarn',
+    dir + 'com/samaritantechs/hoopcalls/MainActivity.java',
+    dir + 'com/samaritantechs/hoopcalls/HoopLoanBridge.java',
+    dir + 'com/samaritantechs/hoopcalls/Updater.java'], { encoding: 'utf8' });
+  const EXPECTED_WITHOUT_THE_SDK =
+    /cannot find symbol|does not exist|cannot access|does not override or implement/;
+  const syntax = (r.stderr || '').split('\n')
+    .filter(l => /error:/.test(l) && !EXPECTED_WITHOUT_THE_SDK.test(l));
+  assert.deepEqual(syntax, [], 'javac reported something that is not a missing Android class');
+});
+
+/* =========================================================================================
+   ONE STATUS-BAR MECHANISM, AND IT IS fitsSystemWindows.
+
+     "the apk interfaces both callap and system are too high to touch the top bar functions
+      (solve as we did with hopeloan)"
+     "you didn't solve the interface haven't buttons on top battery and network positions"
+
+   Reported twice, because the first fix was not one. Two mistakes, both worth a guard:
+
+     THE WRAPPER. setFitsSystemWindows(true) works by way of View.onApplyWindowInsets(), and
+     setOnApplyWindowInsetsListener REPLACES that method outright. A listener added to
+     REINFORCE fitsSystemWindows is therefore the thing that switches it off. Its guard made
+     it worse -- SDK_INT >= 30 is Android 11, so every handset from 11 up lost the working
+     path, not the Android 15 ones it was aimed at. HOPE runs the same theme, the same
+     targetSdk and the same WebView-as-content-view with fitsSystemWindows alone, in
+     production, every day.
+
+     THE PAGE. `padding:calc(14px + env(safe-area-inset-top,0px))` cannot help either, and
+     this is the subtler trap: the wrapper hands the page a viewport that ALREADY starts
+     below the status bar, so that inset is 0 and the calc resolves to the padding that was
+     already there. It reads like a fix in a diff and is a no-op on the handset -- which is
+     worse than nothing, because it makes a live bug look closed.
+   ========================================================================================= */
+test('the wrapper keeps exactly one status-bar mechanism', () => {
+  const main = javaCode('app/src/main/java/com/samaritantechs/hoopcalls/MainActivity.java');
+  assert.match(main, /web\.setFitsSystemWindows\(true\)/,
+    'this is the mechanism HOPE uses, and the one that works');
+  assert.doesNotMatch(main, /setOnApplyWindowInsetsListener/,
+    'an inset listener REPLACES onApplyWindowInsets, which is how fitsSystemWindows works -- '
+    + 'adding one disables the very thing it looks like it is helping');
+  assert.doesNotMatch(main, /web\.setBackgroundColor/,
+    'the navy WebView background only ever tinted the strip that listener created; without '
+    + 'it, it just turns an empty WebView into a featureless blue screen');
+});
+
+test('no page pads itself for a status bar the wrapper already cleared', () => {
+  /* Guarded across every page, not just the two that had it: the next person to meet this
+     bug will reach for the same inset, and it will be just as inert. */
+  for (const f of ['call.html', 'portal.html', 'upload.html', 'index.html']) {
+    const url = new URL('../public/' + f, import.meta.url);
+    if (!fs.existsSync(url)) continue;
+    /* Comments stripped first. The note explaining why this inset is useless NAMES it, so a
+       check against the raw file fails on its own documentation -- which is how the reader
+       ends up deleting the explanation to make the test pass. */
+    const shipped = fs.readFileSync(url, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ');
+    assert.doesNotMatch(shipped, /env\(safe-area-inset-top/,
+      `${f}: the wrapper's viewport already starts below the status bar, so this inset is `
+      + 'always 0 -- it is a no-op that reads as a fix');
+  }
 });

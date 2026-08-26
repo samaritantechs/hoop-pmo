@@ -217,20 +217,3 @@ test('portal.html: the sign-in panel can be shrunk and moved by the keyboard fit
   assert.match(fit[0], /style\.minHeight\s*=\s*vv\.height/,
     'setting height without minHeight leaves the panel exactly as tall as it was');
 });
-
-/* The APK draws the page inside a WebView whose top edge can sit under the status bar.
-     "the apk interfaces both callap and system are too high to touch the top bar functions"
-   The wrapper pads for the system bars on API 30+, but only there; env(safe-area-inset-top)
-   covers every other path and costs nothing where the native padding already worked -- the
-   inset is 0 and the calc() adds 0. It needs viewport-fit=cover to have a value at all. */
-for (const [page, sel] of [['portal.html', '\\.top'], ['call.html', 'header\\.top']]) {
-  test(`${page}: the top bar clears the phone's status bar`, () => {
-    const src = read(page);
-    assert.match(src, /viewport-fit=cover/,
-      'without viewport-fit=cover, env(safe-area-inset-top) is always 0');
-    const rule = src.match(new RegExp('(^|\\n)' + sel + '\\{[^}]*\\}', 'm'));
-    assert.ok(rule, `${sel} rule not found`);
-    assert.match(rule[0], /padding:calc\(\d+px \+ env\(safe-area-inset-top,0px\)\)/,
-      'the top bar needs the safe-area inset added to its own padding');
-  });
-}
