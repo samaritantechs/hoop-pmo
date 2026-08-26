@@ -140,6 +140,31 @@ body.nav-closed aside.side{display:none}
   .top{padding:10px 12px}
 }
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+/* TWO PANELS, SIDE BY SIDE -- HOPE's .pair, brought over. The breakpoint is 1000px rather
+   than the shell's 760px on purpose: two charts crammed into a 900px tablet are worse than
+   one above the other, and the point of pairing them is to see both at once, which stops
+   being true well before the layout technically stops fitting. */
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+/* A GRID ITEM'S AUTOMATIC MINIMUM IS ITS CONTENT, so one wide child inside a 1fr track
+   does not overflow -- it widens the track, unbalances the pair and grows the page a
+   horizontal scrollbar. min-width:0 lets the track hold its share, and the overflow-x on
+   .card is what the content then scrolls inside instead. HOPE gets this from .card having
+   overflow:hidden; being explicit about it here says why it cannot be removed. */
+.pair>*{min-width:0}
+.pair>.card{overflow-x:auto}
+@media(max-width:1000px){ .pair{grid-template-columns:1fr} }
+/* Tighter tiles for a card that only has half a row. The page-level .tiles minimum of
+   150px needs 470px for three across, which a half column does not have until roughly
+   1150px -- so between the breakpoint and there, three tiles broke to 2 + 1 orphan. */
+.pair .tiles{grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px}
+/* A CHART MAY SCALE DOWN, NEVER UP.
+   An SVG with viewBox + width:100% and no ceiling grows without limit, so once the shell
+   stopped capping the page at 1120px these charts were stretched across the whole monitor
+   -- every label blown up with them. That is the "zoomed too much". The cap is the chart's
+   own natural size: below it the drawing shrinks as it always did, above it it simply
+   stops and centres, and the text stays the size it was designed at. */
+.chartwrap{width:100%;max-width:560px;margin:0 auto}
+.chartwrap svg{display:block;width:100%;height:auto}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px;box-shadow:0 2px 10px -4px rgba(11,42,107,.14)}
 .tile .l{font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
 .tile .v{font-size:24px;font-weight:800;margin-top:4px}
@@ -979,6 +1004,11 @@ function drawDash(m){
     +'<div class="tile"><div class="l">Simu leo</div><div class="v">'+n(s.calls)+'</div><div class="s">credit team</div></div>'
     +'<div class="tile"><div class="l">Reached — yesterday</div><div class="v" style="color:var(--ok)">'+(s.reached&&s.reached.pct!=null?pct(s.reached.pct):'—')+'</div><div class="s">'+(s.reached&&s.reached.den?money(s.reached.num)+' / '+money(s.reached.den)+' · ':'')+'last week avg: '+(s.weekAvg&&s.weekAvg.pct!=null?pct(s.weekAvg.pct):'—')+'</div></div>'
     +'</div>'
+    /* THE WEEK, LEFT AND RIGHT. These two answer halves of one question -- how much 7+ debt
+       is on the books, and how much of it the credit team pulled back -- so reading them
+       needs both in the eye at once. Stacked, the second was always a scroll away from the
+       first, and each was stretched across the whole monitor to fill the room. */
+    +'<div class="pair">'
     +'<div class="card"><h2>Locked 7+ — wiki hii / this week</h2>'
     +'<div class="mut" style="margin-bottom:6px">Kila siku ya upload: wateja waliofungiwa wiki+ wakiwa bado ndani ya dirisha la Hoop. Kupanda = mzigo unaongezeka.</div>'
     +'<div id="trendBox"><div class="sk"></div></div></div>'
@@ -986,6 +1016,29 @@ function drawDash(m){
     +'<div class="mut" style="margin-bottom:6px">Ndani ya siku 45 pekee (dirisha la Hoop). '
     +'Kila credit, kila siku: waliopewa OFF JANA (7+ siku jana) na wangapi kati yao walipungua leo.</div>'
     +'<div id="credRecBox"><div class="sk"></div></div></div>'
+    +'</div>'
+    /* SALES AND STOCK, BELOW. Summaries only -- the number and the one thing wrong with it,
+       with the pane itself a click away for anybody who needs the pivots.
+
+       GATED HERE, ON THE CLIENT, and that is deliberate. salesWeek wants the `scorecards`
+       nav and stockAccount wants `stock`; the dashboard is shown to everybody. Asking for
+       either unconditionally would put a 403 error string on the dashboard of every code
+       that does not hold them -- the exact bug requireAnyNav was written for. Widening the
+       server gate would be worse: per-agent sales is not something a dashboard-only code
+       should acquire by side door. So the card is drawn only for somebody who could have
+       opened that pane anyway, and the request is never made otherwise. */
+    /* .pair only when there are genuinely TWO. A code holding just one of the two navs
+       would otherwise get a 1fr 1fr grid with a single child: the card sitting in the left
+       half and dead space in the right. */
+    +(function(){
+      var cards=[];
+      if(hasNav('scorecards')) cards.push('<div class="card"><h2>Mauzo wiki hii / Sales this week</h2>'
+        +'<div id="dashSalesBox"><div class="sk"></div></div></div>');
+      if(hasNav('stock')) cards.push('<div class="card"><h2>Stoo / Stock accountability</h2>'
+        +'<div id="dashStockBox"><div class="sk"></div></div></div>');
+      if(!cards.length) return '';
+      return cards.length>1 ? '<div class="pair">'+cards.join('')+'</div>' : cards[0];
+    })()
     +'<div class="card"><h2>Leo unafanyaje / Today’s path</h2>'
     +'<ol class="road" style="margin:0;padding-left:20px">'
     +'<li><a href="/upload">Pakia orodha ya Watu ya leo</a> — Excel kutoka Watu, kama ilivyo.</li>'
@@ -994,6 +1047,75 @@ function drawDash(m){
     +'</ol></div>';
   drawTrend();
   drawCreditRecovery();
+  if(hasNav('scorecards')) drawDashSales();
+  if(hasNav('stock')) drawDashStock();
+}
+/** Does this code hold that pane? The same list the sidebar is built from, so a card can
+    never appear for a nav whose tab is hidden. */
+function hasNav(k){ return (BOOT.navs||[]).indexOf(k)>=0; }
+
+/* ---------- the two summaries under the charts ----------
+   Each is the headline plus the ONE number that means somebody has to do something: the
+   week against its target, and how much stock nobody can account for. Everything else
+   stays in the pane, one click away, where there is room to pivot it four ways. */
+function drawDashSales(){
+  var box=$('#dashSalesBox'); if(!box) return;
+  srv('salesWeek',{}).then(function(d){
+    var b=$('#dashSalesBox'); if(!b) return;
+    var c=d.company||{}, n=c.count||0, amt=c.amount||0;
+    var tgt=d.weekTarget||null;
+    /* AGAINST THE AMOUNT, NOT THE COUNT. weekTarget is TZS (SALES_DAILY_TARGET x 7) and
+       `n` is a number of handsets, so subtracting one from the other compared shillings to
+       phones: fourteen sold against a 21,000,000 target read as "20,999,986 pungufu" and
+       painted red every single week, whatever the team did. drawSalesPerf compares amounts
+       throughout; this is the same comparison. */
+    var over=tgt?(amt-tgt):null;
+    var pctOfTarget=tgt?Math.round(100*amt/tgt):null;
+    b.innerHTML='<div class="tiles" style="margin-bottom:8px">'
+      +'<div class="tile"><div class="l">Simu zimeuzwa</div><div class="v">'+money(n)+'</div>'
+        +'<div class="s">'+esc(d.from||'')+' → '+esc(d.to||'')+'</div></div>'
+      +'<div class="tile"><div class="l">Thamani</div><div class="v">'+money(amt)+'</div>'
+        +'<div class="s">TZS</div></div>'
+      /* THE PERFORMANCE IS THE HEADLINE, not the goal. Printing the target big and the
+         delta small put the number nobody can act on where the eye lands first. */
+      +(tgt?'<div class="tile"><div class="l">Dhidi ya lengo</div>'
+        +'<div class="v" style="color:var(--'+(over>=0?'ok':'bad')+')">'+pctOfTarget+'%</div>'
+        +'<div class="s">'+(over>=0?'+'+money(over):'−'+money(Math.abs(over)))
+        +' / lengo '+money(tgt)+'</div></div>'
+        :'<div class="tile"><div class="l">Dhidi ya lengo</div><div class="v">—</div>'
+        +'<div class="s">weka SALES_DAILY_TARGET</div></div>')
+      +'</div>'
+      // Said plainly rather than shown as "this week" -- see the Monday problem.
+      +(d.fellBack?'<div class="note">Wiki hii bado haina mauzo — hii ni wiki iliyopita. '
+        +'/ Nothing uploaded for this week yet; showing the last week that has sales.</div>':'')
+      +'<button class="btn sm ghost" onclick="goTab(\'sales\')">Fungua Mauzo / Open sales</button>';
+  }).catch(function(e){ var b=$('#dashSalesBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
+}
+function drawDashStock(){
+  var box=$('#dashStockBox'); if(!box) return;
+  srv('stockAccount',{}).then(function(d){
+    var b=$('#dashStockBox'); if(!b) return;
+    var t=(d.company&&d.company.totals)||{};
+    if(!d.asOf){
+      b.innerHTML='<div class="mut">Hakuna ripoti ya stock bado. / No stock report uploaded yet.</div>';
+      return;
+    }
+    var un=t.unaccounted||0;
+    b.innerHTML='<div class="tiles" style="margin-bottom:8px">'
+      +'<div class="tile"><div class="l">Zilizopo</div><div class="v">'+money(t.held||0)+'</div>'
+        +'<div class="s">'+esc(String(d.asOf).slice(0,10))+'</div></div>'
+      +'<div class="tile"><div class="l">Hazijulikani</div>'
+        +'<div class="v"'+(un?' style="color:var(--bad)"':'')+'>'+money(un)+'</div>'
+        +'<div class="s">zimeondoka bila maelezo</div></div>'
+      +'<div class="tile"><div class="l">Zimekaa muda</div><div class="v">'+money(t.stale||0)+'</div>'
+        +'<div class="s">zaidi ya siku '+money(d.staleDays||0)+'</div></div>'
+      +'</div>'
+      /* Not the same as zero unaccounted, and it must not read like it: a departure nobody
+         could check is an open question, not a clean book. */
+      +(d.notChecked?'<div class="note">'+money(d.notChecked)+' hazikuweza kukaguliwa. '
+        +'/ could not be checked against the sales book or Watu.</div>':'')
+      +'<button class="btn sm ghost" onclick="goTab(\'acct\')">Fungua uwajibikaji / Open accountability</button>';
+  }).catch(function(e){ var b=$('#dashStockBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
 }
 
 /* ===================================================================================
@@ -1031,11 +1153,11 @@ function wireRecWeekBar(d){
     var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
     base.setUTCDate(base.getUTCDate()+7*n);
     RECWEEK=base.toISOString().slice(0,10);
-    drawCreditRecovery(); drawRecoveryTrend();
+    drawCreditRecovery(); drawRecoveryTrend(); drawTrend();
   };
   var p=$('#recWkPrev'); if(p) p.onclick=function(){ step(-1); };
   var n=$('#recWkNext'); if(n) n.onclick=function(){ step(1); };
-  var now=$('#recWkNow'); if(now) now.onclick=function(){ RECWEEK=''; drawCreditRecovery(); drawRecoveryTrend(); };
+  var now=$('#recWkNow'); if(now) now.onclick=function(){ RECWEEK=''; drawCreditRecovery(); drawRecoveryTrend(); drawTrend(); };
 }
 function drawCreditRecovery(){
   var box=$('#credRecBox'); if(!box) return;
@@ -1062,10 +1184,16 @@ function drawCreditRecovery(){
       return;
     }
     var today=(new Date(Date.now()+3*3600*1000)).toISOString().slice(0,10);
+    /* SHORT, and now it has to be. These are CSS-px labels in a grid column, not SVG text
+       that scales: "Wednesday" at 10.5px is an unbreakable ~58px token, and a grid track's
+       automatic minimum is its content, so seven of them plus the name column gave the row
+       a min-content of roughly 526px. Inside half a .pair that is wider than the track, so
+       the grid pushed its column out, the two halves stopped being equal, and the page grew
+       a horizontal scrollbar. Three letters is ~24px and the row fits its column again.
+       (The full Swahili names were already declared here and never used.) */
     var dayShort=function(iso){
-      var wd=['Jumapili','Jumatatu','Jumanne','Jumatano','Alhamisi','Ijumaa','Jumamosi'];
-      var en=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-      return en[new Date(iso+'T00:00:00').getDay()];
+      var sw=['Jpi','Jtt','Jnn','Jtn','Alh','Iju','Jms'];
+      return sw[new Date(iso+'T00:00:00').getDay()];
     };
     // One shared ceiling across every officer, so two rows can be compared by eye. Comparing
     // rows that each scaled to their own maximum would make a light week look like a heavy one.
@@ -1081,7 +1209,7 @@ function drawCreditRecovery(){
        ruled like a table head, the first cell is named rather than left blank, each day
        carries its date under the name, and TODAY's column is tinted the whole way across so
        the eye finds "where are we now" without counting along. */
-    var head='<div style="display:grid;grid-template-columns:132px repeat(7,1fr);gap:4px;'
+    var head='<div style="display:grid;grid-template-columns:minmax(76px,108px) repeat(7,1fr);gap:4px;'
       +'align-items:end;background:var(--b50);border:1px solid var(--line);'
       +'border-radius:9px 9px 0 0;padding:7px 6px;margin-bottom:0">'
       +'<div style="font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;'
@@ -1105,15 +1233,16 @@ function drawCreditRecovery(){
       var cells=pts.map(function(pt){
         var c=p.days[pt.date];
         if(!c||!c.assigned){
-          return '<div style="text-align:center"><div style="height:56px;display:flex;align-items:flex-end;justify-content:center">'
-            +'<div style="color:var(--soft);font-size:11px;padding-bottom:18px">—</div></div>'
+          return '<div style="text-align:center"><div style="height:46px;display:flex;align-items:flex-end;justify-content:center">'
+            +'<div style="color:var(--soft);font-size:11px;padding-bottom:14px">—</div></div>'
             +'<div style="font-size:10px;color:var(--soft);text-align:center">&nbsp;</div></div>';
         }
         wkA+=c.assigned; if(!c.pending) wkR+=c.recovered;
-        var hA=Math.max(3,Math.round(56*c.assigned/max));
-        var hR=c.pending?0:Math.max(0,Math.round(56*c.recovered/max));
+        // 46, matching the cell above -- scaled against 56 the tallest bar overflowed its box.
+        var hA=Math.max(3,Math.round(46*c.assigned/max));
+        var hR=c.pending?0:Math.max(0,Math.round(46*c.recovered/max));
         return '<div style="text-align:center">'
-          +'<div style="height:56px;display:flex;align-items:flex-end;justify-content:center">'
+          +'<div style="height:46px;display:flex;align-items:flex-end;justify-content:center">'
           +'<div style="position:relative;width:22px;height:'+hA+'px;background:var(--b100);border-radius:4px">'
           +(!c.pending&&c.recovered>0?'<div style="position:absolute;left:0;bottom:0;width:100%;height:'+hR+'px;background:var(--ok);border-radius:4px"></div>':'')
           +'</div></div>'
@@ -1122,7 +1251,7 @@ function drawCreditRecovery(){
           +(c.pending?money(c.assigned)+' \u00B7 kesho':money(c.recovered)+'/'+money(c.assigned))
           +'</div></div>';
       }).join('');
-      return '<div style="display:grid;grid-template-columns:132px repeat(7,1fr);gap:4px;align-items:end;'
+      return '<div style="display:grid;grid-template-columns:minmax(76px,108px) repeat(7,1fr);gap:4px;align-items:end;'
         +'padding:8px 6px;border:1px solid var(--line);border-top:0">'
         +'<div style="font-size:12.5px"><b>'+esc(p.name||p.userId)+'</b>'
         +'<div class="mut" style="font-size:10.5px">wiki: '+money(wkR)+'/'+money(wkA)
@@ -1157,7 +1286,7 @@ function drawCreditRecovery(){
    same numbers for anyone who wants to read (or export) them. */
 function drawTrend(){
   var box=$('#trendBox'); if(!box) return;
-  srv('lockedTrend',{}).then(function(d){
+  srv('lockedTrend',{week:RECWEEK}).then(function(d){
     var pts=d.points||[];
     var box2=$('#trendBox'); if(!box2) return;
     var vals=pts.filter(function(p){return p.num!=null;}).map(function(p){return p.num;});
@@ -1173,7 +1302,10 @@ function drawTrend(){
         +' — bado hakuna upload wa wiki hii. / showing the latest week with uploads, not this one.</div>'
       : '';
     var max=Math.max.apply(null,vals), n=pts.length;
-    var W=720,H=182,padL=44,padB=26,padT=16,padR=8;
+    /* Sized for HALF a row, not the whole page. At 720 the chart had to be scaled down
+       hard to fit beside its neighbour, which shrank every label with it; 560 is close
+       to 1:1 in the column it now occupies, so the text reads at the size it was set. */
+    var W=560,H=190,padL=42,padB=26,padT=16,padR=8;
     var innerW=W-padL-padR, innerH=H-padT-padB;
     var slot=innerW/n, bw=Math.min(56,slot*0.62);
     var yOf=function(v){ return padT+innerH-(max?(v/max)*innerH:0); };
@@ -1204,10 +1336,12 @@ function drawTrend(){
     });
     var first=vals[0], last=vals[vals.length-1], diff=last-first;
     box2.innerHTML=wkNote
-      +'<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" '
-      +'aria-label="Locked 7+ per day this week" style="display:block;max-width:100%">'
+      /* .chartwrap is the ceiling: width:100% inside it, but never wider than the chart's
+         own natural size, so it shrinks on a phone and stops growing on a monitor. */
+      +'<div class="chartwrap"><svg viewBox="0 0 '+W+' '+H+'" role="img" '
+      +'aria-label="Locked 7+ per day this week">'
       +'<line x1="'+padL+'" y1="'+(padT+innerH)+'" x2="'+(W-padR)+'" y2="'+(padT+innerH)+'" stroke="var(--line)" stroke-width="1.5"/>'
-      +grid+bars+labels+'</svg>'
+      +grid+bars+labels+'</svg></div>'
       +'<div class="mut" style="margin-top:6px">'
       +(vals.length>1
         ? (diff===0?'Sawa na siku ya kwanza yenye upload.':(diff>0?'⬆ ':'⬇ ')+money(Math.abs(diff))+' kuliko siku ya kwanza yenye upload wiki hii.')

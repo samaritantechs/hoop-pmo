@@ -858,6 +858,99 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
   assert.equal(got, 1, 'and the one who came back is credited to whoever held them');
 });
 
+test('a holiday in the middle does not lose the work done before it', async () => {
+  /* "sometimes its a holiday like they worked in monday and didnt come to work on tuesday
+      today they in office and the monday deck has 0 recovery b/se they werent at work and
+      didnt upload on yesterday maulid so to capture recovery we should look to the next day
+      upload evenif there is a day skipped but the next one [but not the last one!]"
+
+     Monday is worked. Tuesday is Maulid -- office shut, no deck. Wednesday's deck is where
+     Monday's result actually lands. The rule is the NEXT upload that exists, however far
+     away, and emphatically not the newest one: reading Monday off Friday's deck would fold
+     three days of other people's chasing into Monday's number. */
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();
+  const mon = dShift(t, -((dow + 6) % 7));
+  const wed = dShift(mon, 2);
+  const fri = dShift(mon, 4);
+
+  const inWin = dShift(mon, -10);
+  const row = (imei, date, off) => ({ imei, client_name: 'C' + imei, team: 'HOLIDAY',
+    days_offline: off, has_ever_paid: true, price: 450000, disbursed_date: inWin,
+    snapshot_date: date, created_at: date + 'T08:00:00Z' });
+
+  const d = fakeDb({
+    watu_snapshots: [
+      // Monday: three customers at 7+, all Hoop's.
+      row('A', mon, 9), row('B', mon, 8), row('C', mon, 10),
+      // TUESDAY IS MISSING ENTIRELY -- Maulid.
+      // Wednesday, the next deck there is: A came back. B and C did not.
+      row('A', wed, 3), row('B', wed, 8), row('C', wed, 11),
+      // Friday, later still: B came back too. This must NOT be credited to Monday --
+      // that is Wednesday's pool being worked, not Monday's.
+      row('A', fri, 2), row('B', fri, 1), row('C', fri, 12),
+    ],
+    call_users: [{ user_id: 'h1', name: 'CREDIT HOLIDAY', role: 'CREDIT', active: true }],
+  });
+
+  const r = await _FNS.recoveryWeek(d, { ...ADMIN, teams: ['HOLIDAY'] }, {});
+  const monday = r.points[0];
+  assert.equal(monday.date, mon);
+  assert.equal(monday.offJana, 3, 'all three were 7+ and inside the window on Monday');
+  assert.equal(monday.pending, false,
+    'Wednesday exists, so Monday is answered -- a skipped Tuesday is not "still waiting"');
+  assert.equal(monday.reduced, 1,
+    'only A, read from WEDNESDAY -- the next deck there is, across the holiday');
+
+  // Tuesday itself has no list of its own: a gap, not a zero.
+  assert.equal(r.points[1].offJana, null, 'nobody uploaded Tuesday, so Tuesday has no pool');
+
+  // ...and the day whose own deck exists reads from ITS next one, not from the newest.
+  const wednesday = r.points[2];
+  assert.equal(wednesday.offJana, 2, 'B and C are still 7+ on Wednesday');
+  assert.equal(wednesday.reduced, 1, 'B came back by Friday; C did not');
+});
+
+test('a gap at the END of the week is where the work was actually being lost', async () => {
+  /* The mid-week holiday above resolves on its own once the next deck lands, because the
+     read already covered the whole week. What did NOT resolve -- ever -- was a gap that
+     pushes the answer past the end of the read window.
+
+     Saturday is worked. Sunday and Monday nobody uploads. Tuesday's deck carries Saturday's
+     result. The read used to stop one day past Sunday, so Tuesday was outside it: Saturday
+     sat PENDING for good, the work credited to nobody, because the calendar had a hole in
+     it. This is the case the wider window exists for. */
+  const { todayKey } = await import('../api/_lib/time.js');
+  const t = todayKey();
+  const dow = new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay();
+  const mon = dShift(t, -((dow + 6) % 7));
+  const sat = dShift(mon, 5);
+  const nextTue = dShift(mon, 9);          // two days past the old one-day lookahead
+
+  const inWin = dShift(mon, -10);
+  const row = (imei, date, off) => ({ imei, client_name: 'C' + imei, team: 'WEEKEND',
+    days_offline: off, has_ever_paid: true, price: 450000, disbursed_date: inWin,
+    snapshot_date: date, created_at: date + 'T08:00:00Z' });
+
+  const d = fakeDb({
+    watu_snapshots: [
+      row('A', sat, 9), row('B', sat, 8),
+      // Sunday and Monday: nothing. Tuesday is the next deck there is.
+      row('A', nextTue, 2), row('B', nextTue, 8),
+    ],
+    call_users: [{ user_id: 'w1', name: 'CREDIT WEEKEND', role: 'CREDIT', active: true }],
+  });
+
+  const r = await _FNS.recoveryWeek(d, { ...ADMIN, teams: ['WEEKEND'] }, {});
+  const saturday = r.points[5];
+  assert.equal(saturday.date, sat);
+  assert.equal(saturday.offJana, 2);
+  assert.equal(saturday.pending, false,
+    'the answer exists two days past the week -- Saturday is not still waiting for it');
+  assert.equal(saturday.reduced, 1, 'A came back, read from the following Tuesday');
+});
+
 test('recoveryWeek draws a gap, never a zero, for a day nobody uploaded', async () => {
   const { todayKey } = await import('../api/_lib/time.js');
   const t = todayKey();

@@ -82,6 +82,23 @@ test('portal.html: every scrolling flex pane can actually shrink', () => {
   }
 });
 
+test('portal.html: the dashboard sales card compares money with money', () => {
+  /* It compared a HANDSET COUNT against a TZS TARGET. weekTarget is SALES_DAILY_TARGET x 7
+     in shillings; `count` is a number of phones. Fourteen sold against a 21,000,000 target
+     rendered as "20,999,986 pungufu" and painted red every week no matter what the team
+     did -- a tile that is always wrong in the same direction is worse than no tile, because
+     people learn to ignore it and then ignore it on the week it matters.
+
+     Pinned as source text because there is no browser here to render the card in. */
+  const css = read('portal.html');
+  const fn = css.match(/function drawDashSales\(\)\{[\s\S]*?\n\}/);
+  assert.ok(fn, 'drawDashSales not found');
+  assert.match(fn[0], /var over\s*=\s*tgt\s*\?\s*\(\s*amt\s*-\s*tgt\s*\)/,
+    'the target delta must be amount minus target -- never the handset count');
+  assert.doesNotMatch(fn[0], /\(\s*n\s*-\s*tgt\s*\)/,
+    'comparing count to a shilling target is the bug this test exists for');
+});
+
 for (const page of PAGES) {
   const src = read(page);
 
