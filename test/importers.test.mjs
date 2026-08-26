@@ -32,6 +32,70 @@ test('watuDate handles 4-digit years, spaces, Date objects, ISO, and junk', () =
   assert.equal(watuDate(null), null);
 });
 
+/* =========================================================================================
+   THE SHAPE WATU ACTUALLY EXPORTS, which nothing here read.
+
+   A real deck -- WS_ Dealership Sales II Loans Table, 2,689 rows -- writes its dates as
+   "Aug 17, 2026". Month first, with a comma. Every pattern above is day-first, so
+   disbursed_date came back null for EVERY row, and one null cascaded:
+
+     lifeDayOf(null) -> null -> inWindowOf false -> every customer past day 45
+
+   The officers' Lock 7+ tab filters on that window, so it showed nothing; the credit deal
+   put all 292 genuinely-flagged rows in the OUT stratum; the dashboard counted zero inside
+   45 days. The upload itself reported 2,689 rows inserted and looked perfect.
+
+   Against that same file this fix takes locked7-inside-the-window from 0 to 43.
+   ========================================================================================= */
+test('watuDate reads Watu\'s own month-first export: "Aug 17, 2026"', () => {
+  assert.equal(watuDate('Aug 17, 2026'), '2026-08-17');
+  assert.equal(watuDate('Jun 1, 2026'), '2026-06-01');       // single-digit day
+  assert.equal(watuDate('May 30, 2026'), '2026-05-30');
+  assert.equal(watuDate('August 17, 2026'), '2026-08-17');   // spelled out
+  assert.equal(watuDate('Aug 17 2026'), '2026-08-17');       // comma optional
+  assert.equal(watuDate('Aug 17, 26'), '2026-08-17');        // two-digit year
+  // Still refuses nonsense rather than inventing a date.
+  assert.equal(watuDate('Xyz 17, 2026'), null);
+  assert.equal(watuDate('Aug 32, 2026'), null);
+});
+
+test('a month-first deck lands with real dates, so the 45-day window can see it', () => {
+  // The end-to-end shape of the bug: same rows, one unreadable column, nobody in the window.
+  const rows = [
+    ['Shop', 'Client Name', 'IMEI', 'Disbursed Date', 'Days Offline', 'Locked 7+ Days'],
+    ['HOOP KINONDONI', 'Alafati', '351929937378664', 'Aug 17, 2026', '9', 'TRUE'],
+    ['HOOP KINONDONI', 'Yuda', '351738748292885', 'Jun 1, 2026', '11', 'TRUE'],
+  ];
+  const r = importWatu(rows);
+  assert.equal(r.records.length, 2);
+  assert.equal(r.records[0].disbursed_date, '2026-08-17');
+  assert.equal(r.records[1].disbursed_date, '2026-06-01');
+  assert.equal(r.records.filter(x => !x.disbursed_date).length, 0,
+    'a null here is what made every customer look older than 45 days');
+  assert.equal(r.records.filter(x => x.locked7 === true).length, 2);
+});
+
+test('a column that is present but unreadable is reported, not passed off as empty', () => {
+  /* The durable half of the fix. The parser will meet another format it does not know --
+     that is not preventable. What IS preventable is the upload reporting a clean success
+     while a column the whole day is filtered by came back empty on every row. */
+  const rows = [
+    ['Shop', 'Client Name', 'IMEI', 'Disbursed Date', 'Days Offline', 'Locked 7+ Days'],
+    ['HOOP KINONDONI', 'Alafati', '351929937378664', '17/13/9999', '9', 'TRUE'],
+  ];
+  const r = importWatu(rows);
+  const dd = r.columns.find(c => c.key === 'disbursed_date');
+  assert.equal(dd.found, true, 'the header WAS there');
+  assert.equal(dd.filled, 0, '...and not one row parsed -- which is the whole failure');
+  assert.ok(r.critical.includes('disbursed_date'),
+    'present-but-empty must be flagged, or the next format change is silent too');
+  // A column genuinely absent from the file is flagged the same way, for the same reason.
+  assert.ok(r.critical.includes('locked4'));
+  // ...and a healthy column is not flagged, so the warning keeps its meaning.
+  assert.ok(!r.critical.includes('locked7'));
+  assert.ok(!r.critical.includes('days_offline'));
+});
+
 test('watuBool: TRUE/FALSE text, and blank stays null -- missing is not "no"', () => {
   assert.equal(watuBool('TRUE'), true);
   assert.equal(watuBool('FALSE'), false);
