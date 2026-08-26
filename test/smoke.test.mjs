@@ -287,18 +287,31 @@ test('the wrapper keeps exactly one status-bar mechanism', () => {
     + 'it, it just turns an empty WebView into a featureless blue screen');
 });
 
-test('no page pads itself for a status bar the wrapper already cleared', () => {
-  /* Guarded across every page, not just the two that had it: the next person to meet this
-     bug will reach for the same inset, and it will be just as inert. */
+test('no page pads itself with an inset it never checked', () => {
+  /* THE BAN IS ON THE BLIND VERSION, and this distinction is the whole lesson.
+
+     `padding: calc(14px + env(safe-area-inset-top,0px))` in a stylesheet is inert wherever
+     the wrapper has already inset the viewport: the value is 0, the calc resolves to the
+     padding that was already there, and the diff reads like a fix. That is what shipped
+     twice, and it is what stays banned.
+
+     MEASURING the same value is the opposite thing. statusBarFit_() reads it off a probe
+     element, compares screen height against the viewport the page was actually given, and
+     pads only when the numbers say the page is drawing under the clock. That is allowed --
+     it is the thing that replaced the guesswork.
+
+     So the check is narrow on purpose: the inset may not appear inside a padding
+     declaration. It may appear in a height, which is how a probe is measured. */
   for (const f of ['call.html', 'portal.html', 'upload.html', 'index.html']) {
     const url = new URL('../public/' + f, import.meta.url);
     if (!fs.existsSync(url)) continue;
-    /* Comments stripped first. The note explaining why this inset is useless NAMES it, so a
-       check against the raw file fails on its own documentation -- which is how the reader
-       ends up deleting the explanation to make the test pass. */
+    /* Comments stripped first. The note explaining why the blind version is useless NAMES
+       it, so a check against the raw file fails on its own documentation -- which is how the
+       reader ends up deleting the explanation to make the test pass. */
     const shipped = fs.readFileSync(url, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ');
-    assert.doesNotMatch(shipped, /env\(safe-area-inset-top/,
-      `${f}: the wrapper's viewport already starts below the status bar, so this inset is `
-      + 'always 0 -- it is a no-op that reads as a fix');
+    assert.doesNotMatch(shipped, /padding[^;{}]*env\(safe-area-inset-top/,
+      `${f}: padding computed from safe-area-inset-top is 0 wherever the wrapper already `
+      + 'inset the viewport -- a no-op that reads as a fix. Measure it (statusBarFit_) '
+      + 'and pad only when the measurement says the page is under the clock.');
   }
 });

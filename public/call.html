@@ -2156,10 +2156,92 @@ $('#bootRetry').onclick = function(){
   var spin = $('#bootSpin'); if (spin) spin.classList.remove('hide');
   boot();
 };
+/* =====================================================================================
+   THE STATUS BAR, MEASURED ON THE HANDSET INSTEAD OF ASSUMED.
+
+     "the apk interfaces both callap and system are too high to touch the top bar functions"
+     "you didn't solve the interface haven't buttons on top battery and network positions"
+     "the notification and switch buttons are still high I can't reach them"
+
+   Three reports, two fixes from here, neither of which worked -- because both were reasoned
+   from a model of the WebView rather than from anything the handset actually said. The first
+   added env(safe-area-inset-top), which is 0 whenever the wrapper has already inset the
+   viewport, so it resolved to the padding that was there. The second removed the wrapper's
+   inset listener to match HOPE, which is right if HOPE's phones and this one behave alike --
+   and if this handset is on Android 15, where edge-to-edge is forced and statusBarColor is
+   ignored outright, it may have taken away the one thing holding the header down.
+
+   Guessing a third time would be worse than useless. So the page asks the device:
+
+     screen.height    the whole display, in CSS pixels
+     clientHeight     the viewport this page was actually given
+     gap              the difference -- the room the system bars are taking OUTSIDE the page
+
+   A viewport inset below the status bar and above the navigation bar leaves a gap of roughly
+   50-70px. Edge-to-edge leaves almost none: the page has the whole screen and the clock is
+   drawn ON TOP of it. That is the case that needs padding, and it is the only case that gets
+   any -- so a handset where the wrapper is already doing its job is untouched.
+
+   ONLY INSIDE THE APP. A browser tab legitimately fills the screen with no status bar over
+   it, which would look identical to the broken case and pad every desktop user for nothing.
+   The bridge is the proof we are in the WebView, so nothing here runs without it. */
+function statusBarFit_(){
+  if (!nativeBridge()) return null;                 // browser: never
+  var head = document.querySelector('header.top');
+  if (!head) return null;
+  var scrH = (window.screen && window.screen.height) || 0;
+  var viewH = document.documentElement.clientHeight || window.innerHeight || 0;
+  var gap = scrH - viewH;
+
+  // What the platform reports for the notch/status inset, read by measuring a probe rather
+  // than parsing a string -- env() is only readable this way.
+  var inset = 0;
+  try {
+    var probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;top:0;left:0;width:1px;pointer-events:none;'
+      + 'visibility:hidden;height:env(safe-area-inset-top,0px)';
+    document.body.appendChild(probe);
+    inset = Math.round(probe.getBoundingClientRect().height) || 0;
+    probe.parentNode.removeChild(probe);
+  } catch (e) {}
+
+  /* 16px of slack: a handset that is properly inset never comes back under it, and one that
+     is drawing edge-to-edge never comes back over it. */
+  var edgeToEdge = gap < 16;
+  var pad = 0;
+  if (edgeToEdge) {
+    // Prefer what the platform says. When it says nothing -- which is exactly the WebView
+    // quirk that would explain all three reports -- 28px clears a status bar on every
+    // Android density this stock spans.
+    pad = inset > 0 ? inset : 28;
+    head.style.paddingTop = (14 + pad) + 'px';
+  }
+  return { scrH: scrH, viewH: viewH, gap: gap, inset: inset, pad: pad, dpr: window.devicePixelRatio || 1 };
+}
+
+/* THE NUMBERS, ON SCREEN, TEMPORARILY. The person who can see this problem is holding a
+   phone with no computer, so the only way the measurements reach me is if the app shows
+   them. Sits UNDER the header -- the one place guaranteed reachable when the header is not
+   -- and only inside the app. Remove this strip once the reading is in. */
+function statusBarDiag_(m){
+  if (!m) return;
+  var head = document.querySelector('header.top');
+  if (!head || !head.parentNode) return;
+  var d = document.createElement('div');
+  d.id = 'sbDiag';
+  d.style.cssText = 'background:#FEF3C7;color:#3F2D00;font:600 11.5px/1.45 monospace;'
+    + 'padding:7px 10px;border-bottom:1px solid #F59E0B;word-break:break-all';
+  d.textContent = 'screen ' + m.scrH + ' · view ' + m.viewH + ' · gap ' + m.gap
+    + ' · inset ' + m.inset + ' · pad ' + m.pad + ' · dpr ' + m.dpr;
+  head.parentNode.insertBefore(d, head.nextSibling);
+}
+
 /* Bound at page load, not inside whichever screen happens to open first. Binding a dialog's own
    close buttons somewhere else is exactly how the bell once opened with no way out of it. */
 wireBackgroundPrompt_();
 boot();
+/* After layout, or clientHeight is measured before the WebView has settled on a viewport. */
+setTimeout(function(){ try { statusBarDiag_(statusBarFit_()); } catch(e){} }, 350);
 </script>
 <script>window.HOPE_NO_BRAND_FETCH = true;</script>
 <script src="/brand.js"></script>
