@@ -21,6 +21,18 @@ on conflict (role) do nothing;
 insert into settings (key, value) values ('SYSTEM_OPEN', 'YES')
 on conflict (key) do nothing;
 
--- The call app's brand line until Hoop's real logo/colors arrive (starter section 7).
-insert into settings (key, value) values ('CALL_BRAND', 'HOOP CALLS')
-on conflict (key) do nothing;
+-- CALL_BRAND IS DELIBERATELY NOT SEEDED, AND THAT IS THE FIX.
+--
+-- It used to be, as 'HOOP CALLS', from before the rename. call-core.js already falls back to
+-- APP.BRAND ('HOOPLOAN') whenever the row is absent, so seeding it only ever restated the
+-- code default in a second place -- and the moment the code default changed, the copy in the
+-- database went on quietly outranking it. Long after every file in this repo said HOOPLOAN,
+-- /api/call still answered {"brand":"HOOP CALLS"}, because a settings row beats a constant
+-- and nobody thinks to look in the database for a name they have just finished renaming.
+--
+-- The name lives in ONE place now. The setting still exists and is still editable in
+-- Portal -> Settings for a deployment that genuinely wants a different brand on the app; it
+-- is simply no longer planted with a default that can go stale behind the code.
+--
+-- A database seeded before this keeps its old row -- `on conflict do nothing` never updated
+-- one either. See db/migrations/RUN-ME-2026-08-26-call-brand.sql.
