@@ -307,10 +307,13 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
       </span><img class="logo hide" id="appLogo" alt="Menu"></a>
       <div class="who"><b id="appName">&#x2014;</b><span id="appTeam">&#x2014;</span></div>
       <span class="pill" id="syncPill" title="Sync status &#x2014; gusa kusawazisha / tap to sync"><span class="dot"></span></span>
-      <!-- THE ANSWER TO "IS THIS TODAY'S LIST?" -- the deck's own date, on screen, always,
-           and tapping it forces a fresh pull. An officer who doubts their list had no way
-           to act on the doubt; now it is one tap, and the date says whether it worked. -->
-      <button type="button" class="dayBtn" id="deckBtn" title="Orodha ya tarehe gani &#x2014; gusa kusasisha / which day is this list &#x2014; tap to refresh">&#8635; <span id="deckDay">&mdash;</span></button>
+      <!-- THE ANSWER TO "IS THIS TODAY'S LIST?" -- the deck's own date, on screen, always.
+           It used to be a button that forced a pull. The refresh is automatic now (see
+           startSyncLoop), so the control is gone and only the ANSWER remains: amber the
+           moment the list is not today's, because "the office uploaded and my phone did
+           not" has to be visible to the person holding the phone. Asking an officer
+           mid-round to remember to tap something was always the wrong half to keep. -->
+      <span class="dayBtn" id="deckBtn" title="Orodha ya tarehe gani / which day this list is for"><span id="deckDay">&mdash;</span></span>
       <!-- The bell. An officer had no way to learn that a complaint had been raised against a
            customer on their round, or that a colleague had left a note, except by being
            telephoned about it. Same updates the portal shows, scoped to this handset's teams. -->
@@ -640,20 +643,7 @@ function paintDeckDay_(){
   var t = isoToday(0);
   el.textContent = (d === t) ? 'Leo' : d.slice(5);
   btn.classList.toggle('old', d !== t);
-  btn.title = 'Orodha ya ' + d + (d === t ? ' (leo)' : ' — SI ya leo') + ' · gusa kusasisha / tap to refresh';
-}
-/** THE FORCED PULL. Ignores every cooldown and every version check: the officer asked.
-    One bounded read for the list plus the strip -- the cheapest possible answer to "am I
-    looking at today?", and the only thing they could not do before. */
-function forceRefresh_(){
-  var btn = $('#deckBtn');
-  if (btn) btn.classList.add('spin');
-  S.cacheAt = {};                      // nothing is trusted; the server decides
-  var src = LIST_SOURCE[S.view] || 'today';
-  fetchSource_(src, !(S.cache[src] && S.cache[src].length));
-  loadDaySummary(true);
-  doSync();
-  setTimeout(function(){ if (btn) btn.classList.remove('spin'); }, 1200);
+  btn.title = 'Orodha ya ' + d + (d === t ? ' (leo)' : ' — SI ya leo, inasasishwa yenyewe / not today’s; refreshing itself');
 }
 function doSync(){
   if (!S.boot) return Promise.resolve({ ok:true, added:0 });
@@ -683,7 +673,24 @@ var syncVisListenerAdded = false;
 function startSyncLoop(){
   doSync();
   if (S.syncTimer) clearInterval(S.syncTimer);
-  S.syncTimer = setInterval(function(){ if (!document.hidden) doSync(); }, Math.max(60, S.syncEverySec||300) * 1000);
+  /* THE REFRESH IS THE LOOP'S JOB NOW, not the officer's.
+     doSync alone only refetches when it NOTICES a version change, and a handset that slept
+     through the morning upload has nothing to notice -- which is exactly how a phone sat on
+     yesterday's list until somebody thought to tap the day button. That button is gone, so
+     the tick has to do what the tap did.
+
+     Three things, and none of them is expensive: sync, the cheap day-summary read that
+     answers "which deck is current", and a refetch of the list actually on screen -- the
+     last one only when its own per-source cooldown has elapsed, so this cannot turn into a
+     poll. Nothing runs while the app is in the background. */
+  S.syncTimer = setInterval(function(){
+    if (document.hidden) return;
+    doSync();
+    loadDaySummary(true);
+    if (!S.entered) return;
+    var src = LIST_SOURCE[S.view];
+    if (src && !sourceFresh_(src)) fetchSource_(src, false);
+  }, Math.max(60, S.syncEverySec||300) * 1000);
   if (!syncVisListenerAdded) {
     syncVisListenerAdded = true;
     /* COMING BACK TO THE APP IS A REASON TO LOOK AGAIN. doSync only refetches when it
@@ -1168,7 +1175,6 @@ function enterApp(d){
   startSyncLoop();
   loadDaySummary(true);                                     // team % strip -- load once on entry
   $('#syncPill').onclick = function(){ doSync(); loadDaySummary(true); };   // manual sync refreshes the strip too
-  $('#deckBtn').onclick = forceRefresh_;                                    // "is this today's list?" -> one tap
   paintDeckDay_();
   /* AND TAPPING THE FIGURES REFRESHES THEM. The one thing an officer can do when they doubt a
      number is ask for it again, and there was no way to. */
