@@ -301,6 +301,12 @@ const FNS = {
       Budget: ONE read, date-bounded at the database and narrowed to locked7 rows only,
       three columns; cached 5 minutes because a dashboard is opened in bursts. */
   async lockedTrend(db, user, args) {
+    /* GATED, and it was not. This function had no requireNav of any kind, so any signed-in
+       code could read the company's 7+ trend whatever its role -- not by design, just never
+       written. Widened the same way recoveryWeek is rather than closed to 'recovery' alone,
+       because the dashboard draws it too and gating it narrowly would put an error string on
+       the dashboard of everyone who holds dashboard without recovery. */
+    requireAnyNav(user, ['recovery', 'dashboard']);
     /* THE WEEK IS MONDAY TO SUNDAY, fixed -- not a rolling seven days that shifts its
        start every morning. Monday is always the first bar, so two people comparing the
        chart on different days are comparing the same week. Days not yet uploaded come
@@ -376,9 +382,26 @@ const FNS = {
        Bucketing by the day the result arrived put Monday's work on Tuesday's bar.
 
        So a day's pool is taken from that day's OWN upload, and its result is read from the
-       NEXT upload -- which means the window has to run one day PAST Sunday to see Sunday's
-       result, where it used to run one day before Monday. */
-    const readTo = dayShift(from, 7);
+       NEXT upload -- which means the window has to run PAST Sunday to see Sunday's result,
+       where it used to run one day before Monday.
+
+       HOW FAR PAST SUNDAY, and why it is not one day:
+         "sometimes its a holiday like they worked in monday and didnt come to work on
+          tuesday ... so to capture recovery we should look to the next day upload evenif
+          there is a day skipped but the next one [but not the last one!]"
+
+       Nobody uploads on Maulid, or on a Sunday, or the day the office is shut. The result of
+       Friday's chasing then lands in MONDAY's deck, not Saturday's. With only one day of
+       lookahead that result was invisible and the day sat PENDING for good -- work done,
+       credited to nobody, because the calendar had a hole in it.
+
+       So the read runs a further week past Sunday. What it does NOT do is jump to the newest
+       deck: nextOf() below takes the EARLIEST upload after the day in question, which is the
+       owner's "the next one, not the last one". Reading Monday's recovery off Friday's deck
+       would fold four days of other people's work into Monday's number.
+
+       Cost: the same single indexed read over a wider date bound. */
+    const readTo = dayShift(from, 14);
     const ck = 'recweek2:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
@@ -1079,7 +1102,12 @@ const FNS = {
     };
     const nowDate = day(a.asOf) || await latestOf(null);
     const prevDate = nowDate ? await latestOf(nowDate) : null;
-    const ck = 'stockacct:' + nowDate + ':' + prevDate + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    /* Declared HERE, above the cache key, because the key has to include it: staleDays is
+       both an input to the `stale` counts and a field echoed back for the screen to print.
+       Left out of the key, a 5-minute-cached answer computed for one staleDays would be
+       served to a caller that asked for another, carrying the wrong number into their tile. */
+    const STALE_DAYS = num(a.staleDays) || 45;
+    const ck = 'stockacct:' + nowDate + ':' + prevDate + ':' + STALE_DAYS + ':' + (user.teams ? user.teams.join(',') : 'ALL');
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
 
@@ -1115,7 +1143,6 @@ const FNS = {
       if (/RSM/.test(role)) return 'rsm';
       return 'agent';
     };
-    const STALE_DAYS = num(a.staleDays) || 45;
 
     const by = new Map();
     const slot = (holder) => {
