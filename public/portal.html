@@ -1099,7 +1099,11 @@ function drawDash(m){
   var s=BOOT.summary||{};
   var n=function(x){ return x&&x.num!=null?money(x.num):'—'; };
   m.innerHTML=
-    '<div class="tiles">'
+    /* THE WEEK, AT THE HEAD OF THE BOARD -- see drawDashWeekBar. Above the tiles because it
+       governs everything under it, and a control that sits halfway down a page reads as
+       belonging only to the card it is next to, which is exactly how it was misread. */
+    '<div class="card" id="dashWeekBar" style="padding:10px 12px;margin-bottom:10px"></div>'
+    +'<div class="tiles">'
     +'<div class="tile"><div class="l">Orodha ya leo</div><div class="v">'+n(s.list)+'</div><div class="s">'+(s.deckDate?('deck '+esc(s.deckDate)):'hakuna upload bado')+'</div></div>'
     +'<div class="tile"><div class="l">Locked 7+</div><div class="v" style="color:var(--bad)">'+n(s.locked7)+'</div><div class="s">wamefungiwa wiki+, ndani ya 45</div></div>'
     +'<div class="tile"><div class="l">Ndani ya siku 45</div><div class="v">'+n(s.inWindow)+'</div><div class="s">dirisha la Hoop</div></div>'
@@ -1147,10 +1151,8 @@ function drawDash(m){
     +'<li>Credit team wanafungua <a href="/call">HOOPLOAN Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
     +'<li>Kesho asubuhi: pakia ya kesho, kisha angalia <b>Recovery</b> — nani amelipa baada ya simu zetu.</li>'
     +'</ol></div>';
-  drawTrend();
-  drawCreditRecovery();
-  if(hasNav('scorecards')) drawDashSales();
-  if(hasNav('stock')) drawDashStock();
+  // Everything the week governs, through the one path that governs it.
+  dashWeekRedraw();
 }
 /** Does this code hold that pane? The same list the sidebar is built from, so a card can
     never appear for a nav whose tab is hidden. */
@@ -1162,7 +1164,9 @@ function hasNav(k){ return (BOOT.navs||[]).indexOf(k)>=0; }
    stays in the pane, one click away, where there is room to pivot it four ways. */
 function drawDashSales(){
   var box=$('#dashSalesBox'); if(!box) return;
-  srv('salesWeek',{}).then(function(d){
+  // The week the board is standing on -- not "whatever week has sales", which is what an
+  // empty argument asked for and is how this card used to disagree with the two beside it.
+  srv('salesWeek',{week:RECWEEK}).then(function(d){
     var b=$('#dashSalesBox'); if(!b) return;
     var c=d.company||{}, n=c.count||0, amt=c.amount||0;
     var tgt=d.weekTarget||null;
@@ -1190,12 +1194,176 @@ function drawDashSales(){
       // Said plainly rather than shown as "this week" -- see the Monday problem.
       +(d.fellBack?'<div class="note">Wiki hii bado haina mauzo — hii ni wiki iliyopita. '
         +'/ Nothing uploaded for this week yet; showing the last week that has sales.</div>':'')
+      +salesWeekChart_(d)
       +'<button class="btn sm ghost" onclick="goTab(\'sales\')">Fungua Mauzo / Open sales</button>';
   }).catch(function(e){ var b=$('#dashSalesBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
 }
+/** TZS at a glance. A week's takings run to eight digits, and eight digits above a bar is a
+    label nobody reads and every neighbour collides with. */
+function moneyShort_(n){
+  n=Number(n)||0;
+  if(n>=1e9) return (n/1e9).toFixed(n>=1e10?0:1)+'B';
+  if(n>=1e6) return (n/1e6).toFixed(n>=1e7?0:1)+'M';
+  if(n>=1e3) return Math.round(n/1e3)+'K';
+  return String(Math.round(n));
+}
+
+/* =====================================================================================
+   THE SALES WEEK, AS A SHAPE.
+
+     "I expected sales to have a graphical trend"
+
+   The card had the numbers and no picture: total sold, total value, percent of target. Three
+   figures that cannot tell you a week was carried by one enormous Tuesday, which is the thing
+   a dealer actually wants off a dashboard.
+
+   The data was already here -- salesWeek returns company.days, a date -> {count, amount} map
+   -- so this draws what was already being fetched and thrown away.
+
+   BY VALUE, not by handset count, because the target beside it is in shillings and two
+   charts on one card measuring different things is worse than one chart. The count rides
+   along in the tooltip.
+
+   A DAY WITH NO SALES IS DRAWN AS ZERO HERE, and that is the opposite of the locked-7+ chart
+   next to it, on purpose. That chart's gaps mean "nobody uploaded", a fact it can know. Sales
+   arrive as one report covering a range, so within a week that HAS sales, a day with no rows
+   means no sales -- a real zero, and drawing it as a gap would hide a dead Tuesday. */
+function salesWeekChart_(d){
+  var days=d.days||[], byDay=(d.company&&d.company.days)||{};
+  if(!days.length) return '';
+  var pts=days.map(function(iso){
+    var e=byDay[iso]||null;
+    return { date:iso, amount:e?(e.amount||0):0, count:e?(e.count||0):0 };
+  });
+  var vals=pts.map(function(p){ return p.amount; });
+  var max=Math.max.apply(null,vals);
+  if(!(max>0)) return '<div class="mut" style="margin:8px 0">Hakuna mauzo wiki hii. '
+    +'/ No sales recorded in this week.</div>';
+
+  var W=560,H=180,padL=46,padB=26,padT=18,padR=8;
+  var innerW=W-padL-padR, innerH=H-padT-padB;
+  var slot=innerW/pts.length, bw=Math.min(52,slot*0.6);
+  // The daily target, drawn as a line across the week when one is set: a bar chart with a
+  // target on it answers "which days carried us" in one look.
+  var dayTgt=d.dailyTarget||null;
+  var yOf=function(v){ return padT+innerH-(max?(v/max)*innerH:0); };
+  /* THE SAME ABBREVIATIONS THE CREDIT GRID USES, and not the first three letters of the
+     Swahili names -- Jumapili, Jumatatu, Jumanne and Jumatano ALL begin "Jum", so slicing
+     gave a week reading Jum · Jum · Jum · Jum · Alh · Iju · Jum. Four different days under
+     one label is not a shorter axis, it is no axis. */
+  var wd=['Jpi','Jtt','Jnn','Jtn','Alh','Iju','Jms'];
+  var shortOf=function(iso){ return wd[new Date(iso+'T00:00:00').getDay()]; };
+
+  var grid='',bars='',labels='';
+  [0,0.5,1].forEach(function(f){
+    var y=padT+innerH-f*innerH;
+    grid+='<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="var(--line)" stroke-width="1"/>'
+      +'<text x="'+(padL-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="var(--mut)">'
+      +esc(moneyShort_(max*f))+'</text>';
+  });
+  var best=-1; pts.forEach(function(p,i){ if(best<0||p.amount>pts[best].amount) best=i; });
+  pts.forEach(function(p,i){
+    var cx=padL+slot*i+slot/2;
+    labels+='<text x="'+cx+'" y="'+(H-padB+17)+'" text-anchor="middle" font-size="11" '
+      +'font-weight="'+(i===best?'700':'400')+'" fill="var(--mut)">'+esc(shortOf(p.date))+'</text>';
+    if(!p.amount){
+      labels+='<text x="'+cx+'" y="'+(padT+innerH-6)+'" text-anchor="middle" font-size="10" fill="var(--soft)">0</text>';
+      return;
+    }
+    var y=yOf(p.amount), h=Math.max(2,padT+innerH-y);
+    bars+='<rect x="'+(cx-bw/2)+'" y="'+y+'" width="'+bw+'" height="'+h+'" rx="4" fill="var(--ok)" '
+      +'opacity="'+(i===best?'1':'0.5')+'"><title>'+esc(p.date)+': '+money(p.count)+' simu · TZS '
+      +money(p.amount)+'</title></rect>'
+      +'<text x="'+cx+'" y="'+(y-5)+'" text-anchor="middle" font-size="11" font-weight="700" '
+      +'fill="'+(i===best?'var(--ok)':'var(--mut)')+'">'+esc(moneyShort_(p.amount))+'</text>';
+  });
+  var tgtLine='';
+  if(dayTgt&&dayTgt>0&&dayTgt<=max){
+    var ty=yOf(dayTgt);
+    tgtLine='<line x1="'+padL+'" y1="'+ty+'" x2="'+(W-padR)+'" y2="'+ty+'" stroke="var(--b600)" '
+      +'stroke-width="1.5" stroke-dasharray="5 4"/>'
+      +'<text x="'+(W-padR)+'" y="'+(ty-5)+'" text-anchor="end" font-size="10.5" fill="var(--b600)">'
+      +'lengo/siku '+esc(moneyShort_(dayTgt))+'</text>';
+  }
+  var sold=pts.reduce(function(s,p){ return s+p.count; },0);
+  var live=pts.filter(function(p){ return p.amount>0; }).length;
+  return '<div class="chartwrap" style="margin:4px 0 6px"><svg viewBox="0 0 '+W+' '+H+'" role="img" '
+    +'aria-label="Sales value per day this week">'
+    +'<line x1="'+padL+'" y1="'+(padT+innerH)+'" x2="'+(W-padR)+'" y2="'+(padT+innerH)+'" stroke="var(--line)" stroke-width="1.5"/>'
+    +grid+bars+tgtLine+labels+'</svg></div>'
+    +'<div class="mut" style="margin-bottom:8px">Thamani kwa siku (TZS). Kilele: '
+    +esc(moneyShort_(max))+' · siku zenye mauzo: '+money(live)+'/'+money(pts.length)
+    +' · jumla '+money(sold)+' simu.'
+    +(dayTgt?' Mstari wa nukta = lengo la siku.':'')+'</div>';
+}
+
+/* =====================================================================================
+   STOCK, AS A PICTURE -- AND NOT AS A TREND, BECAUSE IT HAS NONE.
+
+     "anything creative for stock at dashboard too"
+
+   Stock is counted whenever Sipho's report is uploaded, not every day, so there is no daily
+   series to draw and inventing one would be a chart that looks informative and is not. What
+   stock DOES have is two compositions, and they are the whole accountability question:
+
+     WHAT IS IN HAND   held, of which `stale` have been sitting past the age limit.
+                       `stale` is a SUBSET of `held` -- so it is drawn inside that bar, never
+                       beside it as though it were separate stock.
+
+     WHAT LEFT         everything on the previous report and not on this one, split into
+                       sold / on Watu / unaccounted. Those three are disjoint and sum to the
+                       departures that could be checked, which is what makes a stacked bar
+                       honest here. `notChecked` is deliberately NOT in the bar: it is the
+                       count nobody could verify either way, and folding an open question
+                       into a clean category is how a book starts lying.
+
+   The second bar is the one the whole feature exists for -- "hoop agents are stealing stock"
+   is a red segment or it is nothing. */
+function stockSplitBars_(d,t){
+  var held=t.held||0, stale=t.stale||0, fresh=Math.max(0,held-stale);
+  var sold=t.sold||0, watu=t.watu||0, un=t.unaccounted||0;
+  var gone=sold+watu+un;
+  var seg=function(n,total,color,label){
+    if(!n) return '';
+    var pctW=total?(100*n/total):0;
+    return '<div style="width:'+pctW.toFixed(2)+'%;background:'+color+'" title="'
+      +esc(label)+': '+money(n)+'"></div>';
+  };
+  var key=function(color,label,n){
+    return '<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px;font-size:11.5px">'
+      +'<i style="width:10px;height:10px;border-radius:3px;background:'+color+';display:inline-block"></i>'
+      +esc(label)+' <b>'+money(n)+'</b></span>';
+  };
+  var bar=function(inner){
+    return '<div style="display:flex;height:14px;border-radius:7px;overflow:hidden;'
+      +'background:var(--b50);margin:4px 0 6px">'+inner+'</div>';
+  };
+  var out='';
+  if(held>0){
+    out+='<div style="font-size:12px;font-weight:700;margin-top:6px">Zilizopo mkononi / In hand</div>'
+      +bar(seg(fresh,held,'var(--b600)','Ndani ya muda')+seg(stale,held,'#F59E0B','Zimekaa muda'))
+      +'<div class="mut">'+key('var(--b600)','ndani ya muda',fresh)
+      +key('#F59E0B','zimekaa zaidi ya siku '+money(d.staleDays||0),stale)+'</div>';
+  }
+  if(gone>0){
+    out+='<div style="font-size:12px;font-weight:700;margin-top:10px">Zimeondoka tangu ripoti iliyopita '
+      +'/ Left since the previous report</div>'
+      +bar(seg(sold,gone,'var(--ok)','Zimeuzwa')+seg(watu,gone,'var(--b300)','Zipo Watu')
+        +seg(un,gone,'var(--bad)','Hazijulikani'))
+      +'<div class="mut">'+key('var(--ok)','zimeuzwa',sold)
+      +key('var(--b300)','zipo Watu',watu)+key('var(--bad)','hazijulikani',un)+'</div>';
+  }
+  if(!out) return '';
+  return '<div style="margin:2px 0 8px">'+out+'</div>';
+}
+
 function drawDashStock(){
   var box=$('#dashStockBox'); if(!box) return;
-  srv('stockAccount',{}).then(function(d){
+  /* The stock book as it stood at the END of the week on screen. Stock has no series to
+     trend -- it is counted whenever Sipho's report is uploaded, not daily -- so following
+     the week means answering "how did the book stand then", which stockAccount resolves
+     backward to the newest report at or before that date. */
+  srv('stockAccount', RECWEEK?{asOf:addDays_(mondayOf_(RECWEEK),6)}:{}).then(function(d){
     var b=$('#dashStockBox'); if(!b) return;
     var t=(d.company&&d.company.totals)||{};
     if(!d.asOf){
@@ -1212,6 +1380,7 @@ function drawDashStock(){
       +'<div class="tile"><div class="l">Zimekaa muda</div><div class="v">'+money(t.stale||0)+'</div>'
         +'<div class="s">zaidi ya siku '+money(d.staleDays||0)+'</div></div>'
       +'</div>'
+      +stockSplitBars_(d,t)
       /* Not the same as zero unaccounted, and it must not read like it: a departure nobody
          could check is an open question, not a clean book. */
       +(d.notChecked?'<div class="note">'+money(d.notChecked)+' hazikuweza kukaguliwa. '
@@ -1233,10 +1402,82 @@ function drawDashStock(){
 
    A day the officer was dealt nothing is a gap, not a zero -- an officer who was handed
    no 7+ customers on Wednesday did not "fail Wednesday", and the chart must not say so. */
-/* THE WEEK SLIDES. One shared choice for BOTH recovery charts (the per-person grid and
-   the 7+ trend), so sliding back a week moves the whole picture together, never half of
-   it. Empty string = this week; anything else is a Monday the server snapped to. */
+/* THE WEEK SLIDES, AND IT SLIDES THE WHOLE DASHBOARD.
+
+     "the date forward and backward is not for credit but the whole dashboard holded
+      DTA preview as hopeloan"
+
+   It began as a control inside the Credit card, moving the two recovery charts. That was
+   the wrong home for it: a dashboard showing last week's recovery beside THIS week's sales
+   and today's stock is four cards disagreeing about what day it is, with nothing on screen
+   saying so. HOPE settled this long ago -- one week bar at the head of the dashboard and
+   every card drawn for it (weekBar / wireWeekBar in HOPE's app.html).
+
+   So the choice lives at the top now and everything follows it: both recovery charts, the
+   sales week, and the stock book as it stood at the end of that week. Empty string = this
+   week; anything else is a Monday. */
 var RECWEEK='';
+/** The Monday of whatever week a date falls in. Computed on the CLIENT so the bar can be
+    drawn before any request returns; the server snaps the same way, and the two must agree
+    or the bar would jump to a different week the moment the first card landed. */
+function mondayOf_(iso){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(iso||''))) return '';
+  var d=new Date(String(iso)+'T09:00:00Z');
+  d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));
+  return d.toISOString().slice(0,10);
+}
+function addDays_(iso,n){
+  var d=new Date(String(iso)+'T09:00:00Z');
+  d.setUTCDate(d.getUTCDate()+n);
+  return d.toISOString().slice(0,10);
+}
+/** Redraw every card the week governs -- in ONE place, so a card added later cannot quietly
+    go on showing a different week from the rest of the board. */
+function dashWeekRedraw(){
+  /* Every one of these guards on its own container and returns quietly when it is not on
+     screen, so this is also the Recovery pane's redraw -- ONE path for the whole week,
+     rather than two lists that drift until half the screen is showing a different week. */
+  drawDashWeekBar();
+  drawTrend();
+  drawCreditRecovery();
+  drawRecoveryTrend();
+  if(hasNav('scorecards')) drawDashSales();
+  if(hasNav('stock')) drawDashStock();
+}
+function dashWeekSet(iso){ RECWEEK=iso||''; dashWeekRedraw(); }
+/* Drawn from the client's own arithmetic rather than from a response, because it heads a
+   board of four independent requests: waiting on one would leave the control missing for as
+   long as the slowest card takes, and adopting one card's answer would make the bar lie
+   whenever that card fell back to a different week on its own. */
+function drawDashWeekBar(){
+  var host=$('#dashWeekBar'); if(!host) return;
+  var thisMon=mondayOf_(isoToday(0));
+  var mon=RECWEEK?mondayOf_(RECWEEK):thisMon;
+  var end=addDays_(mon,6);
+  var chip=mon===thisMon
+    ? '<span class="chip">wiki hii / this week</span>'
+    : (mon>thisMon
+        ? '<span class="chip ok">wiki ijayo / upcoming week</span>'
+        : '<span class="chip warn">wiki iliyopita / past week</span>');
+  host.innerHTML='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    +'<span class="mut" style="font-size:12px">Wiki (Jumatatu) / Week starting Monday</span>'
+    +'<button class="btn sm ghost" id="dwPrev" title="Wiki iliyopita / previous week">◀</button>'
+    +'<input class="inp" type="date" id="dwDate" value="'+esc(mon)+'" style="flex:0 1 158px">'
+    +'<button class="btn sm ghost" id="dwNext" title="Wiki ijayo / next week">▶</button>'
+    +'<span style="font-size:12px;font-weight:700">'+esc(mon)+' → '+esc(end)+'</span>'
+    +chip
+    +(mon===thisMon?'':'<button class="btn sm" id="dwNow">Rudi wiki hii / back to this week</button>')
+    +'</div>'
+    +'<div class="mut" style="font-size:11.5px;margin-top:5px">Kadi zote hapa chini zinafuata wiki hii. '
+    +'/ Every card below is drawn for this week.</div>';
+  var p=$('#dwPrev'); if(p) p.onclick=function(){ dashWeekSet(addDays_(mon,-7)); };
+  var n=$('#dwNext'); if(n) n.onclick=function(){ dashWeekSet(addDays_(mon,7)); };
+  var now=$('#dwNow'); if(now) now.onclick=function(){ dashWeekSet(''); };
+  // Any date is accepted and snapped to its own Monday, in front of them, before the redraw.
+  var dt=$('#dwDate'); if(dt) dt.onchange=function(){
+    var m=mondayOf_(dt.value); if(!m) return; dt.value=m; dashWeekSet(m);
+  };
+}
 function recWeekBar(d){
   return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">'
     +'<button class="btn sm ghost" id="recWkPrev" title="Wiki iliyopita / previous week">◀</button>'
@@ -1251,15 +1492,17 @@ function recWeekBar(d){
     +'</div>';
 }
 function wireRecWeekBar(d){
+  /* Goes through dashWeekRedraw like the dashboard's own bar does, rather than naming three
+     draws of its own. Two lists of "what a week change redraws" is how one of them ends up
+     missing the card somebody added last month. */
   var step=function(n){
     var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
     base.setUTCDate(base.getUTCDate()+7*n);
-    RECWEEK=base.toISOString().slice(0,10);
-    drawCreditRecovery(); drawRecoveryTrend(); drawTrend();
+    dashWeekSet(base.toISOString().slice(0,10));
   };
   var p=$('#recWkPrev'); if(p) p.onclick=function(){ step(-1); };
   var n=$('#recWkNext'); if(n) n.onclick=function(){ step(1); };
-  var now=$('#recWkNow'); if(now) now.onclick=function(){ RECWEEK=''; drawCreditRecovery(); drawRecoveryTrend(); drawTrend(); };
+  var now=$('#recWkNow'); if(now) now.onclick=function(){ dashWeekSet(''); };
 }
 /* THE COLOUR IS THE GRAPH, now that the length is gone.
 
@@ -1292,12 +1535,11 @@ function drawCreditRecovery(){
          upload at most, and recovery needs the NEXT upload before it can show anything.
          So the empty state names the reason and points at the button rather than reading
          as "the chart is broken". */
-      b.innerHTML=recWeekBar(d)
-        +'<div class="mut">Hakuna mgao wa 7+ kwa wiki hii bado'
+      b.innerHTML=
+        '<div class="mut">Hakuna mgao wa 7+ kwa wiki hii bado'
         +(d.thisWeek?' — wiki huanza Jumatatu, na recovery huonekana baada ya upload ya siku inayofuata. Bonyeza ◀ kuona wiki iliyopita.':' — hakuna upload wa wiki hiyo.')
         +' / No 7+ pool for this week yet'+(d.thisWeek?' — a week starts Monday and recovery only shows after the NEXT day\'s upload. Press ◀ for last week.':'.')
         +'</div>';
-      wireRecWeekBar(d);
       return;
     }
     var today=(new Date(Date.now()+3*3600*1000)).toISOString().slice(0,10);
@@ -1376,13 +1618,12 @@ function drawCreditRecovery(){
         +cells+'</div>';
     }).join('');
 
-    b.innerHTML=recWeekBar(d)+head+rows
+    b.innerHTML=head+rows
       +'<div class="mut" style="font-size:10.5px;margin-top:8px">'
       +'Kila kisanduku: <b>waliopungua / waliopewa</b> · kijani zaidi = walirudi zaidi · '
       +'“kesho” = mgao wa leo, matokeo huonekana kwenye upload ijayo · “—” = hakukuwa na mgao siku hiyo. '
       +'Bonyeza \u{1F441} juu ya siku kuona wateja wenyewe.</div>'
       +'<div id="credDayBox" style="margin-top:10px"></div>';
-    wireRecWeekBar(d);
 
     // One handler per eye. Each day opens on its own and replaces whatever was open, so the
     // panel never becomes a stack of days nobody closed.
@@ -1524,6 +1765,10 @@ function drawRecovery(m){
       +'<div class="tile"><div class="l">Wamezidi kuzama</div><div class="v" style="color:var(--bad)">'+money(c.deeper)+'</div></div>'
       +'<div class="tile"><div class="l">Wametoka kwenye orodha</div><div class="v">'+money(c.leftList)+'</div><div class="s">hawakuwepo leo</div></div>'
       +'</div>'
+      /* The same week the dashboard is standing on, and its own way to move it -- the
+         dashboard's bar is not on this screen, and a pane that inherits a week with no
+         control is a pane you cannot get out of last Tuesday from. */
+      +'<div id="recWkBox" style="margin:10px 0 0"></div>'
       +'<div id="recTrendBox" style="margin:14px 0"><div class="mut">Inapakia chati…</div></div>'
       /* BRANCH, not the shop-derived team. watu_snapshots only ever carries KINONDONI for
          this dealer (teamFromShop turns "Hoop Limited, Kinondoni" into one team name), so
@@ -1707,6 +1952,11 @@ function drawRecoveryTrend(){
   // The SAME chosen week as the per-person grid -- the two charts slide together.
   srv('recoveryWeek',{week:RECWEEK}).then(function(d){
     var b=$('#recTrendBox'); if(!b) return;
+    /* This pane's own copy of the week control. Same RECWEEK and the same redraw path as
+       the dashboard's bar -- it is the one screen the dashboard head is not on, and a pane
+       that inherits a week with no control is a pane you cannot get out of last Tuesday from. */
+    var wkBox=$('#recWkBox');
+    if(wkBox){ wkBox.innerHTML=recWeekBar(d); wireRecWeekBar(d); }
     var wk=d.thisWeek?'wiki hii':(esc(d.from||'')+' → '+esc(d.to||''));
     var svg=svgRecoveryBars(d.points||[]);
     if(!svg){
@@ -2785,19 +3035,7 @@ function statusBarFit_(){
   }
   return { scrH: scrH, viewH: viewH, gap: gap, inset: inset, pad: pad, dpr: window.devicePixelRatio || 1 };
 }
-function statusBarDiag_(m){
-  if (!m) return;
-  var bar = document.querySelector('.top');
-  if (!bar || !bar.parentNode) return;
-  var d = document.createElement('div');
-  d.id = 'sbDiag';
-  d.style.cssText = 'background:#FEF3C7;color:#3F2D00;font:600 11.5px/1.45 monospace;'
-    + 'padding:7px 10px;border-bottom:1px solid #F59E0B;word-break:break-all;flex:0 0 auto';
-  d.textContent = 'screen ' + m.scrH + ' · view ' + m.viewH + ' · gap ' + m.gap
-    + ' · inset ' + m.inset + ' · pad ' + m.pad + ' · dpr ' + m.dpr;
-  bar.parentNode.insertBefore(d, bar.nextSibling);
-}
-setTimeout(function(){ try { statusBarDiag_(statusBarFit_()); } catch(e){} }, 350);
+setTimeout(function(){ try { statusBarFit_(); } catch(e){} }, 350);
 
 </script>
 </body>

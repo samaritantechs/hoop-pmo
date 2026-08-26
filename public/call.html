@@ -2219,29 +2219,13 @@ function statusBarFit_(){
   return { scrH: scrH, viewH: viewH, gap: gap, inset: inset, pad: pad, dpr: window.devicePixelRatio || 1 };
 }
 
-/* THE NUMBERS, ON SCREEN, TEMPORARILY. The person who can see this problem is holding a
-   phone with no computer, so the only way the measurements reach me is if the app shows
-   them. Sits UNDER the header -- the one place guaranteed reachable when the header is not
-   -- and only inside the app. Remove this strip once the reading is in. */
-function statusBarDiag_(m){
-  if (!m) return;
-  var head = document.querySelector('header.top');
-  if (!head || !head.parentNode) return;
-  var d = document.createElement('div');
-  d.id = 'sbDiag';
-  d.style.cssText = 'background:#FEF3C7;color:#3F2D00;font:600 11.5px/1.45 monospace;'
-    + 'padding:7px 10px;border-bottom:1px solid #F59E0B;word-break:break-all';
-  d.textContent = 'screen ' + m.scrH + ' · view ' + m.viewH + ' · gap ' + m.gap
-    + ' · inset ' + m.inset + ' · pad ' + m.pad + ' · dpr ' + m.dpr;
-  head.parentNode.insertBefore(d, head.nextSibling);
-}
 
 /* Bound at page load, not inside whichever screen happens to open first. Binding a dialog's own
    close buttons somewhere else is exactly how the bell once opened with no way out of it. */
 wireBackgroundPrompt_();
 boot();
 /* After layout, or clientHeight is measured before the WebView has settled on a viewport. */
-setTimeout(function(){ try { statusBarDiag_(statusBarFit_()); } catch(e){} }, 350);
+setTimeout(function(){ try { statusBarFit_(); } catch(e){} }, 350);
 </script>
 <script>window.HOPE_NO_BRAND_FETCH = true;</script>
 <script src="/brand.js"></script>
