@@ -1093,14 +1093,25 @@ const FNS = {
     requireNav(user, 'stock');
     const a = args || {};
     const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null;
-    const latestOf = async (before) => {
+    const latestOf = async (before, inclusive) => {
       let q = db.from('hoop_aged_stock').select('as_of').not('as_of', 'is', null)
         .order('as_of', { ascending: false }).limit(1);
-      if (before) q = q.lt('as_of', before);
+      if (before) q = inclusive ? q.lte('as_of', before) : q.lt('as_of', before);
       const { data } = await q;
       return data && data[0] ? String(data[0].as_of).slice(0, 10) : null;
     };
-    const nowDate = day(a.asOf) || await latestOf(null);
+    /* asOf MEANS "AS THE BOOK STOOD THEN", NOT "the report filed exactly that day".
+
+       The dashboard's week control hands this the last day of whatever week is on screen,
+       and stock is counted whenever somebody uploads Sipho's report -- not on Sundays. Read
+       literally, an asOf of 2026-08-30 asks for a report filed on the 30th, finds none, and
+       the card comes back empty on a week where the stock book is perfectly well known.
+
+       So a date given here resolves BACKWARD to the newest report at or before it, which is
+       what "how did stock stand that week" actually means. A date earlier than any report
+       at all still yields nothing, and should: there is no book to show yet. */
+    const asked = day(a.asOf);
+    const nowDate = asked ? await latestOf(asked, true) : await latestOf(null);
     const prevDate = nowDate ? await latestOf(nowDate) : null;
     /* Declared HERE, above the cache key, because the key has to include it: staleDays is
        both an input to the `stale` counts and a field echoed back for the screen to print.

@@ -217,3 +217,65 @@ test('portal.html: the sign-in panel can be shrunk and moved by the keyboard fit
   assert.match(fit[0], /style\.minHeight\s*=\s*vv\.height/,
     'setting height without minHeight leaves the panel exactly as tall as it was');
 });
+
+/* =========================================================================================
+   THE DASHBOARD STANDS ON ONE WEEK.
+
+     "the date forward and backward is not for credit but the whole dashboard holded
+      DTA preview as hopeloan"
+
+   The control began inside the Credit card and moved only the two recovery charts, so the
+   board could show last week's recovery beside this week's sales and today's stock -- four
+   cards disagreeing about what day it is, with nothing on screen admitting it. HOPE settled
+   this: one bar at the head, every card drawn for it.
+
+   The regression that matters is a card added later that forgets to take the week, which is
+   why every draw goes through ONE function and this checks that function rather than the
+   call sites.
+   ========================================================================================= */
+test('portal.html: one week governs every card on the dashboard', () => {
+  const src = read('portal.html');
+  const fn = src.match(/function dashWeekRedraw\(\)\{[\s\S]*?\n\}/);
+  assert.ok(fn, 'dashWeekRedraw not found -- the single redraw path is the whole design');
+  for (const card of ['drawTrend', 'drawCreditRecovery', 'drawRecoveryTrend',
+                      'drawDashSales', 'drawDashStock']) {
+    assert.match(fn[0], new RegExp('\\b' + card + '\\('),
+      `${card} is not redrawn when the week changes -- it will show a different week`);
+  }
+  // The bar itself must be at the head of the board, not inside a card it appears to belong to.
+  assert.match(src, /id="dashWeekBar"[\s\S]{0,400}?<div class="tiles">/,
+    'the week bar must sit above the tiles, or it reads as belonging to whatever is beside it');
+  // And the two cards that used to ignore it must now ask for it.
+  assert.match(src, /srv\('salesWeek',\{week:RECWEEK\}\)/,
+    'the sales card must ask for the week the board is standing on');
+  assert.match(src, /srv\('stockAccount', RECWEEK\?\{asOf:/,
+    'the stock card must ask for the book as it stood at the end of that week');
+});
+
+test('portal.html: a Swahili day axis names seven different days', () => {
+  /* Jumapili, Jumatatu, Jumanne and Jumatano ALL begin "Jum", so slicing the names to three
+     letters produced a week reading Jum · Jum · Jum · Jum · Alh · Iju · Jum. Four distinct
+     days under one label is not a shorter axis, it is no axis -- and it looked perfectly
+     fine in the source. Caught by rendering the page, not by reading it. */
+  const src = read('portal.html');
+  assert.doesNotMatch(src, /\['Jumapili'[^\]]*\][^;]*\.slice\(0,\s*3\)/,
+    'slicing Swahili day names to three letters collapses four days onto "Jum"');
+  const fn = src.match(/function salesWeekChart_\(d\)\{[\s\S]*?\n\}/);
+  assert.ok(fn, 'salesWeekChart_ not found');
+  const days = fn[0].match(/\['Jpi','Jtt','Jnn','Jtn','Alh','Iju','Jms'\]/);
+  assert.ok(days, 'the sales axis must use the same distinct abbreviations as the credit grid');
+});
+
+test('portal.html: no assignment concatenates a string onto a unary plus', () => {
+  /* `b.innerHTML=\n  +'<div>...'` is valid JavaScript and means +("<div>...") -- NaN, printed
+     into the card. It happened here by deleting the first term of a concatenation and leaving
+     the `+` that joined it, which is the most ordinary edit there is. Nothing catches it: it
+     parses, it lints, and the page renders the word NaN where the content should be. */
+  for (const page of PAGES) {
+    const src = read(page);
+    const bad = [...src.matchAll(/=\s*\n\s*\+\s*['"`]/g)];
+    assert.deepEqual(bad.map(m => m[0].replace(/\s+/g, ' ')), [],
+      `${page}: an assignment whose right-hand side starts with + and a string is NaN, `
+      + 'not concatenation -- the leading term was deleted and its + left behind');
+  }
+});
