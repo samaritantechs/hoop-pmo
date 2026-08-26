@@ -99,6 +99,38 @@ test('portal.html: the dashboard sales card compares money with money', () => {
     'comparing count to a shilling target is the bug this test exists for');
 });
 
+/* =======================================================================================
+   THE CUSTOMER PANEL IS A DRAWER.
+
+     "Clicking customer should open their panel as hopeloan does. not scroll to bottom"
+
+   It used to render into a #custDetail div below the table and scrollIntoView its way down,
+   so on a long deck the row you clicked scrolled off the top while the panel arrived at the
+   bottom. The regression that matters is somebody reinstating an inline container: that
+   would read as harmless in a diff and put the scrolling straight back.
+   ======================================================================================= */
+test('portal.html: the customer panel opens over the page, not below the table', () => {
+  const src = read('portal.html');
+  assert.ok(/function openCust\(c\)\{[\s\S]*?drawer\(/.test(src),
+    'openCust must render through drawer() -- an inline card is what caused the scrolling');
+  assert.doesNotMatch(src, /id="custDetail"/,
+    'the inline detail container is gone; reinstating it brings the scroll back');
+  assert.doesNotMatch(src, /\$\('#custCard'\)|closest\('#custCard'\)/,
+    'and so is every hook that existed only to chase that inline card around the page');
+});
+
+test('portal.html: a fixed panel is resized for the keyboard', () => {
+  /* position:fixed does not shrink to the visual viewport by itself on every Android
+     WebView, and a comment can ONLY be written from the app -- so the screen this matters
+     on is the only screen it is used on. */
+  const src = read('portal.html');
+  assert.match(src, /function fitPanelToKeyboard_/);
+  assert.ok(/function drawer\(html\)\{[\s\S]*?fitPanelToKeyboard_\('drawerBg'\)/.test(src),
+    'opening a drawer must fit it to the visible area');
+  assert.ok(/function closeDrawer\(\)\{[\s\S]*?style\.height=''/.test(src),
+    'and closing must clear it, or the next drawer opens as a letterbox');
+});
+
 for (const page of PAGES) {
   const src = read(page);
 

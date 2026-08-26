@@ -276,6 +276,16 @@ tbody tr:hover{background:var(--b50)}
 .fld label{display:block;font-size:11.5px;font-weight:700;color:var(--mut);margin-bottom:5px}
 .fld input,.fld select,.fld textarea{width:100%;padding:11px 12px;border:1.5px solid var(--line);
   border-radius:10px;background:var(--card);color:var(--ink)}
+/* The customer's facts, label left and value right -- HOPE's .facts, brought over with the
+   panel it belongs to. A run of "Agent: X · Guarantor: Y" sentences is read line by line;
+   two aligned columns are scanned, which is what somebody does with a phone to their ear. */
+.facts{background:var(--card);border:1px solid var(--gline);border-radius:var(--gr-sm);
+  padding:12px;margin-bottom:12px;box-shadow:var(--gsh-sm),var(--ghi)}
+.frow{display:flex;justify-content:space-between;gap:10px;padding:6px 0;
+  border-bottom:1px solid var(--line);font-size:12.5px}
+.frow:last-child{border-bottom:0}
+.frow span:first-child{color:var(--mut)}
+.frow b,.frow a{text-align:right;word-break:break-word}
 
 /* The tip, bottom right: present enough to be read, quiet enough to be ignored. */
 #tip{position:fixed;right:18px;bottom:18px;max-width:330px;background:var(--card);
@@ -474,9 +484,22 @@ function drawer(html){
   $('#drawer').innerHTML = html
     + '<button class="btn ghost w" style="margin-top:8px" onclick="closeDrawer()">Funga / Close</button>';
   $('#drawerBg').style.display='flex';
+  $('#drawer').scrollTop=0;        // a reopened drawer starts at the top, not where the last one ended
+  fitPanelToKeyboard_('drawerBg');
 }
-function closeDrawer(){ $('#drawerBg').style.display='none'; }
+function closeDrawer(){
+  var bg=$('#drawerBg');
+  bg.style.display='none';
+  /* Clear what fitPanelToKeyboard_ set. Without this a drawer opened later inherits the
+     height the keyboard forced on this one and opens as a letterbox. */
+  bg.style.height=''; bg.style.top='';
+}
 $('#drawerBg').onclick=function(e){ if(e.target===$('#drawerBg')) closeDrawer(); };
+/* Esc closes it, same as tapping outside. At a desk that is the reflex, and a panel that
+   ignores it reads as stuck. */
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'&&$('#drawerBg').style.display==='flex') closeDrawer();
+});
 
 /* THE THREE STATES A PANE CAN BE IN, in one place.
 
@@ -1487,73 +1510,56 @@ function svgRecoveryBars(pts){
   return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto;display:block">'
     +grid+bars+labels+'</svg>';
 }
-/* THE CUSTOMER CARD HAS TO STAY IN SIGHT WHILE A COMMENT IS BEING TYPED.
+/* THE COMMENT BOX HAS TO STAY IN SIGHT WHILE IT IS BEING TYPED INTO.
      "when someone wants to comment in app, the customer board doesnt rise, so they type
       without preview of whats being written"
 
-   scrollIntoView({block:'center'}) was NOT enough, and could not be: it centres the box in
-   the PAGE, and the page has no idea where the keyboard ends. On a handset that left the
-   comment box centred BEHIND the keyboard -- still typing blind, just a little higher.
-   ("the customer pannel doesnt rise enogh for one to see what they're typing")
+   This used to be forty lines of measuring, because the customer panel was an ordinary card
+   at the BOTTOM of the page flow: window.scrollBy could only move it while the document still
+   had room to scroll, and the card was usually the last thing on the page, so the scroll was
+   correct and simply had nowhere to go. The workaround gave the page temporary bottom padding
+   to scroll into.
 
-   So measure it rather than guess. visualViewport reports exactly how much screen is still
-   visible once the keyboard is up (offsetTop + height); the box's own rect says where it
-   sits. Scrolling by precisely the overlap plus a margin lands the box just above the keys
-   every time -- on any keyboard height, on any phone, with no magic numbers.
+   All of that was a consequence of WHERE the panel lived, and the panel has moved. A drawer
+   is position:fixed with its own internal scroll, so the field always has somewhere to go --
+   which is exactly why HOPE never needed the measuring. What HOPE does need, and what is
+   ported here, is one line: a fixed element does NOT shrink to the visual viewport by itself
+   on every Android WebView, so the panel is resized to the visible area when the keyboard
+   opens. Everything above it then works the way the CSS already said it would.
 
-   Asked more than once, because the keyboard slides in over roughly a quarter of a second
-   and the viewport shrinks in steps: a single measurement taken mid-animation is wrong by
-   however much was still moving. */
-var KB_FOCUS=null;
-/* WHY MEASURING ALONE WAS NOT ENOUGH -- the difference between HOPE and here.
-
-   HOPE's comment box lives in a DRAWER: `.drawer-bg` is position:fixed;inset:0 with
-   align-items:flex-end, and `.drawer` inside it is max-height:90vh;overflow:auto. A fixed
-   element re-anchors to the visible area on its own when the keyboard opens, and the drawer
-   scrolls INTERNALLY, so there is always somewhere for the field to go.
-
-   HOOP's #custCard is an ordinary card in the page flow. window.scrollBy can only move it
-   while the DOCUMENT still has room to scroll -- and the card is usually the last thing on
-   the page, so there is nothing underneath it to scroll into. The page hit its own bottom
-   and stopped, which is exactly "doesnt rise enough": the scroll was correct and simply had
-   nowhere to go.
-
-   So make room first. While a field is focused, the page is given bottom padding the height
-   of the keyboard; now the scroll has somewhere to travel, and the measured amount lands the
-   box above the keys. The padding is removed the moment focus leaves, so nothing about the
-   ordinary page changes. */
-function kbHeight_(){
-  var vv=window.visualViewport;
-  if(!vv) return 0;
-  return Math.max(0, (window.innerHeight||0) - vv.height - (vv.offsetTop||0));
+   It covers #scrIn too. The sign-in box is the same shape -- position:fixed, centred instead
+   of flush to the bottom -- and would hide the code field behind the keyboard for the same
+   reason, on the one screen nobody can get past. */
+function fitPanelToKeyboard_(id){
+  var vv=window.visualViewport, bg=document.getElementById(id);
+  if(!vv||!bg) return;
+  bg.style.height=vv.height+'px';
+  bg.style.top=vv.offsetTop+'px';
 }
-function kbRoom_(on){
-  var m=document.querySelector('main');
-  if(!m) return;
-  m.style.paddingBottom = on ? (kbHeight_()+120)+'px' : '';
-}
-function keepAboveKeyboard(el){
-  if(!el||!el.getBoundingClientRect) return;
-  kbRoom_(true);                               // room to scroll into, before measuring
-  var vv=window.visualViewport;
-  var r=el.getBoundingClientRect();
-  var visibleBottom=vv?(vv.offsetTop+vv.height):window.innerHeight;
-  var over=r.bottom+16-visibleBottom;          // +16 so it never sits flush on the keys
-  if(over>1){ try{ window.scrollBy({top:over,behavior:'smooth'}); }catch(err){ window.scrollBy(0,over); } }
-}
-document.addEventListener('focusin', function(e){
+(function(){
+  var vv=window.visualViewport; if(!vv) return;
+  var ids=['drawerBg','scrIn'];
+  function refit(){
+    ids.forEach(function(id){
+      var bg=document.getElementById(id);
+      if(bg&&bg.style.display!=='none'&&!bg.classList.contains('hide')) fitPanelToKeyboard_(id);
+    });
+  }
+  vv.addEventListener('resize',refit);
+  vv.addEventListener('scroll',refit);
+})();
+/* Belt and braces for a WebView slow to fire visualViewport's resize: once the keyboard's own
+   animation has had time to run, bring the field being typed into back inside its panel's
+   visible area, so even a late resize still ends with the words on screen. Delegated from the
+   document because the drawer's contents are rebuilt on every open. */
+document.addEventListener('focusin',function(e){
   var t=e.target;
   if(!t||!/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
-  if(!t.closest||!t.closest('#custCard')) return;
-  KB_FOCUS=t;
-  [120,300,520].forEach(function(ms){ setTimeout(function(){ if(KB_FOCUS===t) keepAboveKeyboard(t); },ms); });
+  if(!t.closest||!t.closest('#drawerBg, #scrIn')) return;
+  setTimeout(function(){
+    try{ t.scrollIntoView({block:'center',behavior:'smooth'}); }catch(err){ t.scrollIntoView(); }
+  },300);
 });
-document.addEventListener('focusout', function(e){
-  if(KB_FOCUS===e.target){ KB_FOCUS=null; setTimeout(function(){ if(!KB_FOCUS) kbRoom_(false); },80); }
-});
-if(window.visualViewport){
-  window.visualViewport.addEventListener('resize', function(){ keepAboveKeyboard(KB_FOCUS); });
-}
 
 /* THE DAY BEHIND THE BAR. Opened by the eye on a day's name; fetched on the tap, never with
    the chart. Every row carries the credit officer who held that customer -- taken from the
@@ -2039,7 +2045,7 @@ function custRender(m){
         +'<td>'+(r.fu?'<span class="chip">'+esc(r.fu)+'</span>':(r.paid?'<span class="chip ok">amelipa</span>':''))+'</td></tr>';
     }).join(''):'<tr><td colspan="9" class="mut">Hakuna mteja kwenye orodha hii bado.</td></tr>')
     +'</tbody></table></div></div>'
-    +'<div id="custDetail"></div><div id="custSrch"></div>';
+    +'<div id="custSrch"></div>';
   $all('[data-pl]',m).forEach(function(b){ b.onclick=function(){ CUST.list=b.getAttribute('data-pl'); CUST.sel=null; custRender(m); }; });
   $all('#custRows tr[data-ci]',m).forEach(function(tr){
     tr.onclick=function(){ openCust(rows[parseInt(tr.getAttribute('data-ci'),10)]); };
@@ -2075,12 +2081,24 @@ function custRender(m){
       }).catch(function(){});
     },350);
   });
-  if(CUST.sel) openCust(CUST.sel);
   // A hit from the header's everything-box lands here: open that customer's card.
   if(window.GOPEN){ var g0=window.GOPEN; window.GOPEN=null; openCust(g0); }
 }
+/* =======================================================================================
+   THE CUSTOMER PANEL OPENS OVER THE PAGE, as HOPE's does.
+
+     "Clicking customer should open their panel as hopeloan does. not scroll to bottom"
+
+   It used to render into a #custDetail div BELOW the table and then scrollIntoView its way
+   down to it. On a deck of three hundred that means the row you clicked scrolls off the top
+   while the panel arrives at the bottom, so you lose your place in the list and cannot see
+   the person you picked at the same time as their history. HOPE puts this in a drawer --
+   the same one openFollowup uses there -- and a drawer is the right shape for it: it covers
+   the page, it is dismissed with Esc or a tap outside, and the list underneath keeps its
+   scroll position, so closing it puts you back exactly where you were.
+   ======================================================================================= */
 function openCust(c){
-  var box=$('#custDetail'); if(!box||!c) return;
+  if(!c) return;
   CUST.sel=c;
   var d=CUST.data||{};
   /* THE FOLLOW-UP IS WRITTEN FROM THE PHONE, OR NOT AT ALL.
@@ -2097,30 +2115,34 @@ function openCust(c){
      everywhere; only the box to write in is absent. A reason on screen is an invitation to
      argue with it. */
   var canW=!BOOT.readOnly && fromApp_();
-  var h=telHref(c.phone);
   var fus=d.fuStatuses||[];
-  box.innerHTML=
-    '<div class="card" id="custCard"><h2>'+esc(c.name||'—')+' '+((c.branch||c.team)?'<span class="chip">'+esc(c.branch||c.team)+'</span>':'')+'</h2>'
-    +'<div class="mut" style="margin-bottom:6px">IMEI '+esc(c.imei)+(c.model?' · '+esc(c.model):'')+(c.price?' · TZS '+money(c.price):'')
+  /* A callable number is a LINK, everywhere it appears -- the whole reason somebody opens
+     this panel is to ring one of these three people. */
+  var tel=function(v){
+    var t=telHref(v);
+    return (v&&t!=='#')?'<a href="tel:'+t+'">'+esc(v)+'</a>':'<span>'+esc(v||'—')+'</span>';
+  };
+  drawer(
+    '<h3>'+esc(c.name||'—')+' '+((c.branch||c.team)?'<span class="chip">'+esc(c.branch||c.team)+'</span>':'')+'</h3>'
+    +'<div class="sub">IMEI '+esc(c.imei)+(c.model?' · '+esc(c.model):'')+(c.price?' · TZS '+money(c.price):'')
     +(c.lifeDay!=null?' · siku '+money(c.lifeDay)+'/45':'')+(c.daysOff!=null?' · OFF siku '+money(c.daysOff):'')+'</div>'
-    +'<div style="font-size:13.5px;margin-bottom:4px"><b>Agent (aliyemuuzia): '+esc(c.agent||'—')+'</b>'
-    +(c.agentPhone&&telHref(c.agentPhone)!=='#'?' · <a href="tel:'+telHref(c.agentPhone)+'">'+esc(c.agentPhone)+'</a>':'')+'</div>'
-    +'<div style="font-size:13.5px;margin-bottom:4px"><b>Mdhamini / Guarantor: '+(c.gName?esc(c.gName):'—')+'</b>'
-    +(c.gPhone&&telHref(c.gPhone)!=='#'?' · <a href="tel:'+telHref(c.gPhone)+'">'+esc(c.gPhone)+'</a>':'')+'</div>'
-    +(c.heldBy?'<div style="font-size:13.5px;margin-bottom:4px"><b>Anayefuatilia / Chasing: 👤 '+esc(c.heldBy)+'</b></div>':'')
-    +'<div style="font-size:13.5px;margin-bottom:10px">Simu: '+(h!=='#'?'<a href="tel:'+h+'">'+esc(c.phone)+'</a>':'—')
-    +' <span class="mut">(namba hii ndiyo ref ya malipo Watu)</span></div>'
-    +'<div id="custHist" class="mut">Inapakia historia…</div>'
+    +'<div class="facts">'
+    +'<div class="frow"><span>Simu ya mteja</span>'+tel(c.phone)+'</div>'
+    +'<div class="frow"><span>Agent (aliyemuuzia)</span><b>'+esc(c.agent||'—')
+      +(c.agentPhone&&telHref(c.agentPhone)!=='#'?' · <a href="tel:'+telHref(c.agentPhone)+'">'+esc(c.agentPhone)+'</a>':'')+'</b></div>'
+    +'<div class="frow"><span>Mdhamini / Guarantor</span><b>'+(c.gName?esc(c.gName):'—')
+      +(c.gPhone&&telHref(c.gPhone)!=='#'?' · <a href="tel:'+telHref(c.gPhone)+'">'+esc(c.gPhone)+'</a>':'')+'</b></div>'
+    +(c.heldBy?'<div class="frow"><span>Anayefuatilia / Chasing</span><b>👤 '+esc(c.heldBy)+'</b></div>':'')
+    +'</div>'
+    +'<div class="mut" style="font-size:11px;margin:-6px 0 12px">Namba ya mteja ndiyo ref ya malipo Watu.</div>'
+    +'<div class="card" style="padding:12px"><b style="font-size:13px">Historia / History</b>'
+    +'<div id="custHist" class="mut" style="margin-top:6px">Inapakia historia…</div></div>'
     +(canW?
-      '<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">'
-      +'<div class="row"><select class="inp" id="cmFu"><option value="">— Hali / status —</option>'
+      '<div class="fld"><label>Hali / status</label><select id="cmFu"><option value="">—</option>'
       +fus.map(function(s){ return '<option'+(c.fu===s?' selected':'')+'>'+esc(s)+'</option>'; }).join('')+'</select></div>'
       +'<div class="row hide" id="cmPromRow"><input class="inp" type="date" id="cmDate"><input class="inp" type="text" id="cmAmt" placeholder="Kiasi / amount (TZS)" inputmode="numeric"></div>'
-      +'<div class="row"><textarea class="inp" id="cmTxt" rows="2" placeholder="Maoni… / comment"></textarea></div>'
-      +'<button class="btn sm" id="cmSave">Hifadhi maoni / Save</button>'
-      +'</div>':'')
-    +'</div>';
-  var el=$('#custCard'); if(el&&el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'nearest'});
+      +'<div class="fld"><label>Maoni / comment</label><textarea id="cmTxt" rows="3"></textarea></div>'
+      +'<button class="btn w" id="cmSave">Hifadhi maoni / Save</button>':''));
   function hist(){
     srv('customerComments',{imei:c.imei}).then(function(x){
       var it=x.items||[];
