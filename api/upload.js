@@ -282,7 +282,7 @@ export default withApi(async (req) => {
   }
 
   enforceKind('watu');
-  const { records, teams, dropped } = importWatu(fileRows);
+  const { records, teams, dropped, columns, critical } = importWatu(fileRows);
   if (!records.length && !dropped.length) {
     const e = new Error('No data rows could be read from the file.'); e.status = 400; throw e;
   }
@@ -358,6 +358,12 @@ export default withApi(async (req) => {
     // spent a week being "mysteriously short".
     dropped: dropped.length,
     droppedRows: dropped.slice(0, 50),
+    /* WHAT THE PARSER COULD AND COULD NOT READ. `critical` names a column the day's work is
+       filtered by that arrived empty -- missing header, or matched and unparseable in every
+       row. Silence here is what let a whole deck of 7+ customers disappear from the
+       distribution while the upload reported a clean 2,689 rows. */
+    columns,
+    critical,
     part: { index, total, last: isLast },
   };
 });

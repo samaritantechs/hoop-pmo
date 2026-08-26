@@ -31,6 +31,8 @@ export function watuDate(v) {
     return v.getFullYear() + '-' + p(v.getMonth() + 1) + '-' + p(v.getDate());
   }
   const s = String(v).trim();
+  const p = n => (n < 10 ? '0' : '') + n;
+  const yearOf = t => { const y = parseInt(t, 10); return t.length === 2 ? (y < 50 ? 2000 + y : 1900 + y) : y; };
   // 13-Jul-26 / 13-Jul-2026 / 13 Jul 26 / 1-Dec-25
   const m = s.match(/^(\d{1,2})[\s\-\/]([A-Za-z]{3,9})[\s\-\/](\d{2}|\d{4})$/);
   if (m) {
@@ -38,10 +40,29 @@ export function watuDate(v) {
     if (!mon) return null;
     const d = parseInt(m[1], 10);
     if (d < 1 || d > 31) return null;
-    let y = parseInt(m[3], 10);
-    if (m[3].length === 2) y = y < 50 ? 2000 + y : 1900 + y;
-    const p = n => (n < 10 ? '0' : '') + n;
-    return y + '-' + p(mon) + '-' + p(d);
+    return yearOf(m[3]) + '-' + p(mon) + '-' + p(d);
+  }
+  /* MONTH FIRST, WITH A COMMA: "Aug 17, 2026". This is what Watu's Dealership Sales export
+     actually writes, and nothing here read it -- so disbursed_date came back null for EVERY
+     row of a 2,689-line deck.
+
+     That one null is not a cosmetic gap. lifeDayOf(null) is null, so inWindowOf is false, so
+     every customer looked like they were past day 45: the officers' "Lock 7+" tab filters on
+     the window and showed nothing, the credit deal put all of them in the OUT stratum, and
+     the dashboard's "ndani ya siku 45" counted zero. The credits uploaded a perfectly good
+     file -- 292 rows genuinely flagged 7+ -- and the system quietly answered that none of
+     them existed. ("the credits tell me they uploaded well yet 7+ people aint seen in the
+     distribution")
+
+     The comma is optional and the month may be spelled out, because a format that changed
+     once will change again. */
+  const mf = s.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{2}|\d{4})$/);
+  if (mf) {
+    const mon = MONTHS[mf[1].slice(0, 3).toUpperCase()];
+    if (!mon) return null;
+    const d = parseInt(mf[2], 10);
+    if (d < 1 || d > 31) return null;
+    return yearOf(mf[3]) + '-' + p(mon) + '-' + p(d);
   }
   // Anything else (ISO, d/m/yyyy) falls through to Hope's parser, day-first like the region.
   return dateOrNull(s, true);
@@ -484,5 +505,36 @@ export function importWatu(rows) {
       if (j >= 0) records[j] = out;
     } else { seen.add(imei); records.push(out); }
   }
-  return { records, teams: [...teams], dropped, headers: present.map(p => p[0]) };
+  /* =====================================================================================
+     WHAT WAS READ, AND WHAT CAME BACK EMPTY.
+
+     The note on WATU_COLS says it outright: a header that matches nothing is
+     indistinguishable from a column of empty cells. That was true of `headers` too -- it
+     was computed here and then thrown away by the caller, so an upload said "2,689 rows
+     inserted" in exactly the same words whether a column was read, missing, or matched and
+     unparseable in every single row.
+
+     The last one is what actually happened. Disbursed Date matched its header and then
+     failed to parse on all 2,689 rows, because Watu writes "Aug 17, 2026" and every pattern
+     here was day-first. Nothing said so, so nobody knew until the credits noticed their 7+
+     customers had vanished from the distribution.
+
+     `blank` is the number that would have caught it: a column that is PRESENT and empty
+     everywhere is a parser that does not understand this file, and the upload can now say
+     so on the spot instead of leaving somebody to infer it from a missing tab days later. */
+  const filled = key => records.reduce((n, r) => n + (r[key] != null && r[key] !== '' ? 1 : 0), 0);
+  const cols = WATU_COLS.map(([key, , ...names]) => {
+    const found = names.some(n => h[normalizeHeader(n)] !== undefined);
+    const has = found ? filled(key) : 0;
+    return { key, found, filled: has, blank: found ? records.length - has : records.length };
+  });
+  return {
+    records, teams: [...teams], dropped,
+    headers: present.map(p => p[0]),
+    columns: cols,
+    // Named separately because these three are what the day's work is filtered by, and an
+    // empty one of these is not a cosmetic gap -- it empties a screen.
+    critical: cols.filter(c => ['disbursed_date', 'locked7', 'locked4', 'days_offline'].includes(c.key)
+      && (!c.found || c.filled === 0)).map(c => c.key),
+  };
 }

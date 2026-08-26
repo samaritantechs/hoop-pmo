@@ -330,7 +330,7 @@ $('#send').onclick = function(){
   var header = AOA[0], data = AOA.slice(1);
   var total = Math.max(1, Math.ceil(data.length / SLICE));
   var batch = uuid_();
-  var sent = 0, inserted = 0, droppedAll = [];
+  var sent = 0, inserted = 0, droppedAll = [], CRIT = null;
   $('#send').disabled = true;
   $('#bar').style.display = 'block'; $('#barFill').style.width = '2%';
   show('Uploading…', 'ok');
@@ -346,6 +346,9 @@ $('#send').onclick = function(){
         if (x.s < 200 || x.s >= 300 || x.b.ok === false) throw new Error((x.b && x.b.error) || ('HTTP ' + x.s));
         sent++; inserted += x.b.inserted || 0;
         (x.b.droppedRows || []).forEach(function(d){ droppedAll.push(d); });
+        // A column the day's work is filtered by that arrived empty. Kept from the FIRST
+        // part that reports it -- every slice carries the same headers, so one is the truth.
+        if (!CRIT && x.b.critical && x.b.critical.length) CRIT = x.b.critical;
         $('#barFill').style.width = Math.round(100*sent/total) + '%';
         if (sent < total) return part(sent);
         var srvKind = x.b.kind || 'watu';
@@ -361,6 +364,30 @@ $('#send').onclick = function(){
         if (droppedAll.length) t += '\nRejected rows (' + droppedAll.length + '): '
           + droppedAll.slice(0,10).map(function(d){ return d.name + ' (' + d.imei + ')'; }).join('; ')
           + (droppedAll.length > 10 ? ' …' : '');
+        /* THE UPLOAD THAT LOOKED PERFECT AND WAS NOT.
+           A deck of 2,689 rows went in reporting exactly this success message while its
+           Disbursed Date column failed to parse on every single row -- Watu writes
+           "Aug 17, 2026" and the parser only knew day-first shapes. One null date makes a
+           customer look older than 45 days, so the officers' Lock 7+ tab emptied, the credit
+           deal put everybody in the OUT stratum, and nobody could tell why. The file was
+           fine. The message was the problem: it could not distinguish a column that was read
+           from one that was missing or unreadable.
+           Now it can, and it says so loudly enough to stop the day. */
+        if (CRIT && CRIT.length) {
+          var NAMES = { disbursed_date:'Disbursed Date', locked7:'Locked 7+ Days',
+                        locked4:'Locked 4+ Days', days_offline:'Days Offline' };
+          show(t + '\n\n\u26a0 SOMA HII / READ THIS: hizi safu hazikusomeka \u2014 '
+            + CRIT.map(function(k){ return NAMES[k] || k; }).join(', ')
+            + '. Zimekosekana kwenye faili, au muundo wake umebadilika na mfumo haujausoma. '
+            + 'Bila hizi, wateja hawataonekana kwenye orodha ya 7+ wala ndani ya siku 45. '
+            + 'Mwambie msimamizi kabla ya kuendelea.'
+            + '\n/ These columns could not be read \u2014 missing from the file, or their format '
+            + 'changed and the parser does not understand it. Without them customers will not '
+            + 'appear in the 7+ list or inside the 45-day window. Report this before relying '
+            + 'on today\u2019s lists.', 'bad');
+          $('#send').disabled = false;
+          return;
+        }
         show(t, 'ok');
         $('#send').disabled = false;
       });
