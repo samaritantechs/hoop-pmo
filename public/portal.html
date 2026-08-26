@@ -230,6 +230,8 @@ td.r,th.r{text-align:right}
 
 /* A row that answers the pointer is how an eye follows one customer across eight columns. */
 tbody tr:hover{background:var(--b50)}
+/* The totals line, weighted so the eye stops at it. HOPE's .totrow -- same name, same job. */
+tr.totrow td{font-weight:800;background:var(--b50);border-top:2px solid var(--b100)}
 /* One class for the sideways scroll every wide table needs, instead of inline overflow
    repeated at sixteen call sites. */
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
@@ -827,14 +829,51 @@ function busy(on){
   BUSY=Math.max(0,BUSY+(on?1:-1));
   var b=$('#busy'); if(b) b.classList.toggle('on',BUSY>0);
 }
-function srv(fn,args){
+/* =======================================================================================
+   A DROPPED REQUEST IS NOT A FAILED SCREEN.
+
+     "on settings: Imeshindikana / Could not load. Failed to fetch"
+
+   "Failed to fetch" is not the server saying no -- it is fetch() rejecting because no
+   response arrived at all. settings() is one bounded read of eight keys; it cannot be slow
+   and it cannot crash. So the request did not complete: a handset that changed tower
+   mid-request, a moment of no signal, a connection reset while a deploy swapped over.
+
+   There was NO retry anywhere in this client. One dropped packet on mobile data and the
+   pane died with a message nobody can act on. For officers working on patchy connections
+   that is not an edge case -- it is Tuesday.
+
+   So a fetch-level rejection is retried, twice, backing off. An HTTP ERROR IS NOT RETRIED:
+   a 400 or a 403 is the server answering, and asking again gets the same answer.
+
+   WHY RETRYING A POST IS SAFE HERE, EXCEPT ONCE. A rejected fetch is ambiguous -- the
+   server may have processed it before the answer was lost -- so a retry can duplicate a
+   write. Every write this client makes is idempotent by construction: settingSet upserts,
+   notifSeen moves a watermark to now, deviceEnrol skips what is already enrolled,
+   deviceSetState writes no event when the state does not move. The exception is
+   portalAddComment, which APPENDS -- retrying it could post a follow-up twice, and a
+   duplicated comment in a customer's history is a small lie about what happened. It is on
+   the deny-list, and anything added later that appends belongs there too. */
+var NO_RETRY={portalAddComment:1};
+function srv(fn,args,tries){
+  tries=tries||0;
   busy(true);
   return fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({code:CODE,fn:fn,args:args||{}})})
   .then(function(r){ return r.text().then(function(t){ var b; try{b=JSON.parse(t);}catch(e){throw new Error('Server error HTTP '+r.status);}
-    if(r.status<200||r.status>=300||b.ok===false) throw new Error(b.error||('HTTP '+r.status)); return b; }); })
+    if(r.status<200||r.status>=300||b.ok===false){ var er=new Error(b.error||('HTTP '+r.status)); er.answered=true; throw er; } return b; }); })
   .then(function(v){ busy(false); return v; },
-        function(e){ busy(false); throw e; });
+        function(e){
+          busy(false);
+          var dropped=!e||!e.answered;          // no response at all, as opposed to a refusal
+          if(dropped&&!NO_RETRY[fn]&&tries<2){
+            return new Promise(function(res){ setTimeout(res,tries?1500:500); })
+              .then(function(){ return srv(fn,args,tries+1); });
+          }
+          if(dropped) e=new Error('Mtandao umekatika — imejaribu mara '+(tries+1)+'. Angalia intaneti kisha bofya ↻. '
+            + '/ The request never reached the server; tried '+(tries+1)+' times. Check the connection, then tap ↻.');
+          throw e;
+        });
 }
 
 $('#inBtn').onclick=function(){
@@ -1909,99 +1948,132 @@ function drawStockAccount(m){
    TZS per day -- plus the week total; the company pivot is the same shape with one row.
    The target line is SALES_DAILY_TARGET (TZS/day) from settings: each day is measured
    against it, and the row total against target x 7. */
-var SALESPERF={week:'',pivot:'general'};
+var SALESPERF={week:'',pivot:'general',data:null,at:0};
+/* =======================================================================================
+   SALES PERFORMANCE -- one fetch per WEEK, and no bars.
+
+     "Speed is still an issue like i was tryna pull sales by roles it loads too much"
+     "On sales performance remove the bars in rows it just longens the report too bad"
+
+   THE SPEED PROBLEM WAS THE PIVOT BUTTONS, and it was entirely self-inflicted. salesWeek
+   returns ALL FOUR pivots in one payload -- general, RSM, agent, company are computed from
+   the same rows in the same pass -- and the pivot buttons then called drawSalesPerf(), which
+   wiped the pane to a spinner and went back to the server for a payload it was already
+   holding. Four ways to look at one week meant four round trips to see them. Switching now
+   re-renders from what is in hand; only the WEEK arrows fetch, because only they change the
+   answer.
+
+   THE BARS WERE THE LENGTH PROBLEM. Every day cell carried a 46px column plus a number under
+   it, so one person's week was ~70px of screen -- twenty agents and the report is fifteen
+   hundred pixels of mostly whitespace, scrolled past to reach a total. A sales report is
+   read by comparing numbers along a row and down a column, which is what a table is for. One
+   line per person now, and it is a real <table>, so it also gets the Excel export and the
+   column filters every other table here has -- which the hand-built grid never could.
+
+   What the bars encoded is kept: a day that met the target is green, and the day's TZS is on
+   the cell's tooltip. Nothing that was legible is gone -- only the pixels around it.
+   ======================================================================================= */
 function drawSalesPerf(m){
+  // Held for five minutes, keyed by week: the same window the server caches for, so the two
+  // cannot disagree about which week is "current".
+  var fresh=SALESPERF.data&&SALESPERF.data.__wk===SALESPERF.week&&(Date.now()-SALESPERF.at)<5*60000;
+  if(fresh) return salesRender(m);
   m.innerHTML='<div class="card"><h2>Sales performance</h2><div class="sk"></div></div>';
   srv('salesWeek',{week:SALESPERF.week}).then(function(d){
-    var target=d.dailyTarget||0;
-    var pivots=[['general','General duty'],['rsm','RSM'],['agent','Commission agent'],['company','Company']];
-    var bar='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'
-      +'<button class="btn sm ghost" id="spPrev" title="previous week">◀</button>'
-      +'<span style="font-size:12px;font-weight:600">'+esc(d.from||'')+' → '+esc(d.to||'')+'</span>'
-      +'<button class="btn sm ghost" id="spNext" title="next week">▶</button>'
-      +(d.thisWeek?'<span class="chip">wiki hii / this week</span>'
-        :'<button class="btn sm" id="spNow">Rudi wiki hii / this week</button>')
-      +(d.fellBack ? '<span class="chip warn">bado hakuna mauzo wiki hii / no sales yet this week</span>' : '')
-      +'<span style="flex:1"></span>'
-      +'<span class="mut" style="font-size:11.5px">Lengo / target: '
-        +(target?money(target)+' TZS/siku · '+money(d.weekTarget)+' /wiki':'—')+'</span>'
-      +'</div>';
-    var tabs='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
-      +pivots.map(function(p){
-        return '<button class="btn sm'+(SALESPERF.pivot===p[0]?'':' ghost')+'" data-sp="'+p[0]+'">'+p[1]+'</button>';
-      }).join('')+'</div>';
-
-    // Company is one synthetic row so the grid renders it identically to a per-person pivot.
-    var rows = SALESPERF.pivot==='company'
-      ? [{ name:'Company / jumla', days:d.company.days, count:d.company.count, amount:d.company.amount }]
-      : (d[SALESPERF.pivot]||[]);
-
-    var body;
-    if(!rows.length){
-      body='<div class="mut">Hakuna mauzo kwa wiki hii — pakia faili la mauzo (hoopltd.shop) kisha rudi hapa. '
-        +'/ No sales for this week yet; upload the sales file and come back.</div>';
-    } else {
-      // One ceiling across every row and day, so bars compare by eye. The daily target,
-      // if set, is drawn as a reference line inside each day cell.
-      var max=1;
-      rows.forEach(function(r){ d.days.forEach(function(dd){ var c=r.days[dd]; if(c&&c.amount>max) max=c.amount; }); });
-      if(target>max) max=target;
-      var dayName=function(iso){ return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(iso+'T00:00:00').getDay()]; };
-      var head='<div style="display:grid;grid-template-columns:150px repeat(7,1fr) 92px;gap:4px;'
-        +'background:var(--b50);border:1px solid var(--line);border-radius:9px 9px 0 0;padding:7px 6px;'
-        +'font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase">'
-        +'<div>'+esc(pivots.filter(function(p){return p[0]===SALESPERF.pivot;})[0][1])+'</div>'
-        +d.days.map(function(dd){ return '<div style="text-align:center">'+esc(dayName(dd))
-          +'<div style="font-size:9px;color:var(--soft);font-weight:600">'+esc(dd.slice(5))+'</div></div>'; }).join('')
-        +'<div style="text-align:right">Wiki / week</div></div>';
-      var grid=rows.map(function(r){
-        var cells=d.days.map(function(dd){
-          var c=r.days[dd];
-          if(!c||!c.amount){
-            return '<div style="text-align:center"><div style="height:46px;display:flex;align-items:flex-end;justify-content:center">'
-              +'<div style="color:var(--soft);font-size:11px;padding-bottom:14px">—</div></div>'
-              +'<div style="font-size:9.5px;color:var(--soft);text-align:center">&nbsp;</div></div>';
-          }
-          var h=Math.max(3,Math.round(46*c.amount/max));
-          var hit=target&&c.amount>=target;
-          var tLine=target?'<div style="position:absolute;left:-2px;right:-2px;bottom:'+Math.round(46*target/max)
-            +'px;border-top:1.5px dashed var(--mut);opacity:.5"></div>':'';
-          return '<div style="text-align:center">'
-            +'<div style="height:46px;display:flex;align-items:flex-end;justify-content:center;position:relative">'
-            +tLine+'<div style="width:20px;height:'+h+'px;background:'+(hit?'var(--ok)':'var(--b100)')+';border-radius:4px"></div></div>'
-            +'<div style="font-size:9.5px;text-align:center;font-weight:600;margin-top:2px">'+money(c.count)+'</div></div>';
-        }).join('');
-        var overTarget=target?(r.amount>=d.weekTarget):null;
-        return '<div style="display:grid;grid-template-columns:150px repeat(7,1fr) 92px;gap:4px;align-items:end;'
-          +'padding:8px 6px;border:1px solid var(--line);border-top:0">'
-          +'<div style="font-size:12.5px"><b>'+esc(r.name)+'</b>'
-          +'<div class="mut" style="font-size:10.5px">'+money(r.count)+' simu</div></div>'
-          +cells
-          +'<div style="text-align:right;align-self:center"><b style="font-size:12.5px'
-            +(overTarget===true?';color:var(--ok)':(overTarget===false?';color:var(--mut)':''))+'">'
-            +money(r.amount)+'</b>'
-          +(target?'<div class="mut" style="font-size:9.5px">'+(overTarget?'✓ lengo':Math.round(100*r.amount/d.weekTarget)+'%')+'</div>':'')
-          +'</div></div>';
-      }).join('');
-      body=head+grid
-        +'<div class="mut" style="font-size:10.5px;margin-top:8px">Nambari chini ya kila baa = idadi ya simu siku hiyo · '
-        +'urefu = thamani (TZS) · kijani = imefika lengo la siku · mstari wa vitone = lengo la siku. '
-        +(target?'':'Weka <b>SALES_DAILY_TARGET</b> kwenye Settings ili uone mstari wa lengo.')
-        +'</div>';
-    }
-    m.innerHTML='<div class="card"><h2>Sales performance</h2>'
-      +'<div class="mut" style="margin-bottom:8px">Mauzo ya kila siku, yaliyofuatiliwa kwa: mhudumu (general duty), RSM, wakala wa komisheni, na jumla ya kampuni. '
-      +'/ Daily sales pivoted by general duty, RSM, commission agent, and company.</div>'
-      +bar+tabs+body+'</div>';
-    var step=function(n){
-      var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
-      base.setUTCDate(base.getUTCDate()+7*n); SALESPERF.week=base.toISOString().slice(0,10); drawSalesPerf(m);
-    };
-    var p=$('#spPrev'); if(p) p.onclick=function(){ step(-1); };
-    var nx=$('#spNext'); if(nx) nx.onclick=function(){ step(1); };
-    var nw=$('#spNow'); if(nw) nw.onclick=function(){ SALESPERF.week=''; drawSalesPerf(m); };
-    $all('[data-sp]').forEach(function(b){ b.onclick=function(){ SALESPERF.pivot=b.getAttribute('data-sp'); drawSalesPerf(m); }; });
+    d.__wk=SALESPERF.week; SALESPERF.data=d; SALESPERF.at=Date.now();
+    salesRender(m);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function salesRender(m){
+  var d=SALESPERF.data; if(!d) return;
+  var target=d.dailyTarget||0;
+  var pivots=[['general','General duty'],['rsm','RSM'],['agent','Commission agent'],['company','Company']];
+  var bar='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'
+    +'<button class="btn sm ghost" id="spPrev" title="previous week">◀</button>'
+    +'<span style="font-size:12px;font-weight:600">'+esc(d.from||'')+' → '+esc(d.to||'')+'</span>'
+    +'<button class="btn sm ghost" id="spNext" title="next week">▶</button>'
+    +(d.thisWeek?'<span class="chip">wiki hii / this week</span>'
+      :'<button class="btn sm" id="spNow">Rudi wiki hii / this week</button>')
+    +(d.fellBack ? '<span class="chip warn">bado hakuna mauzo wiki hii / no sales yet this week</span>' : '')
+    +'<span style="flex:1"></span>'
+    +'<span class="mut" style="font-size:11.5px">Lengo / target: '
+      +(target?money(target)+' TZS/siku · '+money(d.weekTarget)+' /wiki':'—')+'</span>'
+    +'</div>';
+  var tabs='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+    +pivots.map(function(p){
+      return '<button class="btn sm'+(SALESPERF.pivot===p[0]?'':' ghost')+'" data-sp="'+p[0]+'">'+p[1]+'</button>';
+    }).join('')+'</div>';
+
+  // Company is one synthetic row so the table renders it identically to a per-person pivot.
+  var rows = SALESPERF.pivot==='company'
+    ? [{ name:'Company / jumla', days:d.company.days, count:d.company.count, amount:d.company.amount }]
+    : (d[SALESPERF.pivot]||[]);
+
+  var body;
+  if(!rows.length){
+    body='<div class="mut">Hakuna mauzo kwa wiki hii — pakia faili la mauzo (hoopltd.shop) kisha rudi hapa. '
+      +'/ No sales for this week yet; upload the sales file and come back.</div>';
+  } else {
+    // Three letters, not "Wednesday": a full name is an unbreakable ~58px token and seven of
+    // them set the table's minimum width wider than the pane.
+    var dayName=function(iso){ return ['Jpi','Jtt','Jnn','Jtn','Alh','Iju','Jmo'][new Date(iso+'T00:00:00').getDay()]; };
+    var who=pivots.filter(function(p){return p[0]===SALESPERF.pivot;})[0][1];
+    // Column totals, so the bottom row answers "what did the whole company do on Tuesday" --
+    // the question a per-person table otherwise makes you add up by hand.
+    var colC={},colA={};
+    d.days.forEach(function(dd){ colC[dd]=0; colA[dd]=0; });
+    rows.forEach(function(r){ d.days.forEach(function(dd){
+      var c=r.days[dd]; if(c){ colC[dd]+=c.count; colA[dd]+=c.amount; } }); });
+    var totC=rows.reduce(function(s,r){ return s+r.count; },0);
+    var totA=rows.reduce(function(s,r){ return s+r.amount; },0);
+
+    var cell=function(c){
+      if(!c||!c.count) return '<td class="r"><span style="color:var(--soft)">—</span></td>';
+      var hit=target&&c.amount>=target;
+      return '<td class="r"'+(hit?' style="color:var(--ok);font-weight:700"':'')
+        +' title="'+money(c.amount)+' TZS">'+money(c.count)+'</td>';
+    };
+    body='<div class="scroll"><table><thead><tr><th>'+esc(who)+'</th>'
+      +d.days.map(function(dd){
+        return '<th class="r" title="'+esc(dd)+'">'+esc(dayName(dd))
+          +'<div style="font-size:9px;color:var(--soft);font-weight:600">'+esc(dd.slice(5))+'</div></th>'; }).join('')
+      +'<th class="r">Simu</th><th class="r">TZS / wiki</th>'+(target?'<th class="r">Lengo</th>':'')+'</tr></thead><tbody>'
+      +rows.map(function(r){
+        var overTarget=target?(r.amount>=d.weekTarget):null;
+        return '<tr><td><b>'+esc(r.name)+'</b></td>'
+          +d.days.map(function(dd){ return cell(r.days[dd]); }).join('')
+          +'<td class="r">'+money(r.count)+'</td>'
+          +'<td class="r"><b'+(overTarget===true?' style="color:var(--ok)"':'')+'>'+money(r.amount)+'</b></td>'
+          +(target?'<td class="r">'+(overTarget?'<span class="chip ok">✓</span>'
+              :'<span class="mut">'+Math.round(100*r.amount/d.weekTarget)+'%</span>')+'</td>':'')
+          +'</tr>';
+      }).join('')
+      +'</tbody><tfoot><tr class="totrow"><td><b>Jumla / total</b></td>'
+      +d.days.map(function(dd){
+        return '<td class="r" title="'+money(colA[dd])+' TZS">'+(colC[dd]?money(colC[dd]):'—')+'</td>'; }).join('')
+      +'<td class="r"><b>'+money(totC)+'</b></td><td class="r"><b>'+money(totA)+'</b></td>'
+      +(target?'<td></td>':'')+'</tr></tfoot></table></div>'
+      +'<div class="mut" style="font-size:10.5px;margin-top:8px">Kila nambari = idadi ya simu siku hiyo; '
+      +'gusa/weka kishale juu yake kuona thamani (TZS). <b style="color:var(--ok)">Kijani</b> = siku imefika lengo. '
+      +(target?'':'Weka <b>SALES_DAILY_TARGET</b> kwenye Settings ili uone lengo.')
+      +'</div>';
+  }
+  m.innerHTML='<div class="card"><h2>Sales performance</h2>'
+    +'<div class="mut" style="margin-bottom:8px">Mauzo ya kila siku, yaliyofuatiliwa kwa: mhudumu (general duty), RSM, wakala wa komisheni, na jumla ya kampuni. '
+    +'/ Daily sales pivoted by general duty, RSM, commission agent, and company.</div>'
+    +bar+tabs+body+'</div>';
+  var step=function(n){
+    var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
+    base.setUTCDate(base.getUTCDate()+7*n);
+    SALESPERF.week=base.toISOString().slice(0,10); SALESPERF.data=null; drawSalesPerf(m);
+  };
+  var p=$('#spPrev'); if(p) p.onclick=function(){ step(-1); };
+  var nx=$('#spNext'); if(nx) nx.onclick=function(){ step(1); };
+  var nw=$('#spNow'); if(nw) nw.onclick=function(){ SALESPERF.week=''; SALESPERF.data=null; drawSalesPerf(m); };
+  /* NO FETCH HERE. The payload already holds every pivot -- this only chooses which of them
+     to draw, which is the whole point of the change. */
+  $all('[data-sp]').forEach(function(b){ b.onclick=function(){
+    SALESPERF.pivot=b.getAttribute('data-sp'); salesRender(m); }; });
 }
 
 /* ---------- wateja / customers ----------
