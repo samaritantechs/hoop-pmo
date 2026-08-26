@@ -2747,6 +2747,58 @@ function drawSettings(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* =====================================================================================
+   THE STATUS BAR, MEASURED RATHER THAN ASSUMED -- the portal's half.
+
+   Same reasoning, same numbers, same rule as call.html; see the long note there. Two
+   differences that matter on this page:
+
+     the bar is .top, not header.top -- white, not navy
+     the sidebar's brand sits at the same height, so it takes the inset too, or the header
+     clears the clock and the brand beside it still does not
+
+   Only inside the app: fromApp_() is the proof, because a desktop browser legitimately
+   fills the screen with nothing drawn over it and would otherwise be padded for nothing. */
+function statusBarFit_(){
+  if (!fromApp_()) return null;
+  var bar = document.querySelector('.top');
+  if (!bar) return null;
+  var scrH = (window.screen && window.screen.height) || 0;
+  var viewH = document.documentElement.clientHeight || window.innerHeight || 0;
+  var gap = scrH - viewH;
+  var inset = 0;
+  try {
+    var probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;top:0;left:0;width:1px;pointer-events:none;'
+      + 'visibility:hidden;height:env(safe-area-inset-top,0px)';
+    document.body.appendChild(probe);
+    inset = Math.round(probe.getBoundingClientRect().height) || 0;
+    probe.parentNode.removeChild(probe);
+  } catch (e) {}
+
+  var pad = 0;
+  if (gap < 16) {                                   // edge-to-edge: the clock is over us
+    pad = inset > 0 ? inset : 28;
+    bar.style.paddingTop = (11 + pad) + 'px';
+    var side = document.querySelector('aside.side');
+    if (side) side.style.paddingTop = (14 + pad) + 'px';
+  }
+  return { scrH: scrH, viewH: viewH, gap: gap, inset: inset, pad: pad, dpr: window.devicePixelRatio || 1 };
+}
+function statusBarDiag_(m){
+  if (!m) return;
+  var bar = document.querySelector('.top');
+  if (!bar || !bar.parentNode) return;
+  var d = document.createElement('div');
+  d.id = 'sbDiag';
+  d.style.cssText = 'background:#FEF3C7;color:#3F2D00;font:600 11.5px/1.45 monospace;'
+    + 'padding:7px 10px;border-bottom:1px solid #F59E0B;word-break:break-all;flex:0 0 auto';
+  d.textContent = 'screen ' + m.scrH + ' · view ' + m.viewH + ' · gap ' + m.gap
+    + ' · inset ' + m.inset + ' · pad ' + m.pad + ' · dpr ' + m.dpr;
+  bar.parentNode.insertBefore(d, bar.nextSibling);
+}
+setTimeout(function(){ try { statusBarDiag_(statusBarFit_()); } catch(e){} }, 350);
+
 </script>
 </body>
 </html>
