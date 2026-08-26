@@ -126,6 +126,36 @@ The phone says hello the moment it is enrolled, so it should show up on the regi
 the box is still open. If it does not, provisioning did not take — check it there and then,
 not after it has been reboxed.
 
+### 4. Lock it BEFORE you box it
+
+This is the step that makes stock locking work, and the one that is easy to get backwards.
+
+**An order to lock only reaches a phone that is online.** The handset asks what it should be
+doing every 15 minutes; a command is never queued or pushed — it is recomputed from `state`
+and handed over on the next beat. A phone that is already boxed, switched off, with no SIM
+and no wifi, will never hear it. Ticking **Funga** on a shelf full of boxes therefore changes
+a column in the register and *nothing on the phones*, which is exactly the false sense of
+security this system exists to avoid.
+
+So while the handset is still on the bench and still online:
+
+1. Tick it → **Funga** → reason (`stock, unsold` does fine).
+2. **Wait for the register to say confirmed, not pending.** Pending means the office has
+   decided and the phone has not yet agreed. Only confirmed means the lock screen is actually
+   up on that handset.
+3. *Then* power it off and box it.
+
+From that moment the phone carries its own lock. `Prefs.LOCKED` is written on the handset and
+`BootReceiver` restores it on every boot **with no network at all** — so a box that walks out
+of the store powers on locked, stays locked through as many reboots as anyone tries, and
+cannot be factory reset out of it. The thief gets a brick with our phone number on it.
+
+Unlock is the sale: **Fungua** when the phone is handed to a customer, with the handset online
+so it hears within about fifteen minutes. Record the customer or sale reference at the same
+time — that is what switches the offline rule from "never self-lock" to the grace window
+below, and a sold phone left looking like stock is a phone that can be kept in airplane mode
+forever.
+
 ---
 
 ## Day to day
