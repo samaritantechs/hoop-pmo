@@ -47,20 +47,41 @@ input,select,textarea{font-family:inherit}
    the identity and the exits sit at the bottom of the column where they stop competing
    with the tabs, and the table gets the whole width of whatever screen it is on.
    ===================================================================================== */
-.shell{display:flex;height:100%}
+/* THE HEIGHT HAS TO COME FROM THE WINDOW, not from a chain of percentages.
+
+   `.shell{height:100%}` alone did not work, and this is why: percentage height resolves
+   against the PARENT's height, and #scrApp -- the wrapper between <body> and the shell --
+   had none. So the chain broke there, the shell fell back to the height of its contents,
+   and the sidebar grew as long as whatever table was on screen. Logout ended up somewhere
+   past the bottom of a stock report.
+
+   Viewport units cut the chain out entirely: 100dvh is the window, whatever any ancestor
+   is doing. dvh rather than vh because on a phone vh is the height WITHOUT the address
+   bar, so the foot of the column sits under it; vh stays first as the fallback for the
+   older WebViews this runs in. */
+#scrApp{height:100vh;height:100dvh;overflow:hidden}
+.shell{display:flex;height:100%;min-height:0}
 
 /* The navy is --b900, the same shade the phone app's header uses -- not the darkest in the
    ramp. A near-black column the full height of the screen next to a white page is what
    makes a system read as hard; one step lighter is the colour it was meant to match. */
 aside.side{width:236px;flex:0 0 auto;background:var(--b900);color:#cfe0ff;
-  display:flex;flex-direction:column;padding:14px 12px}
+  display:flex;flex-direction:column;padding:14px 12px;min-height:0}
+/* Neither of these may be squeezed: the brand anchors the top and the foot holds Logout. */
+.side .brand,.side .foot{flex:0 0 auto}
 .side .brand{display:flex;align-items:center;gap:9px;color:#fff;font-weight:800;font-size:14px;line-height:1.3}
 .side .brand svg{width:40px;flex:0 0 40px}
 .side .brand small{display:block;color:var(--b300);font-weight:500;font-size:10.5px;margin-top:2px;letter-spacing:.04em}
 
 /* THE NAV ITSELF. It scrolls inside the column when the list outgrows the window, so the
    brand above it and the identity below it never move. */
-.tabs{margin-top:16px;display:flex;flex-direction:column;gap:2px;flex:1;overflow:auto}
+/* min-height:0 is the other half of the fix, and it is not optional. A flex item's default
+   min-height is `auto`, which means "never shrink below your own content" -- so `flex:1`
+   plus `overflow:auto` does NOT produce a scrolling box, it produces a box that grows to
+   fit and pushes whatever follows it out of view. That is what put the foot off-screen
+   even once the height was right. Same reason it is on .body below. */
+.tabs{margin-top:16px;display:flex;flex-direction:column;gap:2px;
+  flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .tabs button{display:flex;align-items:center;gap:9px;width:100%;text-align:left;
   background:transparent;border:0;color:#cfe0ff;padding:9px 11px;border-radius:9px;
   font-size:13px;font-weight:600;cursor:pointer}
@@ -87,7 +108,7 @@ aside.side{width:236px;flex:0 0 auto;background:var(--b900);color:#cfe0ff;
   background:rgba(255,255,255,.1);color:#fff;border:0;cursor:pointer;font-weight:600}
 .side .foot a:hover,.side .foot button:hover{background:rgba(255,255,255,.18)}
 
-main.main{flex:1;min-width:0;display:flex;flex-direction:column}
+main.main{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column}
 .top{background:#fff;border-bottom:1px solid var(--line);padding:11px 16px;
   display:flex;align-items:center;gap:10px;flex:0 0 auto}
 .top h1{margin:0;font-size:16.5px;font-weight:800;min-width:0;white-space:nowrap;
@@ -100,8 +121,8 @@ main.main{flex:1;min-width:0;display:flex;flex-direction:column}
 .busy.on::after{content:'';display:block;height:100%;width:40%;background:var(--b600);
   animation:hoopbz 1.1s ease-in-out infinite}
 @keyframes hoopbz{0%{margin-left:-40%}100%{margin-left:100%}}
-/* The ONLY thing on the page that scrolls. */
-.body{flex:1;overflow:auto;padding:16px 18px 60px}
+/* The ONLY thing on the page that scrolls -- see the min-height:0 note on .tabs. */
+.body{flex:1 1 auto;min-height:0;overflow:auto;padding:16px 18px 60px}
 
 /* The three lines open and close the column -- everywhere. Closed, the work takes the width. */
 #navBtn{flex:0 0 auto;font-size:17px;line-height:1;padding:7px 11px}
@@ -109,8 +130,11 @@ body.nav-closed aside.side{display:none}
 .navBack{display:none}
 @media(max-width:760px){
   /* On a phone the open nav is a drawer OVER the page, with a backdrop that closes it. */
+  /* The column does NOT scroll as a whole here either -- .tabs does, inside it. Letting the
+     aside scroll too would carry the foot away with the list, which is the same complaint
+     one level down: Logout has to stay where the thumb expects it. */
   aside.side{position:fixed;left:0;top:0;bottom:0;width:230px;z-index:20;
-    overflow-y:auto;box-shadow:8px 0 30px -12px rgba(8,28,74,.45)}
+    overflow:hidden;box-shadow:8px 0 30px -12px rgba(8,28,74,.45)}
   body:not(.nav-closed) .navBack{display:block;position:fixed;inset:0;background:rgba(8,17,34,.45);z-index:15}
   .body{padding:12px 10px 60px}
   .top{padding:10px 12px}
