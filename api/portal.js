@@ -52,6 +52,31 @@ AUDITED.add('deviceToken');
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
 
+/* =======================================================================================
+   A PERSON TYPING SOMETHING WRONG IS NOT A SERVER FAILURE.
+
+   Every `throw new Error(...)` in this file lands in withApi, which stamps anything without
+   its own `.status` as a 500. Most of the throws here are validation -- "Weka IMEI", "Sababu
+   inahitajika", "IMEI nyingi mno" -- so an officer forgetting a field was being recorded,
+   and charted, as the server falling over. That is how a deployment ends up reporting a 9.5%
+   failure rate while working exactly as designed, and it buries the failures that ARE real
+   under a pile of the ones that are not.
+
+   `bad()` is what a validation throw should have been all along: 400, the client's problem,
+   with the same bilingual message the screen already shows. */
+function bad(msg) {
+  const e = new Error(msg); e.status = 400; throw e;
+}
+
+/* A table that has not been created yet. PostgREST says so in a few different ways depending
+   on version, so this matches on what they all share rather than on one code. Used to let a
+   pane whose migration has not been run read as EMPTY instead of throwing a 500 at somebody
+   who has done nothing wrong except open it early. */
+function tableMissing(err) {
+  const s = String((err && (err.message || err.code)) || err || '');
+  return /does not exist|Could not find the table|42P01|PGRST205/i.test(s);
+}
+
 function requireWrite(user) {
   if (isReadOnly(user)) {
     const e = new Error('Msimbo huu ni wa kuangalia tu. / This is a view-only code.'); e.status = 403; throw e;
@@ -183,6 +208,74 @@ async function weekOf(db, user, args, table, col) {
 }
 
 const FNS = {
+  /* =====================================================================================
+     TIPS. Short notes keyed to a tab, held in the `hints` table so they can be written by
+     whoever is training people rather than by whoever edits this file.
+
+     Both languages come back in ONE payload and the phone picks a side, because the tip
+     shown is chosen client-side by tab and by language -- a round trip per tip, for text
+     this short, would be a request every few minutes for nothing.
+
+     Ungated on purpose: a hint is public help text, and the tab it belongs to is already
+     the tab this person is looking at. Budget: one small read, and the client asks once
+     per sign-in. */
+  async hints(db, user) {
+    const rows = await fetchAll(() => db.from('hints').select('tab, message, sw_message'));
+    const tips = { sw: {}, en: {} };
+    const push = (bag, tab, msg) => {
+      const k = String(tab || 'all').trim() || 'all';
+      if (!msg) return;
+      (bag[k] = bag[k] || []).push(String(msg));
+    };
+    for (const r of rows) {
+      push(tips.en, r.tab, r.message);
+      // A hint with no Swahili still shows in Swahili rather than vanishing -- half the
+      // office reads that side, and a blank tip teaches nobody anything.
+      push(tips.sw, r.tab, r.sw_message || r.message);
+    }
+    const s = await fetchAll(() => db.from('settings').select('key, value')
+      .in('key', ['HINT_EVERY_SEC', 'HINT_HOLD_SEC']));
+    const num = k => { const r = s.find(x => String(x.key) === k); const n = Number(r && r.value); return Number.isFinite(n) && n > 0 ? n : null; };
+    return { ok: true, tips, everySec: num('HINT_EVERY_SEC') || 240, holdSec: num('HINT_HOLD_SEC') || 7 };
+  },
+
+  /* =====================================================================================
+     THE BELL. What an officer wrote down, surfaced to whoever supervises them without
+     anybody having to go looking in the Ripoti tab for it.
+
+     SCOPED, NOT GLOBAL: scopeQ narrows to this code's own teams exactly as every other
+     read here does, so a branch supervisor sees their branch and nobody else's.
+
+     "Unseen" is per person and kept in `settings` under a key made from their access code
+     -- a last-read watermark, not a per-row read flag. That is the whole mechanism: cheap,
+     needs no new table, and cannot drift out of step with the rows themselves.
+     Budget: one bounded read of the newest comments plus one keyed settings read. */
+  async notifications(db, user) {
+    const rows = await fetchAll(() => scopeQ(user, db.from('followup_comments')
+      .select('imei, team, client_name, comment, fu_status, created_by, created_at')
+      .order('created_at', { ascending: false }).limit(40)));
+    const seenKey = 'NOTIF_SEEN_' + String(user.code || user.name || '').toUpperCase();
+    const { data } = await db.from('settings').select('value').eq('key', seenKey).maybeSingle();
+    const since = data && data.value ? Date.parse(String(data.value)) : 0;
+    const items = rows.slice(0, 40).map(r => ({
+      imei: r.imei, who: r.client_name || r.imei, team: r.team || '',
+      what: r.comment || '', status: r.fu_status || '',
+      by: r.created_by || '', at: r.created_at,
+      unseen: !since || Date.parse(r.created_at) > since,
+    }));
+    return { ok: true, items, unseen: items.filter(i => i.unseen).length };
+  },
+
+  /* The watermark moves to NOW, not to the newest row shown. A comment written while the
+     drawer was open would otherwise be marked read without ever having been on screen. */
+  async notifSeen(db, user) {
+    const seenKey = 'NOTIF_SEEN_' + String(user.code || user.name || '').toUpperCase();
+    const { error } = await db.from('settings')
+      .upsert({ key: seenKey, value: new Date().toISOString() }, { onConflict: 'key' });
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  },
+
   async boot(db, user) {
     const [summary, teams] = await Promise.all([
       summaryFor(db, { name: user.name, role: user.role, teams: user.teams }, Date.now()),
@@ -698,11 +791,13 @@ const FNS = {
     requireWrite(user);
     const a = args || {};
     const ref = String(a.imei || '').trim();
-    if (!ref) throw new Error('IMEI is required.');
+    if (!ref) bad('IMEI is required.');
     if (user.teams && a.team && !user.teams.some(t => K(t) === K(a.team))) {
-      throw new Error('Mteja huyu yuko nje ya timu zako. / That customer is outside your teams.');
+      // Not 400: nothing is wrong with what they typed -- they are simply not allowed it.
+      const e = new Error('Mteja huyu yuko nje ya timu zako. / That customer is outside your teams.');
+      e.status = 403; throw e;
     }
-    if (!a.fu && !String(a.comment || '').trim()) throw new Error('Chagua hali au andika maoni. / Pick a status or write a comment.');
+    if (!a.fu && !String(a.comment || '').trim()) bad('Chagua hali au andika maoni. / Pick a status or write a comment.');
     const now = new Date().toISOString();
     const { error: sErr } = await db.from('followup_status')
       .upsert({ imei: ref, team: a.team ? K(a.team) : null, client_name: a.name || null },
@@ -1104,10 +1199,27 @@ const FNS = {
     requireNav(user, 'devices');
     const a = args || {};
     const want = String(a.state || '').trim();
-    let q = db.from('devices').select(
-      'imei, item, holder, state, state_reason, state_at, reported, last_seen, app_version, battery, android, sold_ref, customer, enrolled_at');
-    if (['enrolled', 'locked', 'released', 'lost'].includes(want)) q = q.eq('state', want);
-    const rows = await fetchAll(() => q);
+    const build = () => {
+      let q = db.from('devices').select(
+        'imei, item, holder, state, state_reason, state_at, reported, last_seen, app_version, battery, android, sold_ref, customer, enrolled_at');
+      if (['enrolled', 'locked', 'released', 'lost'].includes(want)) q = q.eq('state', want);
+      return q;
+    };
+    /* BEFORE THE MIGRATION IS RUN, this table does not exist, and PostgREST answers with a
+       relation-not-found that fetchAll turns into a throw -- which withApi reports as a 500.
+       So every time somebody opened this pane on a deployment where the SQL had not been run
+       yet, the system logged a server failure. It was documented as "reads as empty rather
+       than erroring"; it did not, and this is what makes that true.
+
+       An empty register and a register that is not there yet are still DIFFERENT facts, so
+       `notReady` rides along and the screen says which one it is looking at. */
+    let rows;
+    try { rows = await fetchAll(build); }
+    catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], total: 0, notReady: true,
+        counts: { enrolled: 0, locked: 0, lockPending: 0, released: 0, lost: 0, neverSeen: 0, stale: 0 } };
+    }
     const now = Date.now();
     const HOURS = 36 * 3600 * 1000;      // silent longer than this and it is worth asking why
     const out = rows.map(r => {
@@ -1148,8 +1260,8 @@ const FNS = {
     const a = args || {};
     const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : String(a.imeis || '').split(/[\s,;]+/))
       .map(x => String(x || '').trim()).filter(Boolean))];
-    if (!list.length) throw new Error('Weka angalau IMEI moja. / At least one IMEI is required.');
-    if (list.length > 500) throw new Error('IMEI nyingi mno kwa mara moja (kikomo 500). / Too many at once — 500 max.');
+    if (!list.length) bad('Weka angalau IMEI moja. / At least one IMEI is required.');
+    if (list.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). / Too many at once — 500 max.');
 
     const [already, stock] = await Promise.all([
       fetchAll(() => db.from('devices').select('imei').in('imei', list)),
@@ -1215,11 +1327,11 @@ const FNS = {
     }
     const reason = String(a.reason || '').trim();
     if ((to === 'locked' || to === 'lost') && !reason) {
-      throw new Error('Sababu inahitajika. / A reason is required to lock or write off a phone.');
+      bad('Sababu inahitajika. / A reason is required to lock or write off a phone.');
     }
     const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : [a.imei || a.imeis])
       .map(x => String(x || '').trim()).filter(Boolean))];
-    if (!list.length) throw new Error('Weka IMEI. / An IMEI is required.');
+    if (!list.length) bad('Weka IMEI. / An IMEI is required.');
 
     const current = await fetchAll(() => db.from('devices').select('imei, state').in('imei', list));
     const known = new Map(current.map(r => [String(r.imei), r.state]));
@@ -1248,7 +1360,7 @@ const FNS = {
   async deviceHistory(db, user, args) {
     requireNav(user, 'devices');
     const imei = String((args && args.imei) || '').trim();
-    if (!imei) throw new Error('IMEI inahitajika. / An IMEI is required.');
+    if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
     /* Columns named rather than `*` for one reason: `*` would carry enrol_token onto this
        screen. The handset's credential is a secret and this is the screen most likely to be
        open with a stranger looking over the counter. */
@@ -1273,9 +1385,9 @@ const FNS = {
   async deviceToken(db, user, args) {
     requireWrite(user); requireNav(user, 'devices');
     const imei = String((args && args.imei) || '').trim();
-    if (!imei) throw new Error('IMEI inahitajika. / An IMEI is required.');
+    if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
     const rows = await fetchAll(() => db.from('devices').select('imei, enrol_token').eq('imei', imei));
-    if (!rows.length) throw new Error('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
+    if (!rows.length) bad('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
     return { ok: true, imei, token: rows[0].enrol_token || null };
   },
 
@@ -1555,7 +1667,7 @@ const FNS = {
     const wantsAll = a.allTeams === true;
     const list = Array.isArray(a.teams) ? a.teams.map(K).filter(Boolean) : [];
     if (!wantsAll && !list.length) {
-      throw new Error('Chagua ALL au orodhesha timu. / State ALL, or name the teams.');
+      bad('Chagua ALL au orodhesha timu. / State ALL, or name the teams.');
     }
     const row = { code, name: String(a.name).trim(), role: K(a.role),
       teams: wantsAll ? null : list,

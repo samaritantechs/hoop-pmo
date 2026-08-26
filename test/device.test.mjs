@@ -158,6 +158,47 @@ test('dev_hello identifies the handset at provisioning without it reporting stat
   await assert.rejects(() => deviceApi(d, 'nonsense', [{}], NOW), /Unknown function/);
 });
 
+/* ---------- what a failure is, and what it is not ---------- */
+
+test('a person typing something wrong is a 400, not a server failure', async () => {
+  // These were all bare throws, which withApi stamps 500. An officer forgetting a field was
+  // being logged and charted as the server falling over -- which is how a deployment reports
+  // a 9.5% failure rate while behaving exactly as designed.
+  const d = fleet([{ imei: 'D1', state: 'enrolled', enrol_token: 'tok1' }]);
+  const status = async fn => { try { await fn(); return 0; } catch (e) { return e.status || 500; } };
+
+  assert.equal(await status(() => _FNS.deviceEnrol(d, ADMIN, { imeis: '' })), 400);
+  assert.equal(await status(() => _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'locked' })), 400,
+    'a lock with no reason is the caller\'s mistake');
+  assert.equal(await status(() => _FNS.deviceToken(d, ADMIN, { imei: '' })), 400);
+  assert.equal(await status(() => _FNS.deviceToken(d, ADMIN, { imei: 'GHOST' })), 400);
+
+  // A view-only code being refused is still 403 -- nothing about that changed.
+  const VIEWER = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: [], readOnly: true };
+  assert.equal(await status(() => _FNS.deviceEnrol(d, VIEWER, { imeis: 'D1' })), 403);
+});
+
+test('the Devices pane reads as empty before the migration, instead of throwing a 500', async () => {
+  // This was DOCUMENTED as degrading to "no devices yet" and did not: PostgREST answers a
+  // missing table with a relation-not-found, which became a 500 for anybody who opened the
+  // pane before the SQL had been run. Every one of those was a logged server failure.
+  const d = {
+    from() {
+      return { select() { return this; }, eq() { return this; }, order() { return this; },
+        limit() { return this; }, range() { return this; },
+        then(res) { return Promise.resolve({ data: null,
+          error: { code: '42P01', message: 'relation "public.devices" does not exist' } }).then(res); } };
+    },
+    _dump: () => [],
+  };
+  const r = await _FNS.deviceList(d, ADMIN, {});
+  assert.equal(r.ok, true, 'it answers rather than throwing');
+  assert.deepEqual(r.rows, []);
+  assert.equal(r.total, 0);
+  // Empty and not-there-yet are still different facts, so the screen can say which it is.
+  assert.equal(r.notReady, true);
+});
+
 /* ---------- the token: minted once, never shown on a list ---------- */
 
 test('enrolment mints one token per phone and hands it back only to the station', async () => {

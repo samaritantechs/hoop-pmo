@@ -9,6 +9,10 @@
   --bg:#F6F8FC; --card:#fff; --ink:#0F172A; --mut:#64748B; --soft:#94A3B8; --line:#E2E8F0;
   --ok:#067647; --okbg:#E7F6EE; --warn:#92400E; --warnbg:#FEF3DC; --bad:#B42318; --badbg:#FDECEA; --sky:#35A8E1; }
 *{box-sizing:border-box}
+/* FULL HEIGHT, NOT FULL PAGE. The window itself never scrolls -- the sidebar holds its own
+   height and only the work scrolls, which is what stops the nav sliding away the moment a
+   table gets long. This one pair of rules is what the whole shell below hangs off. */
+html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Arial,Helvetica,sans-serif}
 .hide{display:none!important}
 /* sign-in */
@@ -25,35 +29,91 @@ input,select,textarea{font-family:inherit}
 .btn.sm{padding:7px 12px;font-size:12.5px}
 .btn:disabled{background:var(--b300)}
 .err{background:var(--badbg);color:var(--bad);border-radius:9px;padding:9px 12px;font-size:13px;margin-top:10px;display:none}
-/* shell */
-header.top{background:var(--b900);color:#fff;padding:12px 16px;position:sticky;top:0;z-index:5}
-.toprow{display:flex;align-items:center;gap:10px;max-width:1080px;margin:0 auto}
-.toprow .who{flex:1;min-width:0}
-.toprow .who b{display:block;font-size:14px}
-.toprow .who span{font-size:11px;color:var(--b300)}
-.toprow .lg{width:52px}
-/* The nav lives on the LEFT, as in Hope's portal: a column of tabs beside the work. */
-.shell{display:flex;max-width:1120px;margin:0 auto;align-items:flex-start}
-aside.side{flex:0 0 185px;padding:16px 0 16px 14px;position:sticky;top:66px}
-.tabs{display:flex;flex-direction:column;gap:6px}
-.tabs button{background:#fff;color:var(--b800);border:1px solid var(--line);text-align:left;
-  padding:11px 14px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
-.tabs button.on{background:var(--b700);border-color:var(--b700);color:#fff}
-/* The two doors that leave the portal ride at the bottom of the same left nav. */
-.tabs .sep{height:1px;background:var(--line);margin:5px 2px}
-.tabs .lnk{display:block;background:#fff;color:var(--b800);border:1px solid var(--line);text-align:left;
-  padding:11px 14px;border-radius:10px;font-size:13px;font-weight:700;text-decoration:none}
-main{flex:1;min-width:0;padding:16px}
-/* The three lines open and close it -- everywhere. Closed, the work takes the width. */
+/* =====================================================================================
+   THE SHELL -- HOPE PMO's, brought over whole.
+
+     "upgrade our hooploan interface to be full screen and the features of the left nav
+      the way its heavy and everything else as the hopepmo"
+
+   What HOOP had was a centred 1120px column with a navy strip along the top and a stack of
+   white pill buttons beside it. Two things were wrong with it on the machines this is
+   actually used on. It threw away every pixel past 1120 -- on the office monitor a stock
+   table sat in the middle of the screen with grey margins either side of it, scrolling
+   sideways while the room went unused. And the nav read as a row of loose buttons that
+   happened to be stacked, rather than as the frame of the application.
+
+   HOPE's model, which this now is: a navy column holding the full height of the window,
+   a white bar over the work, and ONLY the work scrolling. The nav cannot scroll away,
+   the identity and the exits sit at the bottom of the column where they stop competing
+   with the tabs, and the table gets the whole width of whatever screen it is on.
+   ===================================================================================== */
+.shell{display:flex;height:100%}
+
+/* The navy is --b900, the same shade the phone app's header uses -- not the darkest in the
+   ramp. A near-black column the full height of the screen next to a white page is what
+   makes a system read as hard; one step lighter is the colour it was meant to match. */
+aside.side{width:236px;flex:0 0 auto;background:var(--b900);color:#cfe0ff;
+  display:flex;flex-direction:column;padding:14px 12px}
+.side .brand{display:flex;align-items:center;gap:9px;color:#fff;font-weight:800;font-size:14px;line-height:1.3}
+.side .brand svg{width:40px;flex:0 0 40px}
+.side .brand small{display:block;color:var(--b300);font-weight:500;font-size:10.5px;margin-top:2px;letter-spacing:.04em}
+
+/* THE NAV ITSELF. It scrolls inside the column when the list outgrows the window, so the
+   brand above it and the identity below it never move. */
+.tabs{margin-top:16px;display:flex;flex-direction:column;gap:2px;flex:1;overflow:auto}
+.tabs button{display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+  background:transparent;border:0;color:#cfe0ff;padding:9px 11px;border-radius:9px;
+  font-size:13px;font-weight:600;cursor:pointer}
+/* The icon is how somebody finds a tab in a list of fourteen -- the shape registers before
+   the word does, which is the entire reason for carrying them. */
+.tabs button svg{width:16px;height:16px;flex:0 0 16px;opacity:.85}
+.tabs button span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tabs button:hover{background:rgba(255,255,255,.08);color:#fff}
+.tabs button.on{background:#fff;color:var(--b800)}
+.tabs button.on svg{opacity:1}
+/* Quiet labels, not switches. Fourteen tabs in one undifferentiated column is a list you
+   read every time; four short groups is a list you learn once and then aim at. */
+.navhead{padding:14px 11px 4px;font-size:10px;font-weight:700;letter-spacing:.06em;
+  color:var(--b300);text-transform:uppercase}
+
+/* WHO YOU ARE AND THE WAYS OUT, at the foot of the column. These used to ride in the top
+   bar competing with the work; down here they are found when looked for and ignored
+   otherwise, which is the right weight for something used twice a day. */
+.side .foot{border-top:1px solid rgba(255,255,255,.12);padding-top:12px;margin-top:10px}
+.side .foot b{color:#fff;font-size:12.5px;display:block}
+.side .foot span{font-size:11px;color:var(--b300);display:block;margin-bottom:8px}
+.side .foot a,.side .foot button{display:block;width:100%;text-align:center;margin-top:6px;
+  font-size:12px;padding:8px;border-radius:8px;text-decoration:none;
+  background:rgba(255,255,255,.1);color:#fff;border:0;cursor:pointer;font-weight:600}
+.side .foot a:hover,.side .foot button:hover{background:rgba(255,255,255,.18)}
+
+main.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.top{background:#fff;border-bottom:1px solid var(--line);padding:11px 16px;
+  display:flex;align-items:center;gap:10px;flex:0 0 auto}
+.top h1{margin:0;font-size:16.5px;font-weight:800;min-width:0;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+/* A hairline that slides across while the screen you are already reading is brought up to
+   date behind you -- instead of wiping the pane to a spinner on every click. You keep your
+   place and the numbers change under you when they are ready. */
+.busy{height:2px;background:transparent;overflow:hidden;flex:0 0 auto}
+.busy.on{background:var(--b100)}
+.busy.on::after{content:'';display:block;height:100%;width:40%;background:var(--b600);
+  animation:hoopbz 1.1s ease-in-out infinite}
+@keyframes hoopbz{0%{margin-left:-40%}100%{margin-left:100%}}
+/* The ONLY thing on the page that scrolls. */
+.body{flex:1;overflow:auto;padding:16px 18px 60px}
+
+/* The three lines open and close the column -- everywhere. Closed, the work takes the width. */
 #navBtn{flex:0 0 auto;font-size:17px;line-height:1;padding:7px 11px}
 body.nav-closed aside.side{display:none}
 .navBack{display:none}
 @media(max-width:760px){
   /* On a phone the open nav is a drawer OVER the page, with a backdrop that closes it. */
-  aside.side{position:fixed;left:0;top:0;bottom:0;width:200px;background:var(--bg);z-index:20;
-    padding:70px 10px 16px 12px;overflow-y:auto;box-shadow:8px 0 30px -12px rgba(8,28,74,.45)}
+  aside.side{position:fixed;left:0;top:0;bottom:0;width:230px;z-index:20;
+    overflow-y:auto;box-shadow:8px 0 30px -12px rgba(8,28,74,.45)}
   body:not(.nav-closed) .navBack{display:block;position:fixed;inset:0;background:rgba(8,17,34,.45);z-index:15}
-  main{padding:10px 8px}
+  .body{padding:12px 10px 60px}
+  .top{padding:10px 12px}
 }
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px;box-shadow:0 2px 10px -4px rgba(11,42,107,.14)}
@@ -109,7 +169,7 @@ td.r,th.r{text-align:right}
 /* Controls -- rounder, to match the panels they sit on. Nothing else about them changes. */
 .btn{border-radius:12px}
 .btn.sm{border-radius:11px}
-.inp,.tabs button,.tabs .lnk{border-radius:11px}
+.inp{border-radius:11px}
 
 /* A CHIP NEEDS ITS HAIRLINE. A flat fill on a white card has no edge, so the colour
    floats on the surface; the matching line is what makes it read as a token you can
@@ -141,11 +201,66 @@ tbody tr:hover{background:var(--b50)}
    flat wash. Scoped to the phone breakpoint: on a desktop "closed" still means the nav
    is gone and the work takes the width, which is what display:none above is for. */
 @media(max-width:760px){
-  aside.side{border-radius:0 20px 20px 0;transition:transform .2s ease}
-  body.nav-closed aside.side{display:block;transform:translateX(-100%)}
+  aside.side{border-radius:0 18px 18px 0;transition:transform .2s ease}
+  body.nav-closed aside.side{display:flex;transform:translateX(-100%)}
   body:not(.nav-closed) .navBack{-webkit-backdrop-filter:blur(14px) saturate(120%);
     backdrop-filter:blur(14px) saturate(120%)}
 }
+
+/* =====================================================================================
+   THE DRAWER -- and an apology in code form.
+
+   Four screens in this file already CALLED drawer(): the device enrolment form, the batch
+   of provisioning tokens, and both token read-backs. Nothing ever defined it. Every one of
+   those buttons threw ReferenceError and did nothing at all, which means the Devices pane
+   shipped unable to enrol a single phone. A syntax check parses the file and says fine; it
+   cannot know that a name was never bound. Ported from HOPE, where it has always lived.
+   ===================================================================================== */
+.drawer-bg{position:fixed;inset:0;background:rgba(8,17,34,.45);display:none;z-index:60;
+  align-items:flex-end;justify-content:center;
+  -webkit-backdrop-filter:blur(14px) saturate(120%);backdrop-filter:blur(14px) saturate(120%)}
+.drawer{background:var(--bg);width:100%;max-width:560px;max-height:90vh;overflow:auto;
+  border-radius:22px 22px 0 0;padding:16px;box-shadow:0 -18px 50px -24px rgba(8,28,74,.55)}
+.drawer h3{margin:0 0 4px;font-size:16px}
+.drawer .sub{color:var(--mut);font-size:12.5px;margin-bottom:12px}
+.fld{margin-bottom:11px}
+.fld label{display:block;font-size:11.5px;font-weight:700;color:var(--mut);margin-bottom:5px}
+.fld input,.fld select,.fld textarea{width:100%;padding:11px 12px;border:1.5px solid var(--line);
+  border-radius:10px;background:var(--card);color:var(--ink)}
+
+/* The tip, bottom right: present enough to be read, quiet enough to be ignored. */
+#tip{position:fixed;right:18px;bottom:18px;max-width:330px;background:var(--card);
+  border:1px solid var(--line);border-left:3px solid var(--b500);border-radius:var(--gr);
+  padding:12px 14px;font-size:12.5px;color:var(--ink);
+  box-shadow:0 14px 34px -18px rgba(8,28,74,.6);opacity:0;transform:translateY(12px);
+  transition:all .3s ease;pointer-events:none;z-index:70}
+#tip.show{opacity:1;transform:none}
+
+/* The bell's unread count. A dot nobody can read is a dot nobody looks at. */
+.bell{position:relative}
+.bell b{position:absolute;top:-5px;right:-5px;background:var(--bad);color:#fff;
+  border-radius:999px;font-size:10px;line-height:1;padding:3px 5px;min-width:16px;font-weight:800}
+.nrow{display:block;padding:9px 0;border-top:1px solid var(--line);font-size:13.5px}
+.nrow.new{background:var(--b50);margin:0 -16px;padding-left:16px;padding-right:16px}
+.nrow .m{color:var(--mut);font-size:11.5px;margin-top:2px}
+
+/* =====================================================================================
+   DARK MODE -- one class on <body>; every colour in this file already comes from the
+   variables above, so the whole system flips by redefining eleven of them. The panes did
+   not need to know it exists, which is exactly why it is worth having.
+   ===================================================================================== */
+body.dark{--bg:#0B1120;--card:#131C2E;--line:#22304A;--ink:#E5EAF2;--mut:#8B9AB3;--soft:#64748B;
+  --b50:#16233C;--b100:#22304A;--b900:#060D1C;--b950:#040914;
+  --okbg:#12301F;--okline:#1D5136;--warnbg:#33260C;--warnline:#5C4517;
+  --badbg:#3A1512;--badline:#6B2620;
+  --gline:rgba(255,255,255,.09);--ghi:inset 0 1px 0 rgba(255,255,255,.05)}
+body.dark input,body.dark select,body.dark textarea,body.dark .btn.ghost{background:#0F1830;color:var(--ink)}
+body.dark th{background:#101B31;color:var(--b300)}
+body.dark .top{background:var(--card)}
+body.dark .incard{background:var(--card)}
+body.dark tbody tr:hover{background:#16233C}
+/* The active nav pill is white in light mode; a slab of white in a dark column is a hole. */
+body.dark .tabs button.on{background:var(--b700);color:#fff}
 </style>
 </head>
 <body>
@@ -162,45 +277,47 @@ tbody tr:hover{background:var(--b50)}
 </div>
 
 <div id="scrApp" class="hide">
-  <header class="top">
-    <div class="toprow">
-      <button class="btn sm ghost" id="navBtn" title="Menyu">&#9776;</button>
-      <svg class="lg" viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#fff"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
-      <div class="who"><b id="whoName">—</b><span id="whoRole">—</span></div>
-      <input id="gq" placeholder="🔍 IMEI · jina · namba / search everything" autocomplete="off"
-        style="flex:1 1 180px;min-width:120px;max-width:340px;padding:8px 12px;border:1.5px solid rgba(255,255,255,.35);border-radius:99px;background:rgba(255,255,255,.14);color:#fff;font-size:12.5px;outline:none">
-      <a class="btn sm ghost" href="/upload">Upload</a>
-      <a class="btn sm ghost" href="/call">Calls</a>
-      <button class="btn sm ghost" id="outBtn">Toka</button>
-    </div>
-</header>
 <div id="gres" class="hide" style="position:fixed;z-index:998;top:58px;left:50%;transform:translateX(-50%);width:min(640px,94vw);max-height:70vh;overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px rgba(15,23,42,.22);padding:12px"></div>
   <div class="shell">
     <div class="navBack" id="navBack"></div>
     <aside class="side">
-      <div class="tabs" id="tabs">
-      <button data-t="dash" class="on">Dashboard</button>
-      <button data-t="cust">Wateja / Customers</button>
-      <button data-t="ripoti">Call reports</button>
-      <button data-t="recovery">Recovery</button>
-      <button data-t="sales">Sales performance</button>
-      <button data-t="fraud">Fraud audit</button>
-      <button data-t="score">Agent scorecards</button>
-      <button data-t="stock">Stock</button>
-      <button data-t="acct">Stock accountability</button>
-      <button data-t="dev">Devices / Kufunga simu</button>
-      <button data-t="move">Stock movement</button>
-      <button data-t="staff">Staff</button>
-      <button data-t="codes" id="tabCodes">Access codes</button>
-      <button data-t="settings" id="tabSettings">Settings</button>
-      <div class="sep"></div>
-      <a class="lnk" href="/upload">Upload &nearr;</a>
-      <a class="lnk" href="/call">HOOPLOAN Calls &nearr;</a>
-    </div>
-      </aside>
-    <main id="main"></main>
+      <div class="brand">
+        <svg viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#fff"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
+        <div>HOOPLOAN<small>WATU SIMU</small></div>
+      </div>
+      <!-- Built in JS from NAV below, not written out here: the icons, the group labels and
+           the per-role hiding all come from one list, so a pane added later needs one line. -->
+      <nav class="tabs" id="tabs"></nav>
+      <div class="foot">
+        <b id="whoName">—</b><span id="whoRole">—</span>
+        <a href="/upload">&#8679; Upload</a>
+        <a href="/call">&#128222; HOOPLOAN Calls</a>
+        <button id="outBtn">Logout</button>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="top">
+        <button class="btn sm ghost" id="navBtn" title="Menyu / Menu">&#9776;</button>
+        <h1 id="title">Dashboard</h1>
+        <span style="flex:1"></span>
+        <input id="gq" placeholder="&#128269; IMEI &middot; jina &middot; namba" autocomplete="off"
+          style="flex:0 1 300px;min-width:130px;padding:8px 12px;border:1.5px solid var(--line);border-radius:99px;background:var(--bg);font-size:12.5px;outline:none">
+        <button class="btn sm ghost" id="langBtn" title="Lugha / Language">SW</button>
+        <button class="btn sm ghost" id="tipBtn" title="Vidokezo / Tips">&#128161;</button>
+        <button class="btn sm ghost" id="themeBtn" title="Dark mode">&#9789;</button>
+        <button class="btn sm ghost bell" id="bellBtn" title="Taarifa / Notifications">&#128276;</button>
+        <!-- SHORT TAP redraws this pane against fresh data. LONG PRESS reloads the page past
+             the cache, which is the answer to "I fixed it, are you seeing the new one?" --
+             three round trips were spent on that question before HOPE grew this. -->
+        <button class="btn sm ghost" id="refBtn" title="Onyesha upya / Reload">&#8635;</button>
+      </div>
+      <div class="busy" id="busy"></div>
+      <div class="body" id="main"></div>
+    </main>
   </div>
 </div>
+<div class="drawer-bg" id="drawerBg"><div class="drawer" id="drawer"></div></div>
+<div id="tip"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -212,6 +329,105 @@ function pct(x){ return (x==null||isNaN(x))?'—':Math.round(100*x)+'%'; }
 function fmtDur(sec){ sec=Math.max(0,Math.round(Number(sec)||0)); var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60,p=function(n){return(n<10?'0':'')+n;}; return h>0?(h+':'+p(m)+':'+p(s)):(m+':'+p(s)); }
 function telHref(v){ var d=String(v==null?'':v).replace(/\D/g,''); if(!d) return '#'; return d.indexOf('255')===0?'+'+d:'+255'+d.replace(/^0+/,''); }
 function toast(m,bad){ var t=$('#toast'); t.textContent=m; t.className='toast'+(bad?' bad':''); t.style.display='block'; clearTimeout(toast._t); toast._t=setTimeout(function(){t.style.display='none';},3500); }
+
+/* =======================================================================================
+   LANGUAGE, THEME, TIPS, NOTIFICATIONS -- the four HOPE carries in its top bar.
+
+   ON LANGUAGE, honestly: most of this system speaks both at once ("Wateja / Customers"),
+   which is right inside a pane where the two readings sit beside each other. It is wrong in
+   a 236px nav column, where doubling every label is what forces the ellipsis. So the switch
+   does a real job here -- it picks ONE side for the nav and the page title, and leaves the
+   panes bilingual, where the room exists and the pairing helps.
+   ======================================================================================= */
+var LANG='sw';
+try{ LANG=localStorage.getItem('hpLang')==='en'?'en':'sw'; }catch(e){}
+function applyLang(l){
+  LANG=(l==='en')?'en':'sw';
+  try{ localStorage.setItem('hpLang',LANG); }catch(e){}
+  var b=$('#langBtn'); if(b) b.textContent=(LANG==='sw')?'SW':'EN';
+  if(BOOT&&BOOT.navs){ buildNav(); var n=tabMeta(TAB); if(n) $('#title').textContent=navLabel(n); }
+}
+function applyTheme(dark){
+  document.body.classList.toggle('dark',!!dark);
+  try{ localStorage.setItem('hpTheme',dark?'dark':'light'); }catch(e){}
+  var b=$('#themeBtn'); if(b) b.innerHTML=dark?'&#9788;':'&#9789;';
+}
+/* Set before sign-in too, so the code box is not a white flash for somebody working at
+   night -- the theme belongs to the person, not to the session. */
+(function(){ try{ if(localStorage.getItem('hpTheme')==='dark') document.body.classList.add('dark'); }catch(e){} })();
+
+/* TIPS. Short notes from the `hints` table, shown for the tab you are on. Deliberately a
+   corner toast that fades rather than anything you must dismiss: a hint you have to close
+   is an interruption, and people learn to kill those without reading them. */
+var TIPS=null, TIPTIMER=null, TIPHIDE=null, TIPEVERY=240, TIPHOLD=7;
+function tipsStart(){
+  srv('hints').then(function(h){
+    TIPS=h.tips||{};
+    TIPEVERY=Number(h.everySec)||240; TIPHOLD=Number(h.holdSec)||7;
+    clearInterval(TIPTIMER);
+    setTimeout(tipShow,3000);
+    TIPTIMER=setInterval(function(){ tipShow(); },Math.max(30,TIPEVERY)*1000);
+  }).catch(function(){ /* tips are never the reason a screen fails */ });
+}
+function tipShow(force){
+  var el=$('#tip'); if(!el||!TIPS) { if(force) toast(LANG==='en'?'No tips yet.':'Hakuna vidokezo bado.'); return; }
+  var byLang=TIPS[LANG]||TIPS.sw||TIPS.en||{};
+  var pool=(byLang[TAB]||[]).concat(byLang.all||[]);
+  if(!pool.length){ if(force) toast(LANG==='en'?'No tip for this screen.':'Hakuna kidokezo cha skrini hii.'); return; }
+  el.textContent=pool[Math.floor(Math.random()*pool.length)];
+  el.classList.add('show');
+  clearTimeout(TIPHIDE);
+  TIPHIDE=setTimeout(function(){ el.classList.remove('show'); },Math.max(3,TIPHOLD)*1000);
+}
+
+/* THE BELL -- how a supervisor learns an officer logged something without opening the tab.
+   Stored UTC, read in East Africa; one helper so the bell and the tables cannot disagree. */
+function eatDt_(v){
+  var t=Date.parse(v);
+  if(isFinite(t)) return new Date(t+3*3600000).toISOString().replace('T',' ').slice(0,16);
+  return String(v==null?'':v).replace('T',' ').slice(0,16);
+}
+var NOTIF=null;
+function bellRefresh(){
+  return srv('notifications').then(function(d){
+    NOTIF=d;
+    var b=$('#bellBtn'); if(!b) return;
+    b.innerHTML='&#128276;'+(d.unseen?'<b>'+(d.unseen>99?'99+':d.unseen)+'</b>':'');
+  }).catch(function(){ /* the bell is never the reason a screen fails */ });
+}
+function bellOpen(){
+  var d=NOTIF||{items:[]};
+  var items=d.items||[];
+  drawer('<h3>Taarifa / Notifications</h3>'
+    +'<div class="sub">Maoni ya ufuatiliaji ya timu zako. / Follow-up comments from your own teams.</div>'
+    +'<div style="max-height:60vh;overflow:auto">'
+    +(items.length?items.map(function(i){
+        return '<div class="nrow'+(i.unseen?' new':'')+'">'
+          +'<b>'+esc(i.who||i.imei||'')+'</b>'+(i.status?' — '+esc(i.status):'')
+          +'<div>'+esc(i.what||'')+'</div>'
+          +'<div class="m">'+esc(i.team||'')+' · '+esc(i.by||'')+' · '+esc(eatDt_(i.at))+'</div></div>';
+      }).join('')
+      :'<div class="mut">Hakuna kipya. / Nothing new.</div>')
+    +'</div>'
+    +(d.unseen?'<button class="btn w" id="notifSeen" style="margin-top:10px">Nimesoma zote / Mark all read</button>':''));
+  var b=$('#notifSeen');
+  if(b) b.onclick=function(){
+    srv('notifSeen',{}).then(function(){ closeDrawer(); bellRefresh(); })
+      .catch(function(e){ toast(String(e.message||e),true); });
+  };
+}
+
+/* THE DRAWER. Four screens in this file already called this; nothing defined it, so the
+   device enrolment form and every token read-back threw and did nothing. Ported from HOPE
+   verbatim, including the Close button it appends for you -- a sheet on a phone with no
+   visible way out is a trap, and not every caller remembers to add one. */
+function drawer(html){
+  $('#drawer').innerHTML = html
+    + '<button class="btn ghost w" style="margin-top:8px" onclick="closeDrawer()">Funga / Close</button>';
+  $('#drawerBg').style.display='flex';
+}
+function closeDrawer(){ $('#drawerBg').style.display='none'; }
+$('#drawerBg').onclick=function(e){ if(e.target===$('#drawerBg')) closeDrawer(); };
 
 /* THE THREE STATES A PANE CAN BE IN, in one place.
 
@@ -531,11 +747,22 @@ function wireSearch_(inputSel, boxSel, filterFn){
     },350);
   });
 }
+/* THE HAIRLINE, not a spinner over the whole pane. Counted rather than boolean, because
+   several panes fire three or four calls at once and the first one back would otherwise
+   switch the bar off while the rest were still in flight. */
+var BUSY=0;
+function busy(on){
+  BUSY=Math.max(0,BUSY+(on?1:-1));
+  var b=$('#busy'); if(b) b.classList.toggle('on',BUSY>0);
+}
 function srv(fn,args){
+  busy(true);
   return fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({code:CODE,fn:fn,args:args||{}})})
   .then(function(r){ return r.text().then(function(t){ var b; try{b=JSON.parse(t);}catch(e){throw new Error('Server error HTTP '+r.status);}
-    if(r.status<200||r.status>=300||b.ok===false) throw new Error(b.error||('HTTP '+r.status)); return b; }); });
+    if(r.status<200||r.status>=300||b.ok===false) throw new Error(b.error||('HTTP '+r.status)); return b; }); })
+  .then(function(v){ busy(false); return v; },
+        function(e){ busy(false); throw e; });
 }
 
 $('#inBtn').onclick=function(){
@@ -553,6 +780,103 @@ $('#inBtn').onclick=function(){
 };
 $('#inCode').addEventListener('keydown',function(e){ if(e.key==='Enter') $('#inBtn').onclick(); });
 
+/* =======================================================================================
+   THE NAV, AS ONE LIST.
+
+   Every tab is a row here: its key, both languages, the nav permission the SERVER must
+   also grant, an icon, and the group it sits under. Written out as markup before, which
+   meant a new pane touched four places and the icons could not exist at all.
+
+   `nav` is the permission name the endpoints themselves enforce (see requireNav in
+   portal.js) -- this list only decides what to DRAW. A code missing the permission never
+   learns the tab exists, and one that forges the click still gets refused at the server.
+
+   The groups are quiet labels, not switches. Fourteen tabs in one flat column is a list
+   read from the top every time; four short groups is a list learned once and then aimed at.
+   ======================================================================================= */
+var NAV=[
+  { g:'siku',  t:'dash',     nav:'dashboard',  sw:'Dashibodi',        en:'Dashboard',
+    ic:'<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>' },
+  { g:'siku',  t:'cust',     nav:'customers',  sw:'Wateja',           en:'Customers',
+    ic:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/>' },
+  { g:'siku',  t:'ripoti',   nav:'reports',    sw:'Ripoti za simu',   en:'Call reports',
+    ic:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.22a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>' },
+  { g:'siku',  t:'recovery', nav:'recovery',   sw:'Marejesho',        en:'Recovery',
+    ic:'<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>' },
+
+  { g:'mauzo', t:'sales',    nav:'scorecards', sw:'Mauzo ya siku',    en:'Sales performance',
+    ic:'<path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 5-6"/>' },
+  { g:'mauzo', t:'score',    nav:'scorecards', sw:'Alama za maajenti',en:'Agent scorecards',
+    ic:'<path d="M12 2l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17l-5.9 3 1.2-6.5L2.5 8.9 9.1 8z"/>' },
+  { g:'mauzo', t:'fraud',    nav:'fraud',      sw:'Ukaguzi wa udanganyifu', en:'Fraud audit',
+    ic:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>' },
+
+  { g:'stock', t:'stock',    nav:'stock',      sw:'Stoo',             en:'Stock',
+    ic:'<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7L12 12l8.7-5M12 22V12"/>' },
+  { g:'stock', t:'acct',     nav:'stock',      sw:'Uwajibikaji wa stoo', en:'Stock accountability',
+    ic:'<path d="M9 11H5a2 2 0 0 0-2 2v7h18v-7a2 2 0 0 0-2-2h-4"/><path d="M9 11V4h6v7"/><path d="M12 15v2"/>' },
+  { g:'stock', t:'dev',      nav:'devices',    sw:'Kufunga simu',     en:'Devices',
+    ic:'<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/><path d="M9 10V8a3 3 0 0 1 6 0v2"/><rect x="8" y="10" width="8" height="5" rx="1"/>' },
+  { g:'stock', t:'move',     nav:'movement',   sw:'Mwenendo wa stoo', en:'Stock movement',
+    ic:'<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/><path d="M11 18l-6-6 6-6"/>' },
+
+  { g:'admin', t:'staff',    nav:'staff',      sw:'Wafanyakazi',      en:'Staff',
+    ic:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
+  { g:'admin', t:'codes',    nav:'codes',      sw:'Misimbo ya kuingia', en:'Access codes',
+    ic:'<path d="M21 2l-2 2m-7.6 7.6a5 5 0 1 1-7.1 7.1 5 5 0 0 1 7.1-7.1zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3"/>' },
+  { g:'admin', t:'settings', nav:'settings',   sw:'Mipangilio',       en:'Settings',
+    ic:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>' },
+];
+var GROUPS=[
+  { g:'siku',  sw:'Kila siku',  en:'Daily' },
+  { g:'mauzo', sw:'Mauzo',      en:'Sales' },
+  { g:'stock', sw:'Stoo',       en:'Stock' },
+  { g:'admin', sw:'Usimamizi',  en:'Admin' },
+];
+function navLabel(n){ return LANG==='en' ? n.en : n.sw; }
+function buildNav(){
+  var el=$('#tabs'); if(!el) return;
+  var NAVS=BOOT.navs||[];
+  el.innerHTML='';
+  GROUPS.forEach(function(grp){
+    var items=NAV.filter(function(n){ return n.g===grp.g && NAVS.indexOf(n.nav)>=0; });
+    // A heading with nothing under it is a promise of a door that does not exist.
+    if(!items.length) return;
+    var h=document.createElement('div');
+    h.className='navhead';
+    h.textContent=LANG==='en'?grp.en:grp.sw;
+    el.appendChild(h);
+    items.forEach(function(n){
+      var b=document.createElement('button');
+      b.setAttribute('data-t',n.t);
+      b.className=(n.t===TAB?'on':'');
+      b.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" '
+        +'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+n.ic+'</svg>'
+        +'<span>'+esc(navLabel(n))+'</span>';
+      b.onclick=function(){ goTab(n.t); };
+      el.appendChild(b);
+    });
+  });
+}
+function tabMeta(t){ return NAV.filter(function(n){ return n.t===t; })[0]||null; }
+function goTab(t){
+  TAB=t;
+  $all('#tabs button').forEach(function(x){ x.classList.toggle('on',x.getAttribute('data-t')===t); });
+  var n=tabMeta(t), h=$('#title');
+  if(h) h.textContent=n?navLabel(n):'';
+  if(window.innerWidth<=760) navSet(false);
+  // The pane scrolls, so a tab opened after scrolling down a long table would otherwise
+  // start halfway through itself.
+  var b=$('#main'); if(b&&b.parentNode) b.parentNode.scrollTop=0;
+  if(b) b.scrollTop=0;
+  draw();
+  tipShow();
+}
+function navSet(open){
+  document.body.classList.toggle('nav-closed', !open);
+  try{ localStorage.setItem('hpNav', open?'1':'0'); }catch(e){}
+}
+
 function enter(){
   $('#scrIn').classList.add('hide'); $('#scrApp').classList.remove('hide');
   $('#whoName').textContent=BOOT.name||'—';
@@ -560,33 +884,42 @@ function enter(){
   /* WHICH PANES: the server's navs list (per role, ADMIN all, AUDITOR view-all) decides
      every button -- the same rule the endpoints enforce. A pane added later shows up
      here the moment the server lists it. */
-  var NAVKEY={dash:'dashboard',cust:'customers',ripoti:'reports',recovery:'recovery',
-    sales:'scorecards',fraud:'fraud',score:'scorecards',stock:'stock',acct:'stock',dev:'devices',move:'movement',staff:'staff',codes:'codes',settings:'settings'};
   var NAVS=BOOT.navs||[];
-  $all('#tabs button').forEach(function(b){
-    var k=NAVKEY[b.getAttribute('data-t')];
-    if(k) b.classList.toggle('hide',NAVS.indexOf(k)<0);
-  });
-  if(NAVS.indexOf(NAVKEY[TAB])<0){
-    var first=$all('#tabs button').filter(function(b){return !b.classList.contains('hide');})[0];
-    if(first){ TAB=first.getAttribute('data-t');
-      $all('#tabs button').forEach(function(x){x.classList.toggle('on',x===first);}); }
+  // Landing on a tab this code does not hold would draw an empty pane and look broken.
+  if(!tabMeta(TAB) || NAVS.indexOf(tabMeta(TAB).nav)<0){
+    var first=NAV.filter(function(n){ return NAVS.indexOf(n.nav)>=0; })[0];
+    if(first) TAB=first.t;
   }
-  function navSet(open){
-    document.body.classList.toggle('nav-closed', !open);
-    try{ localStorage.setItem('hpNav', open?'1':'0'); }catch(e){}
-  }
+  buildNav();
+  var n=tabMeta(TAB); if(n) $('#title').textContent=navLabel(n);
+
   var savedNav=null; try{ savedNav=localStorage.getItem('hpNav'); }catch(e){}
   navSet(savedNav==null ? window.innerWidth>760 : savedNav==='1');
   $('#navBtn').onclick=function(){ navSet(document.body.classList.contains('nav-closed')); };
   $('#navBack').onclick=function(){ navSet(false); };
-  $all('#tabs button').forEach(function(b){ b.onclick=function(){
-    TAB=b.getAttribute('data-t');
-    $all('#tabs button').forEach(function(x){x.classList.toggle('on',x===b);});
-    if(window.innerWidth<=760) navSet(false);
-    draw();
-  };});
   $('#outBtn').onclick=function(){ try{localStorage.removeItem('hpCode');}catch(e){} location.reload(); };
+
+  /* ---- the four the owner asked for, wired once ---- */
+  $('#langBtn').onclick=function(){ applyLang(LANG==='sw'?'en':'sw'); };
+  $('#themeBtn').onclick=function(){ applyTheme(!document.body.classList.contains('dark')); };
+  $('#tipBtn').onclick=function(){ tipShow(true); };
+  $('#bellBtn').onclick=bellOpen;
+  /* SHORT TAP redraws the pane against fresh data; LONG PRESS reloads the page past the
+     cache. Two different questions -- "are these numbers current?" and "am I even running
+     the new build?" -- and only the second one is worth throwing the whole page away for. */
+  (function(){
+    var b=$('#refBtn'), held=false, t=null;
+    var start=function(){ held=false; t=setTimeout(function(){ held=true; location.reload(true); },700); };
+    var end=function(){ clearTimeout(t); if(!held){ draw(); bellRefresh(); } };
+    b.addEventListener('mousedown',start); b.addEventListener('mouseup',end);
+    b.addEventListener('mouseleave',function(){ clearTimeout(t); });
+    b.addEventListener('touchstart',function(e){ e.preventDefault(); start(); },{passive:false});
+    b.addEventListener('touchend',function(e){ e.preventDefault(); end(); });
+  })();
+
+  applyLang(LANG); applyTheme(document.body.classList.contains('dark'));
+  tipsStart();
+  bellRefresh();
   $('#inBtn').disabled=false;
   draw();
 }
@@ -1174,8 +1507,14 @@ function drawDevices(m){
         +'<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
         +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'
         +'<button class="btn sm ghost" data-dvs="lost">Imepotea / Write off</button></div>'
-      : '<div class="mut">Hakuna kifaa kwenye kundi hili. Bofya "Sajili simu" — weka IMEI kutoka ripoti ya stock. '
-        +'/ No devices here yet; enrol IMEIs from the stock report to begin.</div>';
+      : (d.notReady
+        /* NOT THE SAME THING as an empty register, and it must not read like one: nobody
+           would ever guess from "no devices yet" that the answer is to run a SQL file. */
+        ? '<div class="note bad">Jedwali la vifaa halijatengenezwa bado. Endesha '
+          +'<b>db/migrations/RUN-ME-2026-08-24-devices.sql</b> kwenye Supabase, kisha rudi hapa. '
+          +'/ The devices table has not been created yet — run that migration, then come back.</div>'
+        : '<div class="mut">Hakuna kifaa kwenye kundi hili. Bofya "Sajili simu" — weka IMEI kutoka ripoti ya stock. '
+          +'/ No devices here yet; enrol IMEIs from the stock report to begin.</div>');
     m.innerHTML='<div class="card"><h2>Devices / Kufunga simu</h2>'
       +'<div class="mut" style="margin-bottom:8px">Simu tulizozidhibiti, kwa IMEI. <b>Kuagiza kufunga si sawa na kufungwa</b> — '
       +'simu ikishathibitisha ndipo inasomeka "imefungwa". App ya simu ikiwa bado haijajengwa, zote zitasoma "hajawahi kuongea". '
