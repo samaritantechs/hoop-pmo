@@ -48,6 +48,40 @@ function defines(src, name) {
   ).test(src);
 }
 
+/* =======================================================================================
+   THE SHELL'S TWO LOAD-BEARING RULES.
+
+   Reported from a desk: "I now have to scroll the whole page's content to find the left
+   panel's bottom options." Both causes were invisible without a browser, and both are the
+   kind of thing that gets deleted later by somebody tidying up:
+
+     1. A percentage height is resolved against the PARENT's height. #scrApp had none, so
+        the chain from <body> broke there and the shell fell back to its content's height.
+        Viewport units cut the chain out; dvh so a phone's address bar is accounted for.
+     2. A flex item's default min-height is `auto` -- "never shrink below your content" --
+        so `flex:1` with `overflow:auto` grows instead of scrolling, and pushes whatever
+        follows it out of view. min-height:0 is what makes it a scrolling box.
+   ======================================================================================= */
+test('portal.html: the shell takes its height from the window, not from its contents', () => {
+  const css = read('portal.html');
+  assert.match(css, /#scrApp\{[^}]*height:100dvh/,
+    'the app wrapper must be sized in viewport units -- a percentage chain breaks here');
+  assert.match(css, /#scrApp\{[^}]*height:100vh/,
+    'and keep the vh fallback for the older WebViews this runs in');
+});
+
+test('portal.html: every scrolling flex pane can actually shrink', () => {
+  const css = read('portal.html');
+  for (const sel of ['\\.tabs', '\\.body']) {
+    const m = css.match(new RegExp('(^|\\n)' + sel + '\\{[^}]*\\}', 'm'));
+    assert.ok(m, `${sel} rule not found`);
+    assert.match(m[0], /min-height:0/,
+      `${sel} scrolls, so it needs min-height:0 -- without it the flex item grows and `
+      + 'carries the sidebar foot off the screen');
+    assert.match(m[0], /overflow(-y)?:auto/, `${sel} is meant to be the thing that scrolls`);
+  }
+});
+
 for (const page of PAGES) {
   const src = read(page);
 
