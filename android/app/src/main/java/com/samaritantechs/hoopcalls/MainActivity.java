@@ -37,9 +37,27 @@ public class MainActivity extends Activity {
     private static final int REQ_CALL_LOG = 71;
     private static final int REQ_FILE_PICK = 72;
 
+    /* HOW LONG A BLANK SCREEN IS ALLOWED TO LAST.
+
+         "app is blanking blue not opening"
+
+       The WebView's background is painted navy so the status-bar strip matches the header,
+       which means an empty WebView is a full navy screen -- and that is precisely what an
+       officer reported. Nothing here caught it: onReceivedError fires on an ERROR, and a
+       load that simply never finishes is not an error. No error, no fallback screen, no
+       button: the app just sits there being blue, and the only move left is to force-stop it
+       and try again, which changes nothing.
+
+       The page itself is one self-contained file off a CDN, so twenty seconds is already
+       far more than a slow 3G handset needs. Past that, something is wrong that waiting will
+       not fix, and saying so beats silence. */
+    private static final long LOAD_TIMEOUT_MS = 20000;
+
     private WebView web;
     private SharedPreferences prefs;
     private ValueCallback<Uri[]> pendingFileCallback;
+    private Runnable loadWatchdog;
+    private boolean pageArrived;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -106,6 +124,27 @@ public class MainActivity extends Activity {
             public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
                 if (req.isForMainFrame()) showUrlScreen(String.valueOf(err.getDescription()));
             }
+
+            /* A 500 or a 404 on the main frame is NOT onReceivedError -- the request
+               succeeded, the server just did not send a page. Without this the WebView
+               renders whatever error body came back, or nothing at all, and the officer is
+               back to looking at navy. */
+            @Override
+            public void onReceivedHttpError(WebView v, WebResourceRequest req,
+                                            android.webkit.WebResourceResponse resp) {
+                if (req.isForMainFrame()) {
+                    showUrlScreen("HTTP " + (resp == null ? "?" : String.valueOf(resp.getStatusCode())));
+                }
+            }
+
+            /* The page arrived. Whatever the watchdog was about to say is now wrong, so
+               call it off -- including when the page that arrived is the fallback screen
+               itself, which must not be replaced by a second copy of itself. */
+            @Override
+            public void onPageFinished(WebView v, String url) {
+                pageArrived = true;
+                if (loadWatchdog != null) web.removeCallbacks(loadWatchdog);
+            }
         });
 
         web.setWebChromeClient(new WebChromeClient() {
@@ -162,10 +201,30 @@ public class MainActivity extends Activity {
         if (checkSelfPermission(Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.READ_CALL_LOG}, REQ_CALL_LOG);
         }
-        web.loadUrl(startUrl());
+        loadWatched(startUrl());
         // Ask the portal whether a newer build exists. Off the UI thread, failures ignored --
         // an update check must never be the reason the app does not open.
         Updater.checkInBackground(this, startUrl());
+    }
+
+    /**
+     * Load a URL and start counting. Every load of the real page goes through here rather than
+     * web.loadUrl, so there is no route into the app that can end in a silent navy screen.
+     * Cancelled by onPageFinished; fires the built-in fallback screen if nothing ever arrives.
+     */
+    private void loadWatched(String url) {
+        pageArrived = false;
+        if (loadWatchdog != null) web.removeCallbacks(loadWatchdog);
+        loadWatchdog = new Runnable() {
+            @Override
+            public void run() {
+                if (pageArrived) return;
+                showUrlScreen("Mtandao ni wa polepole sana au mfumo haujibu. "
+                        + "/ The connection is very slow, or the server is not answering.");
+            }
+        };
+        web.postDelayed(loadWatchdog, LOAD_TIMEOUT_MS);
+        web.loadUrl(url);
     }
 
     /**
@@ -214,8 +273,11 @@ public class MainActivity extends Activity {
         web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
     }
 
+    /* Watched, like the first load. Retry is pressed FROM the fallback screen, so if it went
+       back to an unwatched load the officer would be dropped into the same silent navy screen
+       with the button they just used now gone -- a dead end reached by trying to escape one. */
     void retryFromBridge() {
-        runOnUiThread(() -> web.loadUrl(startUrl()));
+        runOnUiThread(() -> loadWatched(startUrl()));
     }
 
     void setStartUrlFromBridge(String url) {
@@ -223,7 +285,7 @@ public class MainActivity extends Activity {
         if (!u.startsWith("http")) u = "https://" + u;
         prefs.edit().putString("startUrl", u).putInt("startUrlVersion", BuildConfig.VERSION_CODE).apply();
         final String go = u;
-        runOnUiThread(() -> web.loadUrl(go));
+        runOnUiThread(() -> loadWatched(go));
     }
 
     @Override

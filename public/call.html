@@ -265,10 +265,13 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
 <div id="scrBoot" class="center">
   <div class="brand" id="bootBrand">HOOPLOAN Calls</div>
   <div class="sk" id="bootSpin"></div>
-  <!-- Shown only if the server does not answer. Without it the officer has a blue screen, no
-       message, and nothing to press -- so they restart the app over and over instead. -->
+  <!-- Shown if the server does not answer, AND once the wait has simply gone on too long.
+       Without it the officer has a blue screen, no message, and nothing to press -- so they
+       restart the app over and over instead, which is exactly what was reported. It used to
+       wait for all three attempts to fail: 25s each plus the gaps, so more than a minute of
+       a screen that said nothing at all. Nobody waits that long. -->
   <div id="bootErr" class="hide" style="max-width:300px;text-align:center;color:#fff;padding:0 18px">
-    <div style="font-size:14px;line-height:1.5">Mfumo haujajibu kwa sasa. Angalia mtandao, kisha jaribu tena.<br>
+    <div id="bootMsg" style="font-size:14px;line-height:1.5">Mfumo haujajibu kwa sasa. Angalia mtandao, kisha jaribu tena.<br>
       <span style="color:rgba(255,255,255,.7);font-size:12.5px">The server is not answering. Check your connection, then try again.</span></div>
     <button class="btn" id="bootRetry" style="margin-top:14px">Jaribu tena / Try again</button>
   </div>
@@ -905,7 +908,53 @@ function setLogo_(url, instant){
   });
 }
 
+/* THE BLUE SCREEN THAT SAID NOTHING.
+
+     "app is blanking blue not opening"
+
+   srv() gives each attempt 25 seconds and retries twice, so a server that is merely slow --
+   a cold serverless function on a bad morning answers in seven -- kept the boot screen mute
+   for over a minute before #bootErr ever appeared. From the outside that is indistinguishable
+   from an app that is broken, so the officer force-stops it, which starts the whole wait over.
+
+   After eight seconds the screen now says what is going on and offers the button, WITHOUT
+   claiming failure and without cancelling anything: the spinner keeps turning, the request
+   keeps running, and if it comes back the app carries on as though nothing happened. The only
+   thing that changed is that the screen stopped being silent. */
+var BOOT_SLOW_MS = 8000;
+var _bootSlowTimer = null;
+var BOOT_MSG_SLOW = 'Inachukua muda mrefu kuliko kawaida — bado inajaribu.<br>'
+  + '<span style="color:rgba(255,255,255,.7);font-size:12.5px">Taking longer than usual — still trying. '
+  + 'You can wait, or try again.</span>';
+var BOOT_MSG_FAIL = 'Mfumo haujajibu kwa sasa. Angalia mtandao, kisha jaribu tena.<br>'
+  + '<span style="color:rgba(255,255,255,.7);font-size:12.5px">The server is not answering. '
+  + 'Check your connection, then try again.</span>';
+function bootSlowStart_(){
+  clearTimeout(_bootSlowTimer);
+  _bootSlowTimer = setTimeout(function(){
+    // Already working from the handset's own copy: there is nothing to wait for and no
+    // reason to worry anybody.
+    if (S.entered) return;
+    var scr = $('#scrBoot'); if (!scr || scr.classList.contains('hide')) return;
+    var m = $('#bootMsg'); if (m) m.innerHTML = BOOT_MSG_SLOW;
+    // The spinner deliberately STAYS: this is not a failure, it is a long wait, and the
+    // difference matters to somebody deciding whether to keep holding the phone.
+    $('#bootErr').classList.remove('hide');
+  }, BOOT_SLOW_MS);
+}
+/** Stop counting. `ok` means the request came back FINE, in which case anything the slow
+    notice already put on screen has to be taken back down -- otherwise a boot that was merely
+    slow leaves "still trying" sitting inside #scrBoot, invisible only because that screen is
+    hidden, and the next logout shows it again over a perfectly healthy app. */
+function bootSlowStop_(ok){
+  clearTimeout(_bootSlowTimer); _bootSlowTimer = null;
+  if (!ok) return;
+  var e = $('#bootErr'); if (e) e.classList.add('hide');
+  var m = $('#bootMsg'); if (m) m.innerHTML = BOOT_MSG_FAIL;
+}
+
 function boot(){
+  bootSlowStart_();
   loadCacheFromDevice_();
   var loggedOut = false;
   try { loggedOut = localStorage.getItem('hcLoggedOut') === '1'; } catch(e){}
@@ -922,6 +971,7 @@ function boot(){
   if (warm && warm.ok) enterApp(warm);
 
   srv('api_callBoot', DEV).then(function(d){
+    bootSlowStop_(true);
     if (d.brand){ $('#bootBrand').textContent = d.brand; $('#regTitle').textContent = 'Karibu ' + d.brand + ' Calls'; }
     if (d.logo){
       setLogo_(d.logo, false);
@@ -958,10 +1008,15 @@ function boot(){
     // sign-in screen made them re-enter a team code that was never the problem -- and on a
     // handset that is already registered, that is a dead end. Stay here, say what happened,
     // and give them a button.
+    bootSlowStop_(false);
     if (window.console) console.error('[hoop] boot failed:', e);
     // Already working from what is on the handset: a dead connection is not a dead end, and it
     // is certainly not a reason to throw an officer off a screen full of their own customers.
     if (S.entered) return;
+    // Now it really has failed, so the "still trying" wording must go and the spinner with
+    // it -- a spinner over a dead request is the app telling an officer to keep waiting for
+    // something that is never coming.
+    var m = $('#bootMsg'); if (m) m.innerHTML = BOOT_MSG_FAIL;
     var spin = $('#bootSpin'); if (spin) spin.classList.add('hide');
     $('#bootErr').classList.remove('hide');
   });
@@ -2094,6 +2149,9 @@ function drawReports(){
 
 $('#bootRetry').onclick = function(){
   $('#bootErr').classList.add('hide');
+  // Back to the neutral wording too. Without this, a retry that goes slow shows the previous
+  // attempt's "the server is not answering" over a live request that may yet succeed.
+  var m = $('#bootMsg'); if (m) m.innerHTML = BOOT_MSG_FAIL;
   var spin = $('#bootSpin'); if (spin) spin.classList.remove('hide');
   boot();
 };
