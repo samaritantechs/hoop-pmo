@@ -93,13 +93,18 @@ class Updater {
     private static void prompt(final MainActivity activity, final int versionCode,
                                String versionName, String notes, final String url,
                                boolean failedBefore) {
-        String body = "HOOP PMO " + versionName + "\n\n" + notes;
+        /* The name in this dialog must be the name on the launcher icon, because the
+           instruction it gives -- allow "Install unknown apps" for X -- is one the officer
+           carries out in Android's own app list, where the app appears under
+           @string/app_name. It said "HOOP PMO" while the icon said "HOOP Calls", so the app
+           being named was not findable anywhere. Both are HOOPLOAN now. */
+        String body = "HOOPLOAN " + versionName + "\n\n" + notes;
         if (failedBefore) {
             body = "Usasishaji uliopita haukukamilika — bado unatumia toleo la zamani.\n"
-                 + "Ruhusu \"Sakinisha programu zisizojulikana\" kwa HOOP PMO, kisha jaribu tena.\n\n"
+                 + "Ruhusu \"Sakinisha programu zisizojulikana\" kwa HOOPLOAN, kisha jaribu tena.\n\n"
                  + "The last update did not finish, so this is still the old build. Allow "
-                 + "\"Install unknown apps\" for HOOP PMO, then try again.\n\n"
-                 + "HOOP PMO " + versionName + "\n" + notes;
+                 + "\"Install unknown apps\" for HOOPLOAN, then try again.\n\n"
+                 + "HOOPLOAN " + versionName + "\n" + notes;
         }
         new AlertDialog.Builder(activity)
                 .setTitle(failedBefore ? "Usasishaji haukukamilika / Update did not finish"

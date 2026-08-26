@@ -1,6 +1,6 @@
 {
-  "versionCode": 4,
-  "versionName": "1.0.3",
-  "notes": "Saa, betri na mtandao havifunikwi tena na app. / The clock, battery and network are no longer covered by the app.",
-  "apkUrl": "https://hoop-pmo.vercel.app/HOOP-Calls.apk"
+  "versionCode": 5,
+  "versionName": "1.0.4",
+  "notes": "App sasa inaitwa HOOPLOAN, na vitufe vya juu havifichwi tena na saa ya simu. / The app is now called HOOPLOAN, and the top bar's buttons are no longer hidden under the phone's clock.",
+  "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN.apk"
 }

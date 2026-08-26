@@ -1,6 +1,6 @@
 #!/bin/bash
 # =====================================================================================
-# Build HOOP Calls WITHOUT Gradle/AGP -- aapt2 + javac + d8 + zipalign + apksigner.
+# Build the HOOPLOAN app WITHOUT Gradle/AGP -- aapt2 + javac + d8 + zipalign + apksigner.
 # Exists because this build environment can reach dl.google.com's SDK repository but not
 # its Maven CDN, so the Android Gradle Plugin cannot be resolved. The wrapper uses only
 # platform APIs (androidx was removed with the browser-update change), so the platform

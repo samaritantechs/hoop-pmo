@@ -60,7 +60,20 @@ a{color:var(--b600)}
 
 /* ---- app shell ---- */
 #scrApp{display:none;flex-direction:column;height:100%}
-header.top{background:var(--b900);color:#fff;padding:14px 16px 12px;flex:0 0 auto}
+/* THE TOP BAR SAT UNDER THE STATUS BAR ON SOME HANDSETS.
+     "the apk interfaces both callap and system are too high to touch the top bar functions"
+
+   The wrapper pads the WebView below the system bars itself on API 30+, but that is one
+   mechanism on one code path, and where it does not land the page draws edge-to-edge and
+   the buttons end up beneath the clock -- visible, and not reachable.
+
+   env(safe-area-inset-top) is the belt to that brace, and it costs nothing when it is not
+   needed: if the native padding already moved the viewport clear of the status bar, the
+   inset is 0 and this line changes nothing at all. It only ever adds room where room is
+   actually missing. (viewport-fit=cover is already on the meta, which is what makes the
+   value available.) */
+header.top{background:var(--b900);color:#fff;flex:0 0 auto;
+  padding:calc(14px + env(safe-area-inset-top,0px)) 16px 12px}
 header.top .row1{display:flex;align-items:center;gap:10px}
 header.top .logo{width:30px;height:30px;border-radius:8px;background:#fff;object-fit:cover;display:block}
 header.top a{flex:0 0 auto;line-height:0}
@@ -430,7 +443,7 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
            the phone: "Files" saves it as a download, Drive keeps it, WhatsApp sends
            it. File share first, text share as the fallback for older WebViews; the
            plain download runs only where a real browser owns the page. */
-        if (window.HopeCalls && navigator.share){
+        if ((window.HoopLoan || window.HopeCalls) && navigator.share){
           if (f && navigator.canShare && navigator.canShare({files:[f]})){
             navigator.share({files:[f],title:'HOOP ripoti'}).catch(function(){});
             return;
@@ -562,14 +575,28 @@ function statusChip(s){
 }
 
 /* ================= native bridge (Android WebView JS interface, absent in a plain browser) =================
-   Contract implemented by com.samaritantechs.hopecalls.HopeCallsBridge:
+   Contract implemented by the Android wrapper's bridge class, exposed as window.HoopLoan
+   (and, for handsets still on the older build, window.HopeCalls):
      getDeviceId()            -> String, stable per install
      getCalls(sinceMs, max)   -> JSON string [{ts,dur,dir:"in"|"out",num}, ...] from the Android call log
      getWatermark()/setWatermark(ms) -> String, last-synced call timestamp (persisted so a JobScheduler
                                         background sync and this foreground page never double-count)
    In a plain browser none of this exists -- the page still works for dialing (tel: links) and logging
    follow-ups, it just can't read the call log, so it shows a small "install the app" banner instead. */
-function nativeBridge(){ return (window.HopeCalls && window.HopeCalls.getCalls) ? window.HopeCalls : null; }
+/* EITHER NAME, ON PURPOSE, FOR AS LONG AS BOTH ARE OUT THERE.
+
+   The rename to HOOPLOAN reaches the APK and this page at different moments: this page is
+   served fresh from Vercel to handsets that are still running the OLD build, and will be
+   for as long as officers take to update. If it looked only for the new name, every one of
+   those phones would lose its bridge -- no call log sync, no device id -- the instant this
+   deployed, and the fix would be "update the app you can no longer be told to update".
+
+   So the page takes whichever is there and the new APK publishes both. When every handset
+   has updated, HopeCalls can go; until then it costs one `||`. */
+function nativeBridge(){
+  var b = window.HoopLoan || window.HopeCalls;
+  return (b && b.getCalls) ? b : null;
+}
 function deviceId(){
   var nb = nativeBridge();
   if (nb && nb.getDeviceId) { try { var id = nb.getDeviceId(); if (id) return id; } catch(e){} }

@@ -172,7 +172,7 @@ to call is exactly the kind of thing that changes on a Tuesday.
 
 ## Updates
 
-Same arrangement as HOOP Calls: `lock-version.json` at the repo root stamps the APK *and* is
+Same arrangement as the HOOPLOAN app: `lock-version.json` at the repo root stamps the APK *and* is
 served back at `/api/lock-version`, so the version a phone runs and the version advertised
 cannot drift. One difference — the lock app **does not ask**. An officer holding the calls
 app should get a prompt; nobody is holding a locked handset in a drawer, and a prompt nobody

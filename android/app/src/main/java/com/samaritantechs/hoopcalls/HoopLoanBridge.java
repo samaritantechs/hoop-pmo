@@ -34,11 +34,11 @@ import java.util.UUID;
  *   isIgnoringBatteryOptimizations() / requestIgnoreBatteryOptimizations()
  * Everything returns strings/primitives -- the WebView bridge marshals nothing fancier.
  */
-public class HopeCallsBridge {
+public class HoopLoanBridge {
     private final MainActivity activity;
     private final SharedPreferences prefs;
 
-    HopeCallsBridge(MainActivity activity, SharedPreferences prefs) {
+    HoopLoanBridge(MainActivity activity, SharedPreferences prefs) {
         this.activity = activity;
         this.prefs = prefs;
     }

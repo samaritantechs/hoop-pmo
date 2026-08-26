@@ -11,13 +11,18 @@ with the code so it evolves with the system.
 | **Upload** | Faili zote: Watu daily, sales, kurasa za Sipho | hoop-pmo.vercel.app/upload |
 | **Portal** | Uongozi: dashboard, wateja, mauzo, ripoti | hoop-pmo.vercel.app/portal |
 
-**APK:** sakinisha mara moja kutoka `hoop-pmo.vercel.app/HOOPLOAN-Calls.apk` — inajisasisha
+**APK:** sakinisha mara moja kutoka `hoop-pmo.vercel.app/HOOPLOAN.apk` — inajisasisha
 yenyewe; simu zinarekodiwa kiotomatiki (Android).
 
 ## Mzunguko wa siku / The daily rhythm
 
 1. **Asubuhi:** pakia orodha ya Watu ya leo kwenye /upload, tarehe ya leo. Simu
-   zinajipakia zenyewe.
+   zinajipakia zenyewe. **Soma mstari wa mwisho wa upload:** unasema orodha ina wateja
+   wangapi na **7+ ndani ya siku 45 ni wangapi** — namba zilezile dashboard itaonyesha.
+   Ukiona onyo, usianze siku; mwambie msimamizi.
+   / Read the last line the upload prints. It reports what the deck holds, counted in the
+   database, and it is the same count the dashboard shows an hour later. A warning there
+   means the deck is wrong now — while the file is still in your hand.
 2. **Credit team wanapiga:** tab **Siku ≤45** kwanza, kisha **Lock 7+**. Kila simu
    inarekodiwa yenyewe.
 3. **Kila mazungumzo:** chagua hali (AMETOA AHADI + tarehe, ANALIPA LEO, HAPATIKANI…)

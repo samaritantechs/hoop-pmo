@@ -364,6 +364,41 @@ $('#send').onclick = function(){
         if (droppedAll.length) t += '\nRejected rows (' + droppedAll.length + '): '
           + droppedAll.slice(0,10).map(function(d){ return d.name + ' (' + d.imei + ')'; }).join('; ')
           + (droppedAll.length > 10 ? ' …' : '');
+
+        /* WHAT THE DECK ACTUALLY HOLDS, counted in the table the phones read.
+             "the credits tell me they uploaded well yet 7+ people aint seen in the distribution"
+
+           Everything above this line describes the FILE. None of it could tell anybody
+           whether the deck came out right, so a short deck and a perfect one printed the
+           same sentence and the disagreement that followed had no evidence on either side.
+           These three numbers come back from the database after the last slice, and they
+           are the same three the dashboard tiles show -- so if they disagree with what
+           leadership sees an hour later, the upload is not the place to look. */
+        var d = x.b.deck, warn = null;
+        if (d) {
+          t += '\nOrodha (deck) sasa: ' + d.rows + ' wateja · 7+ ' + d.locked7
+             + ' · 7+ ndani ya siku 45: ' + d.locked7InWindow
+             + '\n/ On the deck now: ' + d.rows + ' customers · 7+ ' + d.locked7
+             + ' · 7+ inside the 45-day window: ' + d.locked7InWindow;
+          // A deck shorter than the file is either a slice that never landed or repeated
+          // IMEIs in the file itself. Both are worth a look; neither is guessed at here.
+          if (d.rows < inserted) {
+            warn = 'Faili lilikuwa na ' + inserted + ', orodha ina ' + d.rows
+              + '. Ama sehemu ya upload haikufika, ama IMEI zimerudiwa kwenye faili. Angalia kabla ya kuanza siku.'
+              + '\n/ The file carried ' + inserted + ' rows but the deck holds ' + d.rows
+              + '. Either a slice never landed, or the file repeats IMEIs. Check before the day starts.';
+          } else if (d.locked7 > 0 && d.locked7InWindow === 0) {
+            // Legitimate on a genuinely old book -- and the exact shape of the bug that
+            // made every 7+ customer vanish, so it is never passed over in silence.
+            warn = 'Hakuna mteja wa 7+ ndani ya siku 45, ingawa faili lina ' + d.locked7
+              + ' waliofungiwa wiki+. Kama unategemea kuwaona, tarehe za "Disbursed Date" ndizo za kuangalia.'
+              + '\n/ No 7+ customer falls inside the 45-day window, though the file flags '
+              + d.locked7 + ' locked a week or more. If you expected to see them, the Disbursed Date column is what to check.';
+          } else if (d.locked7InWindow === 0) {
+            warn = 'Orodha haina mteja yeyote wa 7+ ndani ya siku 45 leo.'
+              + '\n/ Today’s deck carries no 7+ customer inside the 45-day window.';
+          }
+        }
         /* THE UPLOAD THAT LOOKED PERFECT AND WAS NOT.
            A deck of 2,689 rows went in reporting exactly this success message while its
            Disbursed Date column failed to parse on every single row -- Watu writes
@@ -388,6 +423,10 @@ $('#send').onclick = function(){
           $('#send').disabled = false;
           return;
         }
+        // The deck read back short, or empty of the customers the day is built around. The
+        // upload itself succeeded -- so this is amber, not red: it says what is odd and
+        // leaves the judgement to the person who knows the book.
+        if (warn) { show(t + '\n\n⚠ ' + warn, 'bad'); $('#send').disabled = false; return; }
         show(t, 'ok');
         $('#send').disabled = false;
       });

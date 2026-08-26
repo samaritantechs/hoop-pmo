@@ -15,8 +15,24 @@
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Arial,Helvetica,sans-serif}
 .hide{display:none!important}
-/* sign-in */
-#scrIn{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,var(--b900),var(--b800))}
+/* SIGN-IN, AND WHY IT WOULD NOT RISE FOR THE KEYBOARD.
+
+     "at login page it doesnt slide up to see whats beeing filled"
+
+   fitPanelToKeyboard_ was already pointed at this box and could not move it. Two reasons,
+   both in this one line as it was written:
+
+     min-height:100vh   a height set in JS cannot shrink a box below its own min-height, so
+                        the panel stayed a full viewport tall however small the visible area
+                        got, and the code field kept its place behind the keys.
+     not positioned     `top` means nothing on a static block, so the other half of the fit
+                        was ignored too.
+
+   position:fixed;inset:0 is what HOPE's #signin is, and it is why the same helper works
+   there. overflow:auto so a small screen can still reach the button once the keyboard has
+   taken half the height. */
+#scrIn{position:fixed;inset:0;overflow:auto;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(180deg,var(--b900),var(--b800))}
 .incard{background:#fff;border-radius:18px;padding:28px 24px;width:100%;max-width:380px;margin:16px;box-shadow:0 12px 34px -14px rgba(8,28,74,.45)}
 .mark{width:76px;display:block;margin-bottom:10px}
 .incard h1{font-size:18px;margin:0 0 4px}
@@ -66,7 +82,9 @@ input,select,textarea{font-family:inherit}
    ramp. A near-black column the full height of the screen next to a white page is what
    makes a system read as hard; one step lighter is the colour it was meant to match. */
 aside.side{width:236px;flex:0 0 auto;background:var(--b900);color:#cfe0ff;
-  display:flex;flex-direction:column;padding:14px 12px;min-height:0}
+  display:flex;flex-direction:column;min-height:0;
+  /* Same inset as the white bar beside it, or the brand sits under the clock. */
+  padding:calc(14px + env(safe-area-inset-top,0px)) 12px 14px}
 /* Neither of these may be squeezed: the brand anchors the top and the foot holds Logout. */
 .side .brand,.side .foot{flex:0 0 auto}
 .side .brand{display:flex;align-items:center;gap:9px;color:#fff;font-weight:800;font-size:14px;line-height:1.3}
@@ -109,7 +127,20 @@ aside.side{width:236px;flex:0 0 auto;background:var(--b900);color:#cfe0ff;
 .side .foot a:hover,.side .foot button:hover{background:rgba(255,255,255,.18)}
 
 main.main{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column}
-.top{background:#fff;border-bottom:1px solid var(--line);padding:11px 16px;
+/* THE TOP BAR SAT UNDER THE STATUS BAR ON SOME HANDSETS.
+     "the apk interfaces both callap and system are too high to touch the top bar functions"
+
+   The wrapper pads the WebView below the system bars itself on API 30+, but that is one
+   mechanism on one code path, and where it does not land the page draws edge-to-edge and
+   the buttons end up beneath the clock -- visible, and not reachable.
+
+   env(safe-area-inset-top) is the belt to that brace, and it costs nothing when it is not
+   needed: if the native padding already moved the viewport clear of the status bar, the
+   inset is 0 and this line changes nothing at all. It only ever adds room where room is
+   actually missing. (viewport-fit=cover is already on the meta, which is what makes the
+   value available.) */
+.top{background:#fff;border-bottom:1px solid var(--line);
+  padding:calc(11px + env(safe-area-inset-top,0px)) 16px 11px;
   display:flex;align-items:center;gap:10px;flex:0 0 auto}
 .top h1{margin:0;font-size:16.5px;font-weight:800;min-width:0;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
@@ -512,7 +543,7 @@ function closeDrawer(){
   bg.style.display='none';
   /* Clear what fitPanelToKeyboard_ set. Without this a drawer opened later inherits the
      height the keyboard forced on this one and opens as a letterbox. */
-  bg.style.height=''; bg.style.top='';
+  bg.style.height=''; bg.style.minHeight=''; bg.style.top='';
 }
 $('#drawerBg').onclick=function(e){ if(e.target===$('#drawerBg')) closeDrawer(); };
 /* Esc closes it, same as tapping outside. At a desk that is the reflex, and a panel that
@@ -540,7 +571,9 @@ function paneLoading(m, title){
     (the same object HOOPLOAN Calls reads its device id from), so its presence IS the proof --
     a user agent string can be typed by anyone, an injected object cannot. */
 function fromApp_(){
-  return !!(window.HopeCalls && window.HopeCalls.getDeviceId);
+  // Either name: an older handset still exposes HopeCalls. See nativeBridge() in call.html.
+  var b = window.HoopLoan || window.HopeCalls;
+  return !!(b && b.getDeviceId);
 }
 function safeErr(e){
   var raw=String((e&&e.message)||e||'');
@@ -1607,6 +1640,10 @@ function fitPanelToKeyboard_(id){
   var vv=window.visualViewport, bg=document.getElementById(id);
   if(!vv||!bg) return;
   bg.style.height=vv.height+'px';
+  /* AND the min-height with it. A stylesheet min-height outranks an inline height, so
+     setting one without the other leaves the panel exactly as tall as it was -- which is
+     precisely how the sign-in box sat still while this ran on every keyboard event. */
+  bg.style.minHeight=vv.height+'px';
   bg.style.top=vv.offsetTop+'px';
 }
 (function(){

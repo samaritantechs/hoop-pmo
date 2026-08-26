@@ -24,10 +24,10 @@ import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 /**
- * HOOP PMO in one app: a WebView around the portal launcher, so a leader signs in once and
+ * HOOPLOAN in one app: a WebView around the portal launcher, so a leader signs in once and
  * chooses Calls or the system (dashboard, uploads) from the same place -- plus the two things
  * a plain browser tab cannot do here:
- *   1. read the device call log, so officers' calls sync automatically (HopeCallsBridge);
+ *   1. read the device call log, so officers' calls sync automatically (HoopLoanBridge);
  *   2. hand a real file picker to the page's &lt;input type=file&gt;, which is DEAD in a WebView
  *      unless the host app implements onShowFileChooser -- that is what makes uploading the
  *      daily Expected/Defaulters workbook from the phone work at all.
@@ -45,6 +45,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        /* THE PREFERENCES FILE KEEPS ITS OLD NAME, whatever the app is called now. It holds
+           the device id every registered handset is known to the server by, and the saved
+           access code. Renaming the file points the app at an empty one: every officer is
+           signed out, and the phone comes back as a device nobody has ever seen. Nobody can
+           see this string; the cost of "tidying" it is a morning of re-registrations. */
         prefs = getSharedPreferences("hopecalls", MODE_PRIVATE);
 
         web = new WebView(this);
@@ -71,7 +76,13 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);          // localStorage holds the access code, device id, list cache
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
         s.setAllowFileAccess(false);           // the page never needs file:// -- keep it shut
-        web.addJavascriptInterface(new HopeCallsBridge(this, prefs), "HopeCalls");
+        /* TWO NAMES FOR ONE BRIDGE, while the rename crosses over. HoopLoan is what the
+           page reaches for first; HopeCalls stays so that a page deployed before this APK
+           reaches a phone -- or after it, on a handset that has not updated -- still finds
+           something. Same object, so there is no second copy of any state. */
+        HoopLoanBridge bridge = new HoopLoanBridge(this, prefs);
+        web.addJavascriptInterface(bridge, "HoopLoan");
+        web.addJavascriptInterface(bridge, "HopeCalls");
 
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -123,7 +134,7 @@ public class MainActivity extends Activity {
                    either, it throws, and the catch below then asks Android to open that same URL
                    with an ordinary app -- which nothing can, so the app closes with no file and
                    no message. That is the "downloading JPG just closes the app" report.
-                   The page saves those itself through HopeCalls.saveBase64; if one reaches here
+                   The page saves those itself through HoopLoan.saveBase64; if one reaches here
                    at all it is from an older page, and saying so beats dying. */
                 if (url != null && (url.startsWith("blob:") || url.startsWith("data:"))) {
                     Toast.makeText(MainActivity.this,
@@ -188,13 +199,16 @@ public class MainActivity extends Activity {
         String current = startUrl();
         String html = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
                 + "<body style='font-family:sans-serif;background:#0B2A6B;color:#fff;padding:28px'>"
-                + "<h2 style='margin:0 0 6px'>HOOP Calls</h2>"
+                + "<h2 style='margin:0 0 6px'>HOOPLOAN</h2>"
                 + "<p style='color:#93C5FD'>Imeshindikana kufungua mfumo. Angalia mtandao wako, kisha jaribu tena.<br>"
                 + "<small>" + android.text.TextUtils.htmlEncode(why == null ? "" : why) + "</small></p>"
-                + "<button onclick='HopeCalls.retry()' style='width:100%;padding:14px;border:0;border-radius:10px;font-weight:700'>Jaribu tena / Retry</button>"
+                // This page is built by THIS build, which registers the bridge under both
+                // names, so it can use the new one straight away -- unlike public/call.html,
+                // which is served to older installs too and must still accept either.
+                + "<button onclick='HoopLoan.retry()' style='width:100%;padding:14px;border:0;border-radius:10px;font-weight:700'>Jaribu tena / Retry</button>"
                 + "<p style='color:#93C5FD;margin-top:26px'>Kama mfumo umehamia anwani mpya, iweke hapa:</p>"
                 + "<input id=u value='" + android.text.TextUtils.htmlEncode(current) + "' style='width:100%;padding:12px;border-radius:10px;border:0'>"
-                + "<button onclick='HopeCalls.setStartUrl(document.getElementById(\"u\").value)' "
+                + "<button onclick='HoopLoan.setStartUrl(document.getElementById(\"u\").value)' "
                 + "style='width:100%;padding:14px;border:0;border-radius:10px;font-weight:700;margin-top:10px'>Hifadhi &amp; fungua / Save &amp; open</button>"
                 + "</body>";
         web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
