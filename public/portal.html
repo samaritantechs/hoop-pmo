@@ -189,6 +189,17 @@ body.nav-closed aside.side{display:none}
 .tile .l{font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
 .tile .v{font-size:24px;font-weight:800;margin-top:4px}
 .tile .s{font-size:11px;color:var(--soft);margin-top:2px}
+/* A TILE THAT IS A DOOR. A number with no way through to the rows behind it is where every
+   "where does this come from?" starts, so the ones that HAVE a list say so and open it. The
+   affordance has to be visible without a hover -- half these screens are read on a phone,
+   where there is no such thing -- hence the standing "fungua ›" line rather than a cursor
+   change alone. .on marks the tile whose list is currently showing. */
+.tile.go{cursor:pointer;transition:transform .08s ease,box-shadow .12s ease,border-color .12s ease}
+.tile.go:hover{border-color:var(--b300);box-shadow:0 6px 16px -6px rgba(11,42,107,.3);transform:translateY(-1px)}
+.tile.go:focus-visible{outline:2px solid var(--b600);outline-offset:2px}
+.tile.go.on{border-color:var(--b600);box-shadow:0 0 0 1px var(--b600) inset}
+.tile .gox{font-size:10px;font-weight:800;color:var(--b600);margin-top:7px;text-transform:uppercase;letter-spacing:.04em}
+.tile.go.on .gox::after{content:' ✓'}
 .card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px;margin-bottom:14px;box-shadow:0 2px 10px -4px rgba(11,42,107,.12)}
 .card h2{font-size:15px;margin:0 0 10px}
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -422,6 +433,57 @@ body.dark .tabs button.on{background:var(--b700);color:#fff}
 <script>
 function $(s,r){ return (r||document).querySelector(s); }
 function $all(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); }
+
+/* =====================================================================================
+   EVERY TILE IS A DOOR -- one helper, so all forty behave alike.
+
+     "the widgets in dashboard, sales and stock; in recovery; fraud audit; all stock;
+      devices: - should be clickable to open the description/link to their specified
+      data lists"
+
+   A headline number with no way through to its rows is where every "where does this come
+   from?" begins, and answering that by hand is how a figure loses an argument it was right
+   about. So a tile that HAS a list carries it.
+
+   THREE KINDS OF DOOR, because the three honest answers are different:
+     another pane   the rows live somewhere that already draws them well (Wateja, Recovery,
+                    Mauzo). Set that pane's own filter, then goTab -- never a second copy
+                    of a table that already exists.
+     filter in place  the rows are already on this screen and the tile is one slice of them
+                    (Devices by state, Fraud audit by status). Toggle, and mark the tile.
+     sort in place  every column of the table below IS one of the tiles (Stock
+                    accountability, Call reports). The tile answers "who" by bringing the
+                    worst to the top rather than hiding anybody.
+
+   A tile with no honest destination stays a plain tile. Sending somebody to a screen that
+   does not actually contain the number they clicked is worse than not being clickable.
+
+   The closures live in TILEGO, indexed by the data-go attribute rather than inlined as
+   onclick strings -- an IMEI or a holder's name in an onclick= is one apostrophe away from
+   a broken pane, and this page builds all its HTML by concatenation. */
+var TILEGO=[];
+function tile(label,value,sub,o){
+  o=o||{};
+  var go=o.go?(' data-go="'+(TILEGO.push(o.go)-1)+'" tabindex="0" role="button"'):'';
+  return '<div class="tile'+(o.go?' go':'')+(o.on?' on':'')+'"'+go+'>'
+    +'<div class="l">'+esc(label)+'</div>'
+    +'<div class="v"'+(o.color?' style="color:var(--'+o.color+')"':'')+'>'+value+'</div>'
+    +(sub?'<div class="s">'+sub+'</div>':'')
+    +(o.go?'<div class="gox">'+esc(o.cta||(o.on?'imefunguliwa':'fungua ›'))+'</div>':'')
+    +'</div>';
+}
+/** Call after any innerHTML that contains tiles -- including a box filled in later. */
+function wireTiles(root){
+  $all('[data-go]',root).forEach(function(el){
+    var fn=TILEGO[Number(el.getAttribute('data-go'))];
+    if(!fn) return;
+    el.onclick=fn;
+    // Keyboard, because these are buttons in everything but tag name.
+    el.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); fn(); } };
+  });
+}
+/** Open another pane with its own filter already set. */
+function goWith(tab,set){ if(set) set(); goTab(tab); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function money(n){ n=Number(n)||0; return n.toLocaleString('en-US',{maximumFractionDigits:0}); }
 function pct(x){ return (x==null||isNaN(x))?'—':Math.round(100*x)+'%'; }
@@ -1078,6 +1140,10 @@ function enter(){
 
 function draw(){
   var m=$('#main');
+  /* Emptied once per pane draw, never mid-draw: the dashboard's sales and stock boxes fill
+     in after their own fetches and push onto the same list, and the tiles already on screen
+     are still holding the indexes they were given. */
+  TILEGO=[];
   if(TAB==='dash') return drawDash(m);
   if(TAB==='cust') return drawCust(m);
   if(TAB==='fraud') return drawAudit(m);
@@ -1103,12 +1169,23 @@ function drawDash(m){
        governs everything under it, and a control that sits halfway down a page reads as
        belonging only to the card it is next to, which is exactly how it was misread. */
     '<div class="card" id="dashWeekBar" style="padding:10px 12px;margin-bottom:10px"></div>'
+    /* EVERY ONE OF THESE FIVE OPENS THE PANE THAT HOLDS ITS ROWS -- see the note on tile().
+       The dashboard is the screen people argue over, so it is the one where "show me who"
+       has to be a tap rather than a conversation. */
     +'<div class="tiles">'
-    +'<div class="tile"><div class="l">Orodha ya leo</div><div class="v">'+n(s.list)+'</div><div class="s">'+(s.deckDate?('deck '+esc(s.deckDate)):'hakuna upload bado')+'</div></div>'
-    +'<div class="tile"><div class="l">Locked 7+</div><div class="v" style="color:var(--bad)">'+n(s.locked7)+'</div><div class="s">Watu amewaweka Locked 7+, ndani ya siku 45</div></div>'
-    +'<div class="tile"><div class="l">Ndani ya siku 45</div><div class="v">'+n(s.inWindow)+'</div><div class="s">dirisha la Hoop</div></div>'
-    +'<div class="tile"><div class="l">Simu leo</div><div class="v">'+n(s.calls)+'</div><div class="s">credit team</div></div>'
-    +'<div class="tile"><div class="l">Reached — yesterday</div><div class="v" style="color:var(--ok)">'+(s.reached&&s.reached.pct!=null?pct(s.reached.pct):'—')+'</div><div class="s">'+(s.reached&&s.reached.den?money(s.reached.num)+' / '+money(s.reached.den)+' · ':'')+'last week avg: '+(s.weekAvg&&s.weekAvg.pct!=null?pct(s.weekAvg.pct):'—')+'</div></div>'
+    +tile('Orodha ya leo',n(s.list),(s.deckDate?('deck '+esc(s.deckDate)):'hakuna upload bado'),
+      { go:function(){ goWith('cust',function(){ CUST.list='leo45'; }); }, cta:'wateja ›' })
+    +tile('Locked 7+',n(s.locked7),'Watu amewaweka Locked 7+, ndani ya siku 45',
+      { color:'bad', cta:'marejesho ›',
+        go:function(){ goWith('recovery',function(){ REC.kind='off'; }); } })
+    +tile('Ndani ya siku 45',n(s.inWindow),'dirisha la Hoop',
+      { go:function(){ goWith('cust',function(){ CUST.list='leo45'; }); }, cta:'wateja ›' })
+    +tile('Simu leo',n(s.calls),'credit team',
+      { go:function(){ goWith('ripoti',function(){ RIP.sort='calls'; }); }, cta:'ripoti ›' })
+    +tile('Reached — yesterday',(s.reached&&s.reached.pct!=null?pct(s.reached.pct):'—'),
+      (s.reached&&s.reached.den?money(s.reached.num)+' / '+money(s.reached.den)+' · ':'')
+        +'last week avg: '+(s.weekAvg&&s.weekAvg.pct!=null?pct(s.weekAvg.pct):'—'),
+      { color:'ok', go:function(){ goWith('ripoti',function(){ RIP.sort='ratio'; }); }, cta:'ripoti ›' })
     +'</div>'
     /* THE WEEK, LEFT AND RIGHT. These two answer halves of one question -- how much 7+ debt
        is on the books, and how much of it the credit team pulled back -- so reading them
@@ -1151,6 +1228,7 @@ function drawDash(m){
     +'<li>Credit team wanafungua <a href="/call">HOOPLOAN Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
     +'<li>Kesho asubuhi: pakia ya kesho, kisha angalia <b>Recovery</b> — nani amelipa baada ya simu zetu.</li>'
     +'</ol></div>';
+  wireTiles(m);
   // Everything the week governs, through the one path that governs it.
   dashWeekRedraw();
 }
@@ -1177,25 +1255,30 @@ function drawDashSales(){
        throughout; this is the same comparison. */
     var over=tgt?(amt-tgt):null;
     var pctOfTarget=tgt?Math.round(100*amt/tgt):null;
+    // All three open Mauzo, where the day-by-day board and the per-agent pivots live.
+    var toSales=function(){ goTab('sales'); };
     b.innerHTML='<div class="tiles" style="margin-bottom:8px">'
-      +'<div class="tile"><div class="l">Simu zimeuzwa</div><div class="v">'+money(n)+'</div>'
-        +'<div class="s">'+esc(d.from||'')+' → '+esc(d.to||'')+'</div></div>'
-      +'<div class="tile"><div class="l">Thamani</div><div class="v">'+money(amt)+'</div>'
-        +'<div class="s">TZS</div></div>'
+      +tile('Simu zimeuzwa',money(n),esc(d.from||'')+' → '+esc(d.to||''),
+        { go:toSales, cta:'mauzo ›' })
+      +tile('Thamani',money(amt),'TZS',{ go:toSales, cta:'mauzo ›' })
       /* THE PERFORMANCE IS THE HEADLINE, not the goal. Printing the target big and the
          delta small put the number nobody can act on where the eye lands first. */
-      +(tgt?'<div class="tile"><div class="l">Dhidi ya lengo</div>'
-        +'<div class="v" style="color:var(--'+(over>=0?'ok':'bad')+')">'+pctOfTarget+'%</div>'
-        +'<div class="s">'+(over>=0?'+'+money(over):'−'+money(Math.abs(over)))
-        +' / lengo '+money(tgt)+'</div></div>'
-        :'<div class="tile"><div class="l">Dhidi ya lengo</div><div class="v">—</div>'
-        +'<div class="s">weka SALES_DAILY_TARGET</div></div>')
+      +(tgt
+        ? tile('Dhidi ya lengo',pctOfTarget+'%',
+            (over>=0?'+'+money(over):'−'+money(Math.abs(over)))+' / lengo '+money(tgt),
+            { color:(over>=0?'ok':'bad'), go:toSales, cta:'mauzo ›' })
+        /* No target set is a SETTINGS problem, so this one door leads there instead --
+           telling somebody to "weka SALES_DAILY_TARGET" without saying where is half an
+           instruction. Only for a code that can actually open Settings. */
+        : tile('Dhidi ya lengo','—','weka SALES_DAILY_TARGET',
+            hasNav('settings')?{ go:function(){ goTab('settings'); }, cta:'settings ›' }:{}))
       +'</div>'
       // Said plainly rather than shown as "this week" -- see the Monday problem.
       +(d.fellBack?'<div class="note">Wiki hii bado haina mauzo — hii ni wiki iliyopita. '
         +'/ Nothing uploaded for this week yet; showing the last week that has sales.</div>':'')
       +salesWeekChart_(d)
       +'<button class="btn sm ghost" onclick="goTab(\'sales\')">Fungua Mauzo / Open sales</button>';
+    wireTiles(b);
   }).catch(function(e){ var b=$('#dashSalesBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
 }
 /** TZS at a glance. A week's takings run to eight digits, and eight digits above a bar is a
@@ -1371,14 +1454,16 @@ function drawDashStock(){
       return;
     }
     var un=t.unaccounted||0;
+    /* Each opens Stock accountability with its own column brought to the top, so the tile
+       lands on WHO rather than on the same total again one screen further down. */
+    var toAcct=function(col){ return function(){ goWith('acct',function(){ STOCKACCT.sort=col; }); }; };
     b.innerHTML='<div class="tiles" style="margin-bottom:8px">'
-      +'<div class="tile"><div class="l">Zilizopo</div><div class="v">'+money(t.held||0)+'</div>'
-        +'<div class="s">'+esc(String(d.asOf).slice(0,10))+'</div></div>'
-      +'<div class="tile"><div class="l">Hazijulikani</div>'
-        +'<div class="v"'+(un?' style="color:var(--bad)"':'')+'>'+money(un)+'</div>'
-        +'<div class="s">zimeondoka bila maelezo</div></div>'
-      +'<div class="tile"><div class="l">Zimekaa muda</div><div class="v">'+money(t.stale||0)+'</div>'
-        +'<div class="s">zaidi ya siku '+money(d.staleDays||0)+'</div></div>'
+      +tile('Zilizopo',money(t.held||0),esc(String(d.asOf).slice(0,10)),
+        { go:toAcct('held'), cta:'nani anazo ›' })
+      +tile('Hazijulikani',money(un),'zimeondoka bila maelezo',
+        { color:(un?'bad':''), go:toAcct('unaccounted'), cta:'nani anazo ›' })
+      +tile('Zimekaa muda',money(t.stale||0),'zaidi ya siku '+money(d.staleDays||0),
+        { go:toAcct('stale'), cta:'nani anazo ›' })
       +'</div>'
       +stockSplitBars_(d,t)
       /* Not the same as zero unaccounted, and it must not read like it: a departure nobody
@@ -1386,6 +1471,7 @@ function drawDashStock(){
       +(d.notChecked?'<div class="note">'+money(d.notChecked)+' hazikuweza kukaguliwa. '
         +'/ could not be checked against the sales book or Watu.</div>':'')
       +'<button class="btn sm ghost" onclick="goTab(\'acct\')">Fungua uwajibikaji / Open accountability</button>';
+    wireTiles(b);
   }).catch(function(e){ var b=$('#dashStockBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
 }
 
@@ -1712,7 +1798,25 @@ function drawTrend(){
 }
 
 /* ---------- ripoti ---------- */
-var RIP={from:isoToday(-7),to:isoToday(0),team:''};
+var RIP={from:isoToday(-7),to:isoToday(0),team:'',sort:''};
+/** Tile options for "sort the officers by this column". Clicking the live one clears it. */
+function ripBy(key,cta){
+  return { on:RIP.sort===key, cta:cta,
+    go:function(){ RIP.sort=(RIP.sort===key?'':key); drawRipoti($('#main')); } };
+}
+/* WORST FIRST FOR % PF, biggest first for everything else. The three volume columns are
+   read as league tables -- who did the most -- while % PF is only ever looked at to find
+   who is not chasing their own book, so ordering it downward would bury the answer. */
+function ripSorted(users){
+  if(!RIP.sort) return users;
+  var k=RIP.sort, up=(k==='ratio');
+  return users.slice().sort(function(a,b){
+    var x=Number(a[k])||0, y=Number(b[k])||0;
+    // Somebody with no calls has no ratio to judge; they sink rather than topping the list.
+    if(up){ if(!a.calls) return 1; if(!b.calls) return -1; return x-y; }
+    return y-x;
+  });
+}
 function drawRipoti(m){
   m.innerHTML='<div class="card"><h2>Call reports — simu za credit team</h2><div class="sk"></div></div>';
   srv('report',{from:RIP.from,to:RIP.to,team:RIP.team}).then(function(d){
@@ -1723,14 +1827,19 @@ function drawRipoti(m){
       +'<select class="inp" id="rTeam"><option value="">Timu zote</option>'
       +(d.teams||[]).map(function(x){return '<option'+(x.team===RIP.team?' selected':'')+'>'+esc(x.team)+'</option>';}).join('')
       +'</select></div>'
+      /* EVERY TILE IS A COLUMN OF THE TABLE BELOW, so each one answers "who" by bringing
+         that column to the top rather than by opening a second copy of the same table.
+         % PF sorts WORST first: a tile you click because it looks low should not hand you
+         the people who are already doing well. */
       +'<div class="tiles">'
-      +'<div class="tile"><div class="l">Simu</div><div class="v">'+money(t.calls)+'</div></div>'
-      +'<div class="tile"><div class="l">Muda</div><div class="v">'+fmtDur(t.duration)+'</div></div>'
-      +'<div class="tile"><div class="l">Portfolio</div><div class="v" style="color:var(--ok)">'+money(t.portfolio)+'</div></div>'
-      +'<div class="tile"><div class="l">% pf</div><div class="v">'+(t.calls?pct(t.ratio):'—')+'</div></div>'
+      +tile('Simu',money(t.calls),'',ripBy('calls','nani amepiga ›'))
+      +tile('Muda',fmtDur(t.duration),'',ripBy('duration','nani ametumia ›'))
+      +tile('Portfolio',money(t.portfolio),'',
+        Object.assign({color:'ok'},ripBy('portfolio','nani amefuata ›')))
+      +tile('% pf',(t.calls?pct(t.ratio):'—'),'',ripBy('ratio','wa chini kwanza ›'))
       +'</div>'
       +'<div class="scroll"><table><thead><tr><th>Afisa</th><th class="r">Simu</th><th class="r">Muda</th><th class="r">Wateja</th><th class="r">PF</th><th class="r">Non-PF</th><th class="r">% PF</th><th></th></tr></thead><tbody>'
-      +(d.users||[]).map(function(u){
+      +ripSorted(d.users||[]).map(function(u){
         var h=telHref(u.phone);
         return '<tr><td>'+esc(u.name)+'<div class="mut" style="font-size:10.5px">'+esc(u.team||'')+' '+esc(u.position||'')+'</div></td>'
           +'<td class="r">'+money(u.calls)+'</td><td class="r">'+fmtDur(u.duration)+'</td>'
@@ -1740,6 +1849,7 @@ function drawRipoti(m){
           +'<td class="r"'+(u.calls&&u.ratio<0.5?' style="color:var(--bad)"':'')+'>'+(u.calls?pct(u.ratio):'—')+'</td>'
           +'<td class="r">'+(h!=='#'?'<a href="tel:'+h+'" title="'+esc(u.phone)+'">📞</a>':'')+'</td></tr>';
       }).join('')+'</tbody></table></div></div>';
+    wireTiles(m);
     $('#rF').onchange=function(){RIP.from=this.value;drawRipoti(m);};
     $('#rT').onchange=function(){RIP.to=this.value;drawRipoti(m);};
     $('#rTeam').onchange=function(){RIP.team=this.value;drawRipoti(m);};
@@ -1747,6 +1857,26 @@ function drawRipoti(m){
 }
 
 /* ---------- recovery ---------- */
+/* kind: which slice of the comparison is on screen. '' = all of it. Set from the dashboard
+   too, so "Locked 7+" over there lands on the people who are sinking over here. */
+var REC={kind:''};
+function recBy(k,cta){
+  return { on:REC.kind===k, cta:cta||'orodha ›',
+    go:function(){ REC.kind=(REC.kind===k?'':k); drawRecovery($('#main')); } };
+}
+function recRows(rows){
+  // 'off' is what the dashboard asks for -- the ones going the wrong way, either direction.
+  if(REC.kind==='off') return rows.filter(function(r){ return r.kind==='worse'||r.kind==='left'; });
+  if(!REC.kind) return rows;
+  return rows.filter(function(r){ return r.kind===REC.kind; });
+}
+function recChip(r){
+  if(r.paid) return '<span class="chip ok">AMELIPA</span>';
+  if(r.kind==='better') return '<span class="chip">karibu</span>';
+  if(r.kind==='worse') return '<span class="chip bad">amezama zaidi</span>';
+  if(r.kind==='left') return '<span class="chip warn">ametoka kwenye orodha</span>';
+  return '<span class="chip">—</span>';
+}
 function drawRecovery(m){
   m.innerHTML='<div class="card"><h2>Recovery</h2><div class="sk"></div></div>';
   srv('recovery').then(function(d){
@@ -1758,12 +1888,20 @@ function drawRecovery(m){
     m.innerHTML=
       '<div class="card"><h2>Recovery — '+esc(d.prev)+' → '+esc(d.latest)+'</h2>'
       +'<div class="mut" style="margin-bottom:10px">Nani amerudi baada ya simu zetu: tunalinganisha upload mbili za mwisho, mteja kwa mteja (IMEI).</div>'
+      /* Four of the five filter the table below; "wamelinganishwa" is the denominator --
+         everybody on both decks -- which is the whole book, and the whole book already has
+         a pane of its own. Sending somebody to a fifth copy of Wateja would be worse than
+         the door they already have. */
       +'<div class="tiles">'
-      +'<div class="tile"><div class="l">Wamelinganishwa</div><div class="v">'+money(c.compared)+'</div></div>'
-      +'<div class="tile"><div class="l">Wamelipa mara ya kwanza</div><div class="v" style="color:var(--ok)">'+money(c.paidNew)+'</div></div>'
-      +'<div class="tile"><div class="l">Siku-offline zimepungua</div><div class="v" style="color:var(--ok)">'+money(c.reconnected)+'</div></div>'
-      +'<div class="tile"><div class="l">Wamezidi kuzama</div><div class="v" style="color:var(--bad)">'+money(c.deeper)+'</div></div>'
-      +'<div class="tile"><div class="l">Wametoka kwenye orodha</div><div class="v">'+money(c.leftList)+'</div><div class="s">hawakuwepo leo</div></div>'
+      +tile('Wamelinganishwa',money(c.compared),'wapo kwenye deki zote mbili',
+        { go:function(){ goWith('cust',function(){ CUST.list='leo45'; }); }, cta:'wateja ›' })
+      +tile('Wamelipa mara ya kwanza',money(c.paidNew),'',
+        Object.assign({color:'ok'},recBy('paid')))
+      +tile('Siku-offline zimepungua',money(c.reconnected),'',
+        Object.assign({color:'ok'},recBy('better')))
+      +tile('Wamezidi kuzama',money(c.deeper),'wanahitaji simu leo',
+        Object.assign({color:'bad'},recBy('worse')))
+      +tile('Wametoka kwenye orodha',money(c.leftList),'hawakuwepo leo',recBy('left'))
       +'</div>'
       /* The same week the dashboard is standing on, and its own way to move it -- the
          dashboard's bar is not on this screen, and a pane that inherits a week with no
@@ -1774,12 +1912,22 @@ function drawRecovery(m){
          this dealer (teamFromShop turns "Hoop Limited, Kinondoni" into one team name), so
          this column read the same word on every row. The server now overlays the offline
          queue's real branch per IMEI; the deck's team stays as the fallback. */
+      +(d.notListed?'<div class="note">'+money(d.notListed)+' hawakuorodheshwa hapa (orodha ni ndefu mno). '
+        +'/ rows beyond the listing cap — the counts above are complete, this table is not.</div>':'')
       +'<div class="scroll"><table><thead><tr><th>Mteja</th><th>Branch</th><th class="r">OFF jana</th><th class="r">OFF leo</th><th></th></tr></thead><tbody>'
-      +(d.rows||[]).map(function(r){
+      +recRows(d.rows||[]).map(function(r){
+        /* OFF leo is green only when it actually fell. Painting a rising number green --
+           which it was, for every row -- is the one thing this column must never do. */
+        var down=(r.now!=null&&Number(r.now)<Number(r.was));
         return '<tr><td>'+esc(r.name)+'<div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td><td>'+esc(r.branch||r.team||'')+'</td>'
-          +'<td class="r">'+money(r.was)+'</td><td class="r" style="color:var(--ok)">'+money(r.now)+'</td>'
-          +'<td>'+(r.paid?'<span class="chip ok">AMELIPA</span>':'<span class="chip">karibu</span>')+'</td></tr>';
-      }).join('')+'</tbody></table></div></div>';
+          +'<td class="r">'+money(r.was)+'</td>'
+          +'<td class="r"'+(down?' style="color:var(--ok)"':(r.now==null?'':' style="color:var(--bad)"'))+'>'
+          +(r.now==null?'<span class="mut">hayupo</span>':money(r.now))+'</td>'
+          +'<td>'+recChip(r)+'</td></tr>';
+      }).join('')
+      +(recRows(d.rows||[]).length?'':'<tr><td colspan="5" class="mut">Hakuna mstari wa aina hii. / Nothing in this slice — tap the tile again for all of them.</td></tr>')
+      +'</tbody></table></div></div>';
+    wireTiles(m);
     drawRecoveryTrend();
   }).catch(function(e){ paneFailed(m,e); });
 }
@@ -1980,24 +2128,43 @@ function drawRecoveryTrend(){
    THE DISTINCTION THIS SCREEN EXISTS TO KEEP: a lock ORDERED is not a lock CONFIRMED. The
    office's intent and the phone's own last word are two different facts, so a phone told
    to lock that has not checked in reads PENDING -- never "locked", and never a failure. */
-var DEV={filter:''};
+/* filter = a STATE the server can select on; flag = a per-row judgement (neverSeen, stale)
+   that only exists once a row is drawn. Never both at once: they are two different questions
+   and answering both leaves a screen nobody can read the count off. */
+var DEV={filter:'',flag:''};
 function drawDevices(m){
   m.innerHTML='<div class="card"><h2>Devices</h2><div class="sk"></div></div>';
   srv('deviceList',{state:DEV.filter}).then(function(d){
     var c=d.counts||{};
     var chips=[['','Zote / all'],['enrolled','Enrolled'],['locked','Locked'],['released','Released'],['lost','Lost']];
+    // A chip reads as ON only when nothing else is filtering; otherwise two controls would
+    // both look live while only one of them is deciding what is on screen.
+    var chipOn=function(v){ return !DEV.flag && DEV.filter===v; };
+    /* THE FIVE TILES ARE THE FIVE LISTS, and clicking one filters the table under it.
+       Three of them are states the server can ask the database for; the other two --
+       "never spoke" and "silent" -- are judgements the server makes per row and hands down
+       as flags, so they filter here, on rows already loaded. Clicking the live one clears
+       it, which is the only way back to "zote" that does not need a second control. */
+    var byState=function(st){ return { on:DEV.filter===st&&!DEV.flag, cta:'chuja ›',
+      go:function(){ DEV.filter=(DEV.filter===st&&!DEV.flag?'':st); DEV.flag=''; drawDevices(m); } }; };
+    var byFlag=function(f){ return { on:DEV.flag===f, cta:'chuja ›',
+      go:function(){ DEV.flag=(DEV.flag===f?'':f); DEV.filter=''; drawDevices(m); } }; };
     var tiles='<div class="tiles">'
-      +'<div class="tile"><div class="l">Zimesajiliwa</div><div class="v">'+money(c.enrolled||0)+'</div><div class="s">tayari, hazijafungwa</div></div>'
-      +'<div class="tile"><div class="l">Zimefungwa</div><div class="v"'+((c.locked||0)?' style="color:var(--bad)"':'')+'>'+money(c.locked||0)+'</div>'
-        +'<div class="s">'+((c.lockPending||0)?money(c.lockPending)+' bado hazijathibitisha':'zote zimethibitisha')+'</div></div>'
-      +'<div class="tile"><div class="l">Hazijawahi kuongea</div><div class="v">'+money(c.neverSeen||0)+'</div><div class="s">app haijafunguliwa</div></div>'
-      +'<div class="tile"><div class="l">Kimya / silent</div><div class="v">'+money(c.stale||0)+'</div><div class="s">zaidi ya saa 36</div></div>'
-      +'<div class="tile"><div class="l">Zimeachiwa</div><div class="v" style="color:var(--ok)">'+money(c.released||0)+'</div><div class="s">mkopo umeisha</div></div>'
+      +tile('Zimesajiliwa',money(c.enrolled||0),'tayari, hazijafungwa',byState('enrolled'))
+      +tile('Zimefungwa',money(c.locked||0),
+        ((c.lockPending||0)?money(c.lockPending)+' bado hazijathibitisha':'zote zimethibitisha'),
+        Object.assign({color:((c.locked||0)?'bad':'')},byState('locked')))
+      +tile('Hazijawahi kuongea',money(c.neverSeen||0),'app haijafunguliwa',byFlag('neverSeen'))
+      +tile('Kimya / silent',money(c.stale||0),'zaidi ya saa 36',byFlag('stale'))
+      +tile('Zimeachiwa',money(c.released||0),'mkopo umeisha',
+        Object.assign({color:'ok'},byState('released')))
       +'</div>';
     var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
-      +chips.map(function(x){ return '<button class="btn sm'+(DEV.filter===x[0]?'':' ghost')+'" data-dvf="'+x[0]+'">'+x[1]+'</button>'; }).join('')
+      +chips.map(function(x){ return '<button class="btn sm'+(chipOn(x[0])?'':' ghost')+'" data-dvf="'+x[0]+'">'+x[1]+'</button>'; }).join('')
       +'<span style="flex:1"></span><button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button></div>';
-    var rows=d.rows||[];
+    /* neverSeen and stale ride on the row, so this fence is the same fact the tile counted
+       -- never a second definition of "silent" that could drift from the one in the tile. */
+    var rows=(d.rows||[]).filter(function(r){ return !DEV.flag || r[DEV.flag]===true; });
     var table=rows.length
       ? '<div class="scroll"><table><thead><tr><th></th><th>IMEI</th><th>Item</th><th>Holder</th><th>Hali / state</th>'
         +'<th>Simu inasema</th><th>Iliongea lini</th><th></th></tr></thead><tbody>'
@@ -2033,7 +2200,8 @@ function drawDevices(m){
       +'simu ikishathibitisha ndipo inasomeka "imefungwa". App ya simu ikiwa bado haijajengwa, zote zitasoma "hajawahi kuongea". '
       +'/ Ordering a lock is not the same as a confirmed lock.</div>'
       +tiles+bar+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
-    $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); drawDevices(m); }; });
+    wireTiles(m);
+    $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
     $('#dvEnrol').onclick=function(){ devEnrolForm(m); };
     $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
     $all('[data-dvh]').forEach(function(b){ b.onclick=function(){ devHistory(b.getAttribute('data-dvh')); }; });
@@ -2180,7 +2348,18 @@ function devHistory(imei){
    they are answerable for: held now, held too long, and what LEFT their hands. A departure
    is judged three ways -- sold (in our sales book), kwa Watu (financed but no sale record),
    or UNACCOUNTED, which is the line that matters and is deliberately not called theft. */
-var STOCKACCT={pivot:'company',open:null};
+var STOCKACCT={pivot:'company',open:null,moved:null,sort:''};
+/* The default order already puts the worst first -- most unaccounted, then most stale. A
+   tile only overrides it, and only on the one column the tile is about; the tie-breakers
+   below it stay, so two holders level on the sorted column still read worst-first. */
+function saSorted(rows){
+  if(!STOCKACCT.sort) return rows;
+  var k=STOCKACCT.sort;
+  return rows.slice().sort(function(a,b){
+    return (Number(b[k])||0)-(Number(a[k])||0)
+      || (b.unaccounted-a.unaccounted) || (b.stale-a.stale) || (b.held-a.held);
+  });
+}
 function drawStockAccount(m){
   m.innerHTML='<div class="card"><h2>Stock accountability</h2><div class="sk"></div></div>';
   srv('stockAccount',{}).then(function(d){
@@ -2197,44 +2376,77 @@ function drawStockAccount(m){
       +pivots.map(function(p){
         return '<button class="btn sm'+(STOCKACCT.pivot===p[0]?'':' ghost')+'" data-sa="'+p[0]+'">'+p[1]+'</button>';
       }).join('')+'</div>';
+    /* EVERY TILE IS A COLUMN OF THE TABLE BELOW, so clicking one answers "who" by bringing
+       the worst to the top -- never by hiding anybody, which on an accountability screen
+       would be the wrong instinct entirely. Clicking the live one puts the default order
+       back. */
+    var by=function(col,cta){ return { on:STOCKACCT.sort===col, cta:cta||'nani ›',
+      go:function(){ STOCKACCT.sort=(STOCKACCT.sort===col?'':col); STOCKACCT.open=null;
+        drawStockAccount(m); } }; };
     var head='<div class="tiles">'
-      +'<div class="tile"><div class="l">Zilizopo / held now</div><div class="v">'+money(t.held||0)+'</div>'
-        +'<div class="s">'+money(t.holders||0)+' holders · ripoti '+esc(d.asOf)+'</div></div>'
-      +'<div class="tile"><div class="l">Zimekaa sana / stale</div><div class="v"'+((t.stale||0)?' style="color:var(--bad)"':'')+'>'+money(t.stale||0)+'</div>'
-        +'<div class="s">'+money(d.staleDays)+'+ siku mkononi</div></div>'
-      +'<div class="tile"><div class="l">Zilizotoka / left stock</div><div class="v">'+money(t.gone||0)+'</div>'
-        +'<div class="s">tangu ripoti ya '+esc(d.prevAsOf||'—')+'</div></div>'
-      +'<div class="tile"><div class="l">Zimeuzwa / sold</div><div class="v" style="color:var(--ok)">'+money(t.sold||0)+'</div>'
-        +'<div class="s">zipo kwenye kitabu cha mauzo</div></div>'
-      +'<div class="tile"><div class="l">HAZIJULIKANI / unaccounted</div><div class="v"'+((t.unaccounted||0)?' style="color:var(--bad)"':'')+'>'+money(t.unaccounted||0)+'</div>'
-        +'<div class="s">hazipo mauzoni wala Watu</div></div>'
+      +tile('Zilizopo / held now',money(t.held||0),
+        money(t.holders||0)+' holders · ripoti '+esc(d.asOf),by('held'))
+      +tile('Zimekaa sana / stale',money(t.stale||0),money(d.staleDays)+'+ siku mkononi',
+        Object.assign({color:((t.stale||0)?'bad':'')},by('stale')))
+      +tile('Zilizotoka / left stock',money(t.gone||0),'tangu ripoti ya '+esc(d.prevAsOf||'—'),by('gone'))
+      +tile('Zimehamishwa / transferred',money(t.moved||0),'zipo kwa mtu mwingine, si zimepotea',
+        by('moved','nani kapewa ›'))
+      +tile('Zimeuzwa / sold',money(t.sold||0),'zipo kwenye kitabu cha mauzo',
+        Object.assign({color:'ok'},by('sold')))
+      +tile('HAZIJULIKANI / unaccounted',money(t.unaccounted||0),'hazipo mauzoni wala Watu',
+        Object.assign({color:((t.unaccounted||0)?'bad':'')},by('unaccounted','IMEI ›')))
       +'</div>';
-    var note='<div class="mut" style="margin:8px 0">Simu iliyotoka kwenye stock ina njia tatu za kweli: '
+    var note='<div class="mut" style="margin:8px 0">Simu iliyohamishiwa mwenzake haipotei: ikiwa bado ipo kwenye ripoti ya leo kwa jina lingine, '
+      +'inasomeka <b>imehamishwa</b>, si haijulikani. Na kila IMEI isiyojulikana tunaitafuta kwenye ripoti ZOTE — '
+      +'kama mtu mwingine aliwahi kuwa nayo, jina lake linaonekana kwenye orodha ya IMEI (ni <b>dalili</b>, si uthibitisho — '
+      +'simu bado haijulikani). / A transfer still on the report reads as transferred; every unaccounted IMEI is searched '
+      +'across all reports and names anyone else who held it, as a lead, not a clearance.<br>'
+      +'Simu iliyotoka kwenye stock ina njia tatu za kweli: '
       +'<b>imeuzwa</b> (ipo kwenye kitabu cha mauzo), <b>kwa Watu</b> (imefadhiliwa lakini haipo mauzoni — hilo ni kosa la karatasi, si wizi), '
       +'au <b>haijulikani</b> — haipo popote. Safu ya mwisho ndiyo ya kuulizia, na inaonyesha aliyekuwa nayo mwisho. '
       +'/ Unaccounted = left stock and appears in neither the sales book nor the Watu register.'
       +(d.notChecked?' <b style="color:var(--bad)">'+money(d.notChecked)+' departures were not judged this run (cap reached) — they are NOT counted above.</b>':'')
       +'</div>';
-    var rows=sec.rows||[];
+    var rows=saSorted(sec.rows||[]);
+    var hd=function(col,label){ return '<th class="r"'+(STOCKACCT.sort===col?' style="color:var(--b600)"':'')+'>'+label+'</th>'; };
     var table=rows.length
-      ? '<div class="scroll"><table><thead><tr><th>Holder</th><th>Role</th><th class="r">Held</th><th class="r">Stale</th>'
-        +'<th class="r">Left</th><th class="r">Sold</th><th class="r">Kwa Watu</th><th class="r">Unaccounted</th><th></th></tr></thead><tbody>'
+      ? '<div class="scroll"><table><thead><tr><th>Holder</th><th>Role</th>'
+        +hd('held','Held')+hd('stale','Stale')+hd('gone','Left')+hd('moved','Moved')
+        +hd('sold','Sold')+'<th class="r">Kwa Watu</th>'+hd('unaccounted','Unaccounted')
+        +'<th></th></tr></thead><tbody>'
         +rows.map(function(r,i){
           return '<tr><td><b>'+esc(r.holder)+'</b>'+(r.branch?'<div class="mut" style="font-size:10px">'+esc(r.branch)+'</div>':'')+'</td>'
             +'<td>'+esc(r.role||'—')+'</td>'
             +'<td class="r">'+money(r.held)+'</td>'
             +'<td class="r"'+(r.stale?' style="color:var(--bad)"':'')+'>'+money(r.stale)+'</td>'
             +'<td class="r">'+money(r.gone)+'</td>'
+            +'<td class="r">'+((r.moved||0)?'<button class="btn sm ghost" data-sam="'+i+'">'+money(r.moved)+'</button>':'0')+'</td>'
             +'<td class="r" style="color:var(--ok)">'+money(r.sold)+'</td>'
             +'<td class="r">'+money(r.watu)+'</td>'
             +'<td class="r"'+(r.unaccounted?' style="color:var(--bad);font-weight:700"':'')+'>'+money(r.unaccounted)+'</td>'
             +'<td class="r">'+(r.unaccounted?'<button class="btn sm ghost" data-sax="'+i+'">IMEI</button>':'')+'</td></tr>'
+            +(STOCKACCT.moved===i&&(r.movedList||[]).length
+              ? '<tr><td colspan="10" style="background:var(--b50)"><b style="font-size:12px">Zimehamishwa kutoka '+esc(r.holder)+' — nani kazipata</b>'
+                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th>Sasa yupo kwa</th><th>Ripoti</th></tr></thead><tbody>'
+                +r.movedList.map(function(x){
+                  /* Same name = it never actually changed hands; it just missed the newest
+                     report. Saying that plainly stops somebody going to ask a colleague
+                     about a phone that never left them. */
+                  return '<tr><td style="font-size:11px">'+esc(x.serial)+'</td><td>'+esc(x.item||'—')+'</td>'
+                    +'<td>'+(x.same?'<span class="mut">bado kwake / still theirs</span>':'<b>'+esc(x.to)+'</b>')+'</td>'
+                    +'<td class="mut" style="font-size:11px">'+esc(x.asOf||'—')+'</td></tr>';
+                }).join('')+'</tbody></table></div></td></tr>'
+              : '')
             +(STOCKACCT.open===i&&r.unaccountedList.length
-              ? '<tr><td colspan="9" style="background:var(--b50)"><b style="font-size:12px">Hazijulikani — '+esc(r.holder)+'</b>'
-                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th class="r">Age</th></tr></thead><tbody>'
+              ? '<tr><td colspan="10" style="background:var(--b50)"><b style="font-size:12px">Hazijulikani — '+esc(r.holder)+'</b>'
+                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th class="r">Age</th><th>Nani mwingine aliwahi kuwa nayo</th></tr></thead><tbody>'
                 +r.unaccountedList.map(function(s){
+                  /* A LEAD, NOT AN ACCUSATION -- the phone is still unaccounted for, this is
+                     just who to ask first instead of starting from nothing. */
                   return '<tr><td style="font-size:11px">'+esc(s.serial)+'</td><td>'+esc(s.item||'—')+'</td>'
-                    +'<td class="r">'+(s.age!=null?money(s.age):'—')+'</td></tr>';
+                    +'<td class="r">'+(s.age!=null?money(s.age):'—')+'</td>'
+                    +'<td>'+(s.alsoHeldBy?'<b>'+esc(s.alsoHeldBy)+'</b> <span class="mut" style="font-size:10px">'+esc(s.alsoHeldOn||'')+'</span>'
+                                          :'<span class="mut">—</span>')+'</td></tr>';
                 }).join('')+'</tbody></table></div></td></tr>'
               : '');
         }).join('')+'</tbody></table></div>'
@@ -2244,8 +2456,13 @@ function drawStockAccount(m){
       +'. / Newest stock report against the one before it.</div>'
       +tabs+head+note+table+'</div>';
     $all('[data-sa]').forEach(function(b){ b.onclick=function(){ STOCKACCT.pivot=b.getAttribute('data-sa'); STOCKACCT.open=null; drawStockAccount(m); }; });
+    wireTiles(m);
     $all('[data-sax]').forEach(function(b){ b.onclick=function(){
-      var i=Number(b.getAttribute('data-sax')); STOCKACCT.open=(STOCKACCT.open===i?null:i); drawStockAccount(m); }; });
+      var i=Number(b.getAttribute('data-sax')); STOCKACCT.open=(STOCKACCT.open===i?null:i);
+      STOCKACCT.moved=null; drawStockAccount(m); }; });
+    $all('[data-sam]').forEach(function(b){ b.onclick=function(){
+      var i=Number(b.getAttribute('data-sam')); STOCKACCT.moved=(STOCKACCT.moved===i?null:i);
+      STOCKACCT.open=null; drawStockAccount(m); }; });
   }).catch(function(e){ paneFailed(m,e); });
 }
 
@@ -2569,7 +2786,8 @@ function openCust(c){
    The owner's loop, one pane each: general duty's book vs Watu's records finds the sale
    nobody financed; Sipho's register names who answers for it; the daily files score how
    each agent's customers behave; the warehouse shows who holds the aged phones. */
-var MZ={from:isoToday(-30),to:isoToday(0)};
+// status: which slice of the audit table is showing. '' = all of it.
+var MZ={from:isoToday(-30),to:isoToday(0),status:''};
 function mzDates(redraw){
   return '<div class="row">'
     +'<input class="inp" type="date" id="mzFrom" value="'+MZ.from+'" style="flex:0 1 150px">'
@@ -2585,10 +2803,18 @@ function drawStock(m){
     var filt='<div class="row"><input class="inp" id="stQ" placeholder="Filter: agent, IMEI, item…"></div>';
     m.innerHTML='<div class="card"><h2>Aged stock — by RSMs and agents'+(d.asOf?' <span class="mut" style="font-weight:400;font-size:12px">(report of '+esc(d.asOf)+')</span>':'')+'</h2>'
       +(d.total?
+        /* This pane already holds all three lists; the tiles just take you to the right one
+           rather than making somebody scroll past two tables to find the third. "Oldest"
+           goes further and filters the serial list to whoever is holding it, because the
+           number is only ever read as "who has had one this long". */
         '<div class="tiles">'
-        +'<div class="tile"><div class="l">Aged phones</div><div class="v">'+money(d.total)+'</div><div class="s">past the age limit</div></div>'
-        +'<div class="tile"><div class="l">Holders</div><div class="v">'+money((d.holders||[]).length)+'</div></div>'
-        +'<div class="tile"><div class="l">Oldest</div><div class="v" style="color:var(--bad)">'+money((d.holders[0]||{}).maxAge||0)+'</div><div class="s">days</div></div>'
+        +tile('Aged phones',money(d.total),'past the age limit',
+          { go:function(){ stGo('stSerials',''); }, cta:'orodha ›' })
+        +tile('Holders',money((d.holders||[]).length),'wenye stock',
+          { go:function(){ stGo('stHolders'); }, cta:'nani ›' })
+        +tile('Oldest',money((d.holders[0]||{}).maxAge||0),'days · '+esc((d.holders[0]||{}).agent||'—'),
+          { color:'bad', cta:'simu zake ›',
+            go:function(){ stGo('stSerials',(d.holders[0]||{}).agent||''); } })
         +'</div>'
         +'<div class="mut" style="margin-bottom:8px">Ages are SyscoPos\'s own (resettable there — true age comes in phase 3). Top = oldest burden.</div>'
         +'<h2 style="margin-top:4px">By item — IMEI numbers inclusive</h2>'
@@ -2603,7 +2829,7 @@ function drawStock(m){
                 +'<td>'+esc(s.received||'—')+'</td><td class="r"'+(s.age>=14?' style="color:var(--bad)"':'')+'>'+(s.age!=null?money(s.age):'—')+'</td></tr>';
             }).join('')+'</tbody></table></div></details>';
         }).join('')
-        +'<h2 style="margin-top:16px">By holder</h2>'
+        +'<h2 style="margin-top:16px" id="stHolders">By holder</h2>'
         +'<div class="scroll"><table><thead><tr><th>Holder</th><th>Role</th><th class="r">Phones</th><th class="r">Avg age</th><th class="r">Oldest</th><th>Items</th></tr></thead><tbody>'
         +(d.holders||[]).map(function(h){
           return '<tr><td><b>'+esc(h.agent)+'</b>'+(h.branch?'<div class="mut" style="font-size:10px">'+esc(h.branch)+'</div>':'')+'</td>'
@@ -2612,7 +2838,7 @@ function drawStock(m){
             +'<td class="r"'+(h.maxAge>=14?' style="color:var(--bad)"':'')+'>'+money(h.maxAge)+'</td>'
             +'<td class="mut" style="font-size:11px">'+esc(h.items)+'</td></tr>';
         }).join('')+'</tbody></table></div>'
-        +'<h2 style="margin-top:16px">Per serial</h2>'+filt
+        +'<h2 style="margin-top:16px" id="stSerials">Per serial</h2>'+filt
         +'<div class="scroll"><table><thead><tr><th>Serial / IMEI</th><th>Holder</th><th>Item</th><th>Received</th><th class="r">Age (days)</th></tr></thead><tbody id="stRows">'
         +(d.serials||[]).map(function(s){
           return '<tr><td style="font-size:11px">'+esc(s.serial)+'</td><td>'+esc(s.agent)+'</td><td>'+esc(s.item)+'</td>'
@@ -2621,11 +2847,23 @@ function drawStock(m){
       :'<div class="mut">No stock uploaded yet. Sipho: open Aged Stock in SyscoPos → click the <b>CSV</b> button → upload that file at <a href="/upload">/upload</a> (or save the page AFTER the table is visible and upload the HTML).</div>')
       +'</div>';
     var q=$('#stQ');
-    if(q) q.addEventListener('input',function(){
-      var Q=this.value.trim().toUpperCase();
-      $all('#stRows tr',m).forEach(function(tr){ tr.style.display=!Q||tr.textContent.toUpperCase().indexOf(Q)>=0?'':'none'; });
-    });
+    if(q) q.addEventListener('input',stApplyFilter);
+    wireTiles(m);
   }).catch(function(e){ paneFailed(m,e); });
+}
+/** The per-serial filter, as its own function so a tile can drive the same one the box does
+    -- two filters over one table is how the count in the box stops matching the rows. */
+function stApplyFilter(){
+  var q=$('#stQ'); if(!q) return;
+  var Q=q.value.trim().toUpperCase();
+  $all('#stRows tr').forEach(function(tr){
+    tr.style.display=!Q||tr.textContent.toUpperCase().indexOf(Q)>=0?'':'none';
+  });
+}
+/** Scroll a section of this pane into view, optionally setting the serial filter first. */
+function stGo(id,filter){
+  if(filter!==undefined){ var q=$('#stQ'); if(q){ q.value=filter; stApplyFilter(); } }
+  var h=$('#'+id); if(h&&h.scrollIntoView) h.scrollIntoView({behavior:'smooth',block:'start'});
 }
 function mzStatusChip(s){
   if(s==='OK') return '<span class="chip ok">OK · Watu</span>';
@@ -2634,22 +2872,38 @@ function mzStatusChip(s){
   if(s==='BULK') return '<span class="chip">BULK / CASH?</span>';
   return '<span class="chip bad">⚠ NOT IN WATU</span>';
 }
+/** Tile options for "show only this status". '' means all; 'BULK|PENDING' is one tile over
+    two statuses, because on this screen they are the same answer: not yet judgeable. */
+function mzBy(status,cta){
+  return { on:(MZ.status||'')===status, cta:cta||'chuja ›',
+    go:function(){ MZ.status=((MZ.status||'')===status?'':status); drawAudit($('#main')); } };
+}
+function mzRows(rows){
+  if(!MZ.status) return rows;
+  var want=MZ.status.split('|');
+  return rows.filter(function(r){ return want.indexOf(String(r.status))>=0; });
+}
 function drawAudit(m){
   m.innerHTML='<div class="card"><h2>Fraud audit</h2><div class="sk"></div></div>';
   srv('salesAudit',{from:MZ.from,to:MZ.to}).then(function(d){
     var c=d.counts||{};
     m.innerHTML='<div class="card"><h2>Fraud audit — '+esc(d.from)+' → '+esc(d.to)+'</h2>'
       +mzDates()
+      /* Each tile is one value of the Status column, so it filters the table under it --
+         which is the whole point of an audit screen: the count is the alarm, the rows are
+         the work. Clicking the live one clears the filter. */
       +'<div class="tiles">'
-      +'<div class="tile"><div class="l">Sales</div><div class="v">'+money(c.total)+'</div></div>'
-      +'<div class="tile"><div class="l">In Watu</div><div class="v" style="color:var(--ok)">'+money(c.ok)+'</div></div>'
-      +'<div class="tile"><div class="l">Agent drift</div><div class="v" style="color:var(--warn)">'+money(c.drift)+'</div><div class="s">watu agent ≠ commission</div></div>'
-      +'<div class="tile"><div class="l">Not in Watu</div><div class="v" style="color:var(--bad)">'+money(c.candidates)+'</div><div class="s">candidates — verify</div></div>'
-      +'<div class="tile"><div class="l">Bulk/Pending</div><div class="v">'+money((c.bulk||0)+(c.pending||0))+'</div></div>'
+      +tile('Sales',money(c.total),'',mzBy('','zote ›'))
+      +tile('In Watu',money(c.ok),'',Object.assign({color:'ok'},mzBy('OK')))
+      +tile('Agent drift',money(c.drift),'watu agent ≠ commission',
+        Object.assign({color:'warn'},mzBy('DRIFT')))
+      +tile('Not in Watu',money(c.candidates),'candidates — verify',
+        Object.assign({color:'bad'},mzBy('HAKUNA_WATU')))
+      +tile('Bulk/Pending',money((c.bulk||0)+(c.pending||0)),'',mzBy('BULK|PENDING'))
       +'</div>'
       +'<div class="mut" style="margin-bottom:8px">General duty\'s sales checked against the Watu register by IMEI. Each seller is identified by payout number from the agents register (next of kin on file).</div>'
       +'<div class="scroll"><table><thead><tr><th>Date</th><th>Customer</th><th>IMEI</th><th class="r">Price</th><th>Seller</th><th>Watu agent</th><th>Status</th></tr></thead><tbody>'
-      +(d.rows||[]).map(function(r){
+      +mzRows(d.rows||[]).map(function(r){
         var seller='<b>'+esc(r.seller||'—')+'</b>'
           +(r.reg?'<div class="mut" style="font-size:10px">'+esc(r.reg.name)+' · '+esc(r.reg.role)+(r.reg.kin?' · kin: '+esc(r.reg.kin)+' '+esc(r.reg.kinPhone):'')+'</div>'
                  :(r.sellerPhone?'<div class="mut" style="font-size:10px">'+esc(r.sellerPhone)+' — not in the agents register</div>':''));
@@ -2660,8 +2914,13 @@ function drawAudit(m){
           +'<td>'+(r.watuAgent!=null?esc(r.watuAgent)+(r.watuAgentId?' <span class="mut" style="font-size:10px">#'+esc(r.watuAgentId)+'</span>':''):'—')+'</td>'
           +'<td>'+mzStatusChip(r.status)+'</td></tr>';
       }).join('')
-      +((d.rows||[]).length?'':'<tr><td colspan="7" class="mut">No sales in this period — upload a sales report at /upload (the file is recognized automatically).</td></tr>')
+      +(mzRows(d.rows||[]).length?''
+        :'<tr><td colspan="7" class="mut">'
+          +(MZ.status?'Hakuna mstari wa aina hii. / Nothing in this slice — tap the tile again to see them all.'
+                     :'No sales in this period — upload a sales report at /upload (the file is recognized automatically).')
+          +'</td></tr>')
       +'</tbody></table></div></div>';
+    wireTiles(m);
     mzWire(m,drawAudit);
   }).catch(function(e){ paneFailed(m,e); });
 }

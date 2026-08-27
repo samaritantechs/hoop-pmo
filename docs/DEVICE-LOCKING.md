@@ -67,6 +67,25 @@ blurs those two cannot be trusted to chase anything.
 
 Every phone gets three things: enrolled on the register, made Device Owner, handed its token.
 
+### Sipho's card — the whole loop, per phone
+
+1. **Portal → Devices → + Sajili simu.** Paste the day's IMEIs (up to 500 at once). Copy the
+   token list it shows — it shows each token **once**.
+2. **On the handset:** skip every account in the setup wizard → Settings → About phone →
+   Software information → tap **Build number** 7× → back → Developer options → **USB
+   debugging** on → plug in the cable → accept **Allow USB debugging** on the phone.
+3. **On the laptop:** `./scripts/lock-bench.sh tokens.txt` (or the three commands below for
+   one phone). Takes about ten seconds per handset.
+4. **Watch it appear** on Devices while the box is still open. If it does not, provisioning
+   did not take — fix it now, not after it has been reboxed.
+5. **Funga → reason → wait for CONFIRMED**, not pending. Only then power off and box it.
+
+Steps 1, 3, 4 and 5 are near-instant. **Step 2 is the day**: two to three minutes of tapping
+per phone that no script can reach, which at 200 phones is about ten hours of one person's
+time. The only ways to spend less are to run phones in parallel on a powered USB hub — the
+bench script is built for exactly that — or to buy through a Knox-participating reseller, the
+one route where a handset provisions itself at first boot with nobody touching it.
+
 ### 1. Enrol (portal, before you touch the phones)
 
 Devices → **+ Sajili simu**, paste the IMEIs from Sipho's report. Model and holder fill in
@@ -83,6 +102,7 @@ straight after Settings → Reset. Either route works:
 phones, and unlike a QR it gives you an error you can read):
 
 ```sh
+adb install -r public/HOOPLOAN-Lock.apk
 adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin
 adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \
     -n com.samaritantechs.hooploanlock/.EnrolReceiver \
@@ -90,8 +110,17 @@ adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \
     -e token <that phone's token>
 ```
 
-Install the APK first (`adb install public/HOOPLOAN-Lock.apk`, or download it on the phone
-from `/HOOPLOAN-Lock.apk`).
+Three commands, about ten seconds. **Neither half works without the other:** the APK on its
+own is an ordinary app that a thief uninstalls in seconds, and `set-device-owner` names a
+component that has to already be on the phone, so it fails on a handset with nothing
+installed. Installing is itself an adb command, though, which is why all three are above and
+why nothing here needs touching the phone's screen.
+
+**For a batch, do not type these 200 times.** `scripts/lock-bench.sh` takes the IMEI/token
+list from step 1, walks every phone that `adb devices` can see, and runs all three on each —
+matching each phone to its own token by asking the handset for its IMEI, and refusing to
+guess when it cannot read one. See the header of that file; it is written to be read by
+whoever is running the bench.
 
 > **THE QR ROUTE DOES NOT WORK ON SAMSUNG — tested 27 Aug 2026 on an A07.** The six-tap
 > scanner never appears: tried at first boot, after joining Wi-Fi, and after installing the
@@ -270,6 +299,44 @@ install happens without anyone tapping anything.
 Best effort, and it says so: if a vendor build refuses the silent install, the phone keeps
 running what it has and goes on reporting its `app_version`, so the register shows exactly
 which handsets are behind instead of leaving anyone to guess.
+
+---
+
+## Stock: transfers, and the one this cannot see
+
+> "in hazijulikani there is some transfers sipho says the imei nos are in possession of
+> other owners"
+
+Stock accountability judges a departure by comparing the newest stock report with the one
+before it. Three things now happen before a phone is called **HAZIJULIKANI**:
+
+1. **Still on the report under another name → `Zimehamishwa`.** A handover is not a loss. It
+   is charged to whoever *had* it, naming whoever *has* it — the direction the question gets
+   asked in. Previously this was invisible: the phone was on the report so it was never a
+   departure, and the holder who passed it on just had their count drop by one.
+2. **Seen on a report newer than the one it left → not missing.** Covers a same-day
+   re-upload or a backfilled report.
+3. **Held by somebody else at some point → a lead on the row.** The unaccounted list names
+   them, with the date. It does **not** clear the phone — an old sighting proves somebody
+   handled it once, and letting that empty the column would turn the one number that means
+   "go and ask" into a number that means nothing.
+
+**And the one this cannot see.** `hoop_aged_stock` lists only phones *past the age limit*,
+and SyscoPos resets a handset's age when it changes hands. So a transferred phone can drop
+off the aged report entirely, with no sighting anywhere to find — and from this table that is
+indistinguishable from a phone that walked out of the door.
+
+No amount of searching fixes that, because the information is not in the data. The two things
+that would:
+
+- **A transfer export from SyscoPos**, uploaded like the aged-stock file. Then transfers
+  reclassify themselves and nobody marks anything by hand.
+- **Recording the handover when it happens** — a button on the unaccounted IMEI that says who
+  took it, audited like every other device action.
+
+Until one of those exists, read HAZIJULIKANI as *"left the aged report and is in neither the
+sales book nor Watu"* — which is what the screen says under the tile — and not as a count of
+thefts.
 
 ---
 

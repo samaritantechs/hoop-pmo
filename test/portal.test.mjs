@@ -30,9 +30,22 @@ test('recovery diffs the newest two uploads per IMEI', async () => {
   assert.equal(r.counts.reconnected, 1, 'Alafati\'s days offline fell 21 -> 2');
   assert.equal(r.counts.deeper, 1, 'Yuda sank 12 -> 15');
   assert.equal(r.counts.leftList, 1, 'Rinus was not on today\'s list');
-  assert.equal(r.rows.length, 1);
-  assert.equal(r.rows[0].imei, '351929937378664');
-  assert.equal(r.rows[0].paid, true);
+
+  /* EVERY TILE ON THAT PANE NOW HAS ITS ROWS. This used to be `rows.length === 1` -- the
+     one customer who came back -- while the two who went the WRONG way were counted and
+     thrown away, so the numbers that meant somebody had to pick up a phone were the two
+     you could not click. */
+  assert.equal(r.rows.length, 3, 'the sinking and the vanished are rows too, not just counts');
+  const kind = imei => (r.rows.find(x => x.imei === imei) || {}).kind;
+  assert.equal(kind('351929937378664'), 'paid',
+    'paid outranks better: a first payment is the headline whatever the offline count did');
+  // ...and that customer appears ONCE. Both counters name them; only one row does.
+  assert.equal(r.rows.filter(x => x.imei === '351929937378664').length, 1);
+  assert.equal(r.rows.find(x => x.kind === 'worse').was < r.rows.find(x => x.kind === 'worse').now,
+    true, 'Yuda sank, so was < now');
+  assert.equal(r.rows.find(x => x.kind === 'left').now, null,
+    'somebody off today\'s deck has no "now" to report, and must not be shown a zero');
+  assert.equal(r.notListed, 0, 'nothing was dropped, and the pane is told so');
 });
 
 test('recovery with one upload says so instead of inventing a comparison', async () => {
@@ -521,6 +534,7 @@ test('stockAccount judges every departure three ways and names the last holder o
   // The named IMEIs ride along so a human can go and ask about a specific phone.
   const ax = r.agent.rows[0];
   assert.deepEqual(ax.unaccountedList.map(x => x.serial).sort(), ['A1', 'A2']);
+  assert.equal(r.company.totals.moved, 0, 'nobody handed anything on in this fixture');
 
   // STALE: held now and past the age limit. S2 at 61 days is the only one over 45.
   assert.equal(r.company.totals.stale, 1);
@@ -528,6 +542,102 @@ test('stockAccount judges every departure three ways and names the last holder o
 
   // Worst first -- the row a manager must look at is the top one.
   assert.equal(r.company.rows[0].holder, 'AGENT X');
+});
+
+/* THE TRANSFER, WHICH USED TO BE INVISIBLE.
+     "in hazijulikani there is some transfers sipho says the imei nos are in possession of
+      other owners"
+
+   A serial that moves from one holder to another is still on the report, so it was never a
+   departure -- the holder who passed it on simply had their `held` drop by one with nothing
+   anywhere to say where it went, and the person asking about it later had no thread to pull.
+   It is now charged to whoever HAD it, naming whoever has it now, which is the direction the
+   question is always asked in. */
+test('stockAccount names a transfer and charges it to nobody', async () => {
+  const today = todayKey();
+  const prev = dayShift(today, -1);
+  const st = (serial, agent, as_of, age) => ({ serial, agent, item: 'A07', age_days: age, as_of,
+    received: dayShift(as_of, -(age || 0)) });
+  const d = fakeDb({
+    hoop_aged_stock: [
+      st('T1', 'SIPHO STORE', prev, 50), st('T2', 'SIPHO STORE', prev, 50),
+      // T1 is now with the RSM -- handed on, not lost. T2 never moved.
+      st('T1', 'RSM ONE', today, 51), st('T2', 'SIPHO STORE', today, 51),
+    ],
+    hoop_sales: [], watu_loans: [],
+    hoop_agents: [
+      { name: 'SIPHO STORE', role: 'STORE', branch: 'Dar' },
+      { name: 'RSM ONE', role: 'RSM', branch: 'Dar' },
+    ],
+  });
+  /* A DISTINCT TEAM SCOPE, like the cap test below and for the same reason: stockAccount
+     memoises per report-pair AND per scope, and this fixture shares today/yesterday with the
+     test above -- so plain ADMIN would be handed that test's answer and pass or fail on it. */
+  const r = await _FNS.stockAccount(d, { ...ADMIN, teams: ['XFERTEST'] }, {});
+  assert.equal(r.company.totals.gone, 0, 'a phone still on the report has not left stock');
+  assert.equal(r.company.totals.unaccounted, 0, 'and it is emphatically not missing');
+  assert.equal(r.company.totals.moved, 1, 'it is a handover, and now it says so');
+
+  const sipho = r.store.rows[0];
+  assert.equal(sipho.moved, 1, 'charged to the holder who passed it on');
+  assert.equal(sipho.movedList[0].serial, 'T1');
+  assert.equal(sipho.movedList[0].to, 'RSM ONE', 'and it names who has it now');
+  assert.equal(r.rsm.rows[0].held, 1, 'the receiving holder simply holds it');
+  assert.equal(r.rsm.rows[0].moved, 0, 'receiving is not handing on');
+});
+
+/* AN UNACCOUNTED PHONE THAT SOMEBODY ELSE ONCE HELD -- a lead, not a clearance.
+     "just find for transferers if the 1st hazijulikani happens to be in hands of another
+      agent/rsm"
+
+   Chasing an unaccounted IMEI with no name attached means starting from nothing. If the
+   stock table has ever seen that serial under a DIFFERENT holder, that is who to ask first.
+
+   IT DOES NOT CLEAR THE PHONE, and the test says so twice: an older sighting proves only
+   that somebody handled it once, and letting that empty the unaccounted column would turn
+   the one number on this screen that means "go and ask" into a number that means nothing.
+
+   AND THE LIMIT this cannot reach: hoop_aged_stock lists only phones PAST the age limit,
+   and SyscoPos resets a handset's age when it changes hands, so a transfer can vanish from
+   the report with no sighting anywhere to find. Nothing in this table separates that from a
+   phone that walked. */
+test('an unaccounted phone names whoever else has held it, without being cleared', async () => {
+  const today = todayKey();
+  const prev = dayShift(today, -1);
+  const long = dayShift(today, -9);
+  const st = (serial, agent, as_of, age) => ({ serial, agent, item: 'A07', age_days: age, as_of,
+    received: dayShift(as_of, -(age || 0)) });
+  const d = fakeDb({
+    hoop_aged_stock: [
+      st('W1', 'AGENT X', prev, 50), st('W2', 'AGENT X', prev, 50),
+      st('KEEP', 'AGENT X', prev, 50), st('KEEP', 'AGENT X', today, 51),
+      // W1 was held by the RSM at some point in the past. That is the lead.
+      st('W1', 'RSM ONE', long, 44),
+      // W2 has only ever been AGENT X's. Nothing to point at but them.
+      st('W2', 'AGENT X', long, 44),
+    ],
+    hoop_sales: [], watu_loans: [],
+    hoop_agents: [
+      { name: 'AGENT X', role: 'Field_Officer', branch: 'Dar' },
+      { name: 'RSM ONE', role: 'RSM', branch: 'Dar' },
+    ],
+  });
+  // Its own scope: stockAccount memoises per report-pair AND per scope, and this fixture
+  // shares today/yesterday with the tests above.
+  const r = await _FNS.stockAccount(d, { ...ADMIN, teams: ['LEADTEST'] }, {});
+
+  assert.equal(r.company.totals.unaccounted, 2,
+    'a past sighting is a lead, never an acquittal -- both are still unaccounted for');
+  assert.equal(r.company.totals.moved, 0, 'neither was seen after the report it left');
+
+  const ax = r.agent.rows[0];
+  const w1 = ax.unaccountedList.find(x => x.serial === 'W1');
+  assert.equal(w1.alsoHeldBy, 'RSM ONE', 'so the chase starts with a name');
+  assert.equal(w1.alsoHeldOn, long, 'and a date, so it can be checked');
+
+  const w2 = ax.unaccountedList.find(x => x.serial === 'W2');
+  assert.equal(w2.alsoHeldBy, null,
+    'a phone only ever held by the person charged points at nobody else');
 });
 
 test('stockAccount reports departures it could not judge rather than under-counting a theft', async () => {
