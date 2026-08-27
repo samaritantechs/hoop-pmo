@@ -302,6 +302,44 @@ which handsets are behind instead of leaving anyone to guess.
 
 ---
 
+## Stock: transfers, and the one this cannot see
+
+> "in hazijulikani there is some transfers sipho says the imei nos are in possession of
+> other owners"
+
+Stock accountability judges a departure by comparing the newest stock report with the one
+before it. Three things now happen before a phone is called **HAZIJULIKANI**:
+
+1. **Still on the report under another name → `Zimehamishwa`.** A handover is not a loss. It
+   is charged to whoever *had* it, naming whoever *has* it — the direction the question gets
+   asked in. Previously this was invisible: the phone was on the report so it was never a
+   departure, and the holder who passed it on just had their count drop by one.
+2. **Seen on a report newer than the one it left → not missing.** Covers a same-day
+   re-upload or a backfilled report.
+3. **Held by somebody else at some point → a lead on the row.** The unaccounted list names
+   them, with the date. It does **not** clear the phone — an old sighting proves somebody
+   handled it once, and letting that empty the column would turn the one number that means
+   "go and ask" into a number that means nothing.
+
+**And the one this cannot see.** `hoop_aged_stock` lists only phones *past the age limit*,
+and SyscoPos resets a handset's age when it changes hands. So a transferred phone can drop
+off the aged report entirely, with no sighting anywhere to find — and from this table that is
+indistinguishable from a phone that walked out of the door.
+
+No amount of searching fixes that, because the information is not in the data. The two things
+that would:
+
+- **A transfer export from SyscoPos**, uploaded like the aged-stock file. Then transfers
+  reclassify themselves and nobody marks anything by hand.
+- **Recording the handover when it happens** — a button on the unaccounted IMEI that says who
+  took it, audited like every other device action.
+
+Until one of those exists, read HAZIJULIKANI as *"left the aged report and is in neither the
+sales book nor Watu"* — which is what the screen says under the tile — and not as a count of
+thefts.
+
+---
+
 ## What this cannot do
 
 Stated plainly, because a security feature oversold is worse than none.

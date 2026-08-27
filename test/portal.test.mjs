@@ -586,6 +586,60 @@ test('stockAccount names a transfer and charges it to nobody', async () => {
   assert.equal(r.rsm.rows[0].moved, 0, 'receiving is not handing on');
 });
 
+/* AN UNACCOUNTED PHONE THAT SOMEBODY ELSE ONCE HELD -- a lead, not a clearance.
+     "just find for transferers if the 1st hazijulikani happens to be in hands of another
+      agent/rsm"
+
+   Chasing an unaccounted IMEI with no name attached means starting from nothing. If the
+   stock table has ever seen that serial under a DIFFERENT holder, that is who to ask first.
+
+   IT DOES NOT CLEAR THE PHONE, and the test says so twice: an older sighting proves only
+   that somebody handled it once, and letting that empty the unaccounted column would turn
+   the one number on this screen that means "go and ask" into a number that means nothing.
+
+   AND THE LIMIT this cannot reach: hoop_aged_stock lists only phones PAST the age limit,
+   and SyscoPos resets a handset's age when it changes hands, so a transfer can vanish from
+   the report with no sighting anywhere to find. Nothing in this table separates that from a
+   phone that walked. */
+test('an unaccounted phone names whoever else has held it, without being cleared', async () => {
+  const today = todayKey();
+  const prev = dayShift(today, -1);
+  const long = dayShift(today, -9);
+  const st = (serial, agent, as_of, age) => ({ serial, agent, item: 'A07', age_days: age, as_of,
+    received: dayShift(as_of, -(age || 0)) });
+  const d = fakeDb({
+    hoop_aged_stock: [
+      st('W1', 'AGENT X', prev, 50), st('W2', 'AGENT X', prev, 50),
+      st('KEEP', 'AGENT X', prev, 50), st('KEEP', 'AGENT X', today, 51),
+      // W1 was held by the RSM at some point in the past. That is the lead.
+      st('W1', 'RSM ONE', long, 44),
+      // W2 has only ever been AGENT X's. Nothing to point at but them.
+      st('W2', 'AGENT X', long, 44),
+    ],
+    hoop_sales: [], watu_loans: [],
+    hoop_agents: [
+      { name: 'AGENT X', role: 'Field_Officer', branch: 'Dar' },
+      { name: 'RSM ONE', role: 'RSM', branch: 'Dar' },
+    ],
+  });
+  // Its own scope: stockAccount memoises per report-pair AND per scope, and this fixture
+  // shares today/yesterday with the tests above.
+  const r = await _FNS.stockAccount(d, { ...ADMIN, teams: ['LEADTEST'] }, {});
+
+  assert.equal(r.company.totals.unaccounted, 2,
+    'a past sighting is a lead, never an acquittal -- both are still unaccounted for');
+  assert.equal(r.company.totals.moved, 0, 'neither was seen after the report it left');
+
+  const ax = r.agent.rows[0];
+  const w1 = ax.unaccountedList.find(x => x.serial === 'W1');
+  assert.equal(w1.alsoHeldBy, 'RSM ONE', 'so the chase starts with a name');
+  assert.equal(w1.alsoHeldOn, long, 'and a date, so it can be checked');
+
+  const w2 = ax.unaccountedList.find(x => x.serial === 'W2');
+  assert.equal(w2.alsoHeldBy, null,
+    'a phone only ever held by the person charged points at nobody else');
+});
+
 test('stockAccount reports departures it could not judge rather than under-counting a theft', async () => {
   const today = todayKey();
   const prev = dayShift(today, -1);

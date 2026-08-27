@@ -1255,12 +1255,57 @@ const FNS = {
     const checking = gone.slice(0, LOOKUP_CAP);
     const notChecked = gone.length - checking.length;
     const ids = checking.map(r => String(r.serial));
-    const [soldRows, watuRows] = ids.length ? await Promise.all([
+    /* THE THIRD PLACE TO LOOK, and it is the stock table itself.
+       ==========================================================================
+         "just find for transferers if the 1st hazijulikani happens to be in hands
+          of another agent/rsm"
+
+       Comparing two reports answers "is it on the newest one" and nothing else. A
+       phone can be perfectly well accounted for and still fail that: reports arrive
+       per holder on different days, and SyscoPos resets a handset's age when it
+       changes hands, so a transfer can be absent from the newest report while
+       sitting plainly in the table under somebody else's name. Both looked exactly
+       like theft.
+
+       So before a serial is called missing we ask the WHOLE table about it, and there
+       are two different things worth knowing:
+
+         seen AFTER the report it departed from -> it did not leave stock at all.
+           (Fires on a same-day re-upload or a backfilled report; the ordinary
+           holder-to-holder handover is caught earlier, by `moved`, because that one
+           is still on the newest report.)
+         held at some point by SOMEBODY ELSE -> not proof of anything, and it does
+           NOT clear the phone. It is a LEAD: the chase starts with a name and a date
+           instead of with nothing, which is the whole ask.
+
+       AND THE LIMIT, because this is the case Sipho actually hit: hoop_aged_stock
+       lists only phones PAST the age limit, and SyscoPos resets a handset's age when
+       it changes hands. A transfer can therefore drop off the aged report entirely,
+       leaving no sighting anywhere to find. Nothing in this table can distinguish
+       that from a phone that walked. A real fix needs the transfer recorded at the
+       moment it happens -- see docs/DEVICE-LOCKING.md. */
+    const [soldRows, watuRows, seenRows] = ids.length ? await Promise.all([
       fetchAll(() => db.from('hoop_sales').select('imei, sale_date, commission_agent').in('imei', ids)),
       fetchAll(() => db.from('watu_loans').select('imei').in('imei', ids)),
-    ]) : [[], []];
+      fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, as_of').in('serial', ids)),
+    ]) : [[], [], []];
     const soldBy = new Map(soldRows.map(r => [String(r.imei), r]));
     const inWatu = new Set(watuRows.map(r => String(r.imei)));
+    // Newest sighting per serial, across every report we hold...
+    const lastSeen = new Map();
+    for (const r of seenRows) {
+      const k = String(r.serial), had = lastSeen.get(k);
+      if (!had || String(r.as_of) > String(had.as_of)) lastSeen.set(k, r);
+    }
+    // ...and the newest sighting under a DIFFERENT name, which is the lead.
+    const otherHands = new Map();
+    for (const r of seenRows) {
+      const k = String(r.serial);
+      const charged = checking.find(x => String(x.serial) === k);
+      if (!charged || nameKey(r.agent || '') === nameKey(charged.agent || '')) continue;
+      const had = otherHands.get(k);
+      if (!had || String(r.as_of) > String(had.as_of)) otherHands.set(k, r);
+    }
 
     // Role decides the pivot; hoop_agents is the roster, matched on the same token-sorted
     // name key the rest of the system uses so spelling drift cannot split a person in two.
@@ -1301,19 +1346,39 @@ const FNS = {
       g.moved++;
       if (g.movedList.length < 50) {
         g.movedList.push({ serial: String(r.serial), item: r.item || '',
-          to: holderNow.get(String(r.serial)) || '—' });
+          to: holderNow.get(String(r.serial)) || '—', asOf: nowDate, same: false });
       }
     }
     for (const r of checking) {
       const g = slot(r.agent);
       const id = String(r.serial);
+      const seen = lastSeen.get(id);
+      /* SEEN SOMEWHERE NEWER THAN THE REPORT IT LEFT means it did not leave stock at all
+         -- so it is not a departure, and it must not be counted as one. Checked before
+         sold/Watu because "it is on a later report" is the plainest fact of the three. */
+      if (seen && String(seen.as_of) > String(prevDate)) {
+        g.moved++;
+        if (g.movedList.length < 50) {
+          g.movedList.push({ serial: id, item: r.item || '',
+            to: seen.agent || '—', asOf: String(seen.as_of).slice(0, 10),
+            // Same name = never actually handed on; it simply missed the newest report.
+            same: nameKey(seen.agent || '') === nameKey(r.agent || '') });
+        }
+        continue;
+      }
       g.gone++;
       if (soldBy.has(id)) g.sold++;
       else if (inWatu.has(id)) g.watu++;
       else {
         g.unaccounted++;
         if (g.unaccountedList.length < 50) {
-          g.unaccountedList.push({ serial: id, item: r.item || '', age: r.age_days == null ? null : num(r.age_days) });
+          const other = otherHands.get(id);
+          g.unaccountedList.push({ serial: id, item: r.item || '',
+            age: r.age_days == null ? null : num(r.age_days),
+            // A LEAD, NOT AN ACCUSATION. This phone is still unaccounted for; somebody
+            // else simply held it at some point, and that is who to ask first.
+            alsoHeldBy: other ? (other.agent || '') : null,
+            alsoHeldOn: other ? String(other.as_of).slice(0, 10) : null });
         }
       }
     }

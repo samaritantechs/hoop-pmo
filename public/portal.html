@@ -2389,14 +2389,19 @@ function drawStockAccount(m){
       +tile('Zimekaa sana / stale',money(t.stale||0),money(d.staleDays)+'+ siku mkononi',
         Object.assign({color:((t.stale||0)?'bad':'')},by('stale')))
       +tile('Zilizotoka / left stock',money(t.gone||0),'tangu ripoti ya '+esc(d.prevAsOf||'—'),by('gone'))
-      +tile('Zimehamishwa / transferred',money(t.moved||0),'zimeenda kwa mwenzake',
+      +tile('Zimehamishwa / transferred',money(t.moved||0),'zipo kwa mtu mwingine, si zimepotea',
         by('moved','nani kapewa ›'))
       +tile('Zimeuzwa / sold',money(t.sold||0),'zipo kwenye kitabu cha mauzo',
         Object.assign({color:'ok'},by('sold')))
       +tile('HAZIJULIKANI / unaccounted',money(t.unaccounted||0),'hazipo mauzoni wala Watu',
         Object.assign({color:((t.unaccounted||0)?'bad':'')},by('unaccounted','IMEI ›')))
       +'</div>';
-    var note='<div class="mut" style="margin:8px 0">Simu iliyotoka kwenye stock ina njia tatu za kweli: '
+    var note='<div class="mut" style="margin:8px 0">Simu iliyohamishiwa mwenzake haipotei: ikiwa bado ipo kwenye ripoti ya leo kwa jina lingine, '
+      +'inasomeka <b>imehamishwa</b>, si haijulikani. Na kila IMEI isiyojulikana tunaitafuta kwenye ripoti ZOTE — '
+      +'kama mtu mwingine aliwahi kuwa nayo, jina lake linaonekana kwenye orodha ya IMEI (ni <b>dalili</b>, si uthibitisho — '
+      +'simu bado haijulikani). / A transfer still on the report reads as transferred; every unaccounted IMEI is searched '
+      +'across all reports and names anyone else who held it, as a lead, not a clearance.<br>'
+      +'Simu iliyotoka kwenye stock ina njia tatu za kweli: '
       +'<b>imeuzwa</b> (ipo kwenye kitabu cha mauzo), <b>kwa Watu</b> (imefadhiliwa lakini haipo mauzoni — hilo ni kosa la karatasi, si wizi), '
       +'au <b>haijulikani</b> — haipo popote. Safu ya mwisho ndiyo ya kuulizia, na inaonyesha aliyekuwa nayo mwisho. '
       +'/ Unaccounted = left stock and appears in neither the sales book nor the Watu register.'
@@ -2422,18 +2427,26 @@ function drawStockAccount(m){
             +'<td class="r">'+(r.unaccounted?'<button class="btn sm ghost" data-sax="'+i+'">IMEI</button>':'')+'</td></tr>'
             +(STOCKACCT.moved===i&&(r.movedList||[]).length
               ? '<tr><td colspan="10" style="background:var(--b50)"><b style="font-size:12px">Zimehamishwa kutoka '+esc(r.holder)+' — nani kazipata</b>'
-                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th>Sasa yupo kwa</th></tr></thead><tbody>'
+                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th>Sasa yupo kwa</th><th>Ripoti</th></tr></thead><tbody>'
                 +r.movedList.map(function(x){
+                  /* Same name = it never actually changed hands; it just missed the newest
+                     report. Saying that plainly stops somebody going to ask a colleague
+                     about a phone that never left them. */
                   return '<tr><td style="font-size:11px">'+esc(x.serial)+'</td><td>'+esc(x.item||'—')+'</td>'
-                    +'<td><b>'+esc(x.to)+'</b></td></tr>';
+                    +'<td>'+(x.same?'<span class="mut">bado kwake / still theirs</span>':'<b>'+esc(x.to)+'</b>')+'</td>'
+                    +'<td class="mut" style="font-size:11px">'+esc(x.asOf||'—')+'</td></tr>';
                 }).join('')+'</tbody></table></div></td></tr>'
               : '')
             +(STOCKACCT.open===i&&r.unaccountedList.length
               ? '<tr><td colspan="10" style="background:var(--b50)"><b style="font-size:12px">Hazijulikani — '+esc(r.holder)+'</b>'
-                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th class="r">Age</th></tr></thead><tbody>'
+                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th class="r">Age</th><th>Nani mwingine aliwahi kuwa nayo</th></tr></thead><tbody>'
                 +r.unaccountedList.map(function(s){
+                  /* A LEAD, NOT AN ACCUSATION -- the phone is still unaccounted for, this is
+                     just who to ask first instead of starting from nothing. */
                   return '<tr><td style="font-size:11px">'+esc(s.serial)+'</td><td>'+esc(s.item||'—')+'</td>'
-                    +'<td class="r">'+(s.age!=null?money(s.age):'—')+'</td></tr>';
+                    +'<td class="r">'+(s.age!=null?money(s.age):'—')+'</td>'
+                    +'<td>'+(s.alsoHeldBy?'<b>'+esc(s.alsoHeldBy)+'</b> <span class="mut" style="font-size:10px">'+esc(s.alsoHeldOn||'')+'</span>'
+                                          :'<span class="mut">—</span>')+'</td></tr>';
                 }).join('')+'</tbody></table></div></td></tr>'
               : '');
         }).join('')+'</tbody></table></div>'
