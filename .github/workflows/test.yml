@@ -1,0 +1,44 @@
+# The test suite, run by a machine instead of by whoever remembered.
+#
+# WHY THIS DID NOT EXIST UNTIL NOW, which is the part worth writing down. There were two
+# workflows here -- one that builds the APKs and one that probes production by hand -- and
+# neither ran `npm test`. The suite has grown to 158 tests, several of them written
+# specifically to stop a bug coming back, and every one of them only ever ran because
+# somebody typed the command. A guard that runs at the author's discretion is a guard on the
+# honour system: it holds right up until the day it matters.
+#
+# It runs on every push and every pull request with no `paths` filter, deliberately. The APK
+# workflow filters on `android/**` because compiling Android is slow and irrelevant to a CSS
+# change; this suite takes a couple of seconds and asserts things about the schema, the
+# importers, the portal HTML and the Android sources all at once. Any filter here is a way to
+# be sure the tests did not run on exactly the change that needed them.
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Matches package.json engines. The suite uses node:test and the native test
+          # runner's glob support, so it is genuinely version-sensitive.
+          node-version: '22'
+      # No lockfile is committed, so `npm ci` would fail. The two dependencies are only
+      # needed by the API at runtime -- the tests run against fake-db and never open a
+      # socket -- but installing them keeps an accidental real import from passing here
+      # and failing on Vercel.
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      # A JDK is on the runner already, which matters: two tests shell out to `javac` to
+      # parse-check the Android sources and SKIP THEMSELVES SILENTLY when it is missing.
+      # Without this line they would go on "passing" here by not running at all.
+      - name: Confirm javac was available (the parse checks are not silently skipped)
+        run: javac -version
