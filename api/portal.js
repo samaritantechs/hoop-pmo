@@ -52,6 +52,34 @@ AUDITED.add('deviceToken');
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
 
+/* IS THIS LOAN STILL ON THE BOOK, ON A GIVEN DAY. The 45-day window (WINDOW_DAYS carries the
+   owner's 2 days of calendar grace on top), measured against the day being ASKED ABOUT rather
+   than against today -- so a week re-read next month keeps the bars it had at the time, and
+   every locked-7 figure on every screen answers with the same arithmetic. */
+const inWinOn = (r, day) => {
+  const l = lifeDayOf(r.disbursed_date, day);
+  return l != null && l <= WINDOW_DAYS;
+};
+
+/* WHAT SETTINGS ARE, AND WHY THIS IS ONE LIST RATHER THAN TWO.
+   =======================================================================================
+   `settings` decides what the pane SHOWS and `settingSet` decides what it may SAVE, and
+   for a while those were two hand-kept copies of nearly the same array. They drifted, in
+   the way two copies always do: the five DEVICE_* keys below were written up in
+   docs/DEVICE-LOCKING.md as "these live in settings rather than in the APK", read by
+   device-core.js on every heartbeat -- and were in neither list, so the pane never showed
+   them and settingSet refused to write them. The number a stranded customer is told to
+   call could not be set by anybody, from anywhere, and the doc said it could.
+
+   The keys are also the pane's ORDER, top to bottom, so device settings sit together. */
+const EDITABLE_SETTINGS = [
+  'SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
+  'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET',
+  // The locked handset's four lines, plus how long silence is forgiven. See device-core.js.
+  'DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE', 'DEVICE_LOCK_REASON',
+  'DEVICE_OFFLINE_GRACE_HOURS',
+];
+
 /* =======================================================================================
    A PERSON TYPING SOMETHING WRONG IS NOT A SERVER FAILURE.
 
@@ -319,13 +347,14 @@ const FNS = {
     const rows = await fetchAll(() => scopeQ(user, db.from('watu_snapshots')
       .select('imei, snapshot_date, disbursed_date')
       .eq('locked7', true).gte('snapshot_date', from).lte('snapshot_date', to)));
-    /* No window filter. The query already asks the database for locked7 = true, and that
-       column IS the answer -- see "LOCKED IS A COLUMN, NOT A CALCULATION" in call-core.js.
-       Re-filtering by disbursed_date here is what made this chart disagree with the tile
-       above it whenever a customer aged past day 47 between two uploads. */
+    /* BOTH HALVES, exactly as the tile above -- Watu's locked7 column (asked of the database
+       directly) AND our 45-day window. The window is measured against EACH BAR'S OWN DAY, not
+       against today, so Monday's bar is the book as it stood on Monday; re-reading a past week
+       next month must not quietly shrink its bars as those customers age out. */
     const seen = new Map();
     for (const r of rows) {
       const d = String(r.snapshot_date).slice(0, 10);
+      if (!inWinOn(r, d)) continue;
       if (!seen.has(d)) seen.set(d, new Set());
       seen.get(d).add(String(r.imei));
     }
@@ -436,16 +465,19 @@ const FNS = {
       // Nobody uploaded that day: a GAP, never a zero. "nobody uploaded" and "nobody
       // recovered" are different facts and must not look alike on a chart people act on.
       if (!byDay.has(d)) { points.push({ date: d, offJana: null, reduced: null, pending: false }); continue; }
-      /* THE POOL IS THE COLUMN. This was `days_offline >= 7 && inWindow` -- two calculations
-         of our own standing in for a fact Watu had already published, and neither agreed with
-         it. On the owner's deck Days Offline is filled on 899 rows while Locked 7+ is filled
-         on 2,385, so a customer Watu had flagged as locked could be missing from this pool
-         entirely just because their offline count was blank.
+      /* THE POOL IS THE COLUMN, INSIDE THE WINDOW. The `days_offline >= 7` half was a
+         calculation of ours standing in for a fact Watu had already published, and it did not
+         agree with it -- on the owner's deck Days Offline is filled on 899 rows while Locked
+         7+ is filled on 2,385, so a customer Watu had flagged could be missing from this pool
+         entirely just because their offline count was blank. The window half was never the
+         problem and stays: a loan past day 45 is off the book, locked or not.
+
+         Measured against THAT DAY, not today, so a past week keeps the bars it had.
 
          Recovery is still MEASURED by days_offline falling, further down -- that is how you
-         see somebody come back. It is only the question "who was on the list" that the column
-         now answers. See "LOCKED IS A COLUMN, NOT A CALCULATION" in call-core.js. */
-      const offJana = [...byDay.get(d).values()].filter(r => r.locked7 === true);
+         see somebody come back. It is only "who was on the list" that the column answers. */
+      const offJana = [...byDay.get(d).values()]
+        .filter(r => r.locked7 === true && inWinOn(r, d));
 
       /* The result of that day's chasing shows up in the NEXT upload. Until it exists the day
          is PENDING, not a failure: today's officers have done the work and the answer simply
@@ -528,8 +560,10 @@ const FNS = {
       return m;
     };
     const curM = newest(cur), oldM = newest(old);
-    // The same pool the chart above counts, by the same rule: the column, not a calculation.
-    const offJana = [...oldM.values()].filter(r => r.locked7 === true);
+    // The same pool the chart above counts, by the same rule: Watu's column AND our window,
+    // measured against the day this list belongs to. If these two ever disagree, the chart
+    // and the names under it are describing different books.
+    const offJana = [...oldM.values()].filter(r => r.locked7 === true && inWinOn(r, day));
     const deal = dealMap(offJana, roster.ids, day);
     const out = offJana.map(o => {
       const c = next ? curM.get(String(o.imei)) : null;
@@ -1783,22 +1817,22 @@ const FNS = {
 
   async settings(db, user) {
     requireSettings(user);
-    const KEYS = ['SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
-      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET'];
-    const rows = await fetchAll(() => db.from('settings').select('key, value').in('key', KEYS));
+    const rows = await fetchAll(() => db.from('settings').select('key, value')
+      .in('key', EDITABLE_SETTINGS));
     const by = {}; rows.forEach(r => { by[r.key] = r.value; });
     // An empty FU_STATUSES box looked like "there is no list" when the list simply
     // lives in code -- show the WORKING vocabulary so editing starts from the truth.
     if (!String(by.FU_STATUSES || '').trim()) by.FU_STATUSES = FU_STATUSES.join(', ');
-    return { ok: true, settings: KEYS.map(k => ({ key: k, value: by[k] == null ? '' : by[k] })) };
+    return { ok: true,
+      settings: EDITABLE_SETTINGS.map(k => ({ key: k, value: by[k] == null ? '' : by[k] })) };
   },
 
   async settingSet(db, user, args) {
     requireWrite(user); requireSettings(user);
     const key = K(args && args.key);
-    const ALLOWED = new Set(['SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
-      'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET']);
-    if (!ALLOWED.has(key)) throw new Error('That setting is not editable here: ' + key);
+    if (!EDITABLE_SETTINGS.includes(key)) {
+      throw new Error('That setting is not editable here: ' + key);
+    }
     const { error } = await db.from('settings')
       .upsert({ key, value: String((args && args.value) || '') }, { onConflict: 'key' });
     if (error) throw new Error(error.message);

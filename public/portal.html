@@ -1105,7 +1105,7 @@ function drawDash(m){
     '<div class="card" id="dashWeekBar" style="padding:10px 12px;margin-bottom:10px"></div>'
     +'<div class="tiles">'
     +'<div class="tile"><div class="l">Orodha ya leo</div><div class="v">'+n(s.list)+'</div><div class="s">'+(s.deckDate?('deck '+esc(s.deckDate)):'hakuna upload bado')+'</div></div>'
-    +'<div class="tile"><div class="l">Locked 7+</div><div class="v" style="color:var(--bad)">'+n(s.locked7)+'</div><div class="s">kama Watu alivyoweka kwenye faili</div></div>'
+    +'<div class="tile"><div class="l">Locked 7+</div><div class="v" style="color:var(--bad)">'+n(s.locked7)+'</div><div class="s">Watu amewaweka Locked 7+, ndani ya siku 45</div></div>'
     +'<div class="tile"><div class="l">Ndani ya siku 45</div><div class="v">'+n(s.inWindow)+'</div><div class="s">dirisha la Hoop</div></div>'
     +'<div class="tile"><div class="l">Simu leo</div><div class="v">'+n(s.calls)+'</div><div class="s">credit team</div></div>'
     +'<div class="tile"><div class="l">Reached — yesterday</div><div class="v" style="color:var(--ok)">'+(s.reached&&s.reached.pct!=null?pct(s.reached.pct):'—')+'</div><div class="s">'+(s.reached&&s.reached.den?money(s.reached.num)+' / '+money(s.reached.den)+' · ':'')+'last week avg: '+(s.weekAvg&&s.weekAvg.pct!=null?pct(s.weekAvg.pct):'—')+'</div></div>'
@@ -1116,10 +1116,10 @@ function drawDash(m){
        first, and each was stretched across the whole monitor to fill the room. */
     +'<div class="pair">'
     +'<div class="card"><h2>Locked 7+ — wiki hii / this week</h2>'
-    +'<div class="mut" style="margin-bottom:6px">Kila siku ya upload: wateja waliowekwa <b>Locked 7+ Days</b> kwenye faili la Watu. Kupanda = mzigo unaongezeka.</div>'
+    +'<div class="mut" style="margin-bottom:6px">Kila siku ya upload: wateja waliowekwa <b>Locked 7+ Days</b> kwenye faili la Watu, ndani ya dirisha la siku 45. Kupanda = mzigo unaongezeka.</div>'
     +'<div id="trendBox"><div class="sk"></div></div></div>'
     +'<div class="card"><h2>Credit — 7+ recovery kwa wiki / this week</h2>'
-    +'<div class="mut" style="margin-bottom:6px">Wote waliowekwa Locked 7+ kwenye faili la Watu. '
+    +'<div class="mut" style="margin-bottom:6px">Waliowekwa Locked 7+ kwenye faili la Watu, ndani ya siku 45. '
     +'Kila credit, kila siku: waliopewa OFF JANA (7+ siku jana) na wangapi kati yao walipungua leo.</div>'
     +'<div id="credRecBox"><div class="sk"></div></div></div>'
     +'</div>'
@@ -1964,7 +1964,7 @@ function drawRecoveryTrend(){
       return;
     }
     b.innerHTML='<div style="font-weight:700;margin-bottom:2px">7+ waliopungua / 7+ reduced · '+wk+'</div>'
-      +'<div class="mut" style="margin-bottom:8px">Wote waliowekwa Locked 7+ kwenye faili la Watu. '
+      +'<div class="mut" style="margin-bottom:8px">Waliowekwa Locked 7+ kwenye faili la Watu, ndani ya siku 45. '
       +'Urefu wote = OFF JANA (7+ siku kwenye upload ya jana). Kijani = walipungua siku husika.</div>'
       +svg;
   }).catch(function(e){
@@ -2987,6 +2987,24 @@ function drawSettings(m){
       }).join('')
       +'<div class="mut">SYSTEM_OPEN=YES hufungua mfumo. CALL_BRAND ni jina kwenye app. FU_STATUSES: hali za ufuatiliaji — tenganisha kwa comma (au mstari mpya). '
       +'<b>SALES_DAILY_TARGET</b>: lengo la mauzo kwa siku (TZS) — linaonekana kama mstari kwenye chati ya Sales performance. / daily sales target in TZS, drawn as the target line on the Sales performance chart.</div>'
+      /* THE LOCK SCREEN IS WRITTEN HERE, so the shape it makes is drawn here. Nobody sees
+         that screen in the course of ordinary work -- it takes a provisioned handset and a
+         lock order to appear at all -- so somebody editing DEVICE_LOCK_MESSAGE is otherwise
+         typing blind into a screen only a customer will ever read. */
+      +'<div class="mut" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">'
+      +'<b>DEVICE_*</b>: maneno yanayoonekana kwenye simu iliyofungwa. Hakuna neno lililojengwa ndani ya app — yote yanatoka hapa. '
+      +'/ every word on a locked phone comes from these; none is compiled into the APK.'
+      +'<pre style="background:#0b2a6b;color:#fff;text-align:center;border-radius:8px;padding:12px;margin:8px 0;font-size:11.5px;line-height:1.6;white-space:pre-wrap">'
+      +'HOOP LIMITED\n'
+      +'SIMU HII IMEFUNGWA NA HOOP LIMITED.\nWASILIANA NASI KWA NAMBA 0700123456\n'
+      +'IMEI: 351388334583295\n'
+      +'REASON: STOCK, UNSOLD</pre>'
+      +'<b>DEVICE_LOCK_BRAND</b> = mstari wa kwanza, na <code>{brand}</code>. '
+      +'<b>DEVICE_HELP_PHONE</b> = namba, na <code>{namba}</code>. '
+      +'<b>DEVICE_LOCK_MESSAGE</b> = sentensi — weka <code>{brand}</code> na <code>{namba}</code> popote unapotaka. '
+      +'IMEI inatoka kwenye register, si kwenye simu yenyewe. '
+      +'<b>DEVICE_LOCK_REASON</b> hutumika <u>pale tu</u> simu ilipojifunga yenyewe kwa kukosa mtandao — ukifunga wewe kwa Funga, sababu uliyoandika ndiyo inayoonekana. '
+      +'<b>DEVICE_OFFLINE_GRACE_HOURS</b> = saa za ukimya kabla simu ya mteja kujifunga (168 = wiki moja).</div>'
       +'</div>';
     $all('[data-sv]',m).forEach(function(b){
       b.onclick=function(){

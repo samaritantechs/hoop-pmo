@@ -252,6 +252,65 @@ test('the wrapper is syntactically valid Java', () => {
   assert.deepEqual(syntax, [], 'javac reported something that is not a missing Android class');
 });
 
+test('the lock app is syntactically valid Java', () => {
+  /* Same parse-only check, same caveats, on the other app -- and this one matters more. A
+     syntax slip in the wrapper shows up the moment somebody opens the calls app; a slip in
+     here is only found when a handset is already boxed and on a shelf. */
+  const { spawnSync } = spawnMod;
+  const dir = new URL('../android/lock/src/main/java/com/samaritantechs/hooploanlock/',
+    import.meta.url).pathname;
+  if (spawnSync('javac', ['-version'], { encoding: 'utf8' }).error) return;
+  const r = spawnSync('javac', ['-d', '/tmp/javac-parse-lock', '-nowarn',
+    ...fs.readdirSync(dir).filter(f => f.endsWith('.java')).map(f => dir + f),
+  ], { encoding: 'utf8' });
+  const EXPECTED_WITHOUT_THE_SDK =
+    /cannot find symbol|does not exist|cannot access|does not override or implement|package (android|org\.json)/;
+  const syntax = (r.stderr || '').split('\n')
+    .filter(l => /error:/.test(l) && !EXPECTED_WITHOUT_THE_SDK.test(l));
+  assert.deepEqual(syntax, [], 'javac reported something that is not a missing Android class');
+});
+
+/* =========================================================================================
+   THE FOUR LINES ON A LOCKED PHONE, and why a test stands over them.
+
+       HOOP LIMITED
+       SIMU HII IMEFUNGWA NA HOOP LIMITED. WASILIANA NASI KWA NAMBA 0700000000
+       IMEI: 351388334583295
+       REASON: STOCK, UNSOLD
+
+   That shape was specified by the person who answers the calls, and it is the only part of
+   this system a customer ever reads. Nobody sees this screen during development -- it needs
+   a provisioned handset and a lock order to appear at all -- so a line quietly lost in a
+   refactor would ship, sit in a box, and surface as a phone call nobody can resolve because
+   the caller cannot say which handset they are holding.
+   ========================================================================================= */
+test('the lock screen keeps its four lines, and hard-codes none of the words', () => {
+  const lock = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockActivity.java');
+
+  assert.match(lock, /"IMEI: "/, 'the IMEI line is what a caller reads out to identify the phone');
+  assert.match(lock, /"REASON: "/, 'a lock with no stated reason is the one nobody can resolve');
+  assert.match(lock, /setAllCaps\(true\)/, 'read at arm\'s length, outdoors, by somebody upset');
+
+  // Every word comes down the wire. A literal company name here is a rename that needs an
+  // APK on every handset already in a customer's pocket -- see CALL_BRAND for how that ends.
+  assert.doesNotMatch(lock, /"HOOP[^"]*"/,
+    'the brand belongs in DEVICE_LOCK_BRAND, never compiled into the lock screen');
+  for (const key of ['Prefs.BRAND', 'Prefs.IMEI', 'Prefs.REASON', 'Prefs.HELP_PHONE']) {
+    assert.ok(lock.includes(key), 'the lock screen stopped reading ' + key);
+  }
+});
+
+test('the beat carries every word the lock screen shows', () => {
+  const core = fs.readFileSync(new URL('../api/_lib/device-core.js', import.meta.url), 'utf8');
+  const beat = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Beat.java');
+  /* Both ends of the same wire. The server may send a field the handset ignores and nothing
+     breaks visibly -- the screen simply comes out blank on a phone in somebody's hand. */
+  for (const field of ['brand', 'imei', 'message', 'helpPhone', 'reason']) {
+    assert.match(core, new RegExp('\\b' + field + '\\b'), 'device-core stopped sending ' + field);
+    assert.match(beat, new RegExp('optString\\("' + field + '"'), 'Beat stopped storing ' + field);
+  }
+});
+
 /* =========================================================================================
    ONE STATUS-BAR MECHANISM, AND IT IS fitsSystemWindows.
 

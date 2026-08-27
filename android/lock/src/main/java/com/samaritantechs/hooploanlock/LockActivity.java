@@ -26,16 +26,34 @@ import android.widget.TextView;
  *
  * WHAT THIS SCREEN IS FOR, beyond stopping use: somebody is holding this phone, they cannot
  * use it, and they need to know why and what to do about it. A lock screen that just says
- * LOCKED turns a payment problem into an angry walk to a shop. So it carries the reason and
- * the number to call, both refreshed from the server on every beat -- which is also why the
- * number lives in settings rather than in this APK.
+ * LOCKED turns a payment problem into an angry walk to a shop.
+ *
+ * THE FOUR LINES, specified by the person who has to answer the calls:
+ *
+ *     HOOP LIMITED
+ *     SIMU HII IMEFUNGWA NA HOOP LIMITED. WASILIANA NASI KWA NAMBA 0700000000
+ *     IMEI: 351388334583295
+ *     REASON: STOCK, UNSOLD
+ *
+ * Not one of those words is compiled into this APK. The company name, the number, the
+ * message and the reason all arrive on the heartbeat and are stored, because a handset in
+ * somebody's pocket for eighteen months cannot wait for an app release when the office
+ * changes its phone number. This class owns the LAYOUT; device-core.js owns the WORDS.
+ *
+ * IN CAPITALS, deliberately. This is read at arm's length, often outdoors, often by somebody
+ * who is upset, and the IMEI has to be copied out loud down a phone line digit by digit.
+ * setAllCaps is applied at render so whatever the office types into settings comes out in
+ * the same voice.
  */
 public class LockActivity extends Activity {
 
     static final String EXTRA_RELEASE = "release";
 
+    private TextView brandView;
     private TextView reasonView;
     private TextView helpView;
+    private TextView imeiView;
+    private TextView whyView;
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -71,17 +89,46 @@ public class LockActivity extends Activity {
 
     /** Words from the last beat, so a phone that has heard from us shows the current message. */
     private void refresh() {
-        String msg = Prefs.str(this, Prefs.MESSAGE, "");
-        if (msg == null || msg.isEmpty()) msg = getString(R.string.lock_default);
-        String reason = Prefs.str(this, Prefs.REASON, "");
-        String help = Prefs.str(this, Prefs.HELP_PHONE, "");
-        if (reasonView != null) {
-            reasonView.setText(reason == null || reason.isEmpty() ? msg : msg + "\n\n" + reason);
+        String brand = str(Prefs.BRAND);
+        if (brand.isEmpty()) brand = getString(R.string.lock_brand);
+        String msg = str(Prefs.MESSAGE);
+        if (msg.isEmpty()) msg = getString(R.string.lock_default);
+        String help = str(Prefs.HELP_PHONE);
+        String reason = str(Prefs.REASON);
+
+        /* THE IMEI, from the register first and the modem only as a fallback. Those are two
+           different facts and the register's is the useful one: it is what Sipho's stock
+           report says, what the office will search on, and what an Android 10+ handset
+           cannot read about itself at all unless Device Owner took properly -- which is
+           precisely the phone we would most want to identify. */
+        String imei = str(Prefs.IMEI);
+        if (imei.isEmpty()) {
+            String own = Imei.read(this);
+            if (own != null) imei = own;
         }
-        if (helpView != null) {
-            helpView.setVisibility(help == null || help.isEmpty() ? View.GONE : View.VISIBLE);
-            helpView.setText(help);
-        }
+
+        set(brandView, brand);
+        set(reasonView, msg);
+        /* The number gets its own big line ONLY when the message has not already said it.
+           With the default wording it has -- "WASILIANA NASI KWA NAMBA 0700000000" -- and
+           repeating it underneath looks like two different numbers at a glance. With a
+           custom message that forgot to mention one, this is what stops a locked phone from
+           telling somebody to get in touch without saying how. */
+        set(helpView, help.isEmpty() || msg.contains(help) ? "" : help);
+        set(imeiView, imei.isEmpty() ? "" : "IMEI: " + imei);
+        set(whyView, reason.isEmpty() ? "" : "REASON: " + reason);
+    }
+
+    private String str(String key) {
+        String v = Prefs.str(this, key, "");
+        return v == null ? "" : v.trim();
+    }
+
+    /** Empty is not a blank line on a screen this short -- it is a row that is not there. */
+    private void set(TextView v, String text) {
+        if (v == null) return;
+        v.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
+        v.setText(text);
     }
 
     private View build() {
@@ -92,32 +139,16 @@ public class LockActivity extends Activity {
         int pad = dp(28);
         root.setPadding(pad, pad, pad, pad);
 
-        TextView brand = new TextView(this);
-        brand.setText("HOOPLOAN");
-        brand.setTextColor(Color.WHITE);
-        brand.setTypeface(Typeface.DEFAULT_BOLD);
-        brand.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
-        brand.setGravity(Gravity.CENTER);
-        root.addView(brand);
-
-        reasonView = new TextView(this);
-        reasonView.setTextColor(0xFFDCE6FA);
-        reasonView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        reasonView.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(20);
-        root.addView(reasonView, lp);
-
-        helpView = new TextView(this);
-        helpView.setTextColor(Color.WHITE);
-        helpView.setTypeface(Typeface.DEFAULT_BOLD);
-        helpView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-        helpView.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        hp.topMargin = dp(24);
-        root.addView(helpView, hp);
+        brandView = row(root, 26, Color.WHITE, true, 0);
+        reasonView = row(root, 16, 0xFFDCE6FA, false, 20);
+        helpView = row(root, 22, Color.WHITE, true, 24);
+        /* IMEI and REASON are the reference lines -- smaller, dimmer, and last, because they
+           are what somebody reads OUT once they are already on the call. The message above
+           is what they read first. Monospace on the IMEI so fifteen digits can be tracked
+           with a finger without losing the place. */
+        imeiView = row(root, 14, 0xFFA9BEE6, false, 22);
+        imeiView.setTypeface(Typeface.MONOSPACE);
+        whyView = row(root, 14, 0xFFA9BEE6, false, 6);
 
         /* THE ONE THING A LOCKED PHONE MUST STILL DO. Emergency calls are not ours to take
            away -- not for a debt, not for anything. The dialer opens outside lock task for
@@ -137,6 +168,26 @@ public class LockActivity extends Activity {
         root.addView(emergency, ep);
 
         return root;
+    }
+
+    /**
+     * One centred, ALL-CAPS line, stacked under the last. Built in code rather than XML for
+     * the same reason the rest of this app is: a lock screen that fails to inflate is a
+     * phone nobody can use and nobody can explain, so there is no layout file to go missing
+     * and no theme attribute to be overridden by a vendor build.
+     */
+    private TextView row(LinearLayout root, int sp, int colour, boolean bold, int topDp) {
+        TextView t = new TextView(this);
+        t.setTextColor(colour);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        t.setGravity(Gravity.CENTER);
+        t.setAllCaps(true);
+        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(topDp);
+        root.addView(t, lp);
+        return t;
     }
 
     /** Back does nothing. There is nowhere behind this screen to go. */

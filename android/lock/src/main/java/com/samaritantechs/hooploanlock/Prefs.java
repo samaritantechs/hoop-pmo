@@ -17,6 +17,13 @@ class Prefs {
     static final String MESSAGE = "message";        // the lock screen's words, refreshed each beat
     static final String HELP_PHONE = "helpPhone";
     static final String REASON = "reason";
+    static final String BRAND = "brand";            // company name atop the lock screen; from settings
+    /* The IMEI as the REGISTER holds it, which is a different fact from the one Imei.java
+       reads off the modem: this is the number on Sipho's report, the one a caller reads out
+       down the phone, and on a phone where provisioning half-failed it is the only one this
+       app can put on the screen at all. Stored, because a locked handset in a dead spot has
+       to show it without asking anybody. */
+    static final String IMEI = "imei";
     static final String LAST_OK = "lastOkBeat";     // ms; the anchor the offline grace counts from
     static final String GRACE_HOURS = "graceHours"; // -1 = never self-lock (still stock)
     static final String RETIRED = "retired";        // released for good; stop beating

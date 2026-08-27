@@ -332,33 +332,36 @@ export const WINDOW_DAYS = 47;
 const inWindowOf = (r, day) => { const l = lifeDayOf(r.disbursed_date, day); return l != null && l <= WINDOW_DAYS; };
 
 /* =========================================================================================
-   LOCKED IS A COLUMN, NOT A CALCULATION.
+   LOCKED IS A COLUMN. THE WINDOW IS STILL THE WINDOW. BOTH, NOT EITHER.
 
      "The locked 7+ days list of credits is always a few number away from the actual one so
       please dont use dates to give the customer list but the count and acture true/false
       values in the columns -- this is the VERY CORRECT METHOD"
-     "use the value in true and false: not disb day calculation, we just use the date in
-      castomer card"
+     "Locked 7+ should be in a window of 45 days, it has lost that and credits are now having
+      283 for today yet they told me it was 41"
 
-   Every locked-7 figure used to be `locked7 === true AND inWindowOf(...)`, and the second
-   half is what drifted. inWindowOf measures from disbursed_date to WHATEVER DAY THE PAGE IS
-   OPENED, so the same deck answered 42 one morning and 40 two days later without a single
-   upload -- customers falling out of the window as the calendar moved under them. That is
-   the "few numbers away" exactly.
+   Two rules, and an earlier cut of this obeyed the first by deleting the second. That shipped
+   283 where Watu says 41. Written down so it is not undone twice:
 
-   Watu has already done this arithmetic and published the answer in the file, as Locked 4+
-   Days and Locked 7+ Days. Recomputing our own version of a number the source already states
-   can only ever disagree with it. So the columns decide, and nothing else does.
+     WHICH CUSTOMERS ARE LOCKED   Watu's column, never our arithmetic. Watu has already done
+                                  this sum and published the answer as Locked 4+ / Locked 7+
+                                  Days. Recomputing it from days_offline could only ever
+                                  disagree with the source -- that WAS the "few numbers away".
+     WHICH CUSTOMERS ARE OURS     the 45-day window, exactly as before. A loan past day 45 has
+                                  left the book; that it is also locked does not put it back.
 
-   THE DATE IS NOT GONE -- it moved to where it belongs. lifeDay and inWindow are still
-   carried on every customer row and still shown on the customer card, which is where a person
-   asking "how old is this loan?" looks. It simply no longer decides who is on a list.
+   Measured on the owner's own deck of 2,650 rows, 27 Aug 2026, against the figure Watu quoted
+   the same morning:
 
-   WHAT THIS COSTS, said plainly: on the owner's own 2,689-row deck the 7+ pool goes from
-   about 42 to 292. That is the credit team's daily workload multiplying by seven, and it is
-   the intended consequence of counting what Watu flagged rather than a filtered subset. */
-const isLocked7 = r => r.locked7 === true;
-const isLocked4 = r => r.locked4 === true;
+     locked7 column alone, no window ............ 283      what the broken cut showed
+     locked7 column AND the window .............. 41       what Watu says          <-- this
+     days_offline >= 7 AND the window ........... 44-46    the old date arithmetic
+
+   THE DATE STILL SHOWS ON THE CARD. lifeDay and inWindow ride on every customer row and are
+   drawn on the customer card, which is where somebody asking "how old is this loan?" looks.
+   It is the LOCKED flag that is no longer ours to compute -- not the window. */
+const isLocked7 = (r, day) => r.locked7 === true && inWindowOf(r, day);
+const isLocked4 = (r, day) => r.locked4 === true && inWindowOf(r, day);
 
 /* THE EQUAL DEAL, PER KIND. One round-robin over the whole book looked equal ("all
    credits should get equal distribution") yet the owner saw "3 got 12 and one got 9" on
@@ -404,12 +407,12 @@ export function dealMap(rows, rosterIds, day) {
   const rot = parseInt(h36('deal|' + dk), 36) % rosterIds.length;
   const strata = { L7: [], L4: [], IN: [], OUT: [] };
   for (const r of rows) {
-    /* THE COLUMNS COME FIRST. A locked customer is dealt as locked whatever their disbursed
-       date says -- the window only sorts the ones Watu has NOT flagged, where it is still
-       the only thing distinguishing a live loan from an old one. Before this, a 7+ customer
-       past day 47 was filed under OUT, so the officers' Lock 7+ tab quietly disagreed with
-       the column the file had handed us. */
-    const k = isLocked7(r) ? 'L7' : (isLocked4(r) ? 'L4' : (inWindowOf(r, day) ? 'IN' : 'OUT'));
+    /* THE COLUMNS DECIDE WHICH LOCKED STRATUM, THE WINDOW DECIDES WHETHER AT ALL. A customer
+       past day 45 goes to OUT whether or not Watu flagged them -- they have left the book, and
+       being locked on the way out does not put them back on somebody's calling list. Inside
+       the window, Watu's flag outranks any sum of ours. */
+    const k = isLocked7(r, day) ? 'L7'
+      : (isLocked4(r, day) ? 'L4' : (inWindowOf(r, day) ? 'IN' : 'OUT'));
     strata[k].push(r);
   }
   for (const k of ['L7', 'L4', 'IN', 'OUT']) {
@@ -815,10 +818,9 @@ async function summaryCompute(db, user, nowMs) {
   ]);
   const inWinOf = r => inWindowOf(r, today);
   const inWin = deck.filter(inWinOf).length;
-  /* Straight off the column -- see "LOCKED IS A COLUMN, NOT A CALCULATION" above. The
-     "Ndani ya siku 45" tile beside this one still counts the window, which is the honest
-     division of labour: that tile is ABOUT the window, this one is about what Watu flagged. */
-  const locked7 = deck.filter(isLocked7).length;
+  /* Watu's flag, inside our window -- see the note above isLocked7. Both halves, or this
+     tile reads 283 on a book of 41. */
+  const locked7 = deck.filter(r => isLocked7(r, today)).length;
   // The performance bar is always YESTERDAY (a finished day), never today's half-story,
   // plus last week's average -- company-wide here ("other roles get average of all
   // company"; the per-person cut lives in dailySummary and in Ripoti).
@@ -864,7 +866,7 @@ async function summaryForOfficer(db, cu, nowMs) {
     ok: true,
     deckDate,
     list: { num: mine.length },
-    locked7: { num: mine.filter(isLocked7).length },
+    locked7: { num: mine.filter(r => isLocked7(r, today)).length },
     inWindow: { num: mine.filter(inWinOf).length },
     calls: { num: myLogs.length },
     reached: reachedOn(hist.yDate, hist, cu.user_id, roster) || { pct: null, num: 0, den: 0 },
@@ -901,7 +903,7 @@ async function summaryForAgent(db, cu, nowMs) {
     ok: true,
     deckDate,
     list: { num: mine.length },
-    locked7: { num: mine.filter(isLocked7).length },
+    locked7: { num: mine.filter(r => isLocked7(r, today)).length },
     inWindow: { num: mine.filter(inWinOf).length },
     calls: { num: myLogs.length },
     reached: reachedOn(hist.yDate, hist, cu.user_id, [], mineFn) || { pct: null, num: 0, den: 0 },
