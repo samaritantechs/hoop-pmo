@@ -474,3 +474,38 @@ test('the Windows bench script matches the Linux one where it counts', () => {
   const bat = fs.readFileSync(new URL('../scripts/lock-bench.bat', import.meta.url), 'utf8');
   assert.match(bat, /lock-bench\.ps1/, 'the launcher stopped pointing at the script it launches');
 });
+
+/* =========================================================================================
+   A PHONE WHOSE ROW IS GONE MUST NOT BE A BRICK FOREVER.
+
+     "if it doesn't find it's tocken it's should release fromm organization ownership"
+
+   The handset used to treat a 403 -- "the register does not know this token" -- as a reason
+   to carry on unchanged. That left a phone whose row had been deleted hardened for good,
+   with nobody able to lock it, unlock it or release it, and refusing the factory reset that
+   would have fixed it.
+
+   The fix is a release on SUSTAINED refusal, and the two halves are both load-bearing: it
+   must happen, or the phone is a brick; and it must not happen at the first 403, or one bad
+   deploy hands every phone HOOP owns back to whoever is holding it. Both are asserted here,
+   because a later reader tidying this into "release on 403" would be undoing the second half
+   without noticing there was one.
+   ========================================================================================= */
+test('the handset releases itself only after a SUSTAINED not-enrolled, never at once', () => {
+  const beat = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Beat.java');
+
+  assert.match(beat, /RETIRE_AFTER_GONE_MS/, 'the sustained-403 release was removed');
+  const days = beat.match(/RETIRE_AFTER_GONE_MS\s*=\s*(\d+)L?\s*\*\s*24/);
+  assert.ok(days, 'the threshold must be written in days, so its size is readable at a glance');
+  assert.ok(Number(days[1]) >= 7,
+    'a short threshold turns a bad deploy into a fleet-wide release; keep it in weeks');
+
+  // The 403 clock is started, not acted on, the first time -- and any successful beat
+  // clears it, so a phone that comes back is never carrying a stale countdown.
+  assert.match(beat, /GONE_SINCE, System\.currentTimeMillis\(\)/, 'the first 403 must only start the clock');
+  assert.match(beat, /remove\(Prefs\.GONE_SINCE\)/, 'a successful beat must clear the clock');
+
+  // Only a 403 counts. A timeout or a DNS failure is silence, and silence never frees a
+  // phone -- that is what the offline grace is for, in the other direction.
+  assert.match(beat, /lastStatus == 403/, 'only a real 403 may count toward the release');
+});

@@ -1649,12 +1649,30 @@ const FNS = {
     requireWrite(user); requireNav(user, 'devices');
     const imei = String((args && args.imei) || '').trim();
     if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
-    const rows = await fetchAll(() => db.from('devices').select('imei, state, reported').eq('imei', imei));
+    const rows = await fetchAll(() => db.from('devices')
+      .select('imei, state, reported, last_seen').eq('imei', imei));
     const dev = rows.find(r => String(r.imei) === imei);
     if (!dev) bad('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
     if (String(dev.state) === 'locked' || String(dev.reported) === 'locked') {
       bad('Simu imefungwa. Ifungue kwanza, subiri ithibitishe, ndipo uifute. '
         + '/ This phone is locked. Unlock it and wait for it to confirm before deleting, or it stays locked with no way to reach it.');
+    }
+    /* AND IT MUST NOT ORPHAN A LIVE HANDSET, which is the bug this guard exists for.
+       ------------------------------------------------------------------------------
+       Deleting the row of a phone that is still provisioned leaves it hardened with no
+       office: lock, unlock and release all travel through a row that no longer exists, and
+       the handset refuses the factory reset that would fix it. That is a brick, and it was
+       reachable in one click on the first day this button shipped.
+
+       So the door is: a phone that has never once spoken (provisioning did not take, so
+       there is nothing on the handset to strand), or one already RELEASED -- which is the
+       state that tells the handset to hand itself back. Released-but-not-yet-heard is fine:
+       the order is standing, and the phone applies it the moment it reaches us. */
+    const spoke = !!String(dev.last_seen || '').trim();
+    if (spoke && String(dev.state) !== 'released') {
+      bad('Simu bado ipo chini ya udhibiti. Bonyeza <b>Achia</b> kwanza — ndipo simu ijiachie '
+        + 'yenyewe — kisha uifute. / This handset is still under management. Release it first '
+        + '(Achia), or deleting the row leaves it locked down with nothing able to reach it.');
     }
     // History first: a device_events row whose device is gone is a row nobody can read.
     await db.from('device_events').delete().eq('imei', imei);

@@ -349,6 +349,42 @@ test('deviceDelete refuses a locked phone rather than stranding it', async () =>
   await assert.rejects(() => _FNS.deviceDelete(e, ADMIN, { imei: 'D2' }), /imefungwa|locked/i);
 });
 
+/* THE BUG THIS GUARD EXISTS FOR, found on the first day the button shipped:
+
+     "I used futa and removed all.. phone is on wifi still can't restore"
+
+   Deleting the row of a phone that is still provisioned leaves it hardened with no office.
+   Lock, unlock and release all travel through a row that no longer exists, and the handset
+   refuses the factory reset that would fix it. One click, one brick. */
+test('deviceDelete refuses to orphan a handset that is still under management', async () => {
+  const live = fakeDb({
+    devices: [{ imei: 'D1', state: 'enrolled', reported: 'unlocked',
+      last_seen: '2026-08-27T09:00:00Z', enrol_token: 'tok1' }],
+    device_events: [], settings: [],
+  });
+  await assert.rejects(() => _FNS.deviceDelete(live, ADMIN, { imei: 'D1' }), /Achia|release/i);
+  assert.equal(live._dump('devices').length, 1);
+
+  // RELEASED is the door, because that is the state that tells the handset to hand itself
+  // back. Not yet heard is fine -- the order stands and the phone applies it when it can.
+  const freed = fakeDb({
+    devices: [{ imei: 'D2', state: 'released', reported: 'unlocked',
+      last_seen: '2026-08-27T09:00:00Z', enrol_token: 'tok2' }],
+    device_events: [], settings: [],
+  });
+  assert.equal((await _FNS.deviceDelete(freed, ADMIN, { imei: 'D2' })).ok, true);
+  assert.equal(freed._dump('devices').length, 0);
+
+  // A phone that never once spoke has nothing on it to strand: provisioning did not take,
+  // so the row is the only thing that exists and deleting it is exactly right.
+  const ghost = fakeDb({
+    devices: [{ imei: 'D3', state: 'enrolled', enrol_token: 'tok3' }],
+    device_events: [], settings: [],
+  });
+  assert.equal((await _FNS.deviceDelete(ghost, ADMIN, { imei: 'D3' })).ok, true);
+  assert.equal(ghost._dump('devices').length, 0);
+});
+
 test('deviceDelete is audited and needs write access', async () => {
   const d = fakeDb({ devices: [{ imei: 'D1', state: 'enrolled' }], device_events: [], settings: [] });
   /* A read-only code is decided by its ROLE, not by a readOnly flag on the object --

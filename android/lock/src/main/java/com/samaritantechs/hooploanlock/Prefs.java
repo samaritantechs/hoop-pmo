@@ -27,6 +27,10 @@ class Prefs {
     static final String LAST_OK = "lastOkBeat";     // ms; the anchor the offline grace counts from
     static final String GRACE_HOURS = "graceHours"; // -1 = never self-lock (still stock)
     static final String RETIRED = "retired";        // released for good; stop beating
+    /* When the register first said "I do not know this token". Cleared by any successful
+       beat; after long enough the handset releases itself rather than staying a brick with
+       no office able to reach it. See noteNotEnrolled in Beat.java. */
+    static final String GONE_SINCE = "goneSince";
 
     static SharedPreferences of(Context c) {
         return c.getSharedPreferences(FILE, Context.MODE_PRIVATE);
