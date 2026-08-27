@@ -534,22 +534,33 @@ test('stockAccount reports departures it could not judge rather than under-count
   assert.equal(r.company.totals.unaccounted, 400, 'and the 400 it did judge are all counted');
 });
 
-test('salesWeek pivots one week four ways and measures each against the daily target', async () => {
+test('salesWeek counts the WATU DECK -- disbursed date and price, not the sales upload', async () => {
+  /* "Use disb date and price in watu deck as sales data ... we just shifting where to read
+      sales from"
+
+     A phone leaving the shop and a phone appearing in Watu's book are the same event, and
+     Watu's book decides what was actually financed. So the figures come from watu_loans:
+     Disbursed Date is when, Price is how much.
+
+     The pivots had to be REMAPPED rather than repointed. The sales upload carried three
+     different people per sale (recorder, agent, commission earner); the deck carries one.
+     So the cuts are now company / agent (Watu's own) / branch / shop, which is what the
+     deck can actually answer. */
   const { todayKey } = await import('../api/_lib/time.js');
   const t = todayKey();
   const mon = dayShift(t, -((new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay() + 6) % 7));
   const tue = dayShift(mon, 1);
-  const sale = (k, date, rsm, agent, price, up, rec) => ({ sale_key: k, sale_date: date, imei: 'IM' + k,
-    price, agent: rsm, commission_agent: agent, uploaded_by: up, recorded_by: rec, team: 'PIVOTTEST' });
+  const loan = (k, date, agent, branch, price) => ({ imei: 'IM' + k, disbursed_date: date,
+    price, agent, agent_id: 'A' + k, branch, team: 'PIVOTTEST' });
   const d = fakeDb({
     settings: [{ key: 'SALES_DAILY_TARGET', value: '1000000' }],
-    hoop_sales: [
-      // Monday: Mwinyi loaded two (one names its recorder), Sara loaded one. Two RSMs, two agents.
-      sale('A', mon, 'RSM ONE', 'AGENT X', 500000, 'Mwinyi', null),
-      sale('B', mon, 'RSM ONE', 'AGENT Y', 700000, 'Mwinyi', 'Juma GD'),
-      sale('C', mon, 'RSM TWO', 'AGENT X', 400000, 'Sara', null),
-      // Tuesday: one more from Mwinyi, RSM ONE, AGENT X.
-      sale('D', tue, 'RSM ONE', 'AGENT X', 900000, 'Mwinyi', null),
+    watu_loans: [
+      loan('A', mon, 'AGENT X', 'BRANCH ONE', 500000),
+      loan('B', mon, 'AGENT Y', 'BRANCH ONE', 700000),
+      loan('C', mon, 'AGENT X', 'BRANCH TWO', 400000),
+      loan('D', tue, 'AGENT X', 'BRANCH ONE', 900000),
+      // No disbursed date at all: never financed, so it is not a sale and must not be counted.
+      { imei: 'IMZ', disbursed_date: null, price: 999999, agent: 'AGENT X', team: 'PIVOTTEST' },
     ],
   });
   const scoped = { ...ADMIN, teams: ['PIVOTTEST'] };
@@ -558,28 +569,20 @@ test('salesWeek pivots one week four ways and measures each against the daily ta
   assert.equal(r.dailyTarget, 1000000);
   assert.equal(r.weekTarget, 7000000);
 
-  // GENERAL DUTY: recorded_by wins where present, else uploaded_by. So B -> "Juma GD",
-  // A/C/D fall back to whoever uploaded (Mwinyi x2 incl D, Sara x1).
-  const gd = Object.fromEntries(r.general.map(x => [x.name, x]));
-  assert.equal(gd['Mwinyi'].count, 2, 'A and D fell back to their uploader');
-  assert.equal(gd['Mwinyi'].amount, 1400000);
-  assert.equal(gd['Juma GD'].count, 1, 'B named its recorder, so it is credited to them, not the uploader');
-  assert.equal(gd['Sara'].count, 1);
-
-  // RSM: the AGENT column. RSM ONE = A,B,D; RSM TWO = C.
-  const rsm = Object.fromEntries(r.rsm.map(x => [x.name, x]));
-  assert.equal(rsm['RSM ONE'].count, 3);
-  assert.equal(rsm['RSM ONE'].days[mon].count, 2, 'two on Monday');
-  assert.equal(rsm['RSM ONE'].days[tue].count, 1, 'one on Tuesday');
-  assert.equal(rsm['RSM TWO'].count, 1);
-
-  // COMMISSION AGENT: AGENT X = A,C,D; AGENT Y = B.
+  // AGENT: Watu's own agent column. X sold A, C, D; Y sold B.
   const ag = Object.fromEntries(r.agent.map(x => [x.name, x]));
   assert.equal(ag['AGENT X'].count, 3);
+  assert.equal(ag['AGENT X'].days[mon].count, 2, 'two on Monday');
+  assert.equal(ag['AGENT X'].days[tue].count, 1, 'one on Tuesday');
   assert.equal(ag['AGENT Y'].amount, 700000);
 
-  // COMPANY: one synthetic row, every sale.
-  assert.equal(r.company.count, 4);
+  // BRANCH, riding the old "rsm" pivot slot so the screen's buttons need no rewiring.
+  const br = Object.fromEntries(r.rsm.map(x => [x.name, x]));
+  assert.equal(br['BRANCH ONE'].count, 3);
+  assert.equal(br['BRANCH TWO'].count, 1);
+
+  // COMPANY: every financed phone in the week, and the undated row is not one of them.
+  assert.equal(r.company.count, 4, 'the row with no disbursed date is not a sale');
   assert.equal(r.company.amount, 2500000);
   assert.equal(r.company.days[mon].count, 3);
   assert.equal(r.company.days[tue].amount, 900000);
@@ -591,19 +594,20 @@ test('salesWeek pivots one week four ways and measures each against the daily ta
   assert.equal(last.thisWeek, false, 'a prior date lands in its own week');
 });
 
-test('salesWeek survives a pre-migration database (no recorded_by / uploaded_by columns)', async () => {
+test('salesWeek survives a database whose register has no branch column yet', async () => {
   const { todayKey } = await import('../api/_lib/time.js');
   const t = todayKey();
   const mon = dayShift(t, -((new Date(Date.parse(t + 'T00:00:00Z')).getUTCDay() + 6) % 7));
-  // A fake whose hoop_sales rows simply lack the new columns -- the select must fall back.
+  // branch arrived with a later migration; PostgREST refuses the WHOLE select for an unknown
+  // column, so the read has to fall back rather than take the sales board down with it.
   const d = fakeDb({
     settings: [],
-    hoop_sales: [{ sale_key: 'Z', sale_date: mon, imei: 'IMZ', price: 500000,
-      agent: 'RSM ONE', commission_agent: 'AGENT X', team: 'PREMIG' }],
-  }, { missingColumns: { hoop_sales: ['recorded_by', 'uploaded_by'] } });
+    watu_loans: [{ imei: 'IMZ', disbursed_date: mon, price: 500000,
+      agent: 'AGENT X', agent_id: 'A1', team: 'PREMIG' }],
+  }, { missingColumns: { watu_loans: ['branch'] } });
   const r = await _FNS.salesWeek(d, { ...ADMIN, teams: ['PREMIG'] }, {});
   assert.equal(r.company.count, 1, 'the read fell back and still answered');
-  assert.equal(r.general[0].name, '(haijulikani / unknown)', 'no recorder and no uploader column -> unknown, not a crash');
+  assert.equal(r.rsm[0].name, 'PREMIG', 'with no branch column the shop stands in for it');
   assert.equal(r.dailyTarget, null, 'no target set -> null, chart draws no line');
 });
 
@@ -767,19 +771,23 @@ test('globalSearch finds a customer by any spelling of the number, plus office a
   assert.equal(s.stock[0].asOf, '2026-08-16');
 });
 
-test('lockedTrend is this week MONDAY to SUNDAY, deduped and window-checked per day', async () => {
+test('lockedTrend is this week MONDAY to SUNDAY, deduped, and counts the column', async () => {
+  /* The window check that used to be in this chart is gone -- see "LOCKED IS A COLUMN, NOT A
+     CALCULATION" in call-core.js. It measured disbursed_date against each snapshot day, so a
+     customer Watu had flagged as locked could still be dropped from the bar for being old,
+     and the chart then disagreed with the tile above it. The column decides now. */
   const today = todayKey();
   const dow = new Date(Date.parse(today + 'T00:00:00Z')).getUTCDay();
   const monday = dayShift(today, -((dow + 6) % 7));
-  const fresh = dayShift(monday, -5);     // inside the window on Monday
-  const old = dayShift(monday, -300);     // long outside it
+  const fresh = dayShift(monday, -5);
+  const old = dayShift(monday, -300);     // ancient, and it counts anyway
   const d = fakeDb({
     watu_snapshots: [
-      // Monday: two distinct locked-7 customers in window, one uploaded TWICE
+      // Monday: two distinct locked-7 customers, one uploaded TWICE
       { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: monday },
       { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: monday },
       { imei: 'B', locked7: true, disbursed_date: fresh, snapshot_date: monday },
-      // locked 7+ but long past the window -- not Hoop's burden
+      // Flagged locked 7+ but disbursed 300 days ago: Watu says locked, so it counts.
       { imei: 'C', locked7: true, disbursed_date: old, snapshot_date: monday },
       // last week's Sunday must NOT leak in: the week starts on Monday, always
       { imei: 'D', locked7: true, disbursed_date: fresh, snapshot_date: dayShift(monday, -1) },
@@ -791,7 +799,8 @@ test('lockedTrend is this week MONDAY to SUNDAY, deduped and window-checked per 
   assert.equal(r.points[0].date, monday, 'the first bar is always Monday');
   assert.equal(r.from, monday);
   assert.equal(r.to, dayShift(monday, 6), 'through Sunday');
-  assert.equal(r.points[0].num, 2, 're-upload does not double the bar; past-window row is out');
+  assert.equal(r.points[0].num, 3,
+    're-upload does not double the bar, and the 300-day-old row counts: the column says locked');
   assert.equal(r.points[6].num, null, 'a day with no upload is a GAP, never a zero');
 });
 
@@ -812,20 +821,25 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
   const mon = dShift(t, -((dow + 6) % 7));
   const tue = dShift(mon, 1);                  // where Monday's RESULT becomes visible
 
-  const inWin = dShift(mon, -10);   // disbursed 10 days ago -- inside Hoop's 45-day window
-  const past  = dShift(mon, -80);   // disbursed 80 days ago -- past it, Watu's problem now
-  const row = (imei, date, off, disb) => ({ imei, client_name: 'C' + imei, team: 'KINONDONI',
-    days_offline: off, has_ever_paid: true, price: 450000, disbursed_date: disb,
+  const recent = dShift(mon, -10);
+  const ancient = dShift(mon, -80);   // old, and it counts anyway -- the column decides
+  /* locked7 is now carried explicitly, because it is the thing that decides the pool.
+     days_offline stays, because recovery is still MEASURED by that number falling. */
+  const row = (imei, date, off, disb, l7) => ({ imei, client_name: 'C' + imei, team: 'KINONDONI',
+    days_offline: off, locked7: l7, has_ever_paid: true, price: 450000, disbursed_date: disb,
     snapshot_date: date, created_at: date + 'T08:00:00Z' });
 
   const d = fakeDb({
     watu_snapshots: [
-      // MONDAY's own list -- the one the officers worked on Monday. A and B are 7+ inside the
-      // window; C is not 7+; D is 7+ but disbursed long ago, so past Hoop's 45 and not ours.
-      row('A', mon, 9, inWin), row('B', mon, 8, inWin), row('C', mon, 3, inWin), row('D', mon, 30, past),
-      // TUESDAY's upload is where Monday's result shows: A fell 9 -> 4. B held. D fell but
-      // must not count. All of this belongs on MONDAY's bar, not Tuesday's.
-      row('A', tue, 4, inWin), row('B', tue, 8, inWin), row('C', tue, 3, inWin), row('D', tue, 5, past),
+      // MONDAY's own list. A, B and D are flagged locked 7+; C is not. D was disbursed 80 days
+      // ago and STILL counts -- Watu flagged it, so it is on the list.
+      row('A', mon, 9, recent, true), row('B', mon, 8, recent, true),
+      row('C', mon, 3, recent, false), row('D', mon, 30, ancient, true),
+      // TUESDAY's upload is where Monday's result shows: A fell 9 -> 4 and D fell 30 -> 5, so
+      // Watu no longer flags either. B held at 8 and is still flagged. All of that belongs on
+      // MONDAY's bar, not Tuesday's.
+      row('A', tue, 4, recent, false), row('B', tue, 8, recent, true),
+      row('C', tue, 3, recent, false), row('D', tue, 5, ancient, false),
     ],
     call_users: [
       { user_id: 'u1', name: 'CREDIT ONE', role: 'CREDIT', active: true },
@@ -840,10 +854,10 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
 
   const monday = r.points[0];
   assert.equal(monday.date, mon, 'the first bar is Monday');
-  assert.equal(monday.offJana, 2,
-    'only the two at 7+ AND inside the 45-day window -- D is 7+ but past it, and is not Hoop\'s');
-  assert.equal(monday.reduced, 1,
-    'MONDAY\'s bar carries Monday\'s work, even though the result only showed on Tuesday');
+  assert.equal(monday.offJana, 3,
+    'every row Watu flagged locked 7+ -- D included, though it was disbursed 80 days ago');
+  assert.equal(monday.reduced, 2,
+    'MONDAY\'s bar carries Monday\'s work: A and D both came down by Tuesday, B held');
   const tuesday = r.points[1];
   assert.equal(tuesday.offJana, 1, 'Tuesday has its own pool from its own list -- only B is still 7+');
   assert.equal(tuesday.reduced, null, 'and no upload after it yet, so its result is pending');
@@ -854,8 +868,8 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
   assert.ok(!r.credits.some(c => c.name === 'A BIKE'), 'a bike officer is never dealt 7+ work');
   const dealt = r.credits.reduce((s, c) => s + ((c.days[mon] && c.days[mon].assigned) || 0), 0);
   const got = r.credits.reduce((s, c) => s + ((c.days[mon] && c.days[mon].recovered) || 0), 0);
-  assert.equal(dealt, 2, 'every OFF JANA customer is dealt to somebody');
-  assert.equal(got, 1, 'and the one who came back is credited to whoever held them');
+  assert.equal(dealt, 3, 'every OFF JANA customer is dealt to somebody');
+  assert.equal(got, 2, 'and the ones who came back are credited to whoever held them');
 });
 
 test('a holiday in the middle does not lose the work done before it', async () => {
@@ -876,8 +890,11 @@ test('a holiday in the middle does not lose the work done before it', async () =
   const fri = dShift(mon, 4);
 
   const inWin = dShift(mon, -10);
+    /* locked7 derived from the offline count, which is what each of these fixtures
+       always meant by "a customer at 7+" -- the pool is the column now, so the
+       fixture has to carry it. */
   const row = (imei, date, off) => ({ imei, client_name: 'C' + imei, team: 'HOLIDAY',
-    days_offline: off, has_ever_paid: true, price: 450000, disbursed_date: inWin,
+    days_offline: off, locked7: off >= 7, has_ever_paid: true, price: 450000, disbursed_date: inWin,
     snapshot_date: date, created_at: date + 'T08:00:00Z' });
 
   const d = fakeDb({
@@ -929,8 +946,11 @@ test('a gap at the END of the week is where the work was actually being lost', a
   const nextTue = dShift(mon, 9);          // two days past the old one-day lookahead
 
   const inWin = dShift(mon, -10);
+    /* locked7 derived from the offline count, which is what each of these fixtures
+       always meant by "a customer at 7+" -- the pool is the column now, so the
+       fixture has to carry it. */
   const row = (imei, date, off) => ({ imei, client_name: 'C' + imei, team: 'WEEKEND',
-    days_offline: off, has_ever_paid: true, price: 450000, disbursed_date: inWin,
+    days_offline: off, locked7: off >= 7, has_ever_paid: true, price: 450000, disbursed_date: inWin,
     snapshot_date: date, created_at: date + 'T08:00:00Z' });
 
   const d = fakeDb({
@@ -975,8 +995,11 @@ test('recoveryWeek slides: a past week is read as ITS OWN week, and any date sna
   const lastMon = dShift(thisMon, -7);
   const lastTue = dShift(lastMon, 1);
   const inWin = dShift(lastMon, -10);
+    /* locked7 derived from the offline count, which is what each of these fixtures
+       always meant by "a customer at 7+" -- the pool is the column now, so the
+       fixture has to carry it. */
   const row = (imei, date, off) => ({ imei, client_name: 'C' + imei, team: 'SLIDETEST',
-    days_offline: off, disbursed_date: inWin, snapshot_date: date, created_at: date + 'T08:00:00Z' });
+    days_offline: off, locked7: off >= 7, disbursed_date: inWin, snapshot_date: date, created_at: date + 'T08:00:00Z' });
   // Distinct scope so the five-minute week memo from the tests above cannot answer for us.
   const scoped = { ...ADMIN, teams: ['SLIDETEST'] };
   const d = fakeDb({
@@ -1003,8 +1026,11 @@ test('recoveryDayList names the customers behind a day, with the credit who held
   const mon = dShift(t, -((dow + 6) % 7));
   const tue = dShift(mon, 1);
   const inWin = dShift(mon, -10), past = dShift(mon, -80);
+    /* locked7 derived from the offline count, which is what each of these fixtures
+       always meant by "a customer at 7+" -- the pool is the column now, so the
+       fixture has to carry it. */
   const row = (imei, date, off, disb) => ({ imei, client_name: 'C' + imei, team: 'KINONDONI',
-    days_offline: off, has_ever_paid: true, price: 450000, disbursed_date: disb,
+    days_offline: off, locked7: off >= 7, has_ever_paid: true, price: 450000, disbursed_date: disb,
     snapshot_date: date, created_at: date + 'T08:00:00Z' });
 
   const d = fakeDb({
@@ -1017,8 +1043,10 @@ test('recoveryDayList names the customers behind a day, with the credit who held
 
   const r = await _FNS.recoveryDayList(d, ADMIN, { date: mon });
   assert.equal(r.next, tue, 'the day\'s own list, measured against the NEXT upload');
-  assert.equal(r.rows.length, 2, 'only the 7+ inside the 45-day window -- D is past it');
-  assert.ok(!r.rows.some(x => x.imei === 'D'), 'a customer past the window is never listed');
+  assert.equal(r.rows.length, 3,
+    'every row Watu flagged locked 7+ -- D included, though disbursed 80 days ago');
+  assert.ok(r.rows.some(x => x.imei === 'D'),
+    'the window no longer removes anybody from the list: the column decides');
 
   const a = r.rows.find(x => x.imei === 'A');
   assert.equal(a.was, 9); assert.equal(a.now, 4);
@@ -1027,8 +1055,9 @@ test('recoveryDayList names the customers behind a day, with the credit who held
 
   const b = r.rows.find(x => x.imei === 'B');
   assert.equal(b.recovered, false, 'B held at 8 and did not recover');
-  assert.equal(r.counts.offJana, 2);
-  assert.equal(r.counts.recovered, 1);
+  assert.equal(r.counts.offJana, 3);
+  // A fell 9 -> 4 and D fell 30 -> 5; B held at 8.
+  assert.equal(r.counts.recovered, 2);
 });
 
 test('recoveryDayList marks a day pending when no later upload exists yet', async () => {

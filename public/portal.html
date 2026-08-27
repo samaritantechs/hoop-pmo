@@ -1105,7 +1105,7 @@ function drawDash(m){
     '<div class="card" id="dashWeekBar" style="padding:10px 12px;margin-bottom:10px"></div>'
     +'<div class="tiles">'
     +'<div class="tile"><div class="l">Orodha ya leo</div><div class="v">'+n(s.list)+'</div><div class="s">'+(s.deckDate?('deck '+esc(s.deckDate)):'hakuna upload bado')+'</div></div>'
-    +'<div class="tile"><div class="l">Locked 7+</div><div class="v" style="color:var(--bad)">'+n(s.locked7)+'</div><div class="s">wamefungiwa wiki+, ndani ya 45</div></div>'
+    +'<div class="tile"><div class="l">Locked 7+</div><div class="v" style="color:var(--bad)">'+n(s.locked7)+'</div><div class="s">kama Watu alivyoweka kwenye faili</div></div>'
     +'<div class="tile"><div class="l">Ndani ya siku 45</div><div class="v">'+n(s.inWindow)+'</div><div class="s">dirisha la Hoop</div></div>'
     +'<div class="tile"><div class="l">Simu leo</div><div class="v">'+n(s.calls)+'</div><div class="s">credit team</div></div>'
     +'<div class="tile"><div class="l">Reached — yesterday</div><div class="v" style="color:var(--ok)">'+(s.reached&&s.reached.pct!=null?pct(s.reached.pct):'—')+'</div><div class="s">'+(s.reached&&s.reached.den?money(s.reached.num)+' / '+money(s.reached.den)+' · ':'')+'last week avg: '+(s.weekAvg&&s.weekAvg.pct!=null?pct(s.weekAvg.pct):'—')+'</div></div>'
@@ -1116,10 +1116,10 @@ function drawDash(m){
        first, and each was stretched across the whole monitor to fill the room. */
     +'<div class="pair">'
     +'<div class="card"><h2>Locked 7+ — wiki hii / this week</h2>'
-    +'<div class="mut" style="margin-bottom:6px">Kila siku ya upload: wateja waliofungiwa wiki+ wakiwa bado ndani ya dirisha la Hoop. Kupanda = mzigo unaongezeka.</div>'
+    +'<div class="mut" style="margin-bottom:6px">Kila siku ya upload: wateja waliowekwa <b>Locked 7+ Days</b> kwenye faili la Watu. Kupanda = mzigo unaongezeka.</div>'
     +'<div id="trendBox"><div class="sk"></div></div></div>'
     +'<div class="card"><h2>Credit — 7+ recovery kwa wiki / this week</h2>'
-    +'<div class="mut" style="margin-bottom:6px">Ndani ya siku 45 pekee (dirisha la Hoop). '
+    +'<div class="mut" style="margin-bottom:6px">Wote waliowekwa Locked 7+ kwenye faili la Watu. '
     +'Kila credit, kila siku: waliopewa OFF JANA (7+ siku jana) na wangapi kati yao walipungua leo.</div>'
     +'<div id="credRecBox"><div class="sk"></div></div></div>'
     +'</div>'
@@ -1964,7 +1964,7 @@ function drawRecoveryTrend(){
       return;
     }
     b.innerHTML='<div style="font-weight:700;margin-bottom:2px">7+ waliopungua / 7+ reduced · '+wk+'</div>'
-      +'<div class="mut" style="margin-bottom:8px">Ndani ya siku 45 pekee (dirisha la Hoop). '
+      +'<div class="mut" style="margin-bottom:8px">Wote waliowekwa Locked 7+ kwenye faili la Watu. '
       +'Urefu wote = OFF JANA (7+ siku kwenye upload ya jana). Kijani = walipungua siku husika.</div>'
       +svg;
   }).catch(function(e){

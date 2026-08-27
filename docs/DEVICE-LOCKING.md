@@ -93,6 +93,18 @@ adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \
 Install the APK first (`adb install public/HOOPLOAN-Lock.apk`, or download it on the phone
 from `/HOOPLOAN-Lock.apk`).
 
+> **THE QR ROUTE DOES NOT WORK ON SAMSUNG — tested 27 Aug 2026 on an A07.** The six-tap
+> scanner never appears: tried at first boot, after joining Wi-Fi, and after installing the
+> APK by hand. Samsung has been dropping AOSP QR provisioning in favour of their own Knox
+> Mobile Enrolment. Use the cable. The instructions below are kept for non-Samsung stock and
+> for the day Knox is set up properly.
+>
+> **And the order of the two adb commands is not optional.** set-device-owner FIRST, then the
+> enrol broadcast. Run them the other way round and the receiver drops the token in silence
+> while adb prints `Broadcast completed: result=0`, which reads exactly like success. That
+> cost an evening on the first handset; EnrolReceiver now sets a result code and a message,
+> so adb prints the reason.
+
 **By QR at the setup wizard** (better for hundreds at a time): on the very first "Hi there"
 screen, tap the same spot six times to open the QR scanner, and show it a code containing:
 

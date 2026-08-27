@@ -319,11 +319,13 @@ const FNS = {
     const rows = await fetchAll(() => scopeQ(user, db.from('watu_snapshots')
       .select('imei, snapshot_date, disbursed_date')
       .eq('locked7', true).gte('snapshot_date', from).lte('snapshot_date', to)));
+    /* No window filter. The query already asks the database for locked7 = true, and that
+       column IS the answer -- see "LOCKED IS A COLUMN, NOT A CALCULATION" in call-core.js.
+       Re-filtering by disbursed_date here is what made this chart disagree with the tile
+       above it whenever a customer aged past day 47 between two uploads. */
     const seen = new Map();
     for (const r of rows) {
       const d = String(r.snapshot_date).slice(0, 10);
-      const l = lifeDayOf(r.disbursed_date, d);
-      if (!(l != null && l <= WINDOW_DAYS)) continue;      // Hoop's burden that day only
       if (!seen.has(d)) seen.set(d, new Set());
       seen.get(d).add(String(r.imei));
     }
@@ -434,16 +436,16 @@ const FNS = {
       // Nobody uploaded that day: a GAP, never a zero. "nobody uploaded" and "nobody
       // recovered" are different facts and must not look alike on a chart people act on.
       if (!byDay.has(d)) { points.push({ date: d, offJana: null, reduced: null, pending: false }); continue; }
-      /* ONLY HOOP'S OWN BURDEN -- the 45-day class, exactly as the Locked 7+ chart counts it.
-         A customer past the window is Watu's problem, not ours: chasing them is not what a
-         credit officer is measured on, so they must not swell the denominator and make a good
-         day read as a bad one. Measured on the day the list was cut, which is also the day
-         dealMap strata by, so the deal and the count cannot disagree about who was in it. */
-      const inWin = r => {
-        const l = lifeDayOf(r.disbursed_date, d);
-        return l != null && l <= WINDOW_DAYS;
-      };
-      const offJana = [...byDay.get(d).values()].filter(r => num(r.days_offline) >= 7 && inWin(r));
+      /* THE POOL IS THE COLUMN. This was `days_offline >= 7 && inWindow` -- two calculations
+         of our own standing in for a fact Watu had already published, and neither agreed with
+         it. On the owner's deck Days Offline is filled on 899 rows while Locked 7+ is filled
+         on 2,385, so a customer Watu had flagged as locked could be missing from this pool
+         entirely just because their offline count was blank.
+
+         Recovery is still MEASURED by days_offline falling, further down -- that is how you
+         see somebody come back. It is only the question "who was on the list" that the column
+         now answers. See "LOCKED IS A COLUMN, NOT A CALCULATION" in call-core.js. */
+      const offJana = [...byDay.get(d).values()].filter(r => r.locked7 === true);
 
       /* The result of that day's chasing shows up in the NEXT upload. Until it exists the day
          is PENDING, not a failure: today's officers have done the work and the answer simply
@@ -526,8 +528,8 @@ const FNS = {
       return m;
     };
     const curM = newest(cur), oldM = newest(old);
-    const inWin = r => { const l = lifeDayOf(r.disbursed_date, day); return l != null && l <= WINDOW_DAYS; };
-    const offJana = [...oldM.values()].filter(r => num(r.days_offline) >= 7 && inWin(r));
+    // The same pool the chart above counts, by the same rule: the column, not a calculation.
+    const offJana = [...oldM.values()].filter(r => r.locked7 === true);
     const deal = dealMap(offJana, roster.ids, day);
     const out = offJana.map(o => {
       const c = next ? curM.get(String(o.imei)) : null;
@@ -591,29 +593,63 @@ const FNS = {
 
      Budget: one team-scoped, date-bounded read of hoop_sales (nine columns) + one settings
      read for the target. Memoised five minutes per week and scope, exactly like the trend. */
+  /* =====================================================================================
+     SALES ARE COUNTED FROM THE WATU DECK, NOT THE SALES UPLOAD.
+
+       "Use disb date and price in watu deck as sales data: so ship/overwite the lifetime
+        sales to read from dates by checking the watudeck for sales report, leave the sales
+        upload as it is b/se there is info we need and will stay need from there, we just
+        shifting where to read sales from"
+
+     A phone leaving the shop and a phone appearing in Watu's book are the same event, and
+     Watu's book is the one that decides what was actually financed. Disbursed Date is when
+     it happened and Price is what it was worth, both already in the file the deck is built
+     from. So the figures come from there and the sales upload stops being the source of any
+     headline number.
+
+     THE UPLOAD IS NOT RETIRED, and must not be. salesAudit compares the shop's book AGAINST
+     Watu to find sales Watu never saw (HAKUNA_WATU) and agents who do not match (DRIFT);
+     agentScore deliberately keeps a Watu side and a payout side unmerged. Point either at
+     the Watu deck and it compares Watu with Watu, finds nothing by construction, and the
+     fraud detection quietly stops working. Those two keep reading hoop_sales, which is also
+     the only place commission_agent, commission_phone and the receipt live.
+
+     ONE CONSEQUENCE WORTH KNOWING: a phone sold today reaches Watu's file tomorrow, so these
+     figures follow the deck rather than the till. Yesterday is complete; today is partial
+     until the next upload.
+
+     THE PIVOTS HAD TO BE REMAPPED, not simply repointed. The sales upload carries three
+     different people per sale (who recorded it, the agent, the commission earner); the Watu
+     deck carries one, its own `agent`. So the four cuts are now: company, agent (Watu's own),
+     branch, and shop/team -- each of which the deck can actually answer. */
   async salesWeek(db, user, args) {
     requireNav(user, 'scorecards');
     // Same Monday-problem fallback as the two recovery charts: a sales board that reads blank
     // every Monday morning until somebody uploads is one people stop opening.
-    const wk = await weekOf(db, user, args, 'hoop_sales', 'sale_date');
+    const wk = await weekOf(db, user, args, 'watu_loans', 'disbursed_date');
     const from = wk.from, to = wk.to;
-    const ck = 'salesweek:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    const ck = 'salesweek:watu:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
 
-    // recorded_by / uploaded_by exist only after the migration; a pre-migration database
-    // refuses the whole select for them, so fall back to the columns that were always there.
-    const FULL = 'imei, sale_date, price, branch, agent, commission_agent, recorded_by, uploaded_by';
-    const BARE = 'imei, sale_date, price, branch, agent, commission_agent';
-    let rows;
+    // branch arrived with a later migration; a database without it refuses the whole select,
+    // so fall back to the columns that were always there.
+    const FULL = 'imei, disbursed_date, price, agent, agent_id, team, branch';
+    const BARE = 'imei, disbursed_date, price, agent, agent_id, team';
+    let raw;
     try {
-      rows = await fetchAll(() => scopeQ(user, db.from('hoop_sales').select(FULL)
-        .gte('sale_date', from).lte('sale_date', to)));
+      raw = await fetchAll(() => scopeQ(user, db.from('watu_loans').select(FULL)
+        .gte('disbursed_date', from).lte('disbursed_date', to)));
     } catch (e) {
-      if (!/recorded_by|uploaded_by/i.test(String(e && e.message))) throw e;
-      rows = await fetchAll(() => scopeQ(user, db.from('hoop_sales').select(BARE)
-        .gte('sale_date', from).lte('sale_date', to)));
+      if (!/branch/i.test(String(e && e.message))) throw e;
+      raw = await fetchAll(() => scopeQ(user, db.from('watu_loans').select(BARE)
+        .gte('disbursed_date', from).lte('disbursed_date', to)));
     }
+    /* Named sale_date downstream so every pivot, the day map and the screen keep working off
+       one shape -- the source moved, the vocabulary did not. */
+    const rows = raw.filter(r => r.disbursed_date)
+      .map(r => ({ ...r, sale_date: String(r.disbursed_date).slice(0, 10) }));
+
     const { data: sRows } = await db.from('settings').select('value').eq('key', 'SALES_DAILY_TARGET').maybeSingle();
     const dailyTarget = num((sRows && sRows.value) || 0) || null;
 
@@ -621,9 +657,11 @@ const FNS = {
     for (let i = 0; i < 7; i++) days.push(dayShift(from, i));
     const txt = v => { const s = String(v == null ? '' : v).trim(); return s || null; };
     const keyFns = {
-      general: r => txt(r.recorded_by) || txt(r.uploaded_by) || '(haijulikani / unknown)',
-      rsm:     r => txt(r.agent) || '(no RSM)',
-      agent:   r => txt(r.commission_agent) || '(no agent)',
+      // Kept under their old names so the screen's pivot buttons need no rewiring; what each
+      // one MEANS is now whatever the Watu deck can actually answer.
+      general: r => txt(r.team) || '(haijulikani / unknown)',      // the shop location
+      rsm:     r => txt(r.branch) || txt(r.team) || '(no branch)', // branch, where recorded
+      agent:   r => txt(r.agent) || '(no agent)',                  // Watu's own agent
     };
     const pivot = keyFn => {
       const by = new Map();
