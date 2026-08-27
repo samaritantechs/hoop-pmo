@@ -48,6 +48,8 @@ AUDITED.add('deviceEnrol');
 AUDITED.add('deviceSetState');
 /* A read, audited: it hands out a handset credential, so who asked for which one is kept. */
 AUDITED.add('deviceToken');
+/* An eraser. Once this runs the audit entry is the only record that phone was ever here. */
+AUDITED.add('deviceDelete');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -1622,6 +1624,43 @@ const FNS = {
     const rows = await fetchAll(() => db.from('devices').select('imei, enrol_token').eq('imei', imei));
     if (!rows.length) bad('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
     return { ok: true, imei, token: rows[0].enrol_token || null };
+  },
+
+  /* TAKE A PHONE OFF THE REGISTER ENTIRELY -- for starting a handset over.
+     =====================================================================================
+       "i need delete button after token and historia for now b/se i want to start afresh"
+
+     Deliberately separate from `released`. Achia is a decision about a customer's loan and
+     leaves a trail; this is an eraser for a row that should not have existed -- a wrong
+     IMEI, a test handset, a batch enrolled twice. So the row and its history both go, and
+     the ONLY record left is the audit entry this fn is registered for.
+
+     WHAT IT DOES NOT DO, and the screen says so before anybody presses it: the handset does
+     not hear about this. It still holds its token and is still Device Owner. Its next beat
+     gets a 403, which device-core deliberately treats as "keep doing what you were doing"
+     rather than as permission to unlock -- a phone un-enrolled by somebody tampering with
+     the database is the last one that should let itself go. Starting that HANDSET afresh
+     means a factory reset, with the phone in your hands.
+
+     A LOCKED PHONE IS REFUSED. Deleting the row of a phone that is currently locked would
+     strand it: locked forever, with nothing on the register to unlock it from. Unlock it
+     first, watch it confirm, then delete. */
+  async deviceDelete(db, user, args) {
+    requireWrite(user); requireNav(user, 'devices');
+    const imei = String((args && args.imei) || '').trim();
+    if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
+    const rows = await fetchAll(() => db.from('devices').select('imei, state, reported').eq('imei', imei));
+    const dev = rows.find(r => String(r.imei) === imei);
+    if (!dev) bad('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
+    if (String(dev.state) === 'locked' || String(dev.reported) === 'locked') {
+      bad('Simu imefungwa. Ifungue kwanza, subiri ithibitishe, ndipo uifute. '
+        + '/ This phone is locked. Unlock it and wait for it to confirm before deleting, or it stays locked with no way to reach it.');
+    }
+    // History first: a device_events row whose device is gone is a row nobody can read.
+    await db.from('device_events').delete().eq('imei', imei);
+    const { error } = await db.from('devices').delete().eq('imei', imei);
+    if (error) throw new Error(error.message);
+    return { ok: true, imei };
   },
 
   async stockMovement(db, user, args) {
