@@ -74,7 +74,7 @@ Every phone gets three things: enrolled on the register, made Device Owner, hand
 2. **On the handset:** skip every account in the setup wizard → Settings → About phone →
    Software information → tap **Build number** 7× → back → Developer options → **USB
    debugging** on → plug in the cable → accept **Allow USB debugging** on the phone.
-3. **On the laptop:** `./scripts/lock-bench.sh tokens.txt` (or the three commands below for
+3. **On the laptop:** `scripts\lock-bench.bat` on Windows (or the three commands below for
    one phone). Takes about ten seconds per handset.
 4. **Watch it appear** on Devices while the box is still open. If it does not, provisioning
    did not take — fix it now, not after it has been reboxed.
@@ -116,11 +116,26 @@ component that has to already be on the phone, so it fails on a handset with not
 installed. Installing is itself an adb command, though, which is why all three are above and
 why nothing here needs touching the phone's screen.
 
-**For a batch, do not type these 200 times.** `scripts/lock-bench.sh` takes the IMEI/token
-list from step 1, walks every phone that `adb devices` can see, and runs all three on each —
-matching each phone to its own token by asking the handset for its IMEI, and refusing to
-guess when it cannot read one. See the header of that file; it is written to be read by
-whoever is running the bench.
+**For a batch, do not type these 200 times.** The bench script takes the IMEI/token list from
+step 1, walks every phone that `adb devices` can see, and runs all three on each — matching
+each phone to its own token by asking the handset for its IMEI, and refusing to guess when it
+cannot read one. Both files carry the instructions in their own headers.
+
+| Station | Run |
+|---|---|
+| **Windows** (this is what HOOP's bench runs) | `powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 tokens.txt`, or double-click `scripts\lock-bench.bat` |
+| Linux / macOS | `./scripts/lock-bench.sh tokens.txt` |
+
+> The Windows version exists because the first thing the station saw was
+> `'.' is not recognized as an internal or external command` — a bash script on a Windows
+> bench is not a slow path, it is no path. The two must stay in step; a smoke test holds the
+> PowerShell one to the same command order and the same never-guess rule, and checks both
+> still name the same package and receiver.
+
+**Two messages that read like failures and are not.** `set-device-owner` answering
+`device owner is already set`, and the enrol broadcast answering `ALREADY ENROLLED`, both
+mean the handset was provisioned before. On a phone being redone that is the finished state,
+not an error — the second is the re-enrolment guard doing its job.
 
 > **THE QR ROUTE DOES NOT WORK ON SAMSUNG — tested 27 Aug 2026 on an A07.** The six-tap
 > scanner never appears: tried at first boot, after joining Wi-Fi, and after installing the
