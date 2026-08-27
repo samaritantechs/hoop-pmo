@@ -432,3 +432,45 @@ test('the bench script is valid bash and provisions in the order that works', ()
   assert.match(src, /NEVER GUESS/, 'the unmatched-phone guard was removed');
   assert.match(src, /\$\{TOKEN_OF\[\$IMEI\]:-\}/, 'the token lookup must default to empty, never to a neighbour');
 });
+
+/* =========================================================================================
+   AND THE SAME SCRIPT FOR WINDOWS, which is what the station actually runs.
+
+     C:\Users\marki>./scripts/lock-bench.sh tokens.txt
+     '.' is not recognized as an internal or external command
+
+   A bash script on a Windows bench is not a slow path, it is no path -- so there are two
+   scripts, and the risk is now that they drift. This holds the PowerShell one to the same
+   two rules that matter, and checks the pair still describe the same three commands.
+   ========================================================================================= */
+test('the Windows bench script matches the Linux one where it counts', () => {
+  const ps = fs.readFileSync(new URL('../scripts/lock-bench.ps1', import.meta.url), 'utf8');
+  const sh = fs.readFileSync(new URL('../scripts/lock-bench.sh', import.meta.url), 'utf8');
+
+  // Owner before enrol, here too. The failure mode is identical and just as silent.
+  const owner = ps.indexOf('set-device-owner');
+  const enrol = ps.indexOf('.ENROL');
+  assert.ok(owner > 0 && enrol > 0, 'the PowerShell script lost one of the provisioning commands');
+  assert.ok(owner < enrol, 'set-device-owner must come BEFORE the enrol broadcast');
+
+  assert.match(ps, /NEVER GUESS/, 'the unmatched-phone guard was removed from the Windows script');
+  assert.match(ps, /if \(-not \$token\)/, 'a phone with no matched token must be skipped, never defaulted');
+
+  // Both scripts must name the same package, receiver and admin component -- a rename that
+  // reaches one and not the other bricks a whole bench day on whichever laptop is running
+  // the stale copy.
+  for (const needle of [
+    'com.samaritantechs.hooploanlock',
+    '/.LockAdmin',
+    '/.EnrolReceiver',
+    'ENROLLED',
+  ]) {
+    assert.ok(sh.includes(needle), 'lock-bench.sh no longer mentions ' + needle);
+    assert.ok(ps.includes(needle), 'lock-bench.ps1 no longer mentions ' + needle);
+  }
+
+  // The .bat exists only so nobody has to remember the powershell incantation; if it stops
+  // pointing at the .ps1 it is a file that does nothing when double-clicked.
+  const bat = fs.readFileSync(new URL('../scripts/lock-bench.bat', import.meta.url), 'utf8');
+  assert.match(bat, /lock-bench\.ps1/, 'the launcher stopped pointing at the script it launches');
+});
