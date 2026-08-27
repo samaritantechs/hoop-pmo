@@ -331,6 +331,35 @@ async function activeRoster(db) { return (await rosterFull(db)).ids; }
 export const WINDOW_DAYS = 47;
 const inWindowOf = (r, day) => { const l = lifeDayOf(r.disbursed_date, day); return l != null && l <= WINDOW_DAYS; };
 
+/* =========================================================================================
+   LOCKED IS A COLUMN, NOT A CALCULATION.
+
+     "The locked 7+ days list of credits is always a few number away from the actual one so
+      please dont use dates to give the customer list but the count and acture true/false
+      values in the columns -- this is the VERY CORRECT METHOD"
+     "use the value in true and false: not disb day calculation, we just use the date in
+      castomer card"
+
+   Every locked-7 figure used to be `locked7 === true AND inWindowOf(...)`, and the second
+   half is what drifted. inWindowOf measures from disbursed_date to WHATEVER DAY THE PAGE IS
+   OPENED, so the same deck answered 42 one morning and 40 two days later without a single
+   upload -- customers falling out of the window as the calendar moved under them. That is
+   the "few numbers away" exactly.
+
+   Watu has already done this arithmetic and published the answer in the file, as Locked 4+
+   Days and Locked 7+ Days. Recomputing our own version of a number the source already states
+   can only ever disagree with it. So the columns decide, and nothing else does.
+
+   THE DATE IS NOT GONE -- it moved to where it belongs. lifeDay and inWindow are still
+   carried on every customer row and still shown on the customer card, which is where a person
+   asking "how old is this loan?" looks. It simply no longer decides who is on a list.
+
+   WHAT THIS COSTS, said plainly: on the owner's own 2,689-row deck the 7+ pool goes from
+   about 42 to 292. That is the credit team's daily workload multiplying by seven, and it is
+   the intended consequence of counting what Watu flagged rather than a filtered subset. */
+const isLocked7 = r => r.locked7 === true;
+const isLocked4 = r => r.locked4 === true;
+
 /* THE EQUAL DEAL, PER KIND. One round-robin over the whole book looked equal ("all
    credits should get equal distribution") yet the owner saw "3 got 12 and one got 9" on
    a tab: an officer's share can happen to hold fewer locked-7 customers. So the deal is
@@ -375,7 +404,12 @@ export function dealMap(rows, rosterIds, day) {
   const rot = parseInt(h36('deal|' + dk), 36) % rosterIds.length;
   const strata = { L7: [], L4: [], IN: [], OUT: [] };
   for (const r of rows) {
-    const k = !inWindowOf(r, day) ? 'OUT' : (r.locked7 === true ? 'L7' : (r.locked4 === true ? 'L4' : 'IN'));
+    /* THE COLUMNS COME FIRST. A locked customer is dealt as locked whatever their disbursed
+       date says -- the window only sorts the ones Watu has NOT flagged, where it is still
+       the only thing distinguishing a live loan from an old one. Before this, a 7+ customer
+       past day 47 was filed under OUT, so the officers' Lock 7+ tab quietly disagreed with
+       the column the file had handed us. */
+    const k = isLocked7(r) ? 'L7' : (isLocked4(r) ? 'L4' : (inWindowOf(r, day) ? 'IN' : 'OUT'));
     strata[k].push(r);
   }
   for (const k of ['L7', 'L4', 'IN', 'OUT']) {
@@ -781,9 +815,10 @@ async function summaryCompute(db, user, nowMs) {
   ]);
   const inWinOf = r => inWindowOf(r, today);
   const inWin = deck.filter(inWinOf).length;
-  // Locked 7+ counts Hoop's own burden ONLY: past day 45 the customer is Watu's problem
-  // (the owner's rule). The tile must agree with the app's Lock 7+ tab, which drops them.
-  const locked7 = deck.filter(r => r.locked7 === true && inWinOf(r)).length;
+  /* Straight off the column -- see "LOCKED IS A COLUMN, NOT A CALCULATION" above. The
+     "Ndani ya siku 45" tile beside this one still counts the window, which is the honest
+     division of labour: that tile is ABOUT the window, this one is about what Watu flagged. */
+  const locked7 = deck.filter(isLocked7).length;
   // The performance bar is always YESTERDAY (a finished day), never today's half-story,
   // plus last week's average -- company-wide here ("other roles get average of all
   // company"; the per-person cut lives in dailySummary and in Ripoti).
@@ -829,7 +864,7 @@ async function summaryForOfficer(db, cu, nowMs) {
     ok: true,
     deckDate,
     list: { num: mine.length },
-    locked7: { num: mine.filter(r => r.locked7 === true && inWinOf(r)).length },
+    locked7: { num: mine.filter(isLocked7).length },
     inWindow: { num: mine.filter(inWinOf).length },
     calls: { num: myLogs.length },
     reached: reachedOn(hist.yDate, hist, cu.user_id, roster) || { pct: null, num: 0, den: 0 },
@@ -866,7 +901,7 @@ async function summaryForAgent(db, cu, nowMs) {
     ok: true,
     deckDate,
     list: { num: mine.length },
-    locked7: { num: mine.filter(r => r.locked7 === true && inWinOf(r)).length },
+    locked7: { num: mine.filter(isLocked7).length },
     inWindow: { num: mine.filter(inWinOf).length },
     calls: { num: myLogs.length },
     reached: reachedOn(hist.yDate, hist, cu.user_id, [], mineFn) || { pct: null, num: 0, den: 0 },

@@ -164,19 +164,39 @@ test('pnorm and lifeDayOf ports behave', () => {
   assert.equal(lifeDayOf('2026-07-13', '2026-08-14'), 33);
 });
 
-test('locked 7+ beyond day 45 leaves the count -- not Hoop\'s responsibility', async () => {
+test('locked 7+ counts the COLUMN, whatever the disbursed date says', async () => {
+  /* THIS TEST ASSERTED THE OPPOSITE UNTIL THE OWNER OVERTURNED IT:
+
+       "The locked 7+ days list of credits is always a few number away from the actual one so
+        please dont use dates to give the customer list but the count and acture true/false
+        values in the columns -- this is the VERY CORRECT METHOD"
+       "use the value in true and false: not disb day calculation, we just use the date in
+        castomer card"
+
+     The old rule ANDed the column with a 45-day window measured from disbursed_date to
+     WHATEVER DAY THE PAGE WAS OPENED -- so an untouched deck answered 42 one morning and 40
+     two days later, customers ageing out from under it with no upload in between. That drift
+     is the "few numbers away".
+
+     Watu has already decided who is locked and published it as a column. Recomputing our own
+     version of a number the source already states can only ever disagree with it.
+
+     The two tiles now divide the work honestly: locked7 reports what Watu flagged, inWindow
+     reports the window. Neither borrows the other's rule. */
   _clearSummaryCache();
   const d = db();
-  // Locked a week AND past the 45-day window: disbursed 100 days before the pinned clock.
+  // Locked a week AND far past the window: disbursed 100 days before the pinned clock.
   d._dump('followup_status').push({
     imei: '351999999999999', client_name: 'Nje Ya Dirisha', contact: '255788000111',
     team: 'KINONDONI', model: 'A07', price: 450000, disbursed_date: '2026-05-06',
     days_offline: 40, locked4: true, locked7: true, has_ever_paid: false, deck_date: '2026-08-14' });
   await registerOfficer(d);
   const s = await callApi(d, 'api_callDailySummary', ['dev-1'], NOW);
-  assert.equal(s.list.num, 4, 'company pool: both branches AND the beyond-window row stay on the deck');
-  assert.equal(s.locked7.num, 2, 'the day-100 row stays OUT even with the 2-day grace; days 33 and 47 count');
-  assert.equal(s.inWindow.num, 3);
+  assert.equal(s.list.num, 4, 'company pool: every row stays on the deck');
+  assert.equal(s.locked7.num, 3,
+    'all three flagged rows count -- the day-100 one included, because the column says locked');
+  assert.equal(s.inWindow.num, 3,
+    'and the window tile is untouched: measuring the window is its whole job');
   _clearSummaryCache();
 });
 
