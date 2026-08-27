@@ -2179,7 +2179,8 @@ function drawDevices(m){
             +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
             +'<td>'+esc(r.reported||'—')+'</td><td>'+seen+'</td>'
             +'<td class="r"><button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> '
-            +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button></td></tr>';
+            +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button> '
+            +'<button class="btn sm danger" data-dvd="'+esc(r.imei)+'" title="Ondoa kwenye register / Remove from the register">Futa</button></td></tr>';
         }).join('')+'</tbody></table></div>'
         +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">'
         +'<b style="font-size:12px">Zilizochaguliwa:</b>'
@@ -2206,6 +2207,7 @@ function drawDevices(m){
     $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
     $all('[data-dvh]').forEach(function(b){ b.onclick=function(){ devHistory(b.getAttribute('data-dvh')); }; });
     $all('[data-dvt]').forEach(function(b){ b.onclick=function(){ devToken(b.getAttribute('data-dvt')); }; });
+    $all('[data-dvd]').forEach(function(b){ b.onclick=function(){ devDelete(m, b.getAttribute('data-dvd')); }; });
   }).catch(function(e){ paneFailed(m,e); });
 }
 function devPicked(){ return $all('.dvck').filter(function(c){ return c.checked; }).map(function(c){ return c.value; }); }
@@ -2221,6 +2223,20 @@ function devSetState(m, state){
     toast('Zimebadilishwa: '+money(r.changed)
       +(r.notEnrolled?' · '+money(r.notEnrolled)+' hazijasajiliwa':'')
       +(r.alreadyThere?' · '+money(r.alreadyThere)+' zilikuwa hivyo':''));
+    drawDevices(m);
+  }).catch(function(e){ toast(safeErr(e), true); });
+}
+/* FUTA -- take a phone off the register entirely, for starting a handset over.
+   The confirm has to say the part that is easy to assume the other way round: this erases
+   the ROW, and the handset never hears about it. It keeps its token, keeps Device Owner,
+   and starting THAT afresh needs a factory reset with the phone in your hands. */
+function devDelete(m, imei){
+  if(!confirm('Futa '+imei+' kwenye register?\n\n'
+    +'Simu yenyewe HAIBADILIKI — bado ina token yake na bado ipo chini ya udhibiti. '
+    +'Kuianza upya inahitaji factory reset ukiwa nayo mkononi.\n\n'
+    +'Deletes the register row and its history. The handset itself is unchanged.')) return;
+  srv('deviceDelete',{imei:imei}).then(function(){
+    toast('Imefutwa: '+imei);
     drawDevices(m);
   }).catch(function(e){ toast(safeErr(e), true); });
 }

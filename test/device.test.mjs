@@ -307,3 +307,57 @@ test('enrolment still works against a registry created before the phone half exi
   assert.equal(r.enrolled, 1, 'the phone is on the registry');
   assert.deepEqual(r.provision, [], 'and the station is told plainly that it has no token to write');
 });
+
+/* =========================================================================================
+   FUTA -- taking a phone off the register entirely.
+     "i need delete button after token and historia for now b/se i want to start afresh"
+
+   An eraser for a row that should not have existed: a wrong IMEI, a test handset, a batch
+   enrolled twice. Deliberately not the same thing as Achia, which is a decision about a
+   customer's loan and is meant to leave a trail.
+   ========================================================================================= */
+test('deviceDelete removes the row and its history', async () => {
+  const d = fakeDb({
+    devices: [{ imei: 'D1', state: 'enrolled', enrol_token: 'tok1' },
+              { imei: 'D2', state: 'enrolled', enrol_token: 'tok2' }],
+    device_events: [{ imei: 'D1', event: 'lock' }, { imei: 'D2', event: 'lock' }],
+    settings: [],
+  });
+  const r = await _FNS.deviceDelete(d, ADMIN, { imei: 'D1' });
+  assert.equal(r.ok, true);
+  assert.deepEqual(d._dump('devices').map(x => x.imei), ['D2'], 'only that phone goes');
+  assert.deepEqual(d._dump('device_events').map(x => x.imei), ['D2'],
+    'its history goes with it -- an event row whose device is gone is unreadable');
+});
+
+/* THE ONE IT MUST REFUSE. Deleting a locked phone's row strands the handset: locked for
+   good, with nothing left on the register to unlock it from. */
+test('deviceDelete refuses a locked phone rather than stranding it', async () => {
+  const d = fakeDb({
+    devices: [{ imei: 'D1', state: 'locked', reported: 'locked', enrol_token: 'tok1' }],
+    device_events: [], settings: [],
+  });
+  await assert.rejects(() => _FNS.deviceDelete(d, ADMIN, { imei: 'D1' }), /imefungwa|locked/i);
+  assert.equal(d._dump('devices').length, 1, 'and the row is still there');
+
+  // Reported locked is enough on its own: the office may have unlocked it a second ago and
+  // the handset may not have heard yet, which is exactly when this would strand it.
+  const e = fakeDb({
+    devices: [{ imei: 'D2', state: 'enrolled', reported: 'locked', enrol_token: 'tok2' }],
+    device_events: [], settings: [],
+  });
+  await assert.rejects(() => _FNS.deviceDelete(e, ADMIN, { imei: 'D2' }), /imefungwa|locked/i);
+});
+
+test('deviceDelete is audited and needs write access', async () => {
+  const d = fakeDb({ devices: [{ imei: 'D1', state: 'enrolled' }], device_events: [], settings: [] });
+  /* A read-only code is decided by its ROLE, not by a readOnly flag on the object --
+     see isReadOnly in auth.js. Spreading ADMIN and setting readOnly:true looks like a
+     view-only user and is not one, which is the wrong way for a permission test to pass. */
+  const VIEWER = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['devices'] };
+  await assert.rejects(() => _FNS.deviceDelete(d, VIEWER, { imei: 'D1' }));
+  assert.equal(d._dump('devices').length, 1, 'a view-only code cannot erase a phone');
+  // Once it runs, the audit entry is the only record that phone was ever on the register.
+  const { AUDITED } = await import('../api/_lib/audit.js');
+  assert.ok(AUDITED.has('deviceDelete'), 'an eraser that leaves no trace at all is not acceptable');
+});
