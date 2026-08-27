@@ -164,28 +164,35 @@ test('pnorm and lifeDayOf ports behave', () => {
   assert.equal(lifeDayOf('2026-07-13', '2026-08-14'), 33);
 });
 
-test('locked 7+ counts the COLUMN, whatever the disbursed date says', async () => {
-  /* THIS TEST ASSERTED THE OPPOSITE UNTIL THE OWNER OVERTURNED IT:
+test('locked 7+ is the COLUMN and the window, never one without the other', async () => {
+  /* BOTH HALVES -- and this test has now been wrong in both directions, which is why the
+     numbers are written into it.
+
+     It first asserted `days_offline >= 7 && inWindow`: our own arithmetic standing in for a
+     figure Watu already publishes. The owner overturned that half --
 
        "The locked 7+ days list of credits is always a few number away from the actual one so
         please dont use dates to give the customer list but the count and acture true/false
         values in the columns -- this is the VERY CORRECT METHOD"
-       "use the value in true and false: not disb day calculation, we just use the date in
-        castomer card"
 
-     The old rule ANDed the column with a 45-day window measured from disbursed_date to
-     WHATEVER DAY THE PAGE WAS OPENED -- so an untouched deck answered 42 one morning and 40
-     two days later, customers ageing out from under it with no upload in between. That drift
-     is the "few numbers away".
+     -- and it was rewritten to the column ALONE, dropping the window along with the
+     arithmetic. That shipped, and the owner caught it the same day:
 
-     Watu has already decided who is locked and published it as a column. Recomputing our own
-     version of a number the source already states can only ever disagree with it.
+       "Locked 7+ should be in a window of 45 days, it has lost that and credits are now
+        having 283 for today yet they told me it was 41"
 
-     The two tiles now divide the work honestly: locked7 reports what Watu flagged, inWindow
-     reports the window. Neither borrows the other's rule. */
+     Both readings, measured against his own 2,650-row deck on 27 Aug 2026, beside the figure
+     Watu quoted that same morning:
+
+       column alone, no window ......... 283
+       column AND the window ........... 41    <-- what Watu says
+       days_offline >= 7 AND window .... 44-46
+
+     So Watu decides WHO IS LOCKED, we decide WHO IS STILL ON THE BOOK, and a customer has to
+     pass both to reach an officer's list. */
   _clearSummaryCache();
   const d = db();
-  // Locked a week AND far past the window: disbursed 100 days before the pinned clock.
+  // Locked a week, but disbursed 100 days before the pinned clock -- long off the book.
   d._dump('followup_status').push({
     imei: '351999999999999', client_name: 'Nje Ya Dirisha', contact: '255788000111',
     team: 'KINONDONI', model: 'A07', price: 450000, disbursed_date: '2026-05-06',
@@ -193,10 +200,9 @@ test('locked 7+ counts the COLUMN, whatever the disbursed date says', async () =
   await registerOfficer(d);
   const s = await callApi(d, 'api_callDailySummary', ['dev-1'], NOW);
   assert.equal(s.list.num, 4, 'company pool: every row stays on the deck');
-  assert.equal(s.locked7.num, 3,
-    'all three flagged rows count -- the day-100 one included, because the column says locked');
-  assert.equal(s.inWindow.num, 3,
-    'and the window tile is untouched: measuring the window is its whole job');
+  assert.equal(s.locked7.num, 2,
+    'the day-100 customer is locked AND gone; being locked does not put them back on the book');
+  assert.equal(s.inWindow.num, 3, 'and the window tile counts the window, as it always did');
   _clearSummaryCache();
 });
 

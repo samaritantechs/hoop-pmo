@@ -75,6 +75,22 @@ test('settingSet refuses keys outside the whitelist', async () => {
   await assert.rejects(() => _FNS.settingSet(d, ADMIN, { key: 'DATA_VERSION', value: 'x' }), /not editable/);
 });
 
+/* THE BUG THIS GUARDS. docs/DEVICE-LOCKING.md promised that the lock screen's words "live in
+   settings rather than in the APK", device-core.js read all five keys on every heartbeat --
+   and neither the pane's list nor settingSet's whitelist had ever heard of them. The number a
+   stranded customer is told to call could not be set by anybody, from anywhere, and the doc
+   said it could. A key that something READS and nothing can WRITE is not a setting. */
+test('every setting the lock screen reads can actually be set', async () => {
+  const d = fakeDb({ settings: [] });
+  const KEYS = ['DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE',
+    'DEVICE_LOCK_REASON', 'DEVICE_OFFLINE_GRACE_HOURS'];
+  for (const key of KEYS) await _FNS.settingSet(d, ADMIN, { key, value: 'x' });
+
+  // ...and every one of them is visible in the pane, or nobody would know it was there.
+  const shown = (await _FNS.settings(d, ADMIN)).settings.map(s => s.key);
+  for (const key of KEYS) assert.ok(shown.includes(key), key + ' is missing from Settings');
+});
+
 test('renameAccessCode moves the secret, keeps the row, and flags self-rename', async () => {
   const d = fakeDb({ access_codes: [
     { code: '2802', name: 'MARKII', role: 'ADMIN', teams: null, tabs: ['upload', 'settings'] },
@@ -771,23 +787,23 @@ test('globalSearch finds a customer by any spelling of the number, plus office a
   assert.equal(s.stock[0].asOf, '2026-08-16');
 });
 
-test('lockedTrend is this week MONDAY to SUNDAY, deduped, and counts the column', async () => {
-  /* The window check that used to be in this chart is gone -- see "LOCKED IS A COLUMN, NOT A
-     CALCULATION" in call-core.js. It measured disbursed_date against each snapshot day, so a
-     customer Watu had flagged as locked could still be dropped from the bar for being old,
-     and the chart then disagreed with the tile above it. The column decides now. */
+test('lockedTrend is this week MONDAY to SUNDAY, deduped, column AND window', async () => {
+  /* This chart has to answer with exactly the arithmetic the tile above it uses -- Watu's
+     locked7 column AND the 45-day window -- or the dashboard shows two different numbers for
+     the same question. The window is measured against EACH BAR'S OWN DAY, so re-reading this
+     week next month gives back the same bars rather than shrinking them as customers age. */
   const today = todayKey();
   const dow = new Date(Date.parse(today + 'T00:00:00Z')).getUTCDay();
   const monday = dayShift(today, -((dow + 6) % 7));
   const fresh = dayShift(monday, -5);
-  const old = dayShift(monday, -300);     // ancient, and it counts anyway
+  const old = dayShift(monday, -300);     // ancient: locked, and long off the book
   const d = fakeDb({
     watu_snapshots: [
       // Monday: two distinct locked-7 customers, one uploaded TWICE
       { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: monday },
       { imei: 'A', locked7: true, disbursed_date: fresh, snapshot_date: monday },
       { imei: 'B', locked7: true, disbursed_date: fresh, snapshot_date: monday },
-      // Flagged locked 7+ but disbursed 300 days ago: Watu says locked, so it counts.
+      // Flagged locked 7+ but disbursed 300 days ago: past day 45, so off the chart.
       { imei: 'C', locked7: true, disbursed_date: old, snapshot_date: monday },
       // last week's Sunday must NOT leak in: the week starts on Monday, always
       { imei: 'D', locked7: true, disbursed_date: fresh, snapshot_date: dayShift(monday, -1) },
@@ -799,8 +815,8 @@ test('lockedTrend is this week MONDAY to SUNDAY, deduped, and counts the column'
   assert.equal(r.points[0].date, monday, 'the first bar is always Monday');
   assert.equal(r.from, monday);
   assert.equal(r.to, dayShift(monday, 6), 'through Sunday');
-  assert.equal(r.points[0].num, 3,
-    're-upload does not double the bar, and the 300-day-old row counts: the column says locked');
+  assert.equal(r.points[0].num, 2,
+    're-upload does not double the bar, and the 300-day-old row has left the window');
   assert.equal(r.points[6].num, null, 'a day with no upload is a GAP, never a zero');
 });
 
@@ -822,8 +838,8 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
   const tue = dShift(mon, 1);                  // where Monday's RESULT becomes visible
 
   const recent = dShift(mon, -10);
-  const ancient = dShift(mon, -80);   // old, and it counts anyway -- the column decides
-  /* locked7 is now carried explicitly, because it is the thing that decides the pool.
+  const ancient = dShift(mon, -80);   // locked, but 80 days out: off the book, off the list
+  /* locked7 is carried explicitly, because with the window it is what decides the pool.
      days_offline stays, because recovery is still MEASURED by that number falling. */
   const row = (imei, date, off, disb, l7) => ({ imei, client_name: 'C' + imei, team: 'KINONDONI',
     days_offline: off, locked7: l7, has_ever_paid: true, price: 450000, disbursed_date: disb,
@@ -831,8 +847,8 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
 
   const d = fakeDb({
     watu_snapshots: [
-      // MONDAY's own list. A, B and D are flagged locked 7+; C is not. D was disbursed 80 days
-      // ago and STILL counts -- Watu flagged it, so it is on the list.
+      // MONDAY's own list. A, B and D are flagged locked 7+; C is not. D was disbursed 80
+      // days ago, so it is past day 45 and NOT on anybody's list, flagged or not.
       row('A', mon, 9, recent, true), row('B', mon, 8, recent, true),
       row('C', mon, 3, recent, false), row('D', mon, 30, ancient, true),
       // TUESDAY's upload is where Monday's result shows: A fell 9 -> 4 and D fell 30 -> 5, so
@@ -854,10 +870,10 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
 
   const monday = r.points[0];
   assert.equal(monday.date, mon, 'the first bar is Monday');
-  assert.equal(monday.offJana, 3,
-    'every row Watu flagged locked 7+ -- D included, though it was disbursed 80 days ago');
-  assert.equal(monday.reduced, 2,
-    'MONDAY\'s bar carries Monday\'s work: A and D both came down by Tuesday, B held');
+  assert.equal(monday.offJana, 2,
+    'Watu\'s flag AND the window: D is locked but 80 days out, so it is off the list');
+  assert.equal(monday.reduced, 1,
+    'MONDAY\'s bar carries Monday\'s work: A came down by Tuesday, B held');
   const tuesday = r.points[1];
   assert.equal(tuesday.offJana, 1, 'Tuesday has its own pool from its own list -- only B is still 7+');
   assert.equal(tuesday.reduced, null, 'and no upload after it yet, so its result is pending');
@@ -868,8 +884,8 @@ test('recoveryWeek counts the 7+ who reduced, and deals them across the credit r
   assert.ok(!r.credits.some(c => c.name === 'A BIKE'), 'a bike officer is never dealt 7+ work');
   const dealt = r.credits.reduce((s, c) => s + ((c.days[mon] && c.days[mon].assigned) || 0), 0);
   const got = r.credits.reduce((s, c) => s + ((c.days[mon] && c.days[mon].recovered) || 0), 0);
-  assert.equal(dealt, 3, 'every OFF JANA customer is dealt to somebody');
-  assert.equal(got, 2, 'and the ones who came back are credited to whoever held them');
+  assert.equal(dealt, 2, 'every OFF JANA customer is dealt to somebody');
+  assert.equal(got, 1, 'and the ones who came back are credited to whoever held them');
 });
 
 test('a holiday in the middle does not lose the work done before it', async () => {
@@ -1043,10 +1059,10 @@ test('recoveryDayList names the customers behind a day, with the credit who held
 
   const r = await _FNS.recoveryDayList(d, ADMIN, { date: mon });
   assert.equal(r.next, tue, 'the day\'s own list, measured against the NEXT upload');
-  assert.equal(r.rows.length, 3,
-    'every row Watu flagged locked 7+ -- D included, though disbursed 80 days ago');
-  assert.ok(r.rows.some(x => x.imei === 'D'),
-    'the window no longer removes anybody from the list: the column decides');
+  assert.equal(r.rows.length, 2,
+    'Watu\'s flag AND the window: D is locked but 80 days out, so it is off the list');
+  assert.ok(!r.rows.some(x => x.imei === 'D'),
+    'a customer past day 45 has left the book -- being locked does not put them back');
 
   const a = r.rows.find(x => x.imei === 'A');
   assert.equal(a.was, 9); assert.equal(a.now, 4);
@@ -1055,9 +1071,9 @@ test('recoveryDayList names the customers behind a day, with the credit who held
 
   const b = r.rows.find(x => x.imei === 'B');
   assert.equal(b.recovered, false, 'B held at 8 and did not recover');
-  assert.equal(r.counts.offJana, 3);
-  // A fell 9 -> 4 and D fell 30 -> 5; B held at 8.
-  assert.equal(r.counts.recovered, 2);
+  assert.equal(r.counts.offJana, 2);
+  // A fell 9 -> 4; B held at 8. D is out of the window entirely.
+  assert.equal(r.counts.recovered, 1);
 });
 
 test('recoveryDayList marks a day pending when no later upload exists yet', async () => {

@@ -70,6 +70,14 @@ class Beat {
         Prefs.put(c, Prefs.HELP_PHONE, help == null ? "" : help);
         String reason = r.optString("reason", "");
         Prefs.put(c, Prefs.REASON, reason == null ? "" : reason);
+        /* Brand and IMEI are kept only when the server actually sends them, and never
+           overwritten with blank. An older deployment that does not know these fields yet
+           must not wipe the company name and the IMEI off a lock screen that already had
+           them -- an empty header is exactly the screen nobody can act on. */
+        String brand = r.optString("brand", "");
+        if (brand != null && !brand.isEmpty()) Prefs.put(c, Prefs.BRAND, brand);
+        String imei = r.optString("imei", "");
+        if (imei != null && !imei.isEmpty()) Prefs.put(c, Prefs.IMEI, imei);
 
         if (r.optBoolean("retire", false)) {
             // The loan cleared. Give the phone back completely and stop calling home.

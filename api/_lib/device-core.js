@@ -54,17 +54,58 @@ export function commandFor(state) {
   }
 }
 
-/** The lock screen's words, held in settings so they can be changed without a new APK --
-    the number a stranded customer is told to call is exactly the kind of thing that
-    changes on a Tuesday and must not wait for an app release to do it. */
-async function lockMessage(db) {
+/* THE FOUR LINES ON A LOCKED PHONE, and why every one of them comes from here.
+   =========================================================================================
+   The shape was specified by the person who has to answer the calls:
+
+       HOOP LIMITED
+       SIMU HII IMEFUNGWA NA HOOP LIMITED. WASILIANA NASI KWA NAMBA 0700000000
+       IMEI: 351388334583295
+       REASON: STOCK, UNSOLD
+
+   Not one of those four lines is baked into the APK, and that is the whole point. The
+   company name changes (this repo has already lived through one rename), the number a
+   stranded customer is told to call changes on a Tuesday, and the reason changes per phone.
+   A handset in a customer's pocket for eighteen months cannot be waiting on an app release
+   for any of them, so the APK holds only the LAYOUT and the server holds every word in it.
+
+   {brand} and {namba} are filled here rather than on the handset for the same reason: one
+   substitution, on a machine we can fix, instead of the same little parser in every build
+   of the app that is out there. */
+const LOCK_SETTINGS = ['DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE',
+  'DEVICE_LOCK_REASON'];
+
+const DEFAULT_BRAND = 'HOOP LIMITED';
+
+function fill(text, brand, phone) {
+  return S(text)
+    .replace(/\{\s*(brand|kampuni)\s*\}/gi, brand)
+    .replace(/\{\s*(namba|phone|simu)\s*\}/gi, phone)
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+async function lockWords(db) {
   const rows = await fetchAll(() => db.from('settings').select('key, value')
-    .in('key', ['DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE']));
+    .in('key', LOCK_SETTINGS));
   const get = k => { const r = rows.find(x => S(x.key) === k); return r ? S(r.value) : ''; };
+  const brand = get('DEVICE_LOCK_BRAND') || DEFAULT_BRAND;
+  const phone = get('DEVICE_HELP_PHONE');
+  /* Two defaults, not one, because "Wasiliana nasi kwa namba ." is what a single default
+     with an unset number produces -- a sentence promising a number that is not there, on
+     the one screen where that is worst. No number, no promise of one. */
+  const raw = get('DEVICE_LOCK_MESSAGE')
+    || (phone ? 'Simu hii imefungwa na {brand}. Wasiliana nasi kwa namba {namba}.'
+              : 'Simu hii imefungwa na {brand}. Wasiliana nasi kumaliza malipo.');
   return {
-    message: get('DEVICE_LOCK_MESSAGE')
-      || 'Simu hii imefungwa na HOOPLOAN. Wasiliana nasi kumaliza malipo. / This phone is locked by HOOPLOAN. Contact us to clear your balance.',
-    helpPhone: get('DEVICE_HELP_PHONE') || null,
+    brand,
+    message: fill(raw, brand, phone),
+    helpPhone: phone || null,
+    /* The reason a self-lock shows. An ordered lock always carries its own -- the portal
+       refuses to send one without -- but a phone that locked itself on the offline grace was
+       never given words by anybody, and REASON: (blank) on a customer's screen is worse than
+       a dull sentence from settings. */
+    fallbackReason: get('DEVICE_LOCK_REASON'),
   };
 }
 
@@ -160,19 +201,38 @@ async function beat(db, [payload], nowMs) {
   }
 
   const command = commandFor(dev.state);
-  const words = command === 'lock' ? await lockMessage(db) : { message: null, helpPhone: null };
+  /* THE WORDS GO DOWN ON EVERY BEAT, not only when the answer is "lock", and the reason is
+     the offline grace. A phone that self-locks in a dead spot draws its screen from whatever
+     it last stored -- so if we only ever sent the words alongside a lock order, the one
+     handset that locks with nobody around to explain it would be the one showing a blank
+     screen. Sending them while it is unlocked costs a few dozen bytes on a beat that was
+     already happening. */
+  const retire = S(dev.state) === 'released';
+  /* WITH ONE EXCEPTION: a phone being handed back for good gets no words at all. It is
+     about to unharden, drop Device Owner and stop calling home, and leaving our lock
+     message sitting in a former customer's storage is the opposite of releasing it. */
+  const words = retire ? { brand: null, message: null, helpPhone: null, fallbackReason: '' }
+                       : await lockWords(db);
   const grace = await graceFor(db, dev);
   return {
     ok: true,
     command,                                   // lock | unlock
     state: dev.state,
-    reason: command === 'lock' ? (dev.state_reason || null) : null,
-    ...words,
+    /* Ordered locks carry their own reason; a self-lock has none to carry, so it gets the
+       one from settings. Either way the handset is never left with an empty REASON line. */
+    reason: retire ? null : (S(dev.state_reason) || words.fallbackReason || null),
+    // The register's IMEI, not the handset's guess at it -- see Imei.java. This is the
+    // number on Sipho's report and the one a caller will read out, and it is the only one
+    // an Android 10+ phone can put on its own lock screen at all.
+    imei,
+    brand: words.brand,
+    message: words.message,
+    helpPhone: words.helpPhone,
     // -1 rather than null: the handset parses this into an int, and "never" has to survive
     // that trip as a value it can act on rather than as a missing field it has to guess at.
     graceHours: grace == null ? -1 : grace,
     // So a released phone can stop calling home for good rather than beating forever.
-    retire: S(dev.state) === 'released',
+    retire,
   };
 }
 
@@ -186,8 +246,10 @@ async function hello(db, [payload], nowMs) {
   const dev = await byToken(db, p);
   const at = new Date(nowMs).toISOString();
   await db.from('devices').update({ last_seen: at, updated_at: at }).eq('imei', dev.imei);
+  const words = await lockWords(db);
   return { ok: true, imei: dev.imei, item: dev.item || null, state: dev.state,
-    command: commandFor(dev.state), ...(await lockMessage(db)) };
+    command: commandFor(dev.state), reason: S(dev.state_reason) || words.fallbackReason || null,
+    brand: words.brand, message: words.message, helpPhone: words.helpPhone };
 }
 
 const FNS = { dev_hello: hello, dev_beat: beat };

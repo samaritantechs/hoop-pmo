@@ -199,16 +199,62 @@ including unlocking it straight back.
 
 ---
 
+## What a locked phone actually says
+
+```
+                    HOOP LIMITED
+
+    SIMU HII IMEFUNGWA NA HOOP LIMITED. WASILIANA
+             NASI KWA NAMBA 0700123456
+
+           IMEI: 351388334583295
+           REASON: STOCK, UNSOLD
+
+            [ Simu ya dharura / Emergency call ]
+```
+
+**Not one of those words is in the APK.** The company name, the message, the number and the
+reason all arrive on the heartbeat and are stored on the handset, so a phone that has been in
+somebody's pocket for eighteen months still shows the number the office answers *today*. The
+app owns the layout; the server owns every word in it.
+
+The IMEI shown is **the register's**, not the one the handset reads off its own modem. Those
+are different facts and the register's is the useful one: it is what Sipho's stock report
+says, what the office will search on, and — from Android 10 — the only one an app can display
+at all unless Device Owner took properly. See the note in `Imei.java`.
+
+`{brand}` and `{namba}` in `DEVICE_LOCK_MESSAGE` are filled in by the server, so a rename or a
+new phone number is one row in Settings and not a build.
+
 ## Settings
 
 | Key | Default | What it does |
 |---|---|---|
-| `DEVICE_LOCK_MESSAGE` | Swahili/English default | the words on the lock screen |
-| `DEVICE_HELP_PHONE` | — | the number shown to call |
+| `DEVICE_LOCK_BRAND` | `HOOP LIMITED` | the company name across the top, and `{brand}` |
+| `DEVICE_LOCK_MESSAGE` | see below | the sentence under it; `{brand}` and `{namba}` are substituted |
+| `DEVICE_HELP_PHONE` | — | the number to call, and `{namba}` |
+| `DEVICE_LOCK_REASON` | — | the REASON line **only when nobody ordered the lock** — see below |
 | `DEVICE_OFFLINE_GRACE_HOURS` | `168` | silence before a customer's phone self-locks |
 
+The default message is `Simu hii imefungwa na {brand}. Wasiliana nasi kwa namba {namba}.` —
+and, with no `DEVICE_HELP_PHONE` set, `…Wasiliana nasi kumaliza malipo.` instead. A sentence
+that promises a number and then does not give one is worse than no sentence at all.
+
+`DEVICE_LOCK_REASON` is a **fallback, not an override.** A lock ordered from the portal always
+carries its own reason — Funga refuses to send one without — and that reason always wins. The
+setting covers the one case with nobody to write a reason: a phone that locked *itself* on the
+offline grace, in a dead spot, with the office unaware. Without it that handset shows
+`REASON:` and nothing after it.
+
 These live in settings rather than in the APK because the number a stranded customer is told
-to call is exactly the kind of thing that changes on a Tuesday.
+to call is exactly the kind of thing that changes on a Tuesday. Edit them in **Portal →
+Settings**; every one of them is on that screen.
+
+> They were not, until 27 Aug 2026. This document said they lived in settings, `device-core.js`
+> read them on every heartbeat, and neither `settings` nor `settingSet` had ever listed them —
+> so the pane did not show them and the server refused to save them. The number could not be
+> set by anybody, from anywhere. Two hand-kept copies of nearly the same array are now one
+> `EDITABLE_SETTINGS`, and a test asserts every key the lock screen reads can be written.
 
 ---
 

@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">HOOPLOAN</string>
-    <!-- The default words on a locked screen. The server overrides these on every beat
-         (DEVICE_LOCK_MESSAGE / DEVICE_HELP_PHONE in settings), so these are only what a
-         handset shows before it has ever heard from us. -->
-    <string name="lock_default">Simu hii imefungwa na HOOPLOAN.\nWasiliana nasi kumaliza malipo.\n\nThis phone is locked by HOOPLOAN. Contact us to clear your balance.</string>
+    <!-- The last-resort words, for a handset that has not yet heard from the server even
+         once. Every beat overrides both of these from settings (DEVICE_LOCK_BRAND and
+         DEVICE_LOCK_MESSAGE), which is where they are meant to be changed; these exist so a
+         phone that locks itself before its first successful beat still says something a
+         person can act on rather than showing an empty navy rectangle. -->
+    <string name="lock_brand">HOOP LIMITED</string>
+    <string name="lock_default">Simu hii imefungwa na HOOP LIMITED.\nWasiliana nasi kumaliza malipo.</string>
 </resources>

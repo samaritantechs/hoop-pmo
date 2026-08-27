@@ -31,7 +31,8 @@ test('a heartbeat records what the phone says and returns what the office decide
   assert.equal(r.command, 'lock');
   assert.equal(r.reason, 'Stock unaccounted', 'the phone is told WHY, so the lock screen can say it');
   assert.equal(r.helpPhone, '0700000000');
-  assert.match(r.message, /HOOPLOAN/);
+  assert.match(r.message, /HOOP LIMITED/);
+  assert.equal(r.imei, 'D1', 'the lock screen shows the REGISTER\'s imei, not the modem\'s');
 
   const row = d._dump('devices')[0];
   assert.equal(row.reported, 'locked');
@@ -45,6 +46,79 @@ test('a heartbeat records what the phone says and returns what the office decide
   const list = await _FNS.deviceList(d, ADMIN, {});
   assert.equal(list.rows[0].lockState, 'confirmed');
   assert.equal(list.counts.lockPending, 0);
+});
+
+/* ---------------------------------------------------------------------------------------
+   THE FOUR LINES ON A LOCKED PHONE. Every word of this screen comes down the wire, and
+   these are the cases that decide whether a stranded customer can act on what they read.
+   --------------------------------------------------------------------------------------- */
+test('the lock screen names the company and the number, both from settings', async () => {
+  const d = fleet([{ imei: '351388334583295', state: 'locked', state_reason: 'stock, unsold',
+    enrol_token: 'tok1' }], [
+      { key: 'DEVICE_LOCK_BRAND', value: 'HOOP LIMITED' },
+      { key: 'DEVICE_HELP_PHONE', value: '0700123456' },
+    ]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: true }], NOW);
+
+  assert.equal(r.brand, 'HOOP LIMITED');
+  assert.equal(r.message, 'Simu hii imefungwa na HOOP LIMITED. Wasiliana nasi kwa namba 0700123456.');
+  assert.equal(r.imei, '351388334583295');
+  assert.equal(r.reason, 'stock, unsold');
+});
+
+test('a rename is one settings row, not a new APK', async () => {
+  const d = fleet([{ imei: 'D1', state: 'locked', state_reason: 'r', enrol_token: 'tok1' }], [
+    { key: 'DEVICE_LOCK_BRAND', value: 'HOOP TANZANIA' },
+    { key: 'DEVICE_HELP_PHONE', value: '0755000111' },
+  ]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: true }], NOW);
+  assert.equal(r.brand, 'HOOP TANZANIA');
+  assert.match(r.message, /HOOP TANZANIA/, '{brand} follows the setting into the sentence');
+  assert.doesNotMatch(r.message, /HOOP LIMITED/);
+});
+
+test('a custom message may place the brand and the number wherever it likes', async () => {
+  const d = fleet([{ imei: 'D1', state: 'locked', state_reason: 'r', enrol_token: 'tok1' }], [
+    { key: 'DEVICE_LOCK_BRAND', value: 'HOOP LIMITED' },
+    { key: 'DEVICE_HELP_PHONE', value: '0700123456' },
+    { key: 'DEVICE_LOCK_MESSAGE', value: 'Piga {namba} — {brand}. / Call {namba}.' },
+  ]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: true }], NOW);
+  assert.equal(r.message, 'Piga 0700123456 — HOOP LIMITED. / Call 0700123456.');
+});
+
+/* A sentence that promises a number and then does not give one is worse than no sentence,
+   and an unset DEVICE_HELP_PHONE is the ordinary state of a fresh deployment. */
+test('with no number set, the default message stops promising one', async () => {
+  const d = fleet([{ imei: 'D1', state: 'locked', state_reason: 'r', enrol_token: 'tok1' }]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: true }], NOW);
+  assert.equal(r.helpPhone, null);
+  assert.doesNotMatch(r.message, /namba\s*\.?$/, 'no dangling "kwa namba ."');
+  assert.match(r.message, /HOOP LIMITED/, 'the company still says who it is');
+});
+
+/* THE SELF-LOCK CASE, which is the reason the words go down on every beat rather than only
+   alongside a lock order. A phone that locks itself on the offline grace was never told
+   anything by anybody; whatever it last stored IS its lock screen. */
+test('an unlocked phone is still given the words it will need if it self-locks', async () => {
+  const d = fleet([{ imei: 'D1', state: 'enrolled', enrol_token: 'tok1',
+    customer: 'Asha', sold_ref: 'S-1' }], [
+      { key: 'DEVICE_HELP_PHONE', value: '0700123456' },
+      { key: 'DEVICE_LOCK_REASON', value: 'Simu haijaongea na ofisi kwa muda mrefu' },
+    ]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: false }], NOW);
+
+  assert.equal(r.command, 'unlock', 'nobody has ordered anything');
+  assert.match(r.message, /0700123456/, 'but the words are already on the handset');
+  assert.equal(r.reason, 'Simu haijaongea na ofisi kwa muda mrefu',
+    'a self-lock has no ordered reason, so settings supplies one');
+});
+
+test('an ordered reason always outranks the one in settings', async () => {
+  const d = fleet([{ imei: 'D1', state: 'locked', state_reason: 'Wizi — wakala Juma',
+    enrol_token: 'tok1' }], [{ key: 'DEVICE_LOCK_REASON', value: 'generic fallback' }]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: true }], NOW);
+  assert.equal(r.reason, 'Wizi — wakala Juma');
 });
 
 test('history keeps the transition, not the heartbeat', async () => {
