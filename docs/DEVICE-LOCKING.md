@@ -67,6 +67,25 @@ blurs those two cannot be trusted to chase anything.
 
 Every phone gets three things: enrolled on the register, made Device Owner, handed its token.
 
+### Sipho's card — the whole loop, per phone
+
+1. **Portal → Devices → + Sajili simu.** Paste the day's IMEIs (up to 500 at once). Copy the
+   token list it shows — it shows each token **once**.
+2. **On the handset:** skip every account in the setup wizard → Settings → About phone →
+   Software information → tap **Build number** 7× → back → Developer options → **USB
+   debugging** on → plug in the cable → accept **Allow USB debugging** on the phone.
+3. **On the laptop:** `./scripts/lock-bench.sh tokens.txt` (or the three commands below for
+   one phone). Takes about ten seconds per handset.
+4. **Watch it appear** on Devices while the box is still open. If it does not, provisioning
+   did not take — fix it now, not after it has been reboxed.
+5. **Funga → reason → wait for CONFIRMED**, not pending. Only then power off and box it.
+
+Steps 1, 3, 4 and 5 are near-instant. **Step 2 is the day**: two to three minutes of tapping
+per phone that no script can reach, which at 200 phones is about ten hours of one person's
+time. The only ways to spend less are to run phones in parallel on a powered USB hub — the
+bench script is built for exactly that — or to buy through a Knox-participating reseller, the
+one route where a handset provisions itself at first boot with nobody touching it.
+
 ### 1. Enrol (portal, before you touch the phones)
 
 Devices → **+ Sajili simu**, paste the IMEIs from Sipho's report. Model and holder fill in
@@ -83,6 +102,7 @@ straight after Settings → Reset. Either route works:
 phones, and unlike a QR it gives you an error you can read):
 
 ```sh
+adb install -r public/HOOPLOAN-Lock.apk
 adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin
 adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \
     -n com.samaritantechs.hooploanlock/.EnrolReceiver \
@@ -90,8 +110,17 @@ adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \
     -e token <that phone's token>
 ```
 
-Install the APK first (`adb install public/HOOPLOAN-Lock.apk`, or download it on the phone
-from `/HOOPLOAN-Lock.apk`).
+Three commands, about ten seconds. **Neither half works without the other:** the APK on its
+own is an ordinary app that a thief uninstalls in seconds, and `set-device-owner` names a
+component that has to already be on the phone, so it fails on a handset with nothing
+installed. Installing is itself an adb command, though, which is why all three are above and
+why nothing here needs touching the phone's screen.
+
+**For a batch, do not type these 200 times.** `scripts/lock-bench.sh` takes the IMEI/token
+list from step 1, walks every phone that `adb devices` can see, and runs all three on each —
+matching each phone to its own token by asking the handset for its IMEI, and refusing to
+guess when it cannot read one. See the header of that file; it is written to be read by
+whoever is running the bench.
 
 > **THE QR ROUTE DOES NOT WORK ON SAMSUNG — tested 27 Aug 2026 on an A07.** The six-tap
 > scanner never appears: tried at first boot, after joining Wi-Fi, and after installing the

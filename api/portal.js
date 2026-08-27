@@ -773,8 +773,19 @@ const FNS = {
       return m;
     };
     const curM = byImei(cur), oldM = byImei(old);
+    /* EVERY TILE ON THIS PANE NOW HAS ITS ROWS, and three of them never did. `deeper` and
+       `leftList` were counted and thrown away, so the two numbers that mean somebody has
+       got WORSE were the two you could not act on -- a screen that names the people coming
+       back and hides the ones sinking has it exactly the wrong way round.
+
+       One `kind` per row and one list, filtered on the client, rather than four arrays:
+       a customer is in exactly one of these buckets, and four arrays is four chances for
+       the same IMEI to appear twice with different arithmetic behind it. */
     const rows = [];
     let paidNew = 0, reconnected = 0, deeper = 0, off = 0;
+    const put = (kind, imei, r, was, now, paid) => rows.push({ kind, imei,
+      name: r.client_name, team: r.team, branch: branchOf(imei),
+      was, now, paid: paid === true, price: num(r.price) });
     for (const [imei, c] of curM) {
       const o = oldM.get(imei);
       if (!o) continue;
@@ -784,16 +795,31 @@ const FNS = {
       if (paid) paidNew++;
       if (better) reconnected++;
       if (worse) deeper++;
-      if (paid || better) rows.push({ imei, name: c.client_name, team: c.team,
-        branch: branchOf(imei),
-        was: dOld, now: dNew, paid, price: num(c.price) });
+      // paid outranks better outranks worse: a customer who paid for the first time is
+      // that, whatever their offline count did in the same week.
+      if (paid) put('paid', imei, c, dOld, dNew, true);
+      else if (better) put('better', imei, c, dOld, dNew, false);
+      else if (worse) put('worse', imei, c, dOld, dNew, false);
     }
-    for (const [imei] of oldM) if (!curM.has(imei)) off++;
-    rows.sort((a, b) => (b.paid - a.paid) || (b.was - b.now) - (a.was - a.now));
+    for (const [imei, o] of oldM) {
+      if (curM.has(imei)) continue;
+      off++;
+      // No `now` to report: they are not on today's deck at all, which is the whole fact.
+      put('left', imei, o, num(o.days_offline), null, false);
+    }
+    /* Sorted so that whichever slice is on screen opens on its most urgent row: the ones
+       who came back furthest, and the ones who sank deepest. */
+    const RANK = { paid: 0, better: 1, worse: 2, left: 3 };
+    rows.sort((a, b) => (RANK[a.kind] - RANK[b.kind])
+      || Math.abs(num(b.was) - num(b.now)) - Math.abs(num(a.was) - num(a.now)));
+    /* Capped, and the cap is REPORTED. A truncated list that says nothing reads as a short
+       list, and on this pane that would mean "only nine people slipped" when it was ninety. */
+    const CAP = 800;
     return { ok: true, latest, prev,
       counts: { compared: [...curM.keys()].filter(k => oldM.has(k)).length,
         paidNew, reconnected, deeper, leftList: off },
-      rows: rows.slice(0, 500) };
+      notListed: Math.max(0, rows.length - CAP),
+      rows: rows.slice(0, CAP) };
   },
 
   /** THE CUSTOMERS BOOK, split the way Hoop reads it: today's deck inside the 45-day
@@ -1201,8 +1227,28 @@ const FNS = {
       fetchAll(() => db.from('hoop_agents').select('name, role, branch')),
     ]);
 
-    const nowSet = new Set(now.map(r => String(r.serial)));
+    /* WHO HOLDS EACH SERIAL NOW, not merely whether anybody does.
+       ==========================================================================
+         "in hazijulikani there is some transfers sipho says the imei nos are in
+          possession of other owners"
+
+       A serial that moved from one holder to another was invisible here: it is still
+       somewhere on the current report, so it never counted as a departure at all, and the
+       holder who passed it on simply had their `held` drop by one with nothing to show for
+       it. A transfer is not a loss and it is not nothing -- it is a handover, and the
+       person who made it is exactly who you ask about it later.
+
+       BE CLEAR ABOUT WHAT THIS DOES NOT FIX. hoop_aged_stock lists only phones PAST the age
+       limit, and SyscoPos resets a phone's age when it changes hands, so a transferred
+       handset can drop off the aged report entirely -- and that one still lands in
+       `unaccounted`, because from this table it is indistinguishable from a phone that
+       walked. Naming the transfers we CAN see does not make the rest of them visible; it
+       just stops the ones we can see from being counted as missing. */
+    const holderNow = new Map(now.map(r => [String(r.serial), r.agent || '']));
+    const nowSet = new Set(holderNow.keys());
     const gone = prev.filter(r => !nowSet.has(String(r.serial)));
+    const moved = prev.filter(r => nowSet.has(String(r.serial))
+      && nameKey(holderNow.get(String(r.serial)) || '') !== nameKey(r.agent || ''));
     // NO SILENT CAP: if the departures outrun one keyed read, the answer says how many it
     // could not judge rather than reporting a smaller theft than actually happened.
     const LOOKUP_CAP = 400;
@@ -1235,7 +1281,8 @@ const FNS = {
         const reg = regBy.get(k);
         g = { holder: holder || '—', kind: kindOf(holder),
           role: (reg && reg.role) || '', branch: (reg && reg.branch) || '',
-          held: 0, stale: 0, maxAge: 0, gone: 0, sold: 0, watu: 0, unaccounted: 0, unaccountedList: [] };
+          held: 0, stale: 0, maxAge: 0, gone: 0, sold: 0, watu: 0, unaccounted: 0, unaccountedList: [],
+          moved: 0, movedList: [] };
         by.set(k, g);
       }
       return g;
@@ -1246,6 +1293,16 @@ const FNS = {
       const age = num(r.age_days);
       if (age > g.maxAge) g.maxAge = age;
       if (age >= STALE_DAYS) g.stale++;
+    }
+    // Charged to whoever HAD it, naming whoever has it now -- that is the useful direction:
+    // the question is always "you had this, where did it go", and now the row answers.
+    for (const r of moved) {
+      const g = slot(r.agent);
+      g.moved++;
+      if (g.movedList.length < 50) {
+        g.movedList.push({ serial: String(r.serial), item: r.item || '',
+          to: holderNow.get(String(r.serial)) || '—' });
+      }
     }
     for (const r of checking) {
       const g = slot(r.agent);
@@ -1263,7 +1320,8 @@ const FNS = {
     const rows = [...by.values()].sort((x, y) => y.unaccounted - x.unaccounted || y.stale - x.stale || y.held - x.held);
     const sum = (list, f) => list.reduce((s, x) => s + x[f], 0);
     const totalsOf = list => ({ holders: list.length, held: sum(list, 'held'), stale: sum(list, 'stale'),
-      gone: sum(list, 'gone'), sold: sum(list, 'sold'), watu: sum(list, 'watu'), unaccounted: sum(list, 'unaccounted') });
+      gone: sum(list, 'gone'), sold: sum(list, 'sold'), watu: sum(list, 'watu'),
+      moved: sum(list, 'moved'), unaccounted: sum(list, 'unaccounted') });
     const pick = k => rows.filter(r => r.kind === k);
     const value = {
       ok: true, asOf: nowDate, prevAsOf: prevDate, staleDays: STALE_DAYS,

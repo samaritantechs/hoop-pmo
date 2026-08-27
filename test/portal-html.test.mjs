@@ -279,3 +279,46 @@ test('portal.html: no assignment concatenates a string onto a unary plus', () =>
       + 'not concatenation -- the leading term was deleted and its + left behind');
   }
 });
+
+/* =========================================================================================
+   EVERY TILE IS A DOOR.
+     "the widgets in dashboard, sales and stock; in recovery; fraud audit; all stock;
+      devices: - should be clickable to open the description/link to their specified
+      data lists"
+
+   Forty headline numbers across nine panes, each of which now opens the rows behind it. The
+   two ways this quietly breaks are worth a test each: a tile built the old way (a raw
+   `<div class="tile">`), which loses its door without looking wrong; and a pane whose
+   innerHTML contains tiles but never calls wireTiles, which renders the "fungua ›" line and
+   then does nothing at all when it is tapped. The second is the worse of the two -- it
+   advertises a door that is not there.
+   ========================================================================================= */
+test('portal.html: no tile is built by hand any more', () => {
+  const src = read('portal.html');
+  const raw = [...src.matchAll(/<div class="tile"/g)];
+  assert.equal(raw.length, 0,
+    'a hand-built tile has no door and no keyboard handling -- build it with tile()');
+});
+
+test('portal.html: every pane that draws tiles also wires them', () => {
+  const src = read('portal.html');
+  /* Each drawing function, sliced at the next top-level `function` -- a pane that calls
+     tile() and never wireTiles has painted a button that does nothing. */
+  const fns = src.split(/\nfunction /).slice(1);
+  const missing = fns
+    .filter(f => /\btile\(/.test(f) && !/wireTiles\(/.test(f))
+    // The helper itself and the sorters it calls are not panes.
+    .filter(f => !/^(tile|wireTiles|goWith)\b/.test(f))
+    .map(f => f.slice(0, f.indexOf('(')));
+  assert.deepEqual(missing, [], 'these draw tiles but never call wireTiles');
+});
+
+test('portal.html: a tile that leaves its pane sets the destination filter first', () => {
+  /* goWith(tab, set) exists so "Locked 7+" lands on the sinking customers rather than on
+     Recovery's default view. A bare goTab from a tile is not wrong -- three tiles legitimately
+     just open Mauzo -- but the ones that carry a slice must set it BEFORE navigating, or the
+     pane draws once with the old filter and the click reads as having done nothing. */
+  const src = read('portal.html');
+  const bad = [...src.matchAll(/goWith\('[a-z]+',\s*function\(\)\{\s*\}\)/g)];
+  assert.deepEqual(bad.map(m => m[0]), [], 'goWith with an empty setter should just be goTab');
+});

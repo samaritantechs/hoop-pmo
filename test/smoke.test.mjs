@@ -404,3 +404,31 @@ test('the calls app brand is a constant, not a seeded copy of one', () => {
     + (core.match(/setting\('CALL_BRAND'\)\s*\|\|\s*APP\.BRAND/g) || []).length, 2,
     'every reader of CALL_BRAND must fall back to APP.BRAND when the row is absent');
 });
+
+/* =========================================================================================
+   THE BENCH SCRIPT. Nothing here can run adb, so this checks the two things that are wrong
+   in the FILE rather than on the bench: that it parses at all, and that it keeps the two
+   provisioning commands in the one order that works.
+   ========================================================================================= */
+test('the bench script is valid bash and provisions in the order that works', () => {
+  const { spawnSync } = spawnMod;
+  const path = new URL('../scripts/lock-bench.sh', import.meta.url).pathname;
+  const src = fs.readFileSync(path, 'utf8');
+
+  const parsed = spawnSync('bash', ['-n', path], { encoding: 'utf8' });
+  if (!parsed.error) assert.equal(parsed.status, 0, parsed.stderr);
+
+  /* SET-DEVICE-OWNER BEFORE THE ENROL BROADCAST, always. The other way round, the receiver
+     drops the token on the floor and `am broadcast` still prints "Broadcast completed:
+     result=0" -- which reads exactly like success. That cost an evening on the first
+     handset; a script that shipped them reversed would cost it once per batch. */
+  const owner = src.indexOf('set-device-owner');
+  const enrol = src.indexOf('.ENROL');
+  assert.ok(owner > 0 && enrol > 0, 'the script lost one of the two provisioning commands');
+  assert.ok(owner < enrol, 'set-device-owner must come BEFORE the enrol broadcast');
+
+  // It must never invent a token for a phone whose IMEI it could not read: a token in the
+  // wrong handset makes that phone answer for somebody else's loan.
+  assert.match(src, /NEVER GUESS/, 'the unmatched-phone guard was removed');
+  assert.match(src, /\$\{TOKEN_OF\[\$IMEI\]:-\}/, 'the token lookup must default to empty, never to a neighbour');
+});
