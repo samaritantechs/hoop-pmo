@@ -1,6 +1,6 @@
 {
-  "versionCode": 8,
-  "versionName": "1.7.0",
-  "notes": "Skrini ya kufunga haipepesi tena, na sababu mpya inaonekana mara moja. / The lock screen no longer flashes on release, and a new reason repaints at once.",
+  "versionCode": 9,
+  "versionName": "1.8.0",
+  "notes": "Simu inajiwasha WiFi ikipoteza mtandao, na haiwezi kuzimwa mtandao ikiwa imefungwa. / The handset turns its own Wi-Fi back on when it goes offline, and cannot have its radio switched off while it is locked.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

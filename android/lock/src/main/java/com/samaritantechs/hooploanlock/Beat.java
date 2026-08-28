@@ -37,6 +37,13 @@ class Beat {
         String token = Prefs.str(c, Prefs.TOKEN, "");
         if (token == null || token.isEmpty()) return;               // never provisioned
 
+        /* GET THE RADIO BACK FIRST. A phone with no network hears no order, and a LOCKED one
+           cannot be helped by the person holding it -- lock task puts Settings out of reach,
+           so they could not rejoin a network to free their own handset even if they wanted
+           to. Every beat therefore starts by making sure there is something to beat over.
+           Best effort, and a no-op on a phone that is already online. See Net. */
+        Net.ensureOnline(c);
+
         try {
             JSONObject payload = new JSONObject();
             payload.put("token", token);

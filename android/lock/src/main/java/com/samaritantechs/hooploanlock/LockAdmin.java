@@ -5,6 +5,7 @@ import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 import android.os.PersistableBundle;
 import android.os.UserManager;
 
@@ -89,6 +90,29 @@ public class LockAdmin extends DeviceAdminReceiver {
         try { d.addUserRestriction(me, UserManager.DISALLOW_SAFE_BOOT); } catch (Exception ignored) { }
         try { d.addUserRestriction(me, UserManager.DISALLOW_ADD_USER); } catch (Exception ignored) { }
         try { d.setUninstallBlocked(me, c.getPackageName(), true); } catch (Exception ignored) { }
+        /* AND THE RADIO STAYS ON -- a lock that can be switched off is not a lock.
+           -------------------------------------------------------------------------------
+             "wifi is off, let me connect it"
+
+           A handset that cannot hear us can be neither locked, unlocked nor released.
+           Airplane mode is one tap from any screen and defeats the whole product; from
+           Android 13 turning Wi-Fi off does the same thing more quietly.
+
+           This is not mainly about evasion. The customer who has PAID is who it hurts most:
+           their phone is pinned in lock task, so they cannot reach Settings to rejoin a
+           network, and the release the office has already granted can never arrive. They
+           would be holding a handset nobody alive can open without a cable.
+
+           Held exactly as long as we are Device Owner, next to the factory-reset block and
+           dropped by unharden along with it -- a phone handed back is an ordinary phone.
+           Deliberately NOT set: anything touching mobile data, which is the customer's own
+           money to spend or not. */
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try { d.addUserRestriction(me, UserManager.DISALLOW_AIRPLANE_MODE); } catch (Exception ignored) { }
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            try { d.addUserRestriction(me, UserManager.DISALLOW_CHANGE_WIFI_STATE); } catch (Exception ignored) { }
+        }
         // Only this package may hold the screen. Set once, here, so LockActivity's
         // startLockTask() is allowed to pin without a prompt when the moment comes.
         try { d.setLockTaskPackages(me, new String[]{ c.getPackageName() }); } catch (Exception ignored) { }
@@ -139,6 +163,12 @@ public class LockAdmin extends DeviceAdminReceiver {
         try { d.clearUserRestriction(me, UserManager.DISALLOW_FACTORY_RESET); } catch (Exception ignored) { }
         try { d.clearUserRestriction(me, UserManager.DISALLOW_SAFE_BOOT); } catch (Exception ignored) { }
         try { d.clearUserRestriction(me, UserManager.DISALLOW_ADD_USER); } catch (Exception ignored) { }
+        // Their phone, their radio. Cleared unconditionally rather than behind the same
+        // version checks as harden(): clearing one that was never set costs nothing, and a
+        // handset that changed Android version between lock and release must not keep a
+        // restriction we can no longer name.
+        try { d.clearUserRestriction(me, UserManager.DISALLOW_AIRPLANE_MODE); } catch (Exception ignored) { }
+        try { d.clearUserRestriction(me, UserManager.DISALLOW_CHANGE_WIFI_STATE); } catch (Exception ignored) { }
         try { d.setUninstallBlocked(me, c.getPackageName(), false); } catch (Exception ignored) { }
         // And step down as Device Owner entirely, which is what actually hands the phone back.
         // Deprecated since API 26 but still the only way for an app to give up ownership, and
