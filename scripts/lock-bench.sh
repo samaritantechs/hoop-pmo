@@ -60,11 +60,17 @@ SERVER="${SERVER:-https://hoop-pmo.vercel.app}"
 
 # ONE PHONE, WITHOUT A FILE. TOKEN=<token> covers the case the station hits constantly -- a
 # redo, a replacement, one that failed the first time -- where writing a two-word text file
-# is friction with no purpose. REENROL=1 clears the app's stored data first, so a handset
-# that already holds a token accepts a new one; Device Owner survives that, which is why it
-# works without a factory reset.
+# is friction with no purpose.
+#
+# WAS=<the token it holds now> moves a handset onto a NEW token without a factory reset. The
+# receiver takes a second token from anybody who can name the first one, which only the office
+# can. Re-running with the SAME token needs nothing: it re-arms the phone and reports in.
+#
+# This used to be REENROL=1, which ran `pm clear` -- refused on a Device Owner app, as the
+# comment below the device scan in this same file has always said. It did nothing, silently,
+# and left the factory reset as the only real route to a new token.
 TOKEN="${TOKEN:-}"
-REENROL="${REENROL:-}"
+WAS="${WAS:-}"
 # THE WAY BACK OUT: RELEASE=1 TOKEN=<token> unlocks a handset the office cannot reach and
 # hands it back. See the block below the device scan, and docs/DEVICE-LOCKING.md.
 RELEASE="${RELEASE:-}"
@@ -73,7 +79,8 @@ if [ -z "$TOKEN" ] && { [ -z "$TOKENS" ] || [ ! -f "$TOKENS" ]; }; then
     cat <<USAGE
 usage, one phone:    TOKEN=<that token> $0
 usage, many phones:  $0 <token-list.txt>    (one 'IMEI token' per line, from Devices -> Sajili simu)
-prefix REENROL=1 to either if the phone already holds a token from a previous session.
+to move a phone onto a NEW token (no factory reset):
+                     WAS=<the token it holds now> TOKEN=<the new one> $0
 
 to RELEASE a phone the portal cannot reach (unlock it and hand it back):
                      RELEASE=1 TOKEN=<that phone's token> $0
@@ -169,9 +176,6 @@ for S in $SERIALS; do
 
     printf '  ·  %s  imei %s  ' "$S" "${IMEI:-(not read)}"
 
-    # REENROL first, so a handset already holding a token can take a new one.
-    [ -n "$REENROL" ] && adb -s "$S" shell pm clear "$PKG" >/dev/null 2>&1
-
     adb -s "$S" install -r "$APK" >/dev/null 2>&1 || {
         echo "FAILED at install"; failed=$((failed+1)); continue; }
 
@@ -188,11 +192,13 @@ for S in $SERIALS; do
     # EnrolReceiver answers with a result code and a readable message, so a refusal says why
     # rather than printing result=0 and meaning nothing.
     # --include-stopped-packages IS NOT OPTIONAL. See the note at the top of this file.
+    # WAS is what lets a handset move onto a different token: the receiver takes a second one
+    # from anybody who can name the first, which only the office can.
     OUT=$(adb -s "$S" shell am broadcast --include-stopped-packages \
               -a "$PKG.ENROL" -n "$PKG/.EnrolReceiver" \
-              -e server "$SERVER" -e token "$TOK" 2>&1)
+              -e server "$SERVER" -e token "$TOK" ${WAS:+-e current "$WAS"} 2>&1)
     if printf '%s' "$OUT" | grep -q 'ALREADY ENROLLED'; then
-        echo "ALREADY ENROLLED (prefix REENROL=1 to replace its token)"
+        echo "ALREADY ENROLLED under another token (add WAS=<the token it holds now>)"
         ok=$((ok+1))
     elif printf '%s' "$OUT" | grep -q 'ENROLLED'; then
         echo "ENROLLED"
