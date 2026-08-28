@@ -58,6 +58,24 @@ class SelfUpdate {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             params.setInstallReason(android.content.pm.PackageManager.INSTALL_REASON_POLICY);
         }
+        /* ASK FOR NO PROMPT, EXPLICITLY -- from Android 12 this is what silence requires.
+           ---------------------------------------------------------------------------------
+             "app brought update i accepted manually on phone"
+             "i think everything should be auto"
+
+           A Device Owner has always been allowed to install without asking, and up to
+           Android 11 that was enough on its own. From API 31 the platform prompts anyway
+           unless the session states outright that no user action is wanted -- so the update
+           stalled on a dialog. Harmless on a bench with somebody standing there; useless on
+           two hundred boxed handsets in a warehouse, where nobody will ever tap Accept and
+           the fleet quietly stays on an old build for the rest of its life.
+
+           Best effort, like the rest of this class: a vendor build that refuses simply
+           returns to the old behaviour, and the phone keeps running what it has. */
+        if (Build.VERSION.SDK_INT >= 31) {
+            try { params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED); }
+            catch (Throwable ignored) { }
+        }
         int sessionId = pi.createSession(params);
         PackageInstaller.Session session = pi.openSession(sessionId);
 

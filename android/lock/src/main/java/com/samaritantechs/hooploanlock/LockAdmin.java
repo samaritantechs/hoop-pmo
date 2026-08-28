@@ -92,6 +92,29 @@ public class LockAdmin extends DeviceAdminReceiver {
         // Only this package may hold the screen. Set once, here, so LockActivity's
         // startLockTask() is allowed to pin without a prompt when the moment comes.
         try { d.setLockTaskPackages(me, new String[]{ c.getPackageName() }); } catch (Exception ignored) { }
+        /* PLAY PROTECT, WHICH IS A DIFFERENT GATE FROM THE INSTALL PROMPT.
+           -------------------------------------------------------------------------------
+             "app brought update i accepted manually on phone"
+             "it asked b/se app is dangerous continue anyway"
+
+           Two dialogs, two mechanisms, and only one of them is the install confirmation that
+           SelfUpdate's setRequireUserAction silences. This second one is Play Protect calling
+           a sideloaded device-admin APK harmful -- which, from its point of view, is a fair
+           description of an app that pins the screen and cannot be uninstalled.
+
+           A Device Owner may turn package verification off, and for THIS fleet that is the
+           honest call: these are HOOP's own handsets, provisioned at HOOP's own bench, and
+           nobody is standing beside a boxed phone in a warehouse to tap "install anyway". An
+           update that needs a human is an update two hundred phones will never receive.
+
+           Said plainly because it is a real reduction: with this off, Play Protect stops
+           screening apps on these handsets. It is scoped to phones we own and manage, it is
+           what every managed fleet does, and it is not something to copy onto a personal
+           phone. Best effort -- newer platforms restrict which global settings an owner may
+           write, and a build that refuses simply keeps prompting. */
+        try {
+            d.setGlobalSetting(me, android.provider.Settings.Global.PACKAGE_VERIFIER_ENABLE, "0");
+        } catch (Exception ignored) { }
     }
 
     /**

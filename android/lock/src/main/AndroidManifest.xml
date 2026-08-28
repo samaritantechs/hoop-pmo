@@ -79,5 +79,26 @@
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
 
+        <!-- THE DOORBELL. Firebase delivers here and the app beats immediately, which is how
+             an order given in the office reaches a handset in about a second rather than
+             at its next turn. What arrives carries NO command: see Push.java, where acting on
+             the payload would be the bug rather than the feature.
+
+             Declared unconditionally. On a build without google-services.json the class is
+             not compiled in and nothing can ever deliver to it, so the entry is inert, and it
+             stays inert rather than becoming a way in, because it is not exported. -->
+        <service
+            android:name=".Push"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- No notification icon or channel is declared, on purpose. These are DATA-ONLY
+             messages, handed straight to the app and never drawn on the customer's screen.
+             There is nothing here for them to read, and on a locked handset the notification
+             shade is not reachable anyway. -->
+
     </application>
 </manifest>

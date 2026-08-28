@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "18876395792",
+    "project_id": "hoop-pmo",
+    "storage_bucket": "hoop-pmo.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:18876395792:android:cdce5e9867bf47cde83595",
+        "android_client_info": {
+          "package_name": "com.samaritantechs.hooploanlock"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDZ5zG1OXk1JbmUipq40INpTgO1j1MnCdM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -3,6 +3,7 @@ import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey } from './_lib/time.js';
+import { nudge } from './_lib/push.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES } from './_lib/call-core.js';
 
@@ -1436,7 +1437,8 @@ const FNS = {
     const want = String(a.state || '').trim();
     const build = () => {
       let q = db.from('devices').select(
-        'imei, item, holder, state, state_reason, state_at, reported, last_seen, app_version, battery, android, sold_ref, customer, enrolled_at');
+        'imei, item, holder, state, state_reason, state_at, state_by, reported, last_seen, '
+        + 'app_version, battery, android, sold_ref, customer, enrolled_at');
       if (['enrolled', 'locked', 'released', 'lost'].includes(want)) q = q.eq('state', want);
       return q;
     };
@@ -1466,6 +1468,24 @@ const FNS = {
         // The honest three-way reading of a lock order, never collapsed into a boolean.
         lockState: r.state !== 'locked' ? null
           : (r.reported === 'locked' ? 'confirmed' : 'pending'),
+        /* WHAT WAS LAST ORDERED, AND HOW LONG AGO.
+           ---------------------------------------------------------------------------------
+             "simu inasema = locked but i just unlocked - maybe we add column for last action
+              too that says wether lock, unlock or achia to know what i lastly commited"
+
+           The table already held this and never said it out loud. `state` is the standing
+           intent, so an unlock leaves it reading "tayari" -- true, and nothing like the
+           sentence "I unlocked this two minutes ago". Beside a stale "Simu inasema: locked"
+           that is genuinely unreadable: two columns, neither of them the action just taken.
+
+           So the ORDER is named as an order. With the age beside it, because the whole
+           question behind this is "has the phone had time to hear me yet" -- an unlock given
+           ten seconds ago and one given yesterday mean completely different things about a
+           handset still reporting locked. */
+        lastOrder: r.state === 'locked' ? 'Funga' : r.state === 'released' ? 'Achia'
+          : r.state === 'lost' ? 'Imepotea' : 'Fungua',
+        orderAgeMins: r.state_at ? Math.max(0, Math.round((now - Date.parse(r.state_at)) / 60000)) : null,
+        orderBy: r.state_by || '',
       };
     }).sort((x, y) => {
       const rank = d => (d.state === 'lost' ? 0 : d.state === 'locked' && d.lockState === 'pending' ? 1
@@ -1573,6 +1593,7 @@ const FNS = {
     const missing = list.filter(i => !known.has(i));
     const changing = list.filter(i => known.has(i) && known.get(i) !== to);
     const at = new Date().toISOString();
+    let pushed = { sent: 0, failed: 0, stale: [] };
     if (changing.length) {
       const patch = { state: to, state_reason: reason || null, state_by: user.name,
         state_at: at, updated_at: at };
@@ -1583,10 +1604,25 @@ const FNS = {
         imei, event: to === 'locked' ? 'lock' : to === 'released' ? 'release' : to === 'lost' ? 'lost' : 'unlock',
         from_state: known.get(imei), to_state: to, reason: reason || null, actor: user.name, at })));
       if (eErr) throw new Error(eErr.message);
+
+      /* RING THE DOORBELL. The decision is already recorded above -- this only decides
+         whether the handset finds out in a second or on its next beat.
+         ---------------------------------------------------------------------------------
+         Awaited rather than fired and forgotten, because the operator is watching the screen
+         and a lock that is "sent" before it has actually been sent is the kind of half-truth
+         this system keeps having to unlearn. It cannot fail the action: nudge() swallows
+         everything, returns zeros when push is not configured, and the timed beat underneath
+         is untouched either way. What it costs is a second on a bulk Funga; what it buys is
+         the phones going dark while somebody is still looking at the tick boxes. */
+      pushed = await nudge(db, changing);
     }
     return { ok: true, changed: changing.length,
       alreadyThere: list.length - changing.length - missing.length,
-      notEnrolled: missing.length, notEnrolledList: missing.slice(0, 20) };
+      notEnrolled: missing.length, notEnrolledList: missing.slice(0, 20),
+      /* How many handsets were reached instantly, so the screen can say "3 zimeamshwa"
+         rather than leaving somebody to guess whether the silence means anything. Zero is a
+         perfectly ordinary answer: push may be unconfigured, or those phones may be off. */
+      woken: pushed.sent };
   },
 
   /* ONE PHONE'S WHOLE STORY -- its current row and every state change ever ordered against

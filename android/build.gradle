@@ -1,3 +1,8 @@
 plugins {
     id 'com.android.application' version '8.7.3' apply false
+    /* Reads lock/google-services.json and turns it into the resources the Firebase SDK looks
+       for at startup. Declared here, APPLIED only by :lock, and only when that file is
+       actually present -- see lock/build.gradle for why that condition carries weight. The
+       calls app has no push and never applies it. */
+    id 'com.google.gms.google-services' version '4.4.2' apply false
 }

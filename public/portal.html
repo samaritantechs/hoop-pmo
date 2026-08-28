@@ -2198,6 +2198,7 @@ function drawDevices(m){
       ? '<div class="scroll"><table><thead><tr>'
         +'<th class="noxl"><input type="checkbox" id="dvAll" title="Chagua zote zinazoonekana / select all shown"></th>'
         +'<th>IMEI</th><th>Item</th><th>Holder</th><th>Hali / state</th>'
+        +'<th>Uliagiza / last order</th>'
         +'<th>Simu inasema</th><th>Iliongea lini</th><th class="noxl"></th></tr></thead><tbody>'
         +rows.map(function(r){
           var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
@@ -2208,6 +2209,18 @@ function drawDevices(m){
           return '<tr><td class="noxl"><input type="checkbox" class="dvck" value="'+esc(r.imei)+'"></td>'
             +'<td style="font-size:11px">'+esc(r.imei)+'</td><td>'+esc(r.item||'—')+'</td>'
             +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
+            /* WHAT YOU LAST ORDERED, next to what the phone says about itself.
+               "simu inasema = locked but i just unlocked"
+               Those two columns disagreeing is normal for a moment and alarming without
+               this one: an unlock given ten seconds ago and one given yesterday mean
+               completely different things about a handset still reporting locked. The age
+               is what turns "is this broken" into "has it had time to hear me". */
+            +'<td>'+esc(r.lastOrder||'—')
+              +(r.orderAgeMins!=null?'<div class="mut" style="font-size:10px">'
+                +(r.orderAgeMins<1?'sasa hivi':r.orderAgeMins<60?money(r.orderAgeMins)+' dk'
+                  :money(Math.round(r.orderAgeMins/60))+'h')
+                +(r.orderBy?' · '+esc(r.orderBy):'')+'</div>':'')
+            +'</td>'
             +'<td>'+esc(r.reported||'—')+'</td><td>'+seen+'</td>'
             +'<td class="r noxl"><button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> '
             +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button> '
