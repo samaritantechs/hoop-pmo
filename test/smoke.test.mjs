@@ -689,6 +689,65 @@ test('enrolling a handset puts it back in service, whatever it was carrying', ()
     + 'the phone at another server is a complete bypass of the lock');
 });
 
+/* =========================================================================================
+   THE RELEASE MUST NOT ALSO PUT A LOCK SCREEN UP.
+
+     "cmd runs and the bluescreen flushes off and back on in a second"
+     "restarting the phone made the app flash and get off"
+
+   Unlocking takes two routes: a broadcast to the live screen, and an activity start as a
+   fallback for a screen believed up whose activity is gone. The fallback was guarded by
+   re-reading SCREEN_UP on the line immediately after the broadcast, which READS as "only if
+   the broadcast did not work" and cannot be -- sendBroadcast is asynchronous. It queues the
+   intent and returns; the receiver runs afterwards on the main thread. The flag is always
+   still true one line later, so the guard never once said no.
+
+   Every unlock therefore did it twice: the broadcast took the screen down, and the fallback
+   built a SECOND lock screen, drew it, read its extra and finished. That is the flash -- and
+   for that moment a phone the office has just released is showing its customer a lock screen.
+   ========================================================================================= */
+test('the unlock fallback waits for the live screen instead of racing it', () => {
+  const guard = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Guard.java');
+  const unlock = guard.slice(guard.indexOf('static void unlock'));
+  const body = unlock.slice(0, unlock.indexOf('\n    }'));
+
+  const sent = body.indexOf('sendBroadcast');
+  const started = body.indexOf('startActivity');
+  assert.ok(sent > 0 && started > sent, 'the broadcast must still come first, and the start still exist');
+
+  // The fallback must be deferred, not evaluated inline after an async send.
+  assert.match(body, /postDelayed/,
+    'the fallback must wait for the live screen to act -- a SCREEN_UP read on the next line '
+    + 'is always still true, because sendBroadcast is asynchronous');
+  const between = body.slice(sent, started);
+  assert.match(between, /postDelayed/,
+    'the activity start must sit INSIDE the delayed block, or it still races the broadcast');
+
+  // And a phone re-locked in the meantime must not be torn down by a stale fallback.
+  assert.match(between, /Prefs\.LOCKED/,
+    'the deferred fallback must re-check LOCKED -- an operator can re-lock within the delay');
+});
+
+/* A screen already up, re-locked under a new reason, used to go on showing the old one: the
+   words are read when the activity is built, and re-locking an already-locked phone builds
+   nothing. Register and glass then give two different answers to "why is my phone off". */
+test('a new lock reason repaints a screen that is already up', () => {
+  const guard = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Guard.java');
+  const act = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockActivity.java');
+
+  assert.match(guard, /ACTION_REPAINT/, 'Guard must be able to tell a live screen the words changed');
+  const lock = guard.slice(guard.indexOf('static void lock'));
+  assert.match(lock.slice(0, lock.indexOf('\n    }')), /sendBroadcast[\s\S]{0,80}ACTION_REPAINT/,
+    'locking must send the repaint, or a re-lock under a new reason shows the previous one');
+
+  assert.match(act, /addAction\(Guard\.ACTION_REPAINT\)/,
+    'the screen must actually be listening for the repaint');
+  assert.match(act, /ACTION_REPAINT\.equals[\s\S]{0,200}refresh\(\)/,
+    'a repaint must re-read the words -- and must NOT be treated as a release');
+  assert.match(act, /protected void onResume\(\)[\s\S]{0,120}refresh\(\)/,
+    'and coming back to the front must repaint too, for a broadcast that arrived too early');
+});
+
 /* Two commands that were written down, never run on hardware, and could not work. Both cost
    bench time before anybody tried them, so both are pinned here as absences. */
 test('nothing tells an operator to send BOOT_COMPLETED, which adb may not send', () => {

@@ -1,6 +1,6 @@
 {
-  "versionCode": 7,
-  "versionName": "1.6.0",
-  "notes": "Kusajili tena kunaamsha simu iliyonyamaza — bila kufuta simu. / Re-running the enrol command wakes a handset that has gone silent, with no factory reset.",
+  "versionCode": 8,
+  "versionName": "1.7.0",
+  "notes": "Skrini ya kufunga haipepesi tena, na sababu mpya inaonekana mara moja. / The lock screen no longer flashes on release, and a new reason repaints at once.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
