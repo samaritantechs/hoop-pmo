@@ -599,11 +599,39 @@ ours.
 
 **After a PARTIAL**, ownership was never given up, so relocking needs no factory reset:
 
-1. Devices → **+ Sajili simu** with that IMEI → copy the new token
-2. `adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin` — it will
+1. Devices → that IMEI → **Funga** first, reason `stock, unsold`. See the trap below — this
+   step is not optional if the row currently reads *imeachiwa*.
+2. Devices → that IMEI → **Token**. Do **not** use *+ Sajili simu*: see the second trap.
+3. `adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin` — it will
    answer *"already set"*, which is the expected reply here, not a failure
-3. The enrol broadcast with the new token, exactly as at the bench
-4. **Funga** in the portal, and wait for *imefungwa* before boxing it
+4. The enrol broadcast with that token, exactly as at the bench
+5. Watch for *imefungwa* before boxing it
+
+> ### Two traps when re-enrolling an IMEI the register already knows
+>
+> Both were found by reading the code, not by a handset — which is the only reason they are
+> written here rather than discovered on a bench day.
+>
+> **1. Enrolling against a RELEASED row quietly kills the phone fifteen minutes later.**
+> `retire` in device-core is simply `state === 'released'`, so a released row tells the
+> handset to unlock, unharden and stop beating. The provisioning **handshake does not carry
+> `retire`** — `hello()` returns command, state and the words, and nothing else — so the
+> enrol looks perfect at the bench, the phone appears on the register, and everyone boxes it.
+> The first real beat, up to fifteen minutes later, hands it back. Lock the row (or set it to
+> anything other than *released*) **before** provisioning, and the trap never opens: a phone
+> enrolled against an `enrolled` or `locked` row gets a sane instruction from its first beat.
+>
+> **2. `+ Sajili simu` gives no token for an IMEI already on the register.** `deviceEnrol`
+> mints one only for IMEIs it does not already have (`fresh = list.filter(i => !have.has(i))`)
+> and counts the rest as `alreadyOn`. So re-registering a known handset returns success with
+> an empty `provision` list, and the operator is left looking for a token that was never
+> minted. Use the **Token** button on the row instead, which is the deliberate way to read
+> back the credential a phone already owns.
+>
+> **After a Futa neither applies**: the row and its history are gone, so *+ Sajili simu* does
+> mint a fresh token, and the new row starts as `enrolled`, which is safe to provision
+> against. That is the cleanest way to start a handset over — reset the phone, Futa the row,
+> register it as if it were new stock.
 
 **After a genuine RELEASED, step 2 will be refused, and relocking needs a factory reset.**
 Android only lets an app become Device Owner on a phone with no accounts set up — out of the
