@@ -47,7 +47,12 @@ class Beat {
             body.put("args", new org.json.JSONArray().put(payload));
 
             JSONObject r = post(Prefs.server(c) + "/api/device", body.toString());
-            if (r == null || !r.optBoolean("ok", false)) return;
+            if (r == null || !r.optBoolean("ok", false)) {
+                if (lastStatus == 403) noteNotEnrolled(c);
+                return;
+            }
+            // Any answer at all means the register still knows us; forget the 403 clock.
+            Prefs.of(c).edit().remove(Prefs.GONE_SINCE).apply();
 
             apply(c, r);
         } catch (Exception ignored) {
@@ -91,6 +96,51 @@ class Beat {
         else Guard.unlock(c);
     }
 
+    /* A PHONE WHOSE ROW IS GONE MUST NOT BE A BRICK FOREVER.
+     * =========================================================================
+     *   "if it doesn't find it's tocken it's should release fromm organization
+     *    ownership"
+     *
+     * He is right, and the old rule was wrong. A 403 means the register does not
+     * know this token: nobody can lock it, unlock it or release it, because every
+     * one of those travels through a row that no longer exists. Refusing to act on
+     * that left the handset hardened for good, needing a factory reset it also
+     * refuses to perform. That is not a security posture, it is a brick.
+     *
+     * BUT NOT ON THE FIRST ONE, and that is the whole design. A bad deploy, a
+     * migration mid-flight, a bug in one endpoint -- any of those could 403 the
+     * entire fleet for an hour, and an instant rule would hand every phone HOOP
+     * owns back to whoever is holding it. So the release needs the 403 to be the
+     * settled state of the world rather than a moment in it: fourteen days of
+     * continuous refusal, cleared by any successful beat.
+     *
+     * WHY A HOSTILE NETWORK CANNOT FORGE THIS. A 403 only counts when it arrives
+     * over a valid TLS connection to the configured host -- anything else fails
+     * the handshake and lands in the offline path below, which never releases
+     * anything. Somebody who can genuinely serve our origin already owns the
+     * server, and can simply mark the phone released.
+     *
+     * The first 403's timestamp is stored rather than a counter: a phone that is
+     * off for a fortnight has not served fourteen days of anything, and should
+     * not come back free.
+     */
+    private static final long RETIRE_AFTER_GONE_MS = 14L * 24 * 60 * 60 * 1000;
+
+    private static void noteNotEnrolled(Context c) {
+        long first = Prefs.of(c).getLong(Prefs.GONE_SINCE, 0);
+        if (first == 0) {
+            Prefs.put(c, Prefs.GONE_SINCE, System.currentTimeMillis());
+            return;
+        }
+        if (System.currentTimeMillis() - first < RETIRE_AFTER_GONE_MS) return;
+        // Fourteen days of the office not knowing us. Hand the phone back, exactly as a
+        // release does -- unlock, drop the restrictions, step down as Device Owner, stop.
+        Prefs.put(c, Prefs.RETIRED, true);
+        Guard.unlock(c);
+        LockAdmin.unharden(c);
+        BeatJob.cancel(c);
+    }
+
     /**
      * THE OFFLINE QUESTION, which is the hardest honest call in this whole app.
      *
@@ -131,6 +181,10 @@ class Beat {
         return -1;
     }
 
+    /* The last HTTP status post() saw, so run() can tell "the office says you are not on the
+       register" apart from "the office did not answer". Every other failure is silence. */
+    private static int lastStatus = 0;
+
     private static JSONObject post(String url, String body) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestMethod("POST");
@@ -138,14 +192,15 @@ class Beat {
         c.setConnectTimeout(12000);
         c.setReadTimeout(12000);
         c.setDoOutput(true);
+        lastStatus = 0;
         try {
             OutputStream os = c.getOutputStream();
             os.write(body.getBytes("UTF-8"));
             os.close();
-            // 403 means this token is not on the register. Deliberately NOT treated as
-            // permission to unlock: a phone that has been un-enrolled by somebody tampering
-            // with the database is the last one that should let itself go.
-            if (c.getResponseCode() != 200) return null;
+            lastStatus = c.getResponseCode();
+            // 403 = this token is not on the register. Never an instant release -- see
+            // noteNotEnrolled(), which is where that decision now lives.
+            if (lastStatus != 200) return null;
             BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
             StringBuilder sb = new StringBuilder();
             String line;

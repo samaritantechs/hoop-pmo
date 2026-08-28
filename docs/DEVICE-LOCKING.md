@@ -355,6 +355,55 @@ thefts.
 
 ---
 
+## Futa, and the phone that has no office
+
+**Futa** takes a phone off the register entirely — an eraser for a row that should not have
+existed: a wrong IMEI, a test handset, a batch enrolled twice.
+
+It refuses two cases, and both refusals are the point:
+
+- **A locked phone.** Deleting that row leaves it locked with nothing able to unlock it.
+- **A phone still under management.** Lock, unlock and release all travel through the row.
+  Delete it while the handset is still provisioned and nothing can reach that phone again —
+  and it refuses the factory reset that would fix it. Press **Achia** first, so the handset
+  hands itself back, *then* delete.
+
+> This guard was written on the first day the button shipped, because it happened:
+> *"I used futa and removed all.. phone is on wifi still can't restore"*. One click, one
+> brick. A row that never spoke is still fine to delete — provisioning did not take, so
+> there is nothing on the handset to strand.
+
+### And the handset's own way out
+
+A phone that gets **403 — not enrolled** on every beat for **14 days** releases itself:
+unlocks, drops the restrictions, steps down as Device Owner, stops calling home.
+
+The owner asked for this outright — *"if it doesn't find it's tocken it's should release
+fromm organization ownership"* — and he was right. The old rule treated a 403 as a reason to
+carry on unchanged, which is a defensible-sounding sentence that produces an unrecoverable
+handset.
+
+Both halves of the rule carry weight:
+
+- **It must happen**, or a lost row is a permanent brick.
+- **It must not happen at the first 403**, or one bad deploy hands the whole fleet back to
+  whoever is holding it. A migration mid-flight can 403 everything for an hour; nothing
+  legitimate 403s for a fortnight.
+
+A hostile network cannot forge it: a 403 only counts arriving over a valid TLS connection to
+our own host, and anything else is silence, which never frees a phone. Somebody who can
+genuinely serve our origin already owns the server and can simply mark the phone released.
+
+**Recovering a phone whose row you already deleted**, without a factory reset:
+
+1. Devices → **+ Sajili simu** with that IMEI → copy the new token
+2. `adb shell pm clear com.samaritantechs.hooploanlock` — the app forgets the dead token;
+   Device Owner is untouched, so `EnrolReceiver` will accept a new one
+3. Re-run the enrol broadcast with the new token
+4. **Achia**, then `adb reboot` so it hears immediately
+
+---
+
 ## What this cannot do
 
 Stated plainly, because a security feature oversold is worse than none.
