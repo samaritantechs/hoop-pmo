@@ -17,6 +17,16 @@
 #
 # Or double-click scripts\lock-bench.bat, which is that line and nothing else.
 #
+# ONE PHONE, no file needed -- the station hits this constantly (a redo, a replacement, one
+# that failed the first time), and writing a two-word text file for it is friction with no
+# purpose:
+#
+#     powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 -Token <that token>
+#
+# Add -ReEnrol to either form when the handset already holds a token from an earlier session.
+# It clears the app's stored data first so a new token is accepted; Device Owner survives the
+# clear, so this replaces a token without a factory reset.
+#
 #   tokens.txt -- one phone per line, IMEI then token, from Devices -> + Sajili simu:
 #
 #       351388334583295 f1b942f3991b43dd8d8f857535a0d468
@@ -34,10 +44,24 @@
 # that. A phone that will not report one is set aside and listed at the end for a manual pass
 # -- never guessed, because a token written into the wrong handset makes that phone answer
 # for another customer's loan, and the only way back is a factory reset.
+#
+# THE ONE CASE WHERE THAT MATCH IS SKIPPED, because it is protecting against nothing: one
+# phone connected and one token to give it. There is no other handset to confuse it with, so
+# the pairing cannot be wrong -- and skipping it also skips the "could not read this phone's
+# IMEI" failure, which is precisely what stops a single-phone job dead on Android 10+ where
+# the modem read is refused until Device Owner takes.
 # =============================================================================================
 
 param(
-    [Parameter(Mandatory = $true)][string]$TokenFile,
+    [Parameter(Position = 0)][string]$TokenFile,
+    # ONE PHONE, WITHOUT A FILE. Making a two-word text file to provision a single handset is
+    # friction with no purpose, and the station hits the single-phone case constantly -- a
+    # redo, a replacement, one that failed the first time.
+    [string]$Token,
+    # Re-provision a handset that already holds a token: clears the app's stored data first,
+    # so EnrolReceiver will accept a new one. Device Owner survives the clear, which is why
+    # this works without a factory reset.
+    [switch]$ReEnrol,
     [string]$Apk = "$env:USERPROFILE\Downloads\HOOPLOAN-Lock.apk",
     [string]$Server = 'https://hoop-pmo.vercel.app'
 )
@@ -51,18 +75,27 @@ function Fail($msg) { Write-Host $msg -ForegroundColor Red; exit 2 }
 if (-not (Get-Command adb -ErrorAction SilentlyContinue)) {
     Fail "adb not found. Install it first:  winget install --id Google.PlatformTools -e`nThen close this window and open a new one."
 }
-if (-not (Test-Path $TokenFile)) { Fail "Token file not found: $TokenFile" }
+if (-not $Token -and -not $TokenFile) {
+    Fail @"
+usage, one phone:    .\lock-bench.ps1 -Token f1b942f3991b43dd8d8f857535a0d468
+usage, many phones:  .\lock-bench.ps1 tokens.txt
+add -ReEnrol to either if the phone already holds a token from a previous session.
+"@
+}
+if ($TokenFile -and -not (Test-Path $TokenFile)) { Fail "Token file not found: $TokenFile" }
 if (-not (Test-Path $Apk))       { Fail "APK not found: $Apk`nPass the right path:  -Apk C:\path\to\HOOPLOAN-Lock.apk" }
 
 # IMEI -> token. Tolerates commas, tabs, blank lines and # comments, because this file gets
 # pasted together by hand at six in the morning.
 $tokenOf = @{}
-foreach ($line in Get-Content $TokenFile) {
-    $clean = ($line -split '#')[0] -replace '[,\t]', ' '
-    $parts = $clean -split '\s+' | Where-Object { $_ -ne '' }
-    if ($parts.Count -ge 2) { $tokenOf[$parts[0]] = $parts[1] }
+if ($TokenFile) {
+    foreach ($line in Get-Content $TokenFile) {
+        $clean = ($line -split '#')[0] -replace '[,\t]', ' '
+        $parts = $clean -split '\s+' | Where-Object { $_ -ne '' }
+        if ($parts.Count -ge 2) { $tokenOf[$parts[0]] = $parts[1] }
+    }
+    Write-Host "Loaded $($tokenOf.Count) tokens from $TokenFile"
 }
-Write-Host "Loaded $($tokenOf.Count) tokens from $TokenFile"
 
 $serials = @(adb devices | Select-Object -Skip 1 |
              Where-Object { $_ -match '^(\S+)\s+device$' } |
@@ -70,7 +103,30 @@ $serials = @(adb devices | Select-Object -Skip 1 |
 if ($serials.Count -eq 0) {
     Fail "No phones ready.`nCheck the cable, and that 'Allow USB debugging' was accepted on the phone's own screen."
 }
-Write-Host "Phones connected: $($serials.Count)`n"
+Write-Host "Phones connected: $($serials.Count)"
+
+# THE PAIRING RULE, AND WHY IT CAN SOMETIMES BE SKIPPED ENTIRELY.
+# =============================================================================================
+#   "the locking method for bulk should be one that works wether there is one connected
+#    phone or more"
+#
+# Matching each handset to its token by IMEI exists for exactly one reason: with several
+# phones on the bench there is a wrong pairing to make, and a token written into the wrong
+# handset makes that phone answer for another customer's loan.
+#
+# When there is ONE phone and ONE token, that danger does not exist -- there is no other
+# phone to confuse it with. So the match is skipped, and with it the whole "could not read
+# this handset's IMEI" failure, which is the case that stops a single-phone job dead on
+# Android 10+ where the modem read is refused. Same command, both jobs, and the safety only
+# where it buys something.
+$single = ''
+if ($Token) {
+    $single = $Token
+} elseif ($serials.Count -eq 1 -and $tokenOf.Count -eq 1) {
+    $single = @($tokenOf.Values)[0]
+    Write-Host "One phone, one token: pairing them directly (no IMEI match needed)." -ForegroundColor Cyan
+}
+Write-Host ''
 
 $ok = 0; $failed = 0; $unmatched = @()
 
@@ -86,7 +142,9 @@ foreach ($s in $serials) {
         if ($digits.Length -ge 15) { $imei = $digits.Substring($digits.Length - 15) }
     } catch { }
 
-    $token = if ($imei -and $tokenOf.ContainsKey($imei)) { $tokenOf[$imei] } else { '' }
+    $token = if ($single) { $single }
+             elseif ($imei -and $tokenOf.ContainsKey($imei)) { $tokenOf[$imei] }
+             else { '' }
 
     if (-not $token) {
         # NEVER GUESS. See the header.
@@ -96,7 +154,11 @@ foreach ($s in $serials) {
         continue
     }
 
-    Write-Host "  .  $s  imei $imei  " -NoNewline
+    Write-Host "  .  $s  imei $(if ($imei) { $imei } else { '(not read)' })  " -NoNewline
+
+    # -ReEnrol first, so a handset that already holds a token can take a new one. Device
+    # Owner survives `pm clear`; only the app's own stored data goes.
+    if ($ReEnrol) { $null = adb -s $s shell pm clear $pkg 2>&1 }
 
     $null = adb -s $s install -r "$Apk" 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -106,7 +168,10 @@ foreach ($s in $serials) {
     # Order is not optional: owner FIRST, then the token. The other way round the receiver
     # drops the token and adb still prints a success-looking line. That cost an evening once.
     $owner = (adb -s $s shell dpm set-device-owner $admin 2>&1) -join ' '
-    if ($owner -notmatch 'Success') {
+    # "already set" is not a failure -- it is a handset that was provisioned before, which is
+    # the ordinary state of every phone being redone. It arrives as a red Java stack trace,
+    # which is not how a success usually looks, and treating it as one stopped these jobs dead.
+    if ($owner -notmatch 'Success' -and $owner -notmatch 'already set|already an admin') {
         Write-Host 'FAILED at set-device-owner - phone must have NO google account and NO screen lock' -ForegroundColor Red
         $failed++; continue
     }
@@ -115,7 +180,12 @@ foreach ($s in $serials) {
     # instead of printing result=0 and meaning nothing.
     $out = (adb -s $s shell am broadcast -a "$pkg.ENROL" -n "$pkg/.EnrolReceiver" `
                 -e server $Server -e token $token 2>&1) -join ' '
-    if ($out -match 'ENROLLED') {
+    if ($out -match 'ALREADY ENROLLED') {
+        # Finished already, and only confusing if reported as a failure. Add -ReEnrol to
+        # deliberately replace the token this handset is holding.
+        Write-Host 'ALREADY ENROLLED (add -ReEnrol to replace its token)' -ForegroundColor Yellow
+        $ok++
+    } elseif ($out -match 'ENROLLED') {
         Write-Host 'ENROLLED' -ForegroundColor Green; $ok++
     } else {
         $why = if ($out -match 'data="([^"]*)"') { $matches[1] } else { $out }
