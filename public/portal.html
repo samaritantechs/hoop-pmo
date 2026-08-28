@@ -646,11 +646,19 @@ var CODE='', BOOT=null, TAB='dash';
    every report in every tab -- including tabs added later -- is born exportable.
    CSV with a BOM: Excel opens it clean, Swahili characters intact. Hidden rows
    (filtered out by a search box or a chip) are NOT exported -- you export what you see. */
+/* CELLS MARKED `noxl` ARE CONTROLS, NOT DATA, and they are dropped here. A tick box exports
+   as an empty column and a row of action buttons exports as the words "Token Historia Futa"
+   -- so a Devices export opened in Excel arrived with a blank first column and a nonsense
+   last one, and somebody has to tidy every sheet by hand before it can be sent to anyone.
+   Marking the cell is better than guessing at the content: a column that legitimately holds
+   the word "Futa" would be indistinguishable otherwise. */
 function csvOfTable_(t){
   var out=[];
   [].slice.call(t.rows).forEach(function(tr){
     if(tr.style.display==='none'||tr.classList.contains('fhide')) return;
-    var cells=[].slice.call(tr.cells).map(function(td){
+    var cells=[].slice.call(tr.cells).filter(function(td){
+      return !td.classList.contains('noxl');
+    }).map(function(td){
       return '"'+td.textContent.replace(/\s+/g,' ').trim().replace(/"/g,'""')+'"';
     });
     if(cells.length) out.push(cells.join(','));
@@ -2166,24 +2174,26 @@ function drawDevices(m){
        -- never a second definition of "silent" that could drift from the one in the tile. */
     var rows=(d.rows||[]).filter(function(r){ return !DEV.flag || r[DEV.flag]===true; });
     var table=rows.length
-      ? '<div class="scroll"><table><thead><tr><th></th><th>IMEI</th><th>Item</th><th>Holder</th><th>Hali / state</th>'
-        +'<th>Simu inasema</th><th>Iliongea lini</th><th></th></tr></thead><tbody>'
+      ? '<div class="scroll"><table><thead><tr>'
+        +'<th class="noxl"><input type="checkbox" id="dvAll" title="Chagua zote zinazoonekana / select all shown"></th>'
+        +'<th>IMEI</th><th>Item</th><th>Holder</th><th>Hali / state</th>'
+        +'<th>Simu inasema</th><th>Iliongea lini</th><th class="noxl"></th></tr></thead><tbody>'
         +rows.map(function(r){
           var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
             :r.state==='released'?'<span class="chip ok">imeachiwa</span>'
             :r.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
           var seen=r.neverSeen?'<span class="mut">hajawahi</span>'
             :(r.stale?'<span style="color:var(--bad)">':'<span>')+money(r.silentHours)+'h</span>';
-          return '<tr><td><input type="checkbox" class="dvck" value="'+esc(r.imei)+'"></td>'
+          return '<tr><td class="noxl"><input type="checkbox" class="dvck" value="'+esc(r.imei)+'"></td>'
             +'<td style="font-size:11px">'+esc(r.imei)+'</td><td>'+esc(r.item||'—')+'</td>'
             +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
             +'<td>'+esc(r.reported||'—')+'</td><td>'+seen+'</td>'
-            +'<td class="r"><button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> '
+            +'<td class="r noxl"><button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> '
             +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button> '
             +'<button class="btn sm danger" data-dvd="'+esc(r.imei)+'" title="Ondoa kwenye register / Remove from the register">Futa</button></td></tr>';
         }).join('')+'</tbody></table></div>'
         +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">'
-        +'<b style="font-size:12px">Zilizochaguliwa:</b>'
+        +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
         +'<button class="btn sm danger" data-dvs="locked">Funga / Lock</button>'
         +'<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
         +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'
@@ -2208,9 +2218,51 @@ function drawDevices(m){
     $all('[data-dvh]').forEach(function(b){ b.onclick=function(){ devHistory(b.getAttribute('data-dvh')); }; });
     $all('[data-dvt]').forEach(function(b){ b.onclick=function(){ devToken(b.getAttribute('data-dvt')); }; });
     $all('[data-dvd]').forEach(function(b){ b.onclick=function(){ devDelete(m, b.getAttribute('data-dvd')); }; });
+    devWireTicks_();
   }).catch(function(e){ paneFailed(m,e); });
 }
-function devPicked(){ return $all('.dvck').filter(function(c){ return c.checked; }).map(function(c){ return c.value; }); }
+
+/* TICK ALL, AND THE COUNT BESIDE THE BUTTONS.
+   =========================================================================================
+     "Add Bulk Tick checkbox on the first column before imei that selects all list"
+
+   IT ONLY EVER TICKS ROWS YOU CAN SEE, and that is the whole design rather than a detail.
+   The column funnels hide rows without unticking them, so a select-all that reached hidden
+   rows would arm Funga against phones that are not on screen -- filter to one branch, tick
+   all, lock, and you have just locked the other branches' handsets too. "You act on what you
+   see" is the same rule the Excel export already follows, and the two must not disagree.
+
+   The count exists for the same reason. Funga on a bulk selection is irreversible from the
+   office in one direction -- every one of those phones goes dark to its customer -- so the
+   number of phones about to be affected belongs next to the button, not inferred from ticks
+   scrolled off the top of the screen. */
+function devVisibleTicks_(){
+  return $all('.dvck').filter(function(c){
+    var tr=c.closest('tr');
+    return tr && tr.style.display!=='none' && !tr.classList.contains('fhide');
+  });
+}
+function devSyncTicks_(){
+  var vis=devVisibleTicks_(), on=vis.filter(function(c){ return c.checked; });
+  var n=$('#dvCount'); if(n) n.textContent=String(on.length);
+  var all=$('#dvAll');
+  if(all){
+    all.checked = vis.length>0 && on.length===vis.length;
+    // Partly ticked reads as neither on nor off, which is what it is.
+    all.indeterminate = on.length>0 && on.length<vis.length;
+  }
+}
+function devWireTicks_(){
+  var all=$('#dvAll');
+  if(all) all.onclick=function(){
+    var want=all.checked;
+    devVisibleTicks_().forEach(function(c){ c.checked=want; });
+    devSyncTicks_();
+  };
+  $all('.dvck').forEach(function(c){ c.onclick=function(){ devSyncTicks_(); }; });
+  devSyncTicks_();
+}
+function devPicked(){ return devVisibleTicks_().filter(function(c){ return c.checked; }).map(function(c){ return c.value; }); }
 function devSetState(m, state){
   var imeis=devPicked();
   if(!imeis.length){ toast('Chagua simu kwanza. / Pick some phones first.', true); return; }

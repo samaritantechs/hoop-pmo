@@ -101,15 +101,34 @@ straight after Settings → Reset. Either route works:
 **With a laptop and a cable** (recommended at HOOP's scale — a bench already covered in
 phones, and unlike a QR it gives you an error you can read):
 
-```sh
-adb install -r public/HOOPLOAN-Lock.apk
-adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin
-adb shell am broadcast --include-stopped-packages \
-    -a com.samaritantechs.hooploanlock.ENROL \
-    -n com.samaritantechs.hooploanlock/.EnrolReceiver \
-    -e server https://hoop-pmo.vercel.app \
-    -e token <that phone's token>
+**THE BENCH RUNS WINDOWS, so these are written for `cmd.exe`, one line each.** That is not
+fussiness — the earlier version of this block was wrapped with `\` for readability and cost a
+real session:
+
+- `\` is a **bash** line continuation. In `cmd.exe` it is not a continuation at all, so the
+  first line runs on its own, truncated, and the rest arrive as separate broken commands.
+  (`^` is cmd's continuation. Simpler still: don't wrap.)
+- `<that phone's token>` — `<` and `>` are **redirection** in cmd. Pasting a placeholder in
+  angle brackets does not read as "fill this in", it errors.
+- `public/HOOPLOAN-Lock.apk` is a path inside this repo, which the station does not have.
+
+Download the APK from **<https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk>** first — it lands in
+Downloads, which is where the first line looks. Then, one line at a time:
+
+```bat
+adb install -r "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk"
 ```
+```bat
+adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin
+```
+```bat
+adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.ENROL -n com.samaritantechs.hooploanlock/.EnrolReceiver -e server https://hoop-pmo.vercel.app -e token PASTE_THE_TOKEN_HERE
+```
+
+Replace `PASTE_THE_TOKEN_HERE` with the token from step 1 — no brackets, no quotes.
+
+On Linux or a Mac the same three commands work with `adb install -r <path>` instead of the
+`%USERPROFILE%` form.
 
 Three commands, about ten seconds. **Neither half works without the other:** the APK on its
 own is an ordinary app that a thief uninstalls in seconds, and `set-device-owner` names a
