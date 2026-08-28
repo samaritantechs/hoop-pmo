@@ -41,7 +41,21 @@ class Beat {
             JSONObject payload = new JSONObject();
             payload.put("token", token);
             if (!hello) {
-                payload.put("locked", Prefs.of(c).getBoolean(Prefs.LOCKED, false));
+                /* WHAT THE CUSTOMER CAN SEE, not what we meant to do.
+                   ---------------------------------------------------------------------------
+                   These come apart, and when they do the screen is the fact that matters:
+
+                     "351388334583295 — — tayari  unlocked  0h"
+                     "but the phone is locked and banner on"
+
+                   Reporting the INTENTION made the register confidently wrong in the one
+                   direction nobody checks -- a phone shown as fine while its owner cannot use
+                   it. Reporting the SCREEN makes a stuck lock visible as an unfinished unlock:
+                   the office sees it, the server keeps the fast pace, and Guard.unlock keeps
+                   retrying until the glass agrees. It reads across the other way too -- a lock
+                   ordered whose screen never came up is now pending rather than confirmed,
+                   which is the truth and is worth chasing. */
+                payload.put("locked", Prefs.of(c).getBoolean(Prefs.SCREEN_UP, false));
                 payload.put("battery", battery(c));
                 payload.put("android", Build.VERSION.RELEASE);
                 payload.put("appVersion", BuildConfig.VERSION_NAME);
@@ -142,7 +156,16 @@ class Beat {
            steady state is still one beat every fifteen minutes -- and the second beat can
            never spawn a third. */
         if (mayConfirm && Prefs.of(c).getBoolean(Prefs.LOCKED, false) != before) {
-            new Thread(() -> run(c, false, false)).start();
+            new Thread(() -> {
+                /* A BREATH FIRST, because what we report is now the SCREEN and the screen is
+                   raised or dismissed asynchronously. Beating the instant the intention
+                   changed would report the state we just left -- the very lag this confirming
+                   beat exists to remove. A second and a half is longer than an activity takes
+                   to come up and far shorter than anyone waiting will notice; and if it is
+                   ever not enough, the server's fast pace picks it up moments later anyway. */
+                try { Thread.sleep(1500); } catch (InterruptedException ignored) { }
+                run(c, false, false);
+            }).start();
         }
     }
 

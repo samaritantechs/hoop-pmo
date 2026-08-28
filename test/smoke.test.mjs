@@ -268,8 +268,48 @@ test('the lock app is syntactically valid Java', () => {
   const syntax = (r.stderr || '').split('\n')
     .filter(l => /error:/.test(l) && !EXPECTED_WITHOUT_THE_SDK.test(l));
   assert.deepEqual(syntax, [], 'javac reported something that is not a missing Android class');
-});
 
+  /* AND THE ONE REAL ERROR THIS CANNOT SEE: A CLASS USED WITHOUT ITS IMPORT.
+     -----------------------------------------------------------------------------------
+     Not hypothetical -- `Context` used in LockActivity with no `import android.content.Context`
+     passed everything above and failed the real compile in CI a minute later.
+
+     And javac cannot help here, which is worth knowing before someone tries: without
+     android.jar it stops at the IMPORT lines ("package android.content does not exist") and
+     never reaches the usage, so the "cannot find symbol" the SDK build reports is never
+     produced locally at all. A guard written to read those never fires.
+
+     So this reads the source instead. Every android.* class any file in the package imports
+     is the vocabulary this app uses; if a file mentions one of those names in its code and
+     does not import it, that file does not compile -- anywhere. Comments and string literals
+     are stripped first, because the notes here quote type names constantly. */
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.java'));
+  const vocabulary = new Set();
+  for (const f of files) {
+    for (const m of fs.readFileSync(dir + f, 'utf8').matchAll(/^import\s+android\.[\w.]*\.(\w+)\s*;/gm)) {
+      vocabulary.add(m[1]);
+    }
+  }
+  const unimported = [];
+  for (const f of files) {
+    const raw = fs.readFileSync(dir + f, 'utf8');
+    const mine = new Set([...raw.matchAll(/^import\s+[\w.]*\.(\w+)\s*;/gm)].map(m => m[1]));
+    const code = raw
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')            // block comments
+      .replace(/\/\/.*$/gm, ' ')                    // line comments
+      .replace(/"(?:[^"\\]|\\.)*"/g, '""')          // string literals
+      .replace(/^import\s+[^;]+;/gm, ' ');           // the imports themselves
+    for (const name of vocabulary) {
+      if (mine.has(name)) continue;
+      if (new RegExp('\\b' + name + '\\b').test(code)) {
+        unimported.push(f + ' uses ' + name + ' without importing it');
+      }
+    }
+  }
+  assert.deepEqual(unimported.sort(), [],
+    'a class is used without an import for it -- that compiles nowhere, and javac without the '
+    + 'Android SDK cannot see it, so CI is otherwise the first thing to notice');
+});
 /* =========================================================================================
    THE FOUR LINES ON A LOCKED PHONE, and why a test stands over them.
 

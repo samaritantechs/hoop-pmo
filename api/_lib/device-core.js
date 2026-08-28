@@ -130,9 +130,27 @@ async function lockWords(db) {
    A self-lock is never this phone judging the customer. It is the handset saying "I have not
    heard from the office in far too long", and the moment it reaches us again the office's
    real answer wins -- including unlocking it straight back. */
-/* The ordinary beat, and the one used while an order is outstanding. Both live here rather
-   than in the APK so the pace can be changed for a whole fleet without shipping a build. */
-const BEAT_SECONDS = 15 * 60;
+/* THE PACE, SET HERE AND NOWHERE ELSE.
+   ===========================================================================================
+     "app should always ping within every one minute to update state"
+
+   Both numbers live on the server rather than in the APK, which is what makes this a decision
+   rather than a release: change them and the whole fleet follows on its next beat, including
+   handsets already in customers' pockets. That is deliberate -- the right pace is a business
+   judgement about data cost, and it should never need an APK to revisit.
+
+   WHAT A MINUTE COSTS, so the judgement is made with the number rather than around it. A beat
+   is roughly 6 KB once the TLS handshake is counted (the connection cannot be kept alive
+   across a gap this long). At sixty seconds that is ~260 MB a month per handset, against
+   ~17 MB at a quarter of an hour -- and on a sold phone it is the CUSTOMER's bundle paying.
+   Asked for explicitly, with that number stated; raise it again if the airtime bills argue
+   back.
+
+   AND A MINUTE IS A CEILING, NOT A PROMISE. Android's Doze defers jobs on an idle handset to
+   its own maintenance windows, so a phone asleep in a drawer will drift past sixty seconds
+   whatever is set here. The thing that genuinely breaks through Doze is a high-priority FCM
+   message -- see push.js. Polling is the floor; push is the guarantee. */
+const BEAT_SECONDS = 60;
 const PENDING_BEAT_SECONDS = 25;
 
 const DEFAULT_GRACE_HOURS = 24 * 7;
