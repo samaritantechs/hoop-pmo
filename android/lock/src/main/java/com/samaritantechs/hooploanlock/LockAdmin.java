@@ -116,6 +116,40 @@ public class LockAdmin extends DeviceAdminReceiver {
         // Only this package may hold the screen. Set once, here, so LockActivity's
         // startLockTask() is allowed to pin without a prompt when the moment comes.
         try { d.setLockTaskPackages(me, new String[]{ c.getPackageName() }); } catch (Exception ignored) { }
+        /* LOCATION, GRANTED BY US TO US.
+           -------------------------------------------------------------------------------
+             "am asked if the app could trap last sync with location coordinates"
+
+           Location is a runtime permission and there is nobody at a locked handset to tap
+           Allow -- a phone in a box in a warehouse would never be asked and never answer.
+           A Device Owner may grant it to itself, which is one of the few things being Device
+           Owner buys that a manifest entry cannot.
+
+           Best effort, like everything else here: where a vendor build refuses, Loc.last
+           returns null for ever and the register simply has no position for that handset.
+           A missing column on a report is an acceptable outcome; a lock that fails to
+           install because of it would not be. */
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            for (String perm : new String[]{
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION }) {
+                try {
+                    d.setPermissionGrantState(me, c.getPackageName(), perm,
+                            DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
+                } catch (Exception ignored) { }
+            }
+            /* Background location is a separate permission from Android 10, and it is the one
+               that matters here: this app is never in the foreground on a phone that is not
+               locked. Attempted separately so a platform that refuses it does not also cost
+               us the foreground grant above. */
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    d.setPermissionGrantState(me, c.getPackageName(),
+                            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+                            DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
+                } catch (Exception ignored) { }
+            }
+        }
         /* PLAY PROTECT IS NOT SWITCHED OFF HERE, AND THE REASON IS WORTH KEEPING.
            -------------------------------------------------------------------------------
              "it asked b/se app is dangerous continue anyway"
@@ -169,6 +203,22 @@ public class LockAdmin extends DeviceAdminReceiver {
         // restriction we can no longer name.
         try { d.clearUserRestriction(me, UserManager.DISALLOW_AIRPLANE_MODE); } catch (Exception ignored) { }
         try { d.clearUserRestriction(me, UserManager.DISALLOW_CHANGE_WIFI_STATE); } catch (Exception ignored) { }
+        /* AND HAND BACK THE LOCATION PERMISSION WE GRANTED OURSELVES. A phone under finance
+           reports where it last synced so unaccounted stock can be found; a phone that has
+           been paid off is nobody's to follow. Returned to DEFAULT rather than DENIED, which
+           is the honest undo: it puts the decision back where it belongs, with whoever is
+           holding the phone, exactly as if we had never been Device Owner. */
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            for (String perm : new String[]{
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                    android.Manifest.permission.ACCESS_BACKGROUND_LOCATION }) {
+                try {
+                    d.setPermissionGrantState(me, c.getPackageName(), perm,
+                            DevicePolicyManager.PERMISSION_GRANT_STATE_DEFAULT);
+                } catch (Exception ignored) { }
+            }
+        }
         try { d.setUninstallBlocked(me, c.getPackageName(), false); } catch (Exception ignored) { }
         // And step down as Device Owner entirely, which is what actually hands the phone back.
         // Deprecated since API 26 but still the only way for an app to give up ownership, and

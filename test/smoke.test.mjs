@@ -301,7 +301,13 @@ test('the lock app is syntactically valid Java', () => {
       .replace(/^import\s+[^;]+;/gm, ' ');           // the imports themselves
     for (const name of vocabulary) {
       if (mine.has(name)) continue;
-      if (new RegExp('\\b' + name + '\\b').test(code)) {
+      /* A FULLY QUALIFIED NAME NEEDS NO IMPORT, and this guard used to say otherwise.
+         `android.location.Location at = ...` and `android.content.pm.PackageManager.
+         INSTALL_REASON_POLICY` are both perfectly legal and both were reported as errors the
+         moment some OTHER file imported those classes and put them in the vocabulary. A
+         guard that fails on correct code gets switched off, which would cost the real bug it
+         was written for -- so the match ignores any occurrence preceded by a dot. */
+      if (new RegExp('(?<![.\\w])' + name + '\\b').test(code)) {
         unimported.push(f + ' uses ' + name + ' without importing it');
       }
     }
@@ -798,6 +804,61 @@ test('a phone with no network can still wake up and get its radio back', () => {
     assert.ok(hard.includes(r), 'harden must hold ' + r + ' -- a lock that can be switched off is not a lock');
     assert.ok(soft.includes(r), 'unharden must release ' + r + ' -- a released phone is an ordinary phone');
   }
+});
+
+/* =========================================================================================
+   A COORDINATE WITHOUT ITS AGE IS A WRONG ADDRESS SOMEBODY DRIVES TO.
+
+     "the management gets headache on aged stock [stolen, lost, sold-by-cash etc] am asked if
+      the app could trap last sync with location coordinates"
+
+   The handset reports the position the system ALREADY has -- no GPS wake, no battery, no
+   delay to the beat -- which is the only version of this feature that a customer's phone can
+   afford. The price is that the fix can be far older than the beat carrying it: a phone that
+   spoke a minute ago may hold a position from last Tuesday.
+
+   So the fix's own timestamp is a separate fact all the way through -- handset, wire, column
+   and screen -- and collapsing it into last_seen at any point turns a useful report into a
+   confident lie. That is what these assertions defend.
+   ========================================================================================= */
+test('a reported position always carries the age of the fix, never just the pin', () => {
+  const beat = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Beat.java');
+  assert.match(beat, /payload\.put\("lat"/, 'the handset must report where it was');
+  assert.match(beat, /payload\.put\("locAt"/,
+    'and WHEN that fix was taken -- a last-known position without its age reads as current');
+
+  const core = fs.readFileSync(new URL('../api/_lib/device-core.js', import.meta.url), 'utf8');
+  assert.match(core, /last_loc_at/, 'the server must keep the fix time apart from last_seen');
+  // 0,0 is a real place in the Gulf of Guinea, and it is what a phone with no fix reports if
+  // anybody ever defaults the fields to zero instead of omitting them.
+  assert.match(core, /lat === 0 && lng === 0/,
+    'a 0,0 coordinate must be rejected -- it is the Gulf of Guinea, not a missing value');
+  assert.match(core, /lat >= -90 && lat <= 90/, 'coordinates must be range-checked, not trusted');
+
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const fn = html.slice(html.indexOf('function devWhere'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  assert.match(body, /google\.com\/maps/, 'the column must offer a link, which is the ask');
+  assert.match(body, /locAt/,
+    'and show when the fix was taken beside it -- a pin with no date is a wrong address');
+  assert.match(body, /r\.lat==null\|\|r\.lng==null/,
+    'a row with no position must render nothing at all, not an empty or broken link');
+});
+
+/* NAMING A NEW COLUMN IS HOW YOU TAKE A WHOLE PANE DARK. PostgREST refuses an entire select
+   for one unknown column, so deviceList naming last_lat on a deployment whose migration has
+   not been run would lose EVERY phone, every state and every lock button -- over a feature
+   nobody had asked for yet. The register without a map is still the register; the register
+   without itself is an outage. Learned once on fcm_token; pinned here so it stays learned. */
+test('the devices pane still works before the location migration is run', () => {
+  const src = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('async deviceList('), src.indexOf('async deviceEnrol('));
+  assert.ok(fn.length > 0, 'deviceList moved; this guard needs repointing');
+  assert.match(fn, /last_lat\|last_lng\|last_loc_acc\|last_loc_at/,
+    'deviceList must recognise the missing-location-column error');
+  const fallback = fn.slice(fn.indexOf('tableMissing'));
+  assert.match(fallback, /build\(CORE\)/,
+    'and fall back to a select without them, rather than letting the pane 500');
 });
 
 /* Two commands that were written down, never run on hardware, and could not work. Both cost
