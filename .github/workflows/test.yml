@@ -42,3 +42,38 @@ jobs:
       # Without this line they would go on "passing" here by not running at all.
       - name: Confirm javac was available (the parse checks are not silently skipped)
         run: javac -version
+
+      # A LOCK-APP FIX THAT CANNOT REACH THE FLEET IS NOT A FIX.
+      # =====================================================================================
+      # SelfUpdate is the ONLY way a change to the lock app reaches a handset already in a
+      # customer's pocket, and it decides with one line:
+      #
+      #     if (remote <= BuildConfig.VERSION_CODE) return;   // already current
+      #
+      # So shipping a change to android/lock/** without raising versionCode in
+      # lock-version.json builds a new APK, publishes it, and delivers it to nobody. Every
+      # phone in the field keeps running the old build for the rest of its loan.
+      #
+      # That already happened once, and on the worst possible change: the fix for a release
+      # path that left handsets owned, silent and unreachable shipped at versionCode 1, the
+      # same as the build carrying the bug. It was caught by reading the version file, not by
+      # anything failing -- which is this feature's fourth success-shaped failure.
+      - name: A lock-app change must raise versionCode, or no handset will ever get it
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --depth=1 origin "${{ github.base_ref }}"
+          if git diff --quiet FETCH_HEAD HEAD -- android/lock/ lock-version.json; then
+            echo "lock app untouched; nothing to check."
+            exit 0
+          fi
+          if git diff --quiet FETCH_HEAD HEAD -- android/lock/; then
+            echo "only lock-version.json changed; nothing to check."
+            exit 0
+          fi
+          old=$(git show FETCH_HEAD:lock-version.json | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).versionCode')
+          new=$(node -pe 'JSON.parse(require("fs").readFileSync("lock-version.json","utf8")).versionCode')
+          echo "android/lock changed. versionCode $old -> $new"
+          if [ "$new" -le "$old" ]; then
+            echo "::error::android/lock/** changed but lock-version.json versionCode did not increase ($old -> $new). SelfUpdate skips any build whose versionCode is not HIGHER than the installed one, so this change would reach no handset already in the field. Raise versionCode."
+            exit 1
+          fi

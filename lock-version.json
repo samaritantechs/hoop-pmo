@@ -1,6 +1,6 @@
 {
-  "versionCode": 1,
-  "versionName": "1.0.0",
-  "notes": "Toleo la kwanza: kufunga simu kwa Device Owner. / First build: Device Owner locking.",
+  "versionCode": 2,
+  "versionName": "1.1.0",
+  "notes": "Kuachia simu sasa kunathibitishwa kweli, na simu iliyokwama inaweza kurudishwa kwa kebo. / A release now confirms the phone was really handed back, and a stuck handset can be recovered over the cable.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
