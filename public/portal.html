@@ -2204,8 +2204,14 @@ function drawDevices(m){
           var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
             :r.state==='released'?'<span class="chip ok">imeachiwa</span>'
             :r.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
+          /* THE UNIT FOLLOWS THE BEAT. At a beat a minute, "0h" covers everything from
+             "spoke a second ago" to "has not spoken since before you pressed the button" --
+             the two answers you most need to tell apart when an order looks stuck. Minutes
+             under the hour, hours above it. */
+          var age=r.silentMins==null?'':r.silentMins<1?'sasa hivi'
+            :r.silentMins<60?money(r.silentMins)+' dk':money(Math.round(r.silentMins/60))+'h';
           var seen=r.neverSeen?'<span class="mut">hajawahi</span>'
-            :(r.stale?'<span style="color:var(--bad)">':'<span>')+money(r.silentHours)+'h</span>';
+            :(r.stale?'<span style="color:var(--bad)">':'<span>')+age+'</span>';
           return '<tr><td class="noxl"><input type="checkbox" class="dvck" value="'+esc(r.imei)+'"></td>'
             +'<td style="font-size:11px">'+esc(r.imei)+'</td><td>'+esc(r.item||'—')+'</td>'
             +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
@@ -2352,13 +2358,45 @@ function devEnrolForm(m){
    built here, with the token already in them, rather than left in a document to be copied
    out and edited by hand fifty times. */
 var DEVCMP='com.samaritantechs.hooploanlock/.LockAdmin';
+var DEVPKG='com.samaritantechs.hooploanlock';
+/* ONE LINE, PASTED ONCE, AND IT MUST RUN ON THE BENCH THAT EXISTS.
+   =========================================================================================
+     "the copying cmd from clipboard in system at device should be the single command to
+      configure phone"
+
+   What this used to produce could not run at all on that bench, and had three separate
+   reasons why -- every one of them already found and fixed in the docs, and none of them
+   fixed HERE, which is the copy the station actually pastes:
+
+     `\` line continuations   bash. In cmd.exe the first line runs truncated and the rest
+                              arrive as broken commands.
+     `adb install` bare       no -r, so a handset that already has the app is refused; and a
+                              relative path that only resolves if you happen to be standing
+                              in the right folder.
+     no --include-stopped-packages
+                              the enrol silently does nothing on a freshly installed app and
+                              prints result=0, which reads exactly like success. That one
+                              cost twenty hours on a real handset.
+
+   So: one line, `&&` chained, absolute path, every flag present, the token already in it.
+   Paste, enter, done.
+
+   AND THE THREE STILL SHOWN SEPARATELY BELOW, because the single line stops at the first
+   failure and the commonest "failure" on this bench is not one: a phone being redone answers
+   "device owner is already set", which is the finished state, not an error. When that
+   happens the operator runs the last command on its own. */
+function devOneLiner(token){
+  return 'adb install -r "%USERPROFILE%\\Downloads\\HOOPLOAN-Lock.apk"'
+    + ' && adb shell dpm set-device-owner ' + DEVCMP
+    + ' && adb shell am broadcast --include-stopped-packages'
+    + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
+    + ' -e server ' + location.origin + ' -e token ' + token;
+}
 function devAdbLines(token){
-  var base=location.origin;
-  return 'adb install HOOPLOAN-Lock.apk\n'
-    +'adb shell dpm set-device-owner '+DEVCMP+'\n'
-    +'adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \\\n'
-    +'  -n com.samaritantechs.hooploanlock/.EnrolReceiver \\\n'
-    +'  -e server '+base+' -e token '+token;
+  return 'adb install -r "%USERPROFILE%\\Downloads\\HOOPLOAN-Lock.apk"\n'
+    + 'adb shell dpm set-device-owner ' + DEVCMP + '\n'
+    + 'adb shell am broadcast --include-stopped-packages -a ' + DEVPKG + '.ENROL'
+    + ' -n ' + DEVPKG + '/.EnrolReceiver -e server ' + location.origin + ' -e token ' + token;
 }
 function devCopyBox(id){
   var t=$('#'+id); if(!t) return; t.select();
@@ -2402,12 +2440,23 @@ function devToken(imei){
       +'<textarea id="dvOne" readonly rows="2" style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'
       +esc(r.token)+'</textarea>'
       +'<button class="btn w ghost" id="dvOneCopy">Nakili token / Copy</button>'
-      +'<div class="sub" style="margin-top:12px">Amri za kituo, tayari na token yake: '
-      +'/ The station commands, with this phone\'s token already in them:</div>'
+      +'<div class="sub" style="margin-top:12px"><b>Amri MOJA — bandika kwenye cmd, bonyeza enter.</b> '
+      +'/ ONE command: paste into the black cmd window and press enter. Pakua APK kwanza kutoka '
+      +'<a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a> (inaenda Downloads).</div>'
+      +'<textarea id="dvOneCmd" readonly rows="4" style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
+      +esc(devOneLiner(r.token))+'</textarea>'
+      +'<button class="btn w" id="dvOneCmdCopy">Nakili amri moja / Copy the one command</button>'
+      /* The three separately, because the one-liner stops at the first failure and the
+         commonest one on this bench is not a failure: "device owner is already set" is the
+         finished state of every phone being redone. Then only the last line is wanted. */
+      +'<div class="sub" style="margin-top:12px">Ikisimama kwa <b>"already set"</b> — hiyo si kosa, '
+      +'simu ilishawahi kusajiliwa. Endesha ya mwisho peke yake. '
+      +'/ If it stops at "already set" that phone was provisioned before; run the last one alone.</div>'
       +'<textarea id="dvOneAdb" readonly rows="6" style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
       +esc(devAdbLines(r.token))+'</textarea>'
-      +'<button class="btn w" id="dvOneAdbCopy">Nakili amri / Copy the commands</button>');
+      +'<button class="btn w ghost" id="dvOneAdbCopy">Nakili zote tatu / Copy all three</button>');
     $('#dvOneCopy').onclick=function(){ devCopyBox('dvOne'); };
+    $('#dvOneCmdCopy').onclick=function(){ devCopyBox('dvOneCmd'); };
     $('#dvOneAdbCopy').onclick=function(){ devCopyBox('dvOneAdb'); };
   }).catch(function(e){ toast(safeErr(e), true); });
 }

@@ -1464,6 +1464,17 @@ const FNS = {
       return { ...r,
         neverSeen: !seen,
         silentHours: seen ? Math.round((now - seen) / 3600000) : null,
+        /* MINUTES, BECAUSE HOURS CANNOT ANSWER THE QUESTION ANY MORE.
+           -------------------------------------------------------------------------------
+           "0h" is a rounded hour: it means "sometime in the last half hour", which was fine
+           when the beat was every fifteen minutes and is useless now that it is every
+           minute. Asked to diagnose a phone that had been ordered to unlock four minutes
+           ago, the register said "0h" -- and that is compatible with a handset beating
+           seconds ago AND with one that has not spoken since before the order was given.
+           Two completely different faults behind one number.
+
+           So the age is carried in minutes and the screen picks the unit. */
+        silentMins: seen ? Math.max(0, Math.round((now - seen) / 60000)) : null,
         stale: !seen || (now - seen) > HOURS,
         // The honest three-way reading of a lock order, never collapsed into a boolean.
         lockState: r.state !== 'locked' ? null
