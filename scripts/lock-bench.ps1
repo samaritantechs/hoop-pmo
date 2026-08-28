@@ -178,7 +178,9 @@ foreach ($s in $serials) {
 
     # EnrolReceiver answers with a result code and a readable message, so a refusal says why
     # instead of printing result=0 and meaning nothing.
-    $out = (adb -s $s shell am broadcast -a "$pkg.ENROL" -n "$pkg/.EnrolReceiver" `
+    # --include-stopped-packages IS NOT OPTIONAL. See the note at the top of this file.
+    $out = (adb -s $s shell am broadcast --include-stopped-packages `
+                -a "$pkg.ENROL" -n "$pkg/.EnrolReceiver" `
                 -e server $Server -e token $token 2>&1) -join ' '
     if ($out -match 'ALREADY ENROLLED') {
         # Finished already, and only confusing if reported as a failure. Add -ReEnrol to
@@ -202,7 +204,7 @@ THE UNMATCHED ONES, one at a time. Read the IMEI off the box, then:
 
     adb -s <serial> install -r "$Apk"
     adb -s <serial> shell dpm set-device-owner $admin
-    adb -s <serial> shell am broadcast -a $pkg.ENROL -n $pkg/.EnrolReceiver -e server $Server -e token THAT_PHONES_TOKEN
+    adb -s <serial> shell am broadcast --include-stopped-packages -a $pkg.ENROL -n $pkg/.EnrolReceiver -e server $Server -e token THAT_PHONES_TOKEN
 
 Serials waiting: $($unmatched -join ' ')
 "@ -ForegroundColor Yellow

@@ -509,3 +509,43 @@ test('the handset releases itself only after a SUSTAINED not-enrolled, never at 
   // phone -- that is what the offline grace is for, in the other direction.
   assert.match(beat, /lastStatus == 403/, 'only a real 403 may count toward the release');
 });
+
+/* =========================================================================================
+   --include-stopped-packages, THE THIRD SUCCESS-SHAPED FAILURE THIS FEATURE HAS PRODUCED.
+
+   A freshly installed app -- and any app that has had `pm clear` run on it -- sits in
+   Android's STOPPED state and receives no broadcast at all unless the sender asks for one.
+   Without the flag, `am broadcast` reports:
+
+       Broadcast completed: result=0
+
+   No result code, no message, nothing in logcat: EnrolReceiver is never constructed, so not
+   one of its carefully-worded guards can fire. It looks exactly like the enrol working.
+
+   Caught on a real handset that had been silent for twenty hours while the register happily
+   recorded locks and releases against it. The signature is worth knowing: result=0 with NO
+   data= means the receiver did not run; result=1..4 WITH a message means it did.
+
+   Every place the command is written down must carry the flag, because whichever copy
+   somebody pastes is the one that decides whether a phone gets provisioned.
+   ========================================================================================= */
+test('every written form of the enrol broadcast includes stopped packages', () => {
+  const files = [
+    'scripts/lock-bench.sh',
+    'scripts/lock-bench.ps1',
+    'docs/DEVICE-LOCKING.md',
+    'android/lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java',
+  ];
+  for (const f of files) {
+    const src = fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8');
+    // Every `am broadcast` that names our ENROL action must carry the flag. Allowed to sit
+    // on the next line -- both scripts wrap the command -- so the window is generous.
+    const casts = [...src.matchAll(/am broadcast[\s\S]{0,220}?ENROL/g)];
+    assert.ok(casts.length > 0, f + ': the enrol broadcast disappeared from this file');
+    for (const m of casts) {
+      assert.ok(/--include-stopped-packages/.test(m[0]),
+        f + ': an enrol broadcast without --include-stopped-packages silently does nothing '
+        + 'on a freshly installed or pm-cleared app, and prints result=0 like a success');
+    }
+  }
+});

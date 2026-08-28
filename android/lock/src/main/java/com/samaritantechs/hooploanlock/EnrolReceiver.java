@@ -8,9 +8,21 @@ import android.content.Intent;
  * The second way a phone can be handed its identity: over adb, at a station with a laptop.
  *
  *   adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin
- *   adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \
+ *   adb shell am broadcast --include-stopped-packages \
+ *       -a com.samaritantechs.hooploanlock.ENROL \
  *       -n com.samaritantechs.hooploanlock/.EnrolReceiver \
  *       -e server https://hoop-pmo.vercel.app -e token <the token from the register>
+ *
+ * --include-stopped-packages IS NOT OPTIONAL, and leaving it off is the third time this
+ * feature has produced a failure that prints like a success. A freshly installed app, and
+ * any app that has had `pm clear` run on it, sits in Android's STOPPED state and receives no
+ * broadcast at all unless the sender asks for one. Without the flag `am` reports:
+ *
+ *     Broadcast completed: result=0
+ *
+ * -- no result code, no message, nothing in logcat, and none of the guards below ever run,
+ * because this class is never constructed. result=0 with NO data= is the signature: it means
+ * the receiver did not run, as distinct from result=1..4 with a message, which means it did.
  *
  * QR provisioning is the tidier route for hundreds of phones at a time. This one exists
  * because HOOP is already opening every box by hand -- a cable is one more thing on a bench
