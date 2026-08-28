@@ -130,6 +130,11 @@ async function lockWords(db) {
    A self-lock is never this phone judging the customer. It is the handset saying "I have not
    heard from the office in far too long", and the moment it reaches us again the office's
    real answer wins -- including unlocking it straight back. */
+/* The ordinary beat, and the one used while an order is outstanding. Both live here rather
+   than in the APK so the pace can be changed for a whole fleet without shipping a build. */
+const BEAT_SECONDS = 15 * 60;
+const PENDING_BEAT_SECONDS = 25;
+
 const DEFAULT_GRACE_HOURS = 24 * 7;
 async function graceFor(db, dev) {
   if (!S(dev.customer) && !S(dev.sold_ref)) return null;      // still stock: never
@@ -214,6 +219,13 @@ async function beat(db, [payload], nowMs) {
   const words = retire ? { brand: null, message: null, helpPhone: null, fallbackReason: '' }
                        : await lockWords(db);
   const grace = await graceFor(db, dev);
+  /* HAS THIS PHONE DONE WHAT IT WAS TOLD? Compare the order against what the handset just
+     said it is doing -- `reported` from this very beat when it spoke, the stored value when
+     it did not. A phone that has never reported at all counts as unlocked, which is true:
+     it is not showing a lock screen. A retiring phone is never "unsettled" -- it is on its
+     way out, and hurrying it changes nothing. */
+  const nowLocked = S(reported || dev.reported) === 'locked';
+  const settled = retire || command === (nowLocked ? 'lock' : 'unlock');
   return {
     ok: true,
     command,                                   // lock | unlock
@@ -233,6 +245,28 @@ async function beat(db, [payload], nowMs) {
     graceHours: grace == null ? -1 : grace,
     // So a released phone can stop calling home for good rather than beating forever.
     retire,
+    /* WHEN TO COME BACK -- decided here, because only the server knows whether an order is
+       still outstanding.
+       =====================================================================================
+         "funga and fungua and release should not take even a minute they should all be
+          immediate effect whenever online and phone pings"
+
+       A fixed quarter-hour beat is right for a fleet at rest and far too slow the moment
+       somebody presses a button. But a phone polling every thirty seconds all day would
+       spend a customer's own data bundle on saying "still locked, still locked" -- roughly
+       fifteen times what the fifteen-minute beat costs, on a handset the customer pays the
+       airtime for.
+
+       So the phone asks how long to wait, and the answer is short ONLY while the register
+       and the handset disagree: an order given and not yet carried out. That window is
+       seconds long in practice, and it closes the moment the phone confirms. Steady state --
+       which is almost always -- stays at a quarter of an hour and costs what it always did.
+
+       WHAT THIS STILL CANNOT DO, said plainly: it cannot wake a sleeping phone. The office
+       presses Funga and the handset finds out at its next beat, up to fifteen minutes later;
+       everything from that moment on is now seconds. Beating that first wait needs a push
+       channel (FCM), which is a genuinely different piece of work. */
+    nextBeatSeconds: settled ? BEAT_SECONDS : PENDING_BEAT_SECONDS,
   };
 }
 

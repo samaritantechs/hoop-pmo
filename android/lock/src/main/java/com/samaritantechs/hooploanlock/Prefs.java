@@ -26,6 +26,10 @@ class Prefs {
     static final String IMEI = "imei";
     static final String LAST_OK = "lastOkBeat";     // ms; the anchor the offline grace counts from
     static final String GRACE_HOURS = "graceHours"; // -1 = never self-lock (still stock)
+    /* How many seconds the SERVER wants until the next beat. Short only while an order is
+       outstanding; a quarter of an hour otherwise. Kept here so the pace survives a reboot
+       and so the office can change it for a whole fleet without shipping an APK. */
+    static final String NEXT_BEAT = "nextBeatSeconds";
     static final String RETIRED = "retired";        // released for good; stop beating
     /* When the register first said "I do not know this token". Cleared by any successful
        beat; after long enough the handset releases itself rather than staying a brick with
