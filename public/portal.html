@@ -2523,30 +2523,50 @@ function devProvision(m, r){
      it, and the operator needs to SEE that rather than wonder whether the register has just
      handed the phone in their hand a second identity. `tayari` on a line means: same phone,
      same token, this command only reinstalls and re-arms it. */
-  var lines=p.map(function(x){
+  /* THE COMMAND ARRIVES FINISHED. NOBODY EDITS ANYTHING.
+     =======================================================================================
+       "enrolling should come complete singele updated cmd and not [a PASTE_THE_TOKEN_HERE
+        template]"
+
+     This handed out a template with a placeholder and a paragraph telling the operator to
+     swap the token in by hand -- for every phone, fifty times a morning, from a list in
+     another box. Every one of those edits is a chance to paste the wrong phone's identity
+     into a handset, and the only way to find out is a customer's phone answering for
+     somebody else's loan, with a factory reset as the way back.
+
+     The token was already known per phone by the time this screen drew. There was never a
+     reason to make a person retype it. */
+  var one = p.length === 1;
+  var cmds = p.map(function(x){ return devOneLiner(x.token); }).join('\n');
+  var lines = p.map(function(x){
     return x.imei+'\t'+x.token+'\t'+(x.fresh===false?'tayari / known':'mpya / new');
   }).join('\n');
-  drawer('<h3>Token za kuweka kwenye simu</h3>'
-    +'<div class="sub">Kila simu ina token yake — ndiyo kitambulisho chake, na inaonyeshwa <b>mara moja tu</b>. '
-    +'Simu lazima iwe mpya au imefutwa (bila akaunti yoyote) ndipo iweze kufungwa. '
-    +'/ One token per phone, shown once. The handset must have no accounts on it — box-fresh or '
-    +'factory reset — before it can be made Device Owner.</div>'
-    +'<textarea id="dvTok" rows="'+Math.min(12,Math.max(3,p.length))+'" readonly '
-    +'style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'+esc(lines)+'</textarea>'
-    +'<button class="btn w" id="dvTokCopy">Nakili orodha / Copy the list</button>'
-    /* THE PLACEHOLDER IS NOT IN ANGLE BRACKETS, and that is not a style choice: in cmd.exe
-       `<` and `>` are redirection. A pasted `<TOKEN>` does not read as "fill this in", it
-       errors -- and the operator gets a message about a file, from a command about a phone. */
-    +'<div class="sub" style="margin-top:12px">Kwa kila simu, kwenye laptop ya kituo — weka token ya simu '
-    +'hiyo mahali pa <b>PASTE_THE_TOKEN_HERE</b>, bandika kwenye cmd, bonyeza enter: '
-    +'/ Per phone, on the station laptop — swap that phone\'s token in for '
-    +'<b>PASTE_THE_TOKEN_HERE</b>, paste into cmd, press enter:</div>'
-    +'<textarea id="dvAdb" rows="5" readonly style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
-    +esc(devOneLiner('PASTE_THE_TOKEN_HERE'))+'</textarea>'
-    +'<button class="btn w ghost" id="dvAdbCopy">Nakili amri / Copy the command</button>'
+  drawer('<h3>'+(one?'Simu · '+esc(p[0].imei):'Simu '+money(p.length))+'</h3>'
+    +'<div class="sub"><b>Bandika kwenye cmd, bonyeza enter.</b> '
+    +'/ Paste into the black cmd window, press enter. '
+    +(one?'':'Amri moja kwa kila simu — nakili mstari mmoja kwa simu moja. '
+      +'/ One command per phone: copy ONE line for ONE handset. ')
+    +'Pakua APK kwanza kutoka <a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a>. '
+    +'Simu lazima iwe mpya au imefutwa (bila akaunti yoyote). '
+    +'/ The handset must have no accounts on it — box-fresh or factory reset.</div>'
+    +'<textarea id="dvAdb" rows="'+(one?5:Math.min(14,Math.max(4,p.length*2)))+'" readonly '
+    +'style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'+esc(cmds)+'</textarea>'
+    +'<button class="btn w" id="dvAdbCopy">Nakili amri / Copy the command'+(one?'':'s')+'</button>'
+    /* The IMEI-to-token list stays for MANY phones and goes for one, because with a single
+       handset the token is already inside the command above and a second box holding the
+       same string was exactly the confusion that got the Token drawer cut down to one. */
+    +(one?''
+      : '<div class="sub" style="margin-top:12px">Ipi ni ya nani — na <b>tayari</b> maana yake '
+        +'simu ile ile, token ile ile. / Which token belongs to which phone. <b>tayari</b> means '
+        +'the register already knew this handset and gave it back its own identity.</div>'
+        +'<textarea id="dvTok" rows="'+Math.min(12,Math.max(3,p.length))+'" readonly '
+        +'style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'+esc(lines)+'</textarea>'
+        +'<button class="btn w ghost" id="dvTokCopy">Nakili orodha / Copy the list</button>')
+    +'<div class="sub" style="margin-top:12px">Ya mwisho ndiyo muhimu: <b>result=1</b> na neno '
+    +'<b>ENROLLED</b>. / The line that matters is the last one: <b>result=1 … ENROLLED</b>.</div>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
-  $('#dvTokCopy').onclick=function(){ devCopyBox('dvTok'); };
   $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
+  if($('#dvTokCopy')) $('#dvTokCopy').onclick=function(){ devCopyBox('dvTok'); };
   $('#dvTokDone').onclick=function(){ closeDrawer(); drawDevices(m); };
 }
 function devToken(imei){

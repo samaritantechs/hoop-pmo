@@ -1033,3 +1033,46 @@ test('a known IMEI keeps the token it already holds, and gets it handed back', (
   assert.match(fn, /\/enrol_token\/\.test\(String\(e && e\.message \|\| ''\)\)/,
     'reading enrol_token must fall back when the column is not there yet');
 });
+
+/* =========================================================================================
+   AND THE TOKEN SURVIVES A DELETE, BECAUSE THE HANDSET DOES.
+
+     "then futa shouldnt lose token record"
+
+   Deleting a row destroyed its token, so re-enrolling the same IMEI minted a new identity
+   while the phone was still carrying the old one. Nothing wiped the handset -- Futa is a
+   register operation, it never reaches the phone -- so from that moment every beat came back
+   403 and BOTH ways out were shut: the phone is still Device Owner so it refuses a factory
+   reset, and a release cannot reach it through a token it does not recognise.
+
+   That cost a live presentation. It is one string per IMEI, and it is not optional.
+
+   WHAT IS NOT KEPT: history. "I used futa at devices I expect non of its previous histories"
+   is the other half of the same operator's ask, and both are right -- the PAST goes, the
+   IDENTITY stays. device_events is still deleted with the row.
+   ========================================================================================= */
+test('deleting a device remembers its token but forgets its history', () => {
+  const src = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  const del = src.slice(src.indexOf('async deviceDelete('), src.indexOf('async stockMovement('));
+  assert.ok(del.length > 0, 'deviceDelete moved; this guard needs repointing');
+
+  const remember = del.indexOf("from('device_tokens')");
+  const drop = del.indexOf("from('devices').delete()");
+  assert.ok(remember > 0, 'the token must be remembered before the row goes');
+  assert.ok(remember < drop, 'and remembered BEFORE the delete, or there is nothing left to read');
+  assert.match(del, /from\('device_events'\)\.delete\(\)/,
+    'history must still be deleted -- keeping the identity is not keeping the past');
+
+  // Remembering must never be able to block a delete: a register that cannot delete is worse
+  // than one that forgets, and the table does not exist before the migration.
+  assert.match(del.slice(remember - 200, drop), /try\s*\{[\s\S]*catch/,
+    'the remember step must be best effort, or a missing table makes Futa fail outright');
+
+  const enrol = src.slice(src.indexOf('async deviceEnrol('), src.indexOf('async deviceSetState('));
+  assert.match(enrol, /from\('device_tokens'\)[\s\S]{0,120}\.in\('imei', fresh\)/,
+    'enrolment must look for a remembered token before minting');
+  assert.match(enrol, /remembered\.get\(imei\) \|\| token\(\)/,
+    'and prefer it -- minting for an IMEI we have seen before is what strands a live handset');
+  assert.match(enrol, /fresh: !have\.has\(imei\) && !remembered\.has\(imei\)/,
+    'a phone whose token we remembered is NOT new, and must not be reported as new');
+});
