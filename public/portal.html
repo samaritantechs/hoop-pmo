@@ -992,7 +992,10 @@ function srv(fn,args,tries){
   return fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({code:CODE,fn:fn,args:args||{}})})
   .then(function(r){ return r.text().then(function(t){ var b; try{b=JSON.parse(t);}catch(e){throw new Error('Server error HTTP '+r.status);}
-    if(r.status<200||r.status>=300||b.ok===false){ var er=new Error(b.error||('HTTP '+r.status)); er.answered=true; throw er; } return b; }); })
+    if(r.status<200||r.status>=300||b.ok===false){ var er=new Error(b.error||('HTTP '+r.status)); er.answered=true;
+      // A refusal the caller can argue with carries the rows it is about -- see deviceSetState.
+      if(b.code) er.code=b.code; if(b.imeis) er.imeis=b.imeis;
+      throw er; } return b; }); })
   .then(function(v){ busy(false); return v; },
         function(e){
           busy(false);
@@ -2311,12 +2314,44 @@ function devSetState(m, state){
     reason=prompt((state==='locked'?'Sababu ya kufunga':'Sababu')+' / Reason (required):')||'';
     if(!reason.trim()){ toast('Sababu inahitajika. / A reason is required.', true); return; }
   }
-  srv('deviceSetState',{imeis:imeis,state:state,reason:reason.trim()}).then(function(r){
+  devSend_(m, imeis, state, reason.trim(), false);
+}
+/* THE ORDER, AND THE ONE REFUSAL THAT IS WORTH ARGUING WITH.
+   =========================================================================================
+     "funga for already achia should refuse and say you cant funga achia, proceed anyway if
+      you will install app"
+
+   A released handset that has not spoken since is not listening: it dropped Device Owner and
+   stopped calling home, so a lock ordered against it sits unheard while the register reads
+   "imeagizwa · bado" and the office waits on a phone that stopped asking days ago.
+
+   So the server refuses -- and offers the way through, because there IS one honest reason to
+   give an order a phone cannot currently hear: you are about to put the app back on it by
+   cable and you want the lock waiting when it wakes. That is deliberate, so it takes a
+   deliberate yes rather than being the default.
+
+   Only the phones the server named are retried. Ticking twenty and having one unreachable
+   must not turn a confirmation about that one into a second lock order for the other
+   nineteen -- they were locked the first time. */
+function devSend_(m, imeis, state, reason, force){
+  srv('deviceSetState',{imeis:imeis,state:state,reason:reason,force:force===true}).then(function(r){
     toast('Zimebadilishwa: '+money(r.changed)
       +(r.notEnrolled?' · '+money(r.notEnrolled)+' hazijasajiliwa':'')
-      +(r.alreadyThere?' · '+money(r.alreadyThere)+' zilikuwa hivyo':''));
+      +(r.alreadyThere?' · '+money(r.alreadyThere)+' zilikuwa hivyo':'')
+      +(r.woken?' · '+money(r.woken)+' zimeamshwa':''));
     drawDevices(m);
-  }).catch(function(e){ toast(safeErr(e), true); });
+  }).catch(function(e){
+    var stuck=(e&&e.imeis)||[];
+    if(!stuck.length||force){ toast(safeErr(e), true); return; }
+    if(!confirm('Simu iliyoachiwa haisikii tena.\n\n'+stuck.join('\n')+'\n\n'
+      +'Iliachiwa (Achia) na haijaongea tangu wakati huo — ilishaacha kuwa chini ya udhibiti '
+      +'na haitasikia agizo hili.\n\n'
+      +'Bonyeza OK IKIWA unakwenda kuiweka app tena kwa kebo — agizo litakuwa linasubiri '
+      +'itakapoamka.\n\n'
+      +'This phone was released and has not spoken since, so it is not listening. Press OK '
+      +'only if you are about to re-provision it by cable; the order will be waiting.')) return;
+    devSend_(m, stuck, state, reason, true);
+  });
 }
 /* FUTA -- take a phone off the register entirely, for starting a handset over.
    The confirm has to say the part that is easy to assume the other way round: this erases

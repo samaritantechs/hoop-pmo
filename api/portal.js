@@ -1599,9 +1599,54 @@ const FNS = {
       .map(x => String(x || '').trim()).filter(Boolean))];
     if (!list.length) bad('Weka IMEI. / An IMEI is required.');
 
-    const current = await fetchAll(() => db.from('devices').select('imei, state').in('imei', list));
+    const current = await fetchAll(() => db.from('devices')
+      .select('imei, state, released_at, last_seen').in('imei', list));
     const known = new Map(current.map(r => [String(r.imei), r.state]));
     const missing = list.filter(i => !known.has(i));
+
+    /* FUNGA ON A PHONE ALREADY RELEASED IS USUALLY AN ORDER NOBODY WILL EVER HEAR.
+       =====================================================================================
+         "funga for already achia should refuse and say you cant funga achia, proceed anyway
+          if you will install app"
+
+       Achia tells the handset to unlock, drop the restrictions, step down as Device Owner
+       and STOP CALLING HOME. A phone that did all four is gone: it has no reason to ask us
+       anything ever again. Ordering Funga against that row writes a decision nobody will
+       collect -- the register sits on "imeagizwa · bado" for ever and the office reads it as
+       a phone that is being slow, rather than one that stopped listening days ago.
+
+       BUT NOT EVERY RELEASED PHONE IS GONE, and a blanket refusal would be wrong in the case
+       that matters most. Where the step-down was REFUSED -- Knox, a vendor build, anything
+       -- the handset keeps beating precisely so the office can still reach it. Those are
+       re-lockable from here with no cable at all, and refusing them would send somebody
+       driving to a phone they could have locked from their desk.
+
+       The register can tell the two apart without asking anybody: has this handset spoken
+       SINCE it was released? If it has, it is still listening. If it has not, it is not.
+
+       And the override exists because there is one honest reason to order a lock a phone
+       cannot currently hear: you are about to put the app back on it by cable, and you want
+       the standing order waiting when it wakes up. That is a deliberate act, so it takes a
+       deliberate confirmation rather than being the default. */
+    const stuck = to !== 'locked' || a.force === true ? [] : list.filter(i => {
+      if (known.get(i) !== 'released') return false;
+      const r = current.find(x => String(x.imei) === i);
+      const spoke = r && r.last_seen ? Date.parse(r.last_seen) : 0;
+      const freed = r && r.released_at ? Date.parse(r.released_at) : 0;
+      // Never heard from, or last heard from before we let it go: it is not listening.
+      return !(spoke && freed && spoke > freed);
+    });
+    if (stuck.length) {
+      const e = new Error('Simu iliyoachiwa haisikii tena — iliachwa na ikaacha kuongea. '
+        + 'Irudishe app kwa kebo, kisha funga. / This phone was released and has not spoken '
+        + 'since, so it is no longer listening: a lock order would sit unheard. Re-provision '
+        + 'it by cable first, or confirm to leave the order standing for when it comes back.');
+      e.status = 409;
+      e.code = 'RELEASED_NOT_LISTENING';
+      e.imeis = stuck.slice(0, 20);
+      throw e;
+    }
+
     const changing = list.filter(i => known.has(i) && known.get(i) !== to);
     const at = new Date().toISOString();
     let pushed = { sent: 0, failed: 0, stale: [] };

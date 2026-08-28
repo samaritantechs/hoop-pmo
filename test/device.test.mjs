@@ -591,3 +591,77 @@ test('a beat carries the handset push address, and the register keeps only the n
   assert.match(core, /reported_imei\|fcm_token/,
     'the update must tolerate a missing fcm_token column, as it already does reported_imei');
 });
+
+/* =========================================================================================
+   FUNGA ON A PHONE ALREADY RELEASED.
+
+     "funga for already achia should refuse and say you cant funga achia, proceed anyway if
+      you will install app"
+
+   Achia tells a handset to unlock, drop its restrictions, step down as Device Owner and STOP
+   CALLING HOME. A phone that did all four has no reason to ask us anything ever again, so a
+   lock ordered against that row is a decision nobody will collect: the register reads
+   "imeagizwa · bado" for ever and the office waits on a phone that stopped listening days
+   ago.
+
+   BUT A BLANKET REFUSAL WOULD BE WRONG, and wrong in the case that matters most. Where the
+   step-down was REFUSED -- Knox, a vendor build -- the handset keeps beating precisely so the
+   office can still reach it. Refusing those would send somebody driving to a phone they could
+   have locked from their desk.
+
+   The register can separate them with no help from anybody: has this handset spoken SINCE it
+   was released? Both halves are asserted, because a later reader tidying this into "refuse if
+   released" would delete the half that keeps the reachable ones reachable.
+   ========================================================================================= */
+test('locking a released phone that went quiet is refused, and says which ones', async () => {
+  const freed = new Date(NOW - 3 * 3600000).toISOString();
+  const d = fleet([{ imei: 'GONE1', state: 'released', enrol_token: 't1',
+    released_at: freed, last_seen: new Date(NOW - 5 * 3600000).toISOString() }]);
+
+  await assert.rejects(
+    () => _FNS.deviceSetState(d, ADMIN, { imeis: ['GONE1'], state: 'locked', reason: 'x' }),
+    err => {
+      assert.match(String(err.message), /haisikii|not listening/i,
+        'the refusal must say WHY, not just refuse');
+      assert.equal(err.code, 'RELEASED_NOT_LISTENING');
+      /* It must name the rows. Without them the client can only offer "retry everything",
+         which on a bulk action is a second lock order for the phones that already worked. */
+      assert.deepEqual(err.imeis, ['GONE1']);
+      return true;
+    });
+
+  // And the override goes through, because re-provisioning by cable is a real reason to
+  // leave an order standing for a phone that is not listening yet.
+  const forced = await _FNS.deviceSetState(d, ADMIN,
+    { imeis: ['GONE1'], state: 'locked', reason: 'x', force: true });
+  assert.equal(forced.changed, 1, 'force must be able to leave the order waiting');
+});
+
+test('a released phone still beating is NOT refused -- it is the one you can reach', async () => {
+  /* The step-down was refused, so the handset kept calling home on purpose. This is the case
+     the whole refusal must not catch: locking it from the office works, and sending somebody
+     to it with a cable would be a wasted trip. */
+  const freed = new Date(NOW - 3 * 3600000).toISOString();
+  const d = fleet([{ imei: 'ALIVE1', state: 'released', enrol_token: 't2',
+    released_at: freed, last_seen: new Date(NOW - 60000).toISOString() }]);
+  const r = await _FNS.deviceSetState(d, ADMIN, { imeis: ['ALIVE1'], state: 'locked', reason: 'x' });
+  assert.equal(r.changed, 1, 'a released phone that has spoken SINCE the release is listening');
+});
+
+test('the refusal is only about locking, and only about released phones', async () => {
+  const freed = new Date(NOW - 3 * 3600000).toISOString();
+  const quiet = { state: 'released', enrol_token: 't3', released_at: freed,
+    last_seen: new Date(NOW - 9 * 3600000).toISOString() };
+
+  // Unlocking or re-releasing a silent phone is harmless: neither leaves anybody waiting on
+  // a lock that will not arrive, and refusing them would only be in the way.
+  const a = fleet([{ imei: 'Q1', ...quiet }]);
+  assert.equal((await _FNS.deviceSetState(a, ADMIN, { imeis: ['Q1'], state: 'enrolled' })).changed, 1);
+
+  // And an ordinary enrolled phone that has never spoken is not affected -- it has not been
+  // released, so nothing has told it to stop listening.
+  const b = fleet([{ imei: 'NEW1', state: 'enrolled', enrol_token: 't4' }]);
+  assert.equal((await _FNS.deviceSetState(b, ADMIN,
+    { imeis: ['NEW1'], state: 'locked', reason: 'stock' })).changed, 1,
+    'a never-seen STOCK phone must still be lockable -- that is the normal bench flow');
+});
