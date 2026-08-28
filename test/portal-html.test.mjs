@@ -368,3 +368,59 @@ test('the Excel export drops control cells, and Devices marks them', () => {
     'the row tick cell must be marked noxl');
   assert.match(src, /<td class="r noxl">/, 'the Token/Historia/Futa cell must be marked noxl');
 });
+
+/* =========================================================================================
+   THE COMMAND THE STATION ACTUALLY PASTES.
+
+     "the copying cmd from clipboard in system at device should be the single command to
+      configure phone"
+
+   The docs were fixed three times over for exactly three faults; the portal -- which is the
+   copy Sipho actually uses -- still carried all three, because a fix applied to prose does
+   not travel to code. Every one of them cost real bench time:
+
+     `\` continuations   bash. In cmd.exe the first line runs truncated and the rest arrive
+                         as broken commands. Reported verbatim: "failed to stat", then an
+                         Invalid component stack trace.
+     `adb install` bare  no -r, so a handset that already has the app is refused outright.
+     no --include-stopped-packages
+                         the enrol silently does nothing on a freshly installed app while
+                         printing result=0, which reads exactly like success. Twenty hours
+                         of a real handset lost to that one.
+
+   So the shape of this string is load-bearing, and it is pinned here rather than trusted to
+   whoever edits it next.
+   ========================================================================================= */
+test('the provisioning command the portal hands out actually runs on a Windows bench', () => {
+  const src = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('function devOneLiner'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+
+  // ONE command, chained -- the whole point of it.
+  assert.match(body, /&&/, 'the one-liner must chain its steps, or it is not one command');
+  assert.ok(!/\\\\n/.test(body), 'the single command must not contain newlines');
+
+  // The three faults, each pinned by the thing that fixes it.
+  assert.match(body, /adb install -r/, 'without -r a handset that already has the app is refused');
+  assert.match(body, /--include-stopped-packages/,
+    'without this the enrol silently does nothing and prints result=0 like a success');
+  assert.ok(!/\\\\$|\s\\\\\s/.test(body),
+    'a backslash continuation is bash; in cmd.exe it truncates the command');
+
+  // Order is not optional: owner BEFORE enrol, or the receiver drops the token in silence.
+  const owner = body.indexOf('set-device-owner');
+  const enrol = body.indexOf('.ENROL');
+  assert.ok(owner > 0 && enrol > owner, 'set-device-owner must come before the enrol broadcast');
+
+  // An absolute path, because "adb install HOOPLOAN-Lock.apk" only works if the operator
+  // happens to be standing in the right folder -- and reports "failed to stat" when not.
+  assert.match(body, /%USERPROFILE%/, 'the APK path must not depend on the current directory');
+
+  // And the multi-line version, still offered for redos, must carry the same flags.
+  const many = src.slice(src.indexOf('function devAdbLines'));
+  const manyBody = many.slice(0, many.indexOf('\n}'));
+  assert.match(manyBody, /--include-stopped-packages/,
+    'the three-line version must carry the flag too -- whichever copy is pasted is the one '
+    + 'that decides whether a phone gets provisioned');
+  assert.match(manyBody, /adb install -r/, 'the three-line version needs -r as well');
+});
