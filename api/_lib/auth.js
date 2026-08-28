@@ -164,7 +164,15 @@ export function withApi(handler) {
       if (result !== undefined) res.status(200).json({ ok: true, ...result });
     } catch (e) {
       const status = e.status || 500;
-      res.status(status).json({ ok: false, error: e.message || String(e) });
+      /* A REFUSAL SOMETIMES HAS TO CARRY MORE THAN A SENTENCE. Most do not -- the message is
+         the whole answer, and anything else is noise on a screen. But a refusal the caller is
+         meant to be able to ARGUE WITH needs to say which rows it is about, or the client can
+         only offer "retry everything", which on a bulk action is a second order for the phones
+         that already succeeded. Two fields, both opt-in, both set deliberately at the throw. */
+      const extra = {};
+      if (e.code) extra.code = e.code;
+      if (Array.isArray(e.imeis)) extra.imeis = e.imeis;
+      res.status(status).json({ ok: false, error: e.message || String(e), ...extra });
     }
   };
 }
