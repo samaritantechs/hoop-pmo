@@ -92,29 +92,31 @@ public class LockAdmin extends DeviceAdminReceiver {
         // Only this package may hold the screen. Set once, here, so LockActivity's
         // startLockTask() is allowed to pin without a prompt when the moment comes.
         try { d.setLockTaskPackages(me, new String[]{ c.getPackageName() }); } catch (Exception ignored) { }
-        /* PLAY PROTECT, WHICH IS A DIFFERENT GATE FROM THE INSTALL PROMPT.
+        /* PLAY PROTECT IS NOT SWITCHED OFF HERE, AND THE REASON IS WORTH KEEPING.
            -------------------------------------------------------------------------------
-             "app brought update i accepted manually on phone"
              "it asked b/se app is dangerous continue anyway"
 
-           Two dialogs, two mechanisms, and only one of them is the install confirmation that
-           SelfUpdate's setRequireUserAction silences. This second one is Play Protect calling
-           a sideloaded device-admin APK harmful -- which, from its point of view, is a fair
-           description of an app that pins the screen and cannot be uninstalled.
+           That dialog is Play Protect, not the install confirmation -- two gates, and only
+           the second is the one SelfUpdate's setRequireUserAction silences. The obvious
+           answer is for a Device Owner to turn package verification off, and this code did
+           that for one commit before the compiler pointed out that
+           Settings.Global.PACKAGE_VERIFIER_ENABLE is @hide: not public API, no public
+           constant, does not build.
 
-           A Device Owner may turn package verification off, and for THIS fleet that is the
-           honest call: these are HOOP's own handsets, provisioned at HOOP's own bench, and
-           nobody is standing beside a boxed phone in a warehouse to tap "install anyway". An
-           update that needs a human is an update two hundred phones will never receive.
+           Reaching past that with the raw string would have compiled and then done nothing.
+           From Android 9 setGlobalSetting is restricted to a short allowlist and package
+           verification is not on it, so the call would be accepted and ignored -- a line that
+           reads like a fix, ships like a fix, and leaves the prompt exactly where it was.
+           This feature has produced enough of those.
 
-           Said plainly because it is a real reduction: with this off, Play Protect stops
-           screening apps on these handsets. It is scoped to phones we own and manage, it is
-           what every managed fleet does, and it is not something to copy onto a personal
-           phone. Best effort -- newer platforms restrict which global settings an owner may
-           write, and a build that refuses simply keeps prompting. */
-        try {
-            d.setGlobalSetting(me, android.provider.Settings.Global.PACKAGE_VERIFIER_ENABLE, "0");
-        } catch (Exception ignored) { }
+           WHAT ACTUALLY HAPPENS, which is less alarming than it looked: Play Protect warns
+           when an unknown app is FIRST installed. That is at the bench, with an operator
+           holding the phone, who taps through it once. Updates afterwards are the same
+           package with the same signature and do not re-warn -- and those are the ones that
+           reach a boxed handset with nobody nearby, which is the case that mattered.
+
+           If it ever does need suppressing across a fleet, the supported route is Android
+           Enterprise enrolment through an EMM, not a bare Device Owner. */
     }
 
     /**
