@@ -2204,8 +2204,14 @@ function drawDevices(m){
           var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
             :r.state==='released'?'<span class="chip ok">imeachiwa</span>'
             :r.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
+          /* THE UNIT FOLLOWS THE BEAT. At a beat a minute, "0h" covers everything from
+             "spoke a second ago" to "has not spoken since before you pressed the button" --
+             the two answers you most need to tell apart when an order looks stuck. Minutes
+             under the hour, hours above it. */
+          var age=r.silentMins==null?'':r.silentMins<1?'sasa hivi'
+            :r.silentMins<60?money(r.silentMins)+' dk':money(Math.round(r.silentMins/60))+'h';
           var seen=r.neverSeen?'<span class="mut">hajawahi</span>'
-            :(r.stale?'<span style="color:var(--bad)">':'<span>')+money(r.silentHours)+'h</span>';
+            :(r.stale?'<span style="color:var(--bad)">':'<span>')+age+'</span>';
           return '<tr><td class="noxl"><input type="checkbox" class="dvck" value="'+esc(r.imei)+'"></td>'
             +'<td style="font-size:11px">'+esc(r.imei)+'</td><td>'+esc(r.item||'—')+'</td>'
             +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
