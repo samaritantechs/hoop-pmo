@@ -62,7 +62,17 @@ public class LockActivity extends Activity {
        the thing Android 10+ may refuse in silence, and which stranded a customer's phone
        showing a lock screen while the register read "unlocked". See Guard.unlock. */
     private final BroadcastReceiver release = new BroadcastReceiver() {
-        @Override public void onReceive(Context ctx, Intent i) { standDown(); }
+        @Override public void onReceive(Context ctx, Intent i) {
+            if (Guard.ACTION_REPAINT.equals(i == null ? null : i.getAction())) {
+                /* Re-locked, under a new reason, while this screen was already up. The words
+                   come from the beat and are read at build time, so without this the customer
+                   goes on reading the previous reason -- and the register and the glass give
+                   two different answers to the only question this screen exists to settle. */
+                refresh();
+                return;
+            }
+            standDown();
+        }
     };
 
     @Override
@@ -72,6 +82,7 @@ public class LockActivity extends Activity {
         setContentView(build());
         try {
             IntentFilter f = new IntentFilter(Guard.ACTION_RELEASE);
+            f.addAction(Guard.ACTION_REPAINT);
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(release, f, Context.RECEIVER_NOT_EXPORTED);
             else registerReceiver(release, f);
         } catch (Exception ignored) { }
@@ -95,6 +106,16 @@ public class LockActivity extends Activity {
         try { stopLockTask(); } catch (Exception ignored) { }
         Prefs.put(this, Prefs.SCREEN_UP, false);
         finish();
+    }
+
+    /* Whatever else happened while this screen was away -- a beat with new words, a repaint
+       that arrived while the process was being rebuilt -- the glass is repainted from the
+       stored words every time it comes back to the front. Cheap, and it closes the gap
+       between "the broadcast reached us" and "the broadcast reached us in time". */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refresh();
     }
 
     @Override

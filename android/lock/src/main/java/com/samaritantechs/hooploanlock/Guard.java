@@ -2,6 +2,8 @@ package com.samaritantechs.hooploanlock;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Handler;
+import android.os.Looper;
 
 /**
  * Lock and unlock, in one place, so every caller -- a beat, a boot, the grace rule -- goes
@@ -17,10 +19,34 @@ class Guard {
     static void lock(Context c) {
         Prefs.put(c, Prefs.LOCKED, true);
         show(c);
+        /* AND REPAINT A SCREEN THAT IS ALREADY UP.
+           -------------------------------------------------------------------------------
+             "relocking with other reason works but the previous lock keeps poppin"
+
+           The words on the lock screen -- the reason above all -- arrive on the beat and are
+           read when the activity is built. A phone that is ALREADY locked and is re-locked
+           under a new reason builds nothing: show() hands the system an intent for an
+           activity that is already there, and whether that reaches onNewIntent is up to the
+           platform. When it does not, the customer goes on reading the previous reason while
+           the register shows the new one -- two different answers to "why is my phone off",
+           which is the one question this screen exists to settle.
+
+           The release path already proved the reliable route to a LIVE screen is its own
+           receiver, so the repaint goes the same way. Harmless when no screen is up: nothing
+           is registered to hear it. */
+        try { c.sendBroadcast(new Intent(ACTION_REPAINT).setPackage(c.getPackageName())); }
+        catch (Exception ignored) { }
     }
 
     /** Sent to the lock screen while it is running. See unlock(). */
     static final String ACTION_RELEASE = "com.samaritantechs.hooploanlock.RELEASE_SCREEN";
+    /** Sent when the words may have changed under a screen that is already up. See lock(). */
+    static final String ACTION_REPAINT = "com.samaritantechs.hooploanlock.REPAINT_SCREEN";
+
+    /* HOW LONG TO GIVE THE LIVE SCREEN before falling back to an activity start. Long enough
+       for a main-thread broadcast to be delivered and acted on; short enough that a phone
+       whose activity really is gone still comes down promptly. */
+    private static final long FALLBACK_MS = 1200;
 
     /* TAKING THE SCREEN DOWN HAS TO BE RETRIED, AND CANNOT DEPEND ON STARTING AN ACTIVITY.
        =========================================================================================
@@ -55,15 +81,37 @@ class Guard {
         try { c.sendBroadcast(new Intent(ACTION_RELEASE).setPackage(c.getPackageName())); }
         catch (Exception ignored) { }
 
-        /* And the fallback, for a screen that is believed up but whose activity is gone. Only
-           when the flag still says so after the broadcast -- launching an activity purely to
-           finish it flashes a blue screen at somebody for no reason. */
-        if (Prefs.of(c).getBoolean(Prefs.SCREEN_UP, false)) {
-            Intent i = new Intent(c, LockActivity.class);
+        /* AND THE FALLBACK, WHICH HAS TO WAIT ITS TURN.
+           -------------------------------------------------------------------------------
+             "cmd runs and the bluescreen flushes off and back on in a second"
+
+           This is for a screen that is BELIEVED up but whose activity is gone -- the flag
+           left standing after the system reclaimed the process. It was guarded by re-reading
+           SCREEN_UP on the very next line, which reads as "only if the broadcast did not
+           work" and cannot be: sendBroadcast is ASYNCHRONOUS. It queues the intent and
+           returns, and the receiver runs afterwards on the main thread, so the flag is
+           always still true one line later. The guard never once said no.
+
+           So every unlock did it twice. The broadcast took the screen down, and then this
+           built a SECOND lock screen, drew it, read the extra and finished it -- exactly the
+           blue flash reported here, and the same one behind "restarting the phone made the
+           app flash and get off". Worse than ugly: for that moment a phone the office has
+           just released is showing its customer a lock screen.
+
+           Giving the live screen its moment first costs nothing. If it stood down, SCREEN_UP
+           is false by now and no activity is started at all. If the process died in between,
+           the screen went with it, which is the outcome we wanted anyway. */
+        final Context app = c.getApplicationContext();
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (!Prefs.of(app).getBoolean(Prefs.SCREEN_UP, false)) return;  // the live screen took it
+            // And never tear down a screen the office has put back up in the meantime -- with
+            // an operator working quickly, lock and unlock can be seconds apart.
+            if (Prefs.of(app).getBoolean(Prefs.LOCKED, false)) return;
+            Intent i = new Intent(app, LockActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             i.putExtra(LockActivity.EXTRA_RELEASE, true);
-            try { c.startActivity(i); } catch (Exception ignored) { }
-        }
+            try { app.startActivity(i); } catch (Exception ignored) { }
+        }, FALLBACK_MS);
     }
 
     /** Bring the lock screen up. Safe to call when it is already showing. */
