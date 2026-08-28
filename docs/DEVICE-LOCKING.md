@@ -437,13 +437,98 @@ A hostile network cannot forge it: a 403 only counts arriving over a valid TLS c
 our own host, and anything else is silence, which never frees a phone. Somebody who can
 genuinely serve our origin already owns the server and can simply mark the phone released.
 
-**Recovering a phone whose row you already deleted**, without a factory reset:
+---
+
+## The way back out, over the cable
+
+Everything above needs a handset the office can still reach. This is what to do when it
+cannot — the phone is on wifi, the register says *imeachiwa*, and the handset has not spoken
+for a day.
+
+**`pm clear` does not work here, and it is worth knowing why before you try it.** Android
+protects a Device Owner's data from the shell:
+
+```
+C:\Users\marki>adb shell pm clear com.samaritantechs.hooploanlock
+SecurityException: PID 2000 does not have permission android.permission.CLEAR_APP_USER_DATA
+```
+
+So are the other two obvious routes: `dpm remove-active-admin` answers *"Attempt to remove
+non-test admin"*, and `pm uninstall --user 0` answers `DELETE_FAILED_DEVICE_POLICY_MANAGER`.
+Factory reset is blocked by our own restriction. Every door out is shut — by design, which is
+the point of the lock, and which is exactly the problem when the phone is ours.
+
+**One door is not shut: `adb install -r`.** `setUninstallBlocked` blocks *uninstall*, not
+*update*. A newer APK goes on over the top of a locked, owned handset:
+
+```
+C:\Users\marki>adb install -r HOOPLOAN-Lock.apk
+Performing Streamed Install
+Success
+```
+
+That is the whole recovery route. The app can clear its own data even though the shell
+cannot, and it can call `clearDeviceOwnerApp` on itself even though `dpm` will not. So it
+carries a command for doing both:
+
+```
+adb install -r HOOPLOAN-Lock.apk
+adb shell am broadcast --include-stopped-packages ^
+    -a com.samaritantechs.hooploanlock.RELEASE ^
+    -n com.samaritantechs.hooploanlock/.ReleaseReceiver ^
+    -e token THE_TOKEN_ON_ITS_REGISTER_ROW
+```
+
+*(`^` is the line-continuation for the black cmd window. In PowerShell it is a backtick; on
+one line it needs neither.)*
+
+**`--include-stopped-packages` is not optional here either.** `adb install -r` leaves the app
+in Android's STOPPED state, and a stopped app hears no broadcast at all. Without the flag you
+get `Broadcast completed: result=0` and nothing happens — the same success-shaped failure the
+enrol has produced three times.
+
+Read the answer, because there are three and they mean different things:
+
+| Answer | What happened | What next |
+|---|---|---|
+| `result=1 … RELEASED` | Ownership genuinely given up | Ordinary phone. Uninstall or factory reset it if you like |
+| `result=3 … PARTIAL` | Unlocked, restrictions dropped, token cleared — but the system refused to give up ownership | **Re-enrol and re-lock it as it is**; a full hand-back needs the other admin cleared |
+| `result=2 … TOKEN MISMATCH` | Wrong token; **nothing was changed** | Get the right one from that phone's register row |
+| `result=0`, no message | The receiver never ran | You left off `--include-stopped-packages` |
+
+**PARTIAL is not a failure of the recovery** — it is the recovery telling you the truth. The
+handset is usable again either way: unlocked, with no token, which is precisely the state
+`EnrolReceiver` accepts a fresh token in. On Watu-sourced stock the usual reason is Samsung
+**Knox Guard** (`com.samsung.android.kgclient`), a second device admin with
+`isOrganizationOwnedDevice=true` that is almost certainly the supplier's, not ours. Check with:
+
+```
+adb shell dumpsys device_policy
+```
+
+**Why an exported release does not weaken the lock.** The receiver demands that handset's own
+token, which only the office holds — a sideloaded app cannot read it out of our private
+storage. And reaching adb at all needs USB debugging, which needs Developer options, which
+needs Settings, which a pinned lock screen never lets go of. A genuinely locked phone in a
+customer's hand cannot be reached this way. This is a bench tool for a handset already in
+ours.
+
+### Then relock it, same as any other phone
+
+After a release — by **Achia**, by this command, or by the 14-day self-release — the handset
+is back to being an ordinary phone with our app on it and no token. Relocking is the normal
+enrol, no factory reset:
 
 1. Devices → **+ Sajili simu** with that IMEI → copy the new token
-2. `adb shell pm clear com.samaritantechs.hooploanlock` — the app forgets the dead token;
-   Device Owner is untouched, so `EnrolReceiver` will accept a new one
-3. Re-run the enrol broadcast with the new token
-4. **Achia**, then `adb reboot` so it hears immediately
+2. `adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin` — skip this if
+   it answers *"already set"*, which is ordinary after a PARTIAL
+3. The enrol broadcast with the new token, exactly as at the bench
+4. **Funga** in the portal, and wait for *imefungwa* before boxing it
+
+**And after a real RELEASED, the app can be uninstalled** — `setUninstallBlocked` was dropped
+along with everything else, so `adb uninstall com.samaritantechs.hooploanlock` works, and so
+does removing it from Settings. That is what handing a phone back means. After a PARTIAL it
+still cannot: ownership is still held, so the block on uninstall is still in force.
 
 ---
 
@@ -464,6 +549,13 @@ Stated plainly, because a security feature oversold is worse than none.
 - **A stolen token lets that one handset lie about its own status.** It cannot read the
   register, reach another IMEI, or change what the office decided — `state` is never writable
   from a phone. That asymmetry is the security model.
-- **None of this has been run on a real handset yet.** It compiles in CI; that is not the
-  same as tested. The first phone through the station is the real test, and the honest
-  expectation is that something will need fixing.
+- **It cannot give a phone back that a second admin also holds.** Releasing drops *our*
+  ownership. On stock that arrived carrying Samsung Knox Guard, that admin stays, and only
+  whoever registered it can clear it. See the PARTIAL row above.
+- **A released phone is genuinely released.** Once ownership is given up, the app can be
+  uninstalled and the phone factory reset — by us, by the customer, by anyone holding it.
+  That is the correct end of a cleared loan and not a hole in the lock, but it does mean
+  **Achia** is one-way from the handset's point of view: relocking it is a fresh enrol at a
+  bench, not a button in the office.
+- **The first handset found three bugs the CI could not.** It compiles in CI; that has never
+  been the same as tested. Expect a new model of phone to find something.

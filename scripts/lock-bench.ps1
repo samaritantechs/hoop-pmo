@@ -62,6 +62,9 @@ param(
     # so EnrolReceiver will accept a new one. Device Owner survives the clear, which is why
     # this works without a factory reset.
     [switch]$ReEnrol,
+    # THE WAY BACK OUT, for a handset the server can no longer reach. See the -Release block
+    # below, and docs/DEVICE-LOCKING.md, "The way back out, over the cable".
+    [switch]$Release,
     [string]$Apk = "$env:USERPROFILE\Downloads\HOOPLOAN-Lock.apk",
     [string]$Server = 'https://hoop-pmo.vercel.app'
 )
@@ -80,6 +83,9 @@ if (-not $Token -and -not $TokenFile) {
 usage, one phone:    .\lock-bench.ps1 -Token f1b942f3991b43dd8d8f857535a0d468
 usage, many phones:  .\lock-bench.ps1 tokens.txt
 add -ReEnrol to either if the phone already holds a token from a previous session.
+
+to RELEASE a phone the portal cannot reach (unlock it and hand it back):
+                     .\lock-bench.ps1 -Release -Token <that phone's token>
 "@
 }
 if ($TokenFile -and -not (Test-Path $TokenFile)) { Fail "Token file not found: $TokenFile" }
@@ -104,6 +110,46 @@ if ($serials.Count -eq 0) {
     Fail "No phones ready.`nCheck the cable, and that 'Allow USB debugging' was accepted on the phone's own screen."
 }
 Write-Host "Phones connected: $($serials.Count)"
+
+# THE WAY BACK OUT, for a handset the office cannot reach.
+# =============================================================================================
+# A release normally travels through the portal: press Achia, and the next beat unlocks the
+# phone and steps the app down as Device Owner. That needs a handset that is still listening.
+# When it is not -- the register says imeachiwa and the phone has said nothing for a day -- the
+# shell's own routes are all shut: `pm clear` is refused (CLEAR_APP_USER_DATA), so is
+# `dpm remove-active-admin` ("non-test admin"), so is `pm uninstall`
+# (DELETE_FAILED_DEVICE_POLICY_MANAGER), and factory reset is blocked by our own restriction.
+#
+# `adb install -r` is NOT shut: setUninstallBlocked blocks uninstall, not update. So a newer
+# APK goes on over the top, and the app does for itself what the shell may not.
+if ($Release) {
+    if (-not $Token) { Fail "-Release needs the phone's own token:  -Release -Token <token>" }
+    foreach ($s in $serials) {
+        Write-Host "  .  $s  releasing  " -NoNewline
+        $null = adb -s $s install -r "$Apk" 2>&1
+        if ($LASTEXITCODE -ne 0) { Write-Host 'FAILED at install' -ForegroundColor Red; continue }
+        # --include-stopped-packages IS NOT OPTIONAL: install -r leaves the app STOPPED, and a
+        # stopped app hears no broadcast. Without it, result=0 and nothing happens.
+        $out = (adb -s $s shell am broadcast --include-stopped-packages `
+                    -a "$pkg.RELEASE" -n "$pkg/.ReleaseReceiver" `
+                    -e token $Token 2>&1) -join ' '
+        if ($out -match 'TOKEN MISMATCH') {
+            Write-Host 'WRONG TOKEN - nothing was changed. Check this phone''s register row.' -ForegroundColor Red
+        } elseif ($out -match 'PARTIAL') {
+            # Not a failure: the phone is unlocked and holds no token, which is the state a
+            # fresh enrol is accepted in. Something else still owns it -- on Watu stock that is
+            # usually Samsung Knox Guard. `adb shell dumpsys device_policy` names the admins.
+            Write-Host 'PARTIAL - unlocked and token cleared, but another admin still owns it.' -ForegroundColor Yellow
+            Write-Host '           You can re-enrol and re-lock it as it is. Run: adb shell dumpsys device_policy'
+        } elseif ($out -match 'RELEASED') {
+            Write-Host 'RELEASED - ordinary phone again.' -ForegroundColor Green
+        } else {
+            $why = if ($out -match 'data="([^"]*)"') { $matches[1] } else { $out }
+            Write-Host "FAILED - $why" -ForegroundColor Red
+        }
+    }
+    exit 0
+}
 
 # THE PAIRING RULE, AND WHY IT CAN SOMETIMES BE SKIPPED ENTIRELY.
 # =============================================================================================

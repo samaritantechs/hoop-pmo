@@ -85,11 +85,16 @@ class Beat {
         if (imei != null && !imei.isEmpty()) Prefs.put(c, Prefs.IMEI, imei);
 
         if (r.optBoolean("retire", false)) {
-            // The loan cleared. Give the phone back completely and stop calling home.
-            Prefs.put(c, Prefs.RETIRED, true);
+            // The loan cleared. Give the phone back -- but only go SILENT once it is actually
+            // back. Unlock the screen and try to step down; retire and stop beating only if the
+            // step-down truly took. A phone the system refused to release must keep calling
+            // home, or it becomes what the first A07 became: owned, silent, unreachable. While
+            // it keeps beating the office still sees it and the next beat retries the release.
             Guard.unlock(c);
-            LockAdmin.unharden(c);
-            BeatJob.cancel(c);
+            if (LockAdmin.unharden(c)) {
+                Prefs.put(c, Prefs.RETIRED, true);
+                BeatJob.cancel(c);
+            }
             return;
         }
         if ("lock".equals(command)) Guard.lock(c);
@@ -134,11 +139,15 @@ class Beat {
         }
         if (System.currentTimeMillis() - first < RETIRE_AFTER_GONE_MS) return;
         // Fourteen days of the office not knowing us. Hand the phone back, exactly as a
-        // release does -- unlock, drop the restrictions, step down as Device Owner, stop.
-        Prefs.put(c, Prefs.RETIRED, true);
+        // release does -- unlock, drop the restrictions, step down as Device Owner. Only go
+        // silent if the step-down actually took; a phone still owned keeps beating rather than
+        // becoming a brick nobody can reach. The retry is harmless -- it runs at most once a
+        // beat and self-heals the moment the system stops refusing.
         Guard.unlock(c);
-        LockAdmin.unharden(c);
-        BeatJob.cancel(c);
+        if (LockAdmin.unharden(c)) {
+            Prefs.put(c, Prefs.RETIRED, true);
+            BeatJob.cancel(c);
+        }
     }
 
     /**
