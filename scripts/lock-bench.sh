@@ -58,9 +58,20 @@ ADMIN="$PKG/.LockAdmin"
 APK="${APK:-public/HOOPLOAN-Lock.apk}"
 SERVER="${SERVER:-https://hoop-pmo.vercel.app}"
 
+# ONE PHONE, WITHOUT A FILE. TOKEN=<token> covers the case the station hits constantly -- a
+# redo, a replacement, one that failed the first time -- where writing a two-word text file
+# is friction with no purpose. REENROL=1 clears the app's stored data first, so a handset
+# that already holds a token accepts a new one; Device Owner survives that, which is why it
+# works without a factory reset.
+TOKEN="${TOKEN:-}"
+REENROL="${REENROL:-}"
 TOKENS="${1:-}"
-if [ -z "$TOKENS" ] || [ ! -f "$TOKENS" ]; then
-    echo "usage: $0 <token-list.txt>    (one 'IMEI token' per line, from Devices -> Sajili simu)"
+if [ -z "$TOKEN" ] && { [ -z "$TOKENS" ] || [ ! -f "$TOKENS" ]; }; then
+    cat <<USAGE
+usage, one phone:    TOKEN=<that token> $0
+usage, many phones:  $0 <token-list.txt>    (one 'IMEI token' per line, from Devices -> Sajili simu)
+prefix REENROL=1 to either if the phone already holds a token from a previous session.
+USAGE
     exit 2
 fi
 [ -f "$APK" ] || { echo "APK not found: $APK   (set APK=/path/to/HOOPLOAN-Lock.apk)"; exit 2; }
@@ -68,18 +79,31 @@ fi
 # IMEI -> token. Tolerates commas, tabs, blank lines and # comments, because this file is
 # pasted together by hand at six in the morning.
 declare -A TOKEN_OF
-while IFS= read -r line; do
-    line="${line%%#*}"
-    line="$(printf '%s' "$line" | tr ',\t' '  ')"
-    set -- $line
-    [ $# -ge 2 ] || continue
-    TOKEN_OF["$1"]="$2"
-done < "$TOKENS"
-echo "Loaded ${#TOKEN_OF[@]} tokens from $TOKENS"
+if [ -n "$TOKENS" ] && [ -f "$TOKENS" ]; then
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | tr ',\t' '  ')"
+        set -- $line
+        [ $# -ge 2 ] || continue
+        TOKEN_OF["$1"]="$2"
+    done < "$TOKENS"
+    echo "Loaded ${#TOKEN_OF[@]} tokens from $TOKENS"
+fi
 
 SERIALS=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
 [ -n "$SERIALS" ] || { echo "No phones ready. Check the cable, and that 'Allow USB debugging' was accepted."; exit 1; }
-echo "Phones connected: $(printf '%s\n' "$SERIALS" | wc -l | tr -d ' ')"
+N_PHONES=$(printf '%s\n' "$SERIALS" | wc -l | tr -d ' ')
+echo "Phones connected: $N_PHONES"
+
+# THE ONE CASE WHERE THE IMEI MATCH IS SKIPPED, because it protects against nothing: one
+# phone, one token. There is no other handset to confuse it with, so the pairing cannot be
+# wrong -- and skipping it also skips the "could not read this phone's IMEI" failure, which
+# is what stops a single-phone job dead on Android 10+ where the modem read is refused.
+SINGLE="$TOKEN"
+if [ -z "$SINGLE" ] && [ "$N_PHONES" = "1" ] && [ "${#TOKEN_OF[@]}" = "1" ]; then
+    for v in "${TOKEN_OF[@]}"; do SINGLE="$v"; done
+    echo "One phone, one token: pairing them directly (no IMEI match needed)."
+fi
 echo
 
 ok=0; skipped=0; failed=0
@@ -90,9 +114,9 @@ for S in $SERIALS; do
     # and whose build refuses the read -- that is ordinary, not a fault; see Imei.java.
     IMEI=$(adb -s "$S" shell service call iphonesubinfo 1 2>/dev/null \
            | sed -n 's/.*'"'"'\(.*\)'"'"'.*/\1/p' | tr -cd '0-9' | tail -c 16)
-    TOKEN="${TOKEN_OF[$IMEI]:-}"
+    if [ -n "$SINGLE" ]; then TOK="$SINGLE"; else TOK="${TOKEN_OF[$IMEI]:-}"; fi
 
-    if [ -z "$TOKEN" ]; then
+    if [ -z "$TOK" ]; then
         # NEVER GUESS. A token written into the wrong handset makes that phone answer for
         # another customer's loan, and the only way back is a factory reset.
         echo "  ?  $S — could not match an IMEI (read: '${IMEI:-none}'). Left for the manual pass."
@@ -101,14 +125,20 @@ for S in $SERIALS; do
         continue
     fi
 
-    printf '  ·  %s  imei %s  ' "$S" "$IMEI"
+    printf '  ·  %s  imei %s  ' "$S" "${IMEI:-(not read)}"
+
+    # REENROL first, so a handset already holding a token can take a new one.
+    [ -n "$REENROL" ] && adb -s "$S" shell pm clear "$PKG" >/dev/null 2>&1
 
     adb -s "$S" install -r "$APK" >/dev/null 2>&1 || {
         echo "FAILED at install"; failed=$((failed+1)); continue; }
 
     # Order is not optional: owner first, THEN the token. The other way round the receiver
     # drops the token and adb still prints a success line. That cost an evening once.
-    if ! adb -s "$S" shell dpm set-device-owner "$ADMIN" 2>&1 | grep -qi 'success'; then
+    # "already set" is not a failure -- it is the ordinary state of every phone being redone,
+    # and it arrives as a red Java stack trace, which is not how a success usually looks.
+    OWNER=$(adb -s "$S" shell dpm set-device-owner "$ADMIN" 2>&1)
+    if ! printf '%s' "$OWNER" | grep -qiE 'success|already set|already an admin'; then
         echo "FAILED at set-device-owner — phone must have NO google account and NO screen lock"
         failed=$((failed+1)); continue
     fi
@@ -116,8 +146,11 @@ for S in $SERIALS; do
     # EnrolReceiver answers with a result code and a readable message, so a refusal says why
     # rather than printing result=0 and meaning nothing.
     OUT=$(adb -s "$S" shell am broadcast -a "$PKG.ENROL" -n "$PKG/.EnrolReceiver" \
-              -e server "$SERVER" -e token "$TOKEN" 2>&1)
-    if printf '%s' "$OUT" | grep -q 'ENROLLED'; then
+              -e server "$SERVER" -e token "$TOK" 2>&1)
+    if printf '%s' "$OUT" | grep -q 'ALREADY ENROLLED'; then
+        echo "ALREADY ENROLLED (prefix REENROL=1 to replace its token)"
+        ok=$((ok+1))
+    elif printf '%s' "$OUT" | grep -q 'ENROLLED'; then
         echo "ENROLLED"
         ok=$((ok+1))
     else

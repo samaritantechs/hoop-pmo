@@ -121,10 +121,36 @@ step 1, walks every phone that `adb devices` can see, and runs all three on each
 each phone to its own token by asking the handset for its IMEI, and refusing to guess when it
 cannot read one. Both files carry the instructions in their own headers.
 
-| Station | Run |
-|---|---|
-| **Windows** (this is what HOOP's bench runs) | `powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 tokens.txt`, or double-click `scripts\lock-bench.bat` |
-| Linux / macOS | `./scripts/lock-bench.sh tokens.txt` |
+| | Windows (HOOP's bench) | Linux / macOS |
+|---|---|---|
+| **Many phones** | `…lock-bench.ps1 tokens.txt` | `./scripts/lock-bench.sh tokens.txt` |
+| **One phone** | `…lock-bench.ps1 -Token <token>` | `TOKEN=<token> ./scripts/lock-bench.sh` |
+| **Already holds a token** | add `-ReEnrol` | prefix `REENROL=1` |
+
+(Windows form in full: `powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 …`,
+or double-click `scripts\lock-bench.bat`.)
+
+> "the locking method for bulk should be one that works wether there is one connected phone
+> or more"
+>
+> **One phone needs no file.** Writing a two-word text file to provision a single handset is
+> friction with no purpose, and the single-phone case is constant — a redo, a replacement,
+> one that failed the first time.
+>
+> **And with one phone and one token the IMEI match is skipped**, because it is protecting
+> against nothing: there is no other handset to confuse it with, so the pairing cannot be
+> wrong. That also skips the *"could not read this phone's IMEI"* failure, which is exactly
+> what stops a single-phone job dead on Android 10+ where the modem read is refused until
+> Device Owner takes. With several phones the match is back, because then there IS a wrong
+> pairing to make and it costs a customer their handset.
+>
+> **`-ReEnrol` replaces the token a handset is already holding** — it clears the app's stored
+> data first, and Device Owner survives that, so it works without a factory reset.
+
+**Two answers that are not failures**, and both scripts now count them as done rather than
+stopping: `set-device-owner` saying **device owner is already set** (arriving as a red Java
+stack trace, which is not how a success usually looks), and the broadcast saying
+**ALREADY ENROLLED**. Both mean the handset was provisioned before.
 
 > The Windows version exists because the first thing the station saw was
 > `'.' is not recognized as an internal or external command` — a bash script on a Windows
