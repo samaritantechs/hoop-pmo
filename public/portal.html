@@ -488,6 +488,29 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){retu
 function money(n){ n=Number(n)||0; return n.toLocaleString('en-US',{maximumFractionDigits:0}); }
 function pct(x){ return (x==null||isNaN(x))?'—':Math.round(100*x)+'%'; }
 function fmtDur(sec){ sec=Math.max(0,Math.round(Number(sec)||0)); var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60,p=function(n){return(n<10?'0':'')+n;}; return h>0?(h+':'+p(m)+':'+p(s)):(m+':'+p(s)); }
+/* THE CLOCK, NOT AN AGE.
+   -----------------------------------------------------------------------------------------
+     "you said you'll 00:00:00 for last pinged so as we see actual time"
+
+   An age answers "how long ago"; it does not answer "was that before or after I pressed the
+   button", which is the only question anybody actually asks of this column. "4 dk" beside an
+   order given "4 dk" ago leaves you guessing at the order of two events four minutes apart.
+   A wall clock does not: 14:06:31 against 14:06:12 is settled at a glance.
+
+   Fed epoch milliseconds from the server, never a string. A timestamp text without a zone is
+   read as LOCAL by the browser and as UTC by the server, so the same row would tell Dar es
+   Salaam a time three hours out. The number cannot be misread. */
+function clock(ms){
+  if(!ms) return '';
+  var d=new Date(Number(ms)); if(isNaN(d.getTime())) return '';
+  var p=function(n){ return (n<10?'0':'')+n; };
+  var t=p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+  var n=new Date();
+  var today=d.getFullYear()===n.getFullYear()&&d.getMonth()===n.getMonth()&&d.getDate()===n.getDate();
+  return today?t:(p(d.getDate())+'/'+p(d.getMonth()+1)+' '+t);
+}
+/** Minutes as a person says them. One definition, so two columns cannot drift apart. */
+function agoMins(n){ return n==null?'':n<1?'sasa hivi':n<60?money(n)+' dk':money(Math.round(n/60))+'h'; }
 function telHref(v){ var d=String(v==null?'':v).replace(/\D/g,''); if(!d) return '#'; return d.indexOf('255')===0?'+'+d:'+255'+d.replace(/^0+/,''); }
 function toast(m,bad){ var t=$('#toast'); t.textContent=m; t.className='toast'+(bad?' bad':''); t.style.display='block'; clearTimeout(toast._t); toast._t=setTimeout(function(){t.style.display='none';},3500); }
 
@@ -652,6 +675,19 @@ var CODE='', BOOT=null, TAB='dash';
    last one, and somebody has to tidy every sheet by hand before it can be sent to anyone.
    Marking the cell is better than guessing at the content: a column that legitimately holds
    the word "Futa" would be indistinguishable otherwise. */
+/* A CELL WITH A SUB-LINE IS TWO FACTS, and textContent runs them together. Several columns
+   now carry a small second line under the main one -- the beat's clock over its age, the
+   order's time over who gave it -- and `td.textContent` returns "14:06:314 dk", because a
+   <div> boundary is not whitespace. It reads as a corrupt number in Excel rather than as two
+   values, which is worse than either of them alone. So block children are separated here. */
+function cellText_(td){
+  var s='';
+  [].slice.call(td.childNodes).forEach(function(n){
+    if(n.nodeType===1&&/^(DIV|BR|P|LI|TR)$/.test(n.nodeName)) s+=' ';
+    s+=(n.textContent||'');
+  });
+  return s.replace(/\s+/g,' ').trim();
+}
 function csvOfTable_(t){
   var out=[];
   [].slice.call(t.rows).forEach(function(tr){
@@ -659,7 +695,7 @@ function csvOfTable_(t){
     var cells=[].slice.call(tr.cells).filter(function(td){
       return !td.classList.contains('noxl');
     }).map(function(td){
-      return '"'+td.textContent.replace(/\s+/g,' ').trim().replace(/"/g,'""')+'"';
+      return '"'+cellText_(td).replace(/"/g,'""')+'"';
     });
     if(cells.length) out.push(cells.join(','));
   });
@@ -2207,14 +2243,14 @@ function drawDevices(m){
           var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
             :r.state==='released'?'<span class="chip ok">imeachiwa</span>'
             :r.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
-          /* THE UNIT FOLLOWS THE BEAT. At a beat a minute, "0h" covers everything from
-             "spoke a second ago" to "has not spoken since before you pressed the button" --
-             the two answers you most need to tell apart when an order looks stuck. Minutes
-             under the hour, hours above it. */
-          var age=r.silentMins==null?'':r.silentMins<1?'sasa hivi'
-            :r.silentMins<60?money(r.silentMins)+' dk':money(Math.round(r.silentMins/60))+'h';
+          /* THE TIME IT SPOKE, with the age underneath. The clock is what lets you place the
+             beat either side of the order you gave; the age is what makes a dead phone
+             obvious without doing arithmetic. Both, because they answer different questions,
+             and the red still belongs to the age's fact -- silence, not lateness. */
+          var age=agoMins(r.silentMins);
           var seen=r.neverSeen?'<span class="mut">hajawahi</span>'
-            :(r.stale?'<span style="color:var(--bad)">':'<span>')+age+'</span>';
+            :(r.stale?'<span style="color:var(--bad)">':'<span>')+esc(clock(r.seenAt)||age)+'</span>'
+              +(age?'<div class="mut" style="font-size:10px">'+esc(age)+'</div>':'');
           return '<tr><td class="noxl"><input type="checkbox" class="dvck" value="'+esc(r.imei)+'"></td>'
             +'<td style="font-size:11px">'+esc(r.imei)+'</td><td>'+esc(r.item||'—')+'</td>'
             +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
@@ -2225,9 +2261,8 @@ function drawDevices(m){
                completely different things about a handset still reporting locked. The age
                is what turns "is this broken" into "has it had time to hear me". */
             +'<td>'+esc(r.lastOrder||'—')
-              +(r.orderAgeMins!=null?'<div class="mut" style="font-size:10px">'
-                +(r.orderAgeMins<1?'sasa hivi':r.orderAgeMins<60?money(r.orderAgeMins)+' dk'
-                  :money(Math.round(r.orderAgeMins/60))+'h')
+              +(r.orderAt||r.orderAgeMins!=null?'<div class="mut" style="font-size:10px">'
+                +esc(clock(r.orderAt)||agoMins(r.orderAgeMins))
                 +(r.orderBy?' · '+esc(r.orderBy):'')+'</div>':'')
             +'</td>'
             +'<td>'+esc(r.reported||'—')+'</td><td>'+seen+'</td>'
@@ -2413,25 +2448,35 @@ var DEVPKG='com.samaritantechs.hooploanlock';
                               prints result=0, which reads exactly like success. That one
                               cost twenty hours on a real handset.
 
-   So: one line, `&&` chained, absolute path, every flag present, the token already in it.
-   Paste, enter, done.
+   So: one line, absolute path, every flag present, the token already in it. Paste, enter,
+   done.
 
-   AND THE THREE STILL SHOWN SEPARATELY BELOW, because the single line stops at the first
-   failure and the commonest "failure" on this bench is not one: a phone being redone answers
-   "device owner is already set", which is the finished state, not an error. When that
-   happens the operator runs the last command on its own. */
+   AND THE ENROL IS NOT CHAINED BEHIND `&&`, which is what let the second box go away.
+   -----------------------------------------------------------------------------------------
+     "token copying just have 3 cmd at once dont confuse me nor sipho we taking it nowhere
+      all we need is cmd to sinle paste and run"
+     "just one view and copy now you added the 3rd and am confused"
+
+   The screen used to offer the three separate commands as well, because `&&` stops at the
+   first failure and the commonest stop on this bench is not a failure at all: a phone being
+   redone answers "device owner is already set", which is the finished state. Two boxes and a
+   paragraph explaining when to use which -- a rule the operator has to read, understand and
+   apply correctly at the exact moment the phone in their hand did something unexpected.
+
+   In cmd.exe `&` runs the next command whatever happened to the last one. So the group runs
+   set-device-owner, then the enrol REGARDLESS -- which is precisely the behaviour the second
+   box existed to provide, done by the shell instead of by a person. "already set" now scrolls
+   past and the enrol lands. The install keeps its `&&`: if the APK is not there, nothing
+   downstream can work and the operator should see one error, not three.
+
+   Guarded by the parentheses, not by cmd's precedence rules -- an explicit group is the same
+   on every Windows this will ever touch, and this is not a line to be clever on. */
 function devOneLiner(token){
   return 'adb install -r "%USERPROFILE%\\Downloads\\HOOPLOAN-Lock.apk"'
-    + ' && adb shell dpm set-device-owner ' + DEVCMP
-    + ' && adb shell am broadcast --include-stopped-packages'
+    + ' && (adb shell dpm set-device-owner ' + DEVCMP
+    + ' & adb shell am broadcast --include-stopped-packages'
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
-    + ' -e server ' + location.origin + ' -e token ' + token;
-}
-function devAdbLines(token){
-  return 'adb install -r "%USERPROFILE%\\Downloads\\HOOPLOAN-Lock.apk"\n'
-    + 'adb shell dpm set-device-owner ' + DEVCMP + '\n'
-    + 'adb shell am broadcast --include-stopped-packages -a ' + DEVPKG + '.ENROL'
-    + ' -n ' + DEVPKG + '/.EnrolReceiver -e server ' + location.origin + ' -e token ' + token;
+    + ' -e server ' + location.origin + ' -e token ' + token + ')';
 }
 function devCopyBox(id){
   var t=$('#'+id); if(!t) return; t.select();
@@ -2450,11 +2495,16 @@ function devProvision(m, r){
     +'<textarea id="dvTok" rows="'+Math.min(12,Math.max(3,p.length))+'" readonly '
     +'style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'+esc(lines)+'</textarea>'
     +'<button class="btn w" id="dvTokCopy">Nakili orodha / Copy the list</button>'
-    +'<div class="sub" style="margin-top:12px">Kwa kila simu, kwenye laptop ya kituo — badilisha token: '
-    +'/ Per phone, on the station laptop — swap in that phone\'s token:</div>'
-    +'<textarea id="dvAdb" rows="6" readonly style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
-    +esc(devAdbLines('<TOKEN>'))+'</textarea>'
-    +'<button class="btn w ghost" id="dvAdbCopy">Nakili amri / Copy the commands</button>'
+    /* THE PLACEHOLDER IS NOT IN ANGLE BRACKETS, and that is not a style choice: in cmd.exe
+       `<` and `>` are redirection. A pasted `<TOKEN>` does not read as "fill this in", it
+       errors -- and the operator gets a message about a file, from a command about a phone. */
+    +'<div class="sub" style="margin-top:12px">Kwa kila simu, kwenye laptop ya kituo — weka token ya simu '
+    +'hiyo mahali pa <b>PASTE_THE_TOKEN_HERE</b>, bandika kwenye cmd, bonyeza enter: '
+    +'/ Per phone, on the station laptop — swap that phone\'s token in for '
+    +'<b>PASTE_THE_TOKEN_HERE</b>, paste into cmd, press enter:</div>'
+    +'<textarea id="dvAdb" rows="5" readonly style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
+    +esc(devOneLiner('PASTE_THE_TOKEN_HERE'))+'</textarea>'
+    +'<button class="btn w ghost" id="dvAdbCopy">Nakili amri / Copy the command</button>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
   $('#dvTokCopy').onclick=function(){ devCopyBox('dvTok'); };
   $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
@@ -2469,30 +2519,25 @@ function devToken(imei){
         +'/ Enrolled before the phone half existed; re-enrol after the migration to mint one.</div>');
       return;
     }
-    drawer('<h3>Token · '+esc(imei)+'</h3>'
-      +'<div class="sub">Kwa simu iliyofutwa na kuwekwa app upya. Usiisambaze. '
-      +'/ For re-provisioning a wiped handset. Do not share it.</div>'
-      +'<textarea id="dvOne" readonly rows="2" style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'
-      +esc(r.token)+'</textarea>'
-      +'<button class="btn w ghost" id="dvOneCopy">Nakili token / Copy</button>'
-      +'<div class="sub" style="margin-top:12px"><b>Amri MOJA — bandika kwenye cmd, bonyeza enter.</b> '
-      +'/ ONE command: paste into the black cmd window and press enter. Pakua APK kwanza kutoka '
-      +'<a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a> (inaenda Downloads).</div>'
-      +'<textarea id="dvOneCmd" readonly rows="4" style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
+    /* ONE BOX, ONE BUTTON. There were three -- the bare token, the single command, and the
+       three commands separately -- and the operator's answer to that was "am confused", which
+       is the correct answer: nothing on the screen said which of them to use. The token is
+       inside the command already, so showing it on its own was never a second thing to know,
+       only a second thing to choose between. */
+    drawer('<h3>Simu · '+esc(imei)+'</h3>'
+      +'<div class="sub"><b>Bandika kwenye cmd, bonyeza enter. Ndiyo yote.</b> '
+      +'/ Paste into the black cmd window, press enter. That is all. '
+      +'Pakua APK kwanza kutoka <a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a> '
+      +'(inaenda Downloads). Usiisambaze — ndani mna token ya simu hii. '
+      +'/ It carries this handset\'s token; do not share it.</div>'
+      +'<textarea id="dvOneCmd" readonly rows="5" style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
       +esc(devOneLiner(r.token))+'</textarea>'
-      +'<button class="btn w" id="dvOneCmdCopy">Nakili amri moja / Copy the one command</button>'
-      /* The three separately, because the one-liner stops at the first failure and the
-         commonest one on this bench is not a failure: "device owner is already set" is the
-         finished state of every phone being redone. Then only the last line is wanted. */
-      +'<div class="sub" style="margin-top:12px">Ikisimama kwa <b>"already set"</b> — hiyo si kosa, '
-      +'simu ilishawahi kusajiliwa. Endesha ya mwisho peke yake. '
-      +'/ If it stops at "already set" that phone was provisioned before; run the last one alone.</div>'
-      +'<textarea id="dvOneAdb" readonly rows="6" style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
-      +esc(devAdbLines(r.token))+'</textarea>'
-      +'<button class="btn w ghost" id="dvOneAdbCopy">Nakili zote tatu / Copy all three</button>');
-    $('#dvOneCopy').onclick=function(){ devCopyBox('dvOne'); };
+      +'<button class="btn w" id="dvOneCmdCopy">Nakili amri / Copy the command</button>'
+      +'<div class="sub" style="margin-top:12px">Ukiona <b>"already set"</b> au <b>"Success"</b> '
+      +'— endelea, si kosa. Ya mwisho ndiyo muhimu: <b>result=1</b> na neno <b>ENROLLED</b>. '
+      +'/ "already set" and "Success" both scroll past; the line that matters is the last one, '
+      +'<b>result=1 … ENROLLED</b>.</div>');
     $('#dvOneCmdCopy').onclick=function(){ devCopyBox('dvOneCmd'); };
-    $('#dvOneAdbCopy').onclick=function(){ devCopyBox('dvOneAdb'); };
   }).catch(function(e){ toast(safeErr(e), true); });
 }
 function devHistory(imei){

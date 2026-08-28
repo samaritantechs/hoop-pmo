@@ -416,11 +416,85 @@ test('the provisioning command the portal hands out actually runs on a Windows b
   // happens to be standing in the right folder -- and reports "failed to stat" when not.
   assert.match(body, /%USERPROFILE%/, 'the APK path must not depend on the current directory');
 
-  // And the multi-line version, still offered for redos, must carry the same flags.
-  const many = src.slice(src.indexOf('function devAdbLines'));
-  const manyBody = many.slice(0, many.indexOf('\n}'));
-  assert.match(manyBody, /--include-stopped-packages/,
-    'the three-line version must carry the flag too -- whichever copy is pasted is the one '
-    + 'that decides whether a phone gets provisioned');
-  assert.match(manyBody, /adb install -r/, 'the three-line version needs -r as well');
+  /* THE ENROL MUST NOT BE CHAINED BEHIND THE OWNER STEP.
+     ---------------------------------------------------------------------------------------
+       "token copying just have 3 cmd at once dont confuse me nor sipho"
+
+     The screen used to carry the three commands separately as well, purely because `&&`
+     stops at the first failure and the commonest stop here is not a failure: a phone being
+     redone answers "device owner is already set", which is the finished state. Dropping that
+     second box is only safe while `&` -- run regardless -- sits between owner and enrol, so
+     that is pinned. Restore the `&&` and the operator is back to a phone that installed,
+     printed something red, and never enrolled. */
+  const between = body.slice(owner, enrol);
+  assert.ok(!between.includes('&&'),
+    'the enrol must not be chained behind set-device-owner: "already set" is the finished '
+    + 'state of every phone being redone, and && would swallow the enrol');
+  assert.match(between, /[^&]&[^&]/,
+    'set-device-owner and the enrol must be joined by a single & so the enrol runs whatever '
+    + 'the owner step said');
+
+  // Exactly one command is offered, because two was the confusion being fixed.
+  assert.ok(!/function devAdbLines/.test(src),
+    'the multi-line variant is gone on purpose -- one box, one button, nothing to choose');
+
+  /* AND NO ANGLE-BRACKET PLACEHOLDER ANYWHERE NEAR IT. In cmd.exe `<` and `>` are
+     redirection: a pasted <TOKEN> does not read as "fill this in", it errors, and the
+     operator gets a message about a file from a command about a phone. */
+  assert.ok(!/devOneLiner\('<|devOneLiner\("</.test(src),
+    'the bulk template must not use <TOKEN>: angle brackets are redirection in cmd.exe');
+});
+
+/** Lift one top-level function out of the page and run it for real. */
+function lift(src, name, deps) {
+  const at = src.indexOf('function ' + name + '(');
+  assert.ok(at > 0, name + ' is not defined in portal.html any more');
+  const body = src.slice(at, src.indexOf('\n}', at) + 2);
+  return new Function((deps || '') + body + '\nreturn ' + name + ';')();
+}
+
+/* =========================================================================================
+   THE CLOCK IS THE COLUMN, so it is tested as behaviour rather than as a shape.
+
+     "you said you'll 00:00:00 for last pinged so as we see actual time"
+
+   Two things can go wrong here and both are silent: a zero-padding slip turns 14:06:03 into
+   14:6:3, and a same-day check that only compares the date-of-month calls last month's beat
+   "today". Either one makes the column say the wrong time confidently, which is worse than
+   the age it replaced.
+   ========================================================================================= */
+test('the last-pinged column shows a real clock, padded, and dates anything not today', () => {
+  const src = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const clock = lift(src, 'clock');
+
+  assert.equal(clock(null), '', 'a phone that never spoke has no time to show');
+  assert.equal(clock(0), '', 'epoch zero is "no timestamp", not 1970');
+
+  // Today, single-digit everywhere: the padding case.
+  const t = new Date(); t.setHours(4, 6, 3, 0);
+  assert.equal(clock(t.getTime()), '04:06:03', 'every field is two digits or it is not a clock');
+
+  const u = new Date(); u.setHours(14, 30, 59, 0);
+  assert.equal(clock(u.getTime()), '14:30:59');
+
+  /* A year ago TO THE DAY -- same date-of-month, same month, different year. A same-day
+     check that forgot the year would print this as a bare time and quietly claim a phone
+     that has been silent for a year spoke this afternoon. */
+  const old = new Date(); old.setFullYear(old.getFullYear() - 1); old.setHours(9, 5, 7, 0);
+  assert.match(clock(old.getTime()), /^\d\d\/\d\d 09:05:07$/,
+    'anything but today must carry its date, or a year-old beat reads as this afternoon');
+});
+
+/* A cell that carries a sub-line is two facts; the export used to run them together into
+   "14:06:314 dk", which Excel shows as a corrupt number rather than a time and an age. */
+test('the Excel export keeps a cell and its sub-line apart', () => {
+  const src = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const cellText = lift(src, 'cellText_');
+  const td = { childNodes: [
+    { nodeType: 3, textContent: '14:06:31' },
+    { nodeType: 1, nodeName: 'DIV', textContent: '4 dk' },
+  ] };
+  assert.equal(cellText(td), '14:06:31 4 dk');
+  assert.equal(cellText({ childNodes: [{ nodeType: 3, textContent: '  spaced  out ' }] }),
+    'spaced out', 'ordinary cells still collapse and trim exactly as before');
 });
