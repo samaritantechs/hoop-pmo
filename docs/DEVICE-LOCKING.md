@@ -525,10 +525,19 @@ enrol, no factory reset:
 3. The enrol broadcast with the new token, exactly as at the bench
 4. **Funga** in the portal, and wait for *imefungwa* before boxing it
 
-**And after a real RELEASED, the app can be uninstalled** — `setUninstallBlocked` was dropped
-along with everything else, so `adb uninstall com.samaritantechs.hooploanlock` works, and so
-does removing it from Settings. That is what handing a phone back means. After a PARTIAL it
-still cannot: ownership is still held, so the block on uninstall is still in force.
+**And after a real RELEASED, the app can be uninstalled** — `adb uninstall
+com.samaritantechs.hooploanlock` works, and so does removing it from Settings. That is what
+handing a phone back means.
+
+After a **PARTIAL** it still cannot, and the reason is worth being exact about: it is not our
+`setUninstallBlocked` — that was dropped along with everything else. Android refuses to
+uninstall an app that is *still the active device owner*, whatever that flag says
+(`DELETE_FAILED_DEVICE_POLICY_MANAGER`). Clear the other admin and it goes.
+
+A released phone also **never self-locks again**, even in PARTIAL. It keeps beating, so the
+office can still see it and can still change its mind — but the offline grace is switched
+off on the handset the moment a release is ordered. Otherwise a released phone that spends a
+week out of coverage would lock itself for a loan that is already closed.
 
 ---
 

@@ -599,6 +599,37 @@ test('the handset never retires while it is still Device Owner', () => {
     'unharden() called and its answer thrown away -- the retire decision must depend on it');
 });
 
+test('a released phone never self-locks, even when the step-down was refused', () => {
+  /* THE REGRESSION THE FIX ABOVE COULD HAVE INTRODUCED, caught by reading the diff rather
+     than by a handset a month from now.
+
+     Keeping a refused-release phone beating is right. But it also keeps it subject to
+     enforceGrace -- and the server goes on sending a real graceHours (a week, by default) for
+     any handset that was ever sold, because that figure describes the ROW, not this moment.
+     So a former customer's phone, released, still owned because Knox refused the step-down,
+     that then spends a week out of coverage, would lock itself for a loan the office closed.
+     A lock nobody ordered, on a phone nobody can unlock, for a debt that does not exist.
+
+     Both release paths therefore pin graceHours to -1 -- "never self-lock" -- before they try
+     to step down, so it holds whichever way that goes. */
+  const beat = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Beat.java');
+  const pins = [...beat.matchAll(/Prefs\.put\(c,\s*Prefs\.GRACE_HOURS,\s*"-1"\)/g)];
+  assert.equal(pins.length, 2,
+    'both the retire path and the sustained-403 self-release must pin graceHours to -1');
+
+  // Each pin must come BEFORE its unharden attempt: written after, it would be skipped on
+  // exactly the path that needs it -- the one where the step-down was refused.
+  for (const m of pins) {
+    const after = beat.slice(m.index, m.index + 400);
+    assert.match(after, /LockAdmin\.unharden\(c\)/,
+      'the graceHours pin must sit ahead of the step-down it is protecting against');
+  }
+
+  // -1 is the value enforceGrace actually treats as "never"; anything else self-locks.
+  assert.match(beat, /if \(graceHours <= 0\) return;/,
+    'enforceGrace stopped treating a non-positive grace as "never self-lock"');
+});
+
 /* =========================================================================================
    THE WAY BACK OUT, over the cable. ReleaseReceiver is the recovery route for a handset the
    server can no longer reach -- the A07's actual situation. It is exported so adb can reach

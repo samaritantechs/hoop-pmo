@@ -85,11 +85,20 @@ class Beat {
         if (imei != null && !imei.isEmpty()) Prefs.put(c, Prefs.IMEI, imei);
 
         if (r.optBoolean("retire", false)) {
-            // The loan cleared. Give the phone back -- but only go SILENT once it is actually
-            // back. Unlock the screen and try to step down; retire and stop beating only if the
-            // step-down truly took. A phone the system refused to release must keep calling
-            // home, or it becomes what the first A07 became: owned, silent, unreachable. While
-            // it keeps beating the office still sees it and the next beat retries the release.
+            /* A RELEASED PHONE NEVER SELF-LOCKS AGAIN, and this line is load-bearing now that
+               a refused step-down leaves the handset beating instead of retiring. The server
+               goes on sending a real graceHours for any phone that was ever sold -- it
+               describes the row, not this moment -- and enforceGrace would take that at its
+               word. A former customer's phone that spent a week out of coverage would then
+               lock itself for a loan the office had already closed. Written before the retire
+               attempt, so it holds whether or not the step-down takes. */
+            Prefs.put(c, Prefs.GRACE_HOURS, "-1");
+            /* The loan cleared. Give the phone back -- but only go SILENT once it is actually
+               back. Unlock the screen and try to step down; retire and stop beating only if
+               that truly took. A phone the system refused to release must keep calling home,
+               or it becomes what the first A07 became: owned, silent, unreachable. While it
+               keeps beating the office still sees it, the next beat retries the release, and
+               an office that changes its mind can still reach it. */
             Guard.unlock(c);
             if (LockAdmin.unharden(c)) {
                 Prefs.put(c, Prefs.RETIRED, true);
@@ -143,6 +152,10 @@ class Beat {
         // silent if the step-down actually took; a phone still owned keeps beating rather than
         // becoming a brick nobody can reach. The retry is harmless -- it runs at most once a
         // beat and self-heals the moment the system stops refusing.
+        // And never self-lock again, for the same reason as the retire path above: a handset
+        // still beating because the step-down was refused must not be caught by the grace it
+        // was carrying before the office lost it.
+        Prefs.put(c, Prefs.GRACE_HOURS, "-1");
         Guard.unlock(c);
         if (LockAdmin.unharden(c)) {
             Prefs.put(c, Prefs.RETIRED, true);
