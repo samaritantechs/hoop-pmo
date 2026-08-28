@@ -1814,10 +1814,21 @@ const FNS = {
     const pTerms = ['name.ilike.' + pat, 'phone.ilike.' + pat]
       .concat(dpat ? ['phone.ilike.' + dpat] : []);
     const sTerms = ['serial.ilike.' + pat, 'agent.ilike.' + pat, 'item.ilike.' + pat];
-    const [pe, st] = await Promise.all([
+    /* THE DEVICE REGISTER IS THE FOURTH PLACE AN IMEI LIVES, and it was the one the search
+       could not reach -- so the single question this box exists for, "what is going on with
+       this handset", was the one it could not answer. A phone reaches the register the
+       moment it is enrolled, which is often BEFORE it appears on a stock report and long
+       before it has a customer, so for new stock this is the only leg that finds it at all.
+       Never the enrol_token: this is a search result, and the token is the handset's
+       credential -- see deviceHistory, which names its columns for the same reason. */
+    const dTerms = ['imei.ilike.' + pat, 'item.ilike.' + pat, 'holder.ilike.' + pat]
+      .concat(dpat ? ['imei.ilike.' + dpat] : []);
+    const [pe, st, dv] = await Promise.all([
       db.from('hoop_agents').select('name, phone, role, branch, active').or(pTerms.join(',')).limit(20),
       db.from('hoop_aged_stock').select('serial, item, agent, as_of')
         .or(sTerms.join(',')).order('as_of', { ascending: false }).limit(20),
+      db.from('devices').select('imei, item, holder, state, state_reason, reported, last_seen, customer')
+        .or(dTerms.join(',')).limit(20),
     ]);
     if (pe.error) throw new Error(pe.error.message);
     const seenS = new Set(), stock = [];
@@ -1827,10 +1838,25 @@ const FNS = {
       stock.push({ serial: s.serial, item: s.item || '', holder: s.agent || '',
         asOf: s.as_of ? String(s.as_of).slice(0, 10) : '' });
     }
+    /* The devices table may not exist yet on a deployment that has not run the migration --
+       the same tolerance deviceList shows. A search that 500s because ONE of four legs is
+       missing is worse than a search that quietly returns the other three. */
+    const now = Date.now();
+    const devices = (dv.error ? [] : (dv.data || [])).map(d => {
+      const seen = d.last_seen ? Date.parse(d.last_seen) : NaN;
+      const hrs = Number.isFinite(seen) ? Math.round((now - seen) / 3600000) : null;
+      return { imei: d.imei, item: d.item || '', holder: d.holder || '',
+        customer: d.customer || '', state: d.state || '', reason: d.state_reason || '',
+        reported: d.reported || '',
+        /* Ordered is not confirmed, and the search result has to say which -- it is the
+           same distinction the Devices tab draws with "imeagizwa · bado". */
+        lockState: d.state !== 'locked' ? null : (d.reported === 'locked' ? 'confirmed' : 'pending'),
+        neverSeen: !d.last_seen, silentHours: hrs };
+    });
     return { ok: true, customers: cs.customers,
       people: (pe.data || []).map(p => ({ name: p.name || '', phone: p.phone || '',
         role: p.role || '', branch: p.branch || '', active: p.active !== false })),
-      stock };
+      stock, devices };
   },
 
   /** THE OFFICE, not the logins: everyone on Sipho's register -- agents, team leaders,

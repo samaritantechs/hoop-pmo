@@ -270,6 +270,44 @@ The phone says hello the moment it is enrolled, so it should show up on the regi
 the box is still open. If it does not, provisioning did not take — check it there and then,
 not after it has been reboxed.
 
+> ### Make a phone check in RIGHT NOW, instead of waiting a quarter of an hour
+>
+> ```bat
+> adb shell am broadcast --include-stopped-packages -a android.intent.action.BOOT_COMPLETED -n com.samaritantechs.hooploanlock/.BootReceiver
+> ```
+>
+> The beat is every fifteen minutes, which is right for a fleet and wrong for a bench — and
+> hopeless in front of an audience. `BootReceiver` re-asserts the restrictions, restores
+> whatever the phone should be doing, and beats immediately, so this is the same work the
+> phone does after a reboot, without the reboot.
+>
+> **Order the lock in the portal, run that line, refresh.** Confirmed in seconds.
+>
+> It needs a cable, so it is a bench and demo tool, not a field one — a phone in a customer's
+> pocket still gets its orders on the ordinary fifteen-minute beat.
+
+> ### "imeagizwa · bado" with the phone reading *unlocked* is not a failure — for fifteen minutes
+>
+> This reads exactly like a broken lock and cost a session:
+>
+> ```
+> 351388334583295  —  —  imeagizwa · bado   unlocked   0h
+> ```
+>
+> The report and the answer are ONE round trip. The phone says what it was doing when the
+> request left, and only then hears "lock" — so the beat that carries out a lock is the beat
+> that reports the phone as still unlocked. The register learns the truth on the *next* beat.
+>
+> A handset on **versionCode 2 or later** closes that gap itself: when an answer actually
+> changes what the phone is doing, it spends one extra request saying so, and the register
+> flips within seconds. On an older build, or if you want it instantly either way, use the
+> force-a-beat line above.
+>
+> So: ordered → up to 15 min → confirmed. If it is still *imeagizwa · bado* after two beats
+> **and** the handset's own screen is not locked, then something is genuinely wrong — and the
+> first thing to check is `Iliongea lini`, because a phone that is not beating cannot be
+> locking either.
+
 ### 4. Lock it BEFORE you box it
 
 This is the step that makes stock locking work, and the one that is easy to get backwards.
