@@ -532,6 +532,27 @@ handset is usable again either way: unlocked, with no token, which is precisely 
 adb shell dumpsys device_policy
 ```
 
+**And PARTIAL should also give factory reset back**, which is the part worth understanding,
+because it is the floor under this whole procedure. `unharden()` clears
+`DISALLOW_FACTORY_RESET` *before* it attempts the step-down, and clearing our own restriction
+is an ordinary thing a Device Owner may do — unlike giving up ownership, which the platform
+can refuse. So even when the step-down is refused, the reset that was blocked all along
+should now go through, and a reset wipes Device Owner with it. That is a full recovery by a
+different road.
+
+The ladder, in the order to try it:
+
+1. **RELEASED** → ordinary phone, nothing more to do.
+2. **PARTIAL** → unlocked and re-enrollable as it stands. If you want it properly clean,
+   factory reset it now; that clears the ownership the step-down could not.
+3. **Reset still refused after a PARTIAL** → the restriction belongs to the *other* admin,
+   not to us. That is Knox Guard, and only whoever registered the handset can lift it. At
+   that point the phone is not ours to free, and the question goes to the supplier.
+
+Nobody has been down this road on a real handset yet. Steps 1 and 2 are the expected
+outcomes; step 3 is the one that would mean Watu-sourced stock carries a lock we cannot
+undo — which is worth knowing *before* the next order, not after.
+
 **Why an exported release does not weaken the lock.** The receiver demands that handset's own
 token, which only the office holds — a sideloaded app cannot read it out of our private
 storage. And reaching adb at all needs USB debugging, which needs Developer options, which
@@ -539,31 +560,56 @@ needs Settings, which a pinned lock screen never lets go of. A genuinely locked 
 customer's hand cannot be reached this way. This is a bench tool for a handset already in
 ours.
 
-### Then relock it, same as any other phone
+### Then relock it — and this is where RELEASED and PARTIAL stop being the same
 
-After a release — by **Achia**, by this command, or by the 14-day self-release — the handset
-is back to being an ordinary phone with our app on it and no token. Relocking is the normal
-enrol, no factory reset:
+**After a PARTIAL**, ownership was never given up, so relocking needs no factory reset:
 
 1. Devices → **+ Sajili simu** with that IMEI → copy the new token
-2. `adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin` — skip this if
-   it answers *"already set"*, which is ordinary after a PARTIAL
+2. `adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin` — it will
+   answer *"already set"*, which is the expected reply here, not a failure
 3. The enrol broadcast with the new token, exactly as at the bench
 4. **Funga** in the portal, and wait for *imefungwa* before boxing it
 
-**And after a real RELEASED, the app can be uninstalled** — `adb uninstall
-com.samaritantechs.hooploanlock` works, and so does removing it from Settings. That is what
-handing a phone back means.
+**After a genuine RELEASED, step 2 will be refused, and relocking needs a factory reset.**
+Android only lets an app become Device Owner on a phone with no accounts set up — out of the
+box, or straight after a reset. A released handset that has since been used has accounts on
+it, so `set-device-owner` fails and there is no way round it. That is not our rule and we
+cannot engineer past it.
 
-After a **PARTIAL** it still cannot, and the reason is worth being exact about: it is not our
-`setUninstallBlocked` — that was dropped along with everything else. Android refuses to
+So **Achia is one-way from the handset's side.** Releasing is cheap; taking it back costs a
+wipe. Worth knowing before releasing a phone you meant to keep locked.
+
+**A real RELEASED also means the app can be uninstalled** — `adb uninstall
+com.samaritantechs.hooploanlock`, or from Settings. That is what handing a phone back means.
+After a PARTIAL it still cannot, and the reason is worth being exact about: it is not our
+`setUninstallBlocked`, which was dropped along with everything else. Android refuses to
 uninstall an app that is *still the active device owner*, whatever that flag says
 (`DELETE_FAILED_DEVICE_POLICY_MANAGER`). Clear the other admin and it goes.
 
-A released phone also **never self-locks again**, even in PARTIAL. It keeps beating, so the
-office can still see it and can still change its mind — but the offline grace is switched
-off on the handset the moment a release is ordered. Otherwise a released phone that spends a
-week out of coverage would lock itself for a loan that is already closed.
+**Whether the phone is still talking to us afterwards depends on which release it was**, and
+the difference matters when you are deciding whether to send somebody with a cable:
+
+| | Token | Beating | Office can still reach it |
+|---|---|---|---|
+| **Achia**, step-down refused | kept | yes | **yes** — it retries the release every beat, and can be re-locked from the portal |
+| **Achia**, step-down took | kept | no (retired) | no — and it does not need to be |
+| **adb RELEASE**, either result | cleared | **no** | no — the token is gone, so it has nothing to say. Re-enrol it there and then, at the bench |
+
+A released phone **never self-locks again** either way: the offline grace is switched off on
+the handset the moment a release is ordered, so one that spends a week out of coverage cannot
+lock itself for a loan that is already closed.
+
+---
+
+## Do not rehearse on your own phone
+
+Establishing Device Owner requires a handset with **no Google account and no screen lock** —
+Android permits it only on a phone straight out of the box or straight after a factory reset.
+So a personal phone cannot be enrolled without **wiping it first**, and after a genuine
+release it cannot be re-enrolled without wiping it again.
+
+Use a spare handset from stock. There is no version of this rehearsal that is safe on a phone
+with anything on it you want to keep.
 
 ---
 
