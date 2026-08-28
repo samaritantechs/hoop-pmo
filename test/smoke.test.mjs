@@ -666,3 +666,50 @@ test('the release receiver is guarded, and does not lie about a refused step-dow
       + 'app STOPPED, and a stopped app hears no broadcast without it');
   }
 });
+
+/* =========================================================================================
+   PROVISIONING AGAINST A RELEASED ROW, which is a fifteen-minute fuse.
+
+   `retire` is simply `state === 'released'`, and a retiring phone unlocks, unhardens and
+   stops beating. But the provisioning HANDSHAKE does not carry it -- hello() answers with a
+   command, a state and the words, and nothing else -- so enrolling a handset against a
+   released row looks perfect at the bench: the enrol reports ENROLLED, the phone appears on
+   the register, everybody boxes it. The first real beat, up to fifteen minutes later, hands
+   it back.
+
+   The fix is procedural (lock the row before provisioning, see DEVICE-LOCKING.md) but the
+   SHAPE is what this guards: hello must stay silent about retire, so the handshake can never
+   start the countdown, and beat must keep carrying it, so a genuine release still lands.
+   Somebody "tidying" the two to return the same fields would break one or the other.
+   ========================================================================================= */
+test('the provisioning handshake never carries retire; the beat always does', () => {
+  const core = fs.readFileSync(new URL('../api/_lib/device-core.js', import.meta.url), 'utf8');
+
+  const hello = core.slice(core.indexOf('async function hello'));
+  const helloBody = hello.slice(0, hello.indexOf('\n}'));
+  assert.ok(!/\bretire\b/.test(helloBody),
+    'hello() started returning retire -- a phone would now hand itself back during '
+    + 'provisioning, at the bench, instead of being enrolled');
+
+  const beat = core.slice(core.indexOf('async function beat'));
+  assert.match(beat.slice(0, beat.indexOf('\n}')), /\bretire\b/,
+    'the beat stopped carrying retire -- a released phone would never be handed back');
+
+  // And retire must stay tied to the state, not to some looser condition.
+  assert.match(core, /const retire = S\(dev\.state\) === 'released'/,
+    'retire is the released state and nothing else; widening it releases phones nobody freed');
+});
+
+/* Re-registering a known IMEI mints nothing, which is correct -- one token per phone, for the
+   life of that row -- but it is also why the station must use the Token button rather than
+   Sajili simu when redoing a handset the register already knows. Pinned because the filter is
+   one line and reads like an optimisation. */
+test('enrolment mints a token only for an IMEI the register does not already hold', () => {
+  const portal = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  assert.match(portal, /const fresh = list\.filter\(i => !have\.has\(i\)\)/,
+    'deviceEnrol must skip IMEIs already on the register -- minting a second token for a live '
+    + 'phone would orphan the one that handset is actually carrying');
+  assert.match(portal, /alreadyOn: list\.length - fresh\.length/,
+    'the count of skipped IMEIs must be reported, or the station cannot tell that the empty '
+    + 'token list was deliberate rather than a failure');
+});
