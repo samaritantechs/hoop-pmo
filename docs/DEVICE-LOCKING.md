@@ -549,9 +549,44 @@ The ladder, in the order to try it:
    not to us. That is Knox Guard, and only whoever registered the handset can lift it. At
    that point the phone is not ours to free, and the question goes to the supplier.
 
-Nobody has been down this road on a real handset yet. Steps 1 and 2 are the expected
-outcomes; step 3 is the one that would mean Watu-sourced stock carries a lock we cannot
-undo — which is worth knowing *before* the next order, not after.
+### This has now been done, on a real handset, first try
+
+28 Aug 2026, on the stuck Samsung Galaxy A07 — the one that had been owned, silent and
+unreachable for over twenty hours:
+
+```
+C:\Users\marki>adb install -r "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk"
+Performing Streamed Install
+Success
+
+C:\Users\marki>adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.RELEASE -n com.samaritantechs.hooploanlock/.ReleaseReceiver -e token f1b942f3991b43dd8d8f857535a0d468
+Broadcasting: Intent { act=com.samaritantechs.hooploanlock.RELEASE flg=0x400020 cmp=com.samaritantechs.hooploanlock/.ReleaseReceiver (has extras) }
+Broadcast completed: result=1, data="RELEASED - no longer Device Owner..."
+```
+
+**Rung 1. Not rung 2, and not rung 3.** Two things are settled by that one line, and both
+matter more than the handset itself:
+
+- **`adb install -r` really is the open door.** Every other route out of a Device Owner is
+  shut, and this one is not. A phone in this state is recoverable in two commands.
+- **KNOX GUARD DID NOT BLOCK THE STEP-DOWN.** That A07 had Knox Guard active with
+  `isOrganizationOwnedDevice=true` and `provisioningState: 3`, and `clearDeviceOwnerApp`
+  succeeded anyway. So a second admin on Watu-sourced stock does **not** mean we cannot hand
+  a phone back. That was the open question with money attached, and it came back clean on
+  real hardware.
+
+**And the factory reset then went through**, which was the last unverified claim in the whole
+chain. The same handset that had been refusing `Factory reset` with *"action not allowed:
+contact your organization"* wiped normally once the release had dropped
+`DISALLOW_FACTORY_RESET`. So the phone went bricked → released → wiped → ready for stock, and
+every step of that is now observed rather than reasoned about.
+
+That reset is also the *required* step before it can be locked again: `set-device-owner` is
+refused on a handset that has accounts on it, so a released phone always goes back through a
+wipe on its way into stock. The one-way property, met in practice.
+
+Rung 3 remains theoretical — no handset has produced it. Keep the ladder written down anyway:
+one clean result is evidence, not a guarantee across every model and firmware.
 
 **Why an exported release does not weaken the lock.** The receiver demands that handset's own
 token, which only the office holds — a sideloaded app cannot read it out of our private
@@ -630,9 +665,12 @@ Stated plainly, because a security feature oversold is worse than none.
 - **A stolen token lets that one handset lie about its own status.** It cannot read the
   register, reach another IMEI, or change what the office decided — `state` is never writable
   from a phone. That asymmetry is the security model.
-- **It cannot give a phone back that a second admin also holds.** Releasing drops *our*
-  ownership. On stock that arrived carrying Samsung Knox Guard, that admin stays, and only
-  whoever registered it can clear it. See the PARTIAL row above.
+- **Releasing drops *our* ownership, and only ours.** A second admin on the handset — Samsung
+  Knox Guard, on Watu-sourced stock — stays, and only whoever registered it can clear it.
+  Worth stating carefully, because it was tested on 28 Aug and turned out **not** to be the
+  obstacle it looked like: Knox Guard being present did not stop `clearDeviceOwnerApp`
+  succeeding on that A07. Our release works alongside it. What we still cannot do is remove
+  *their* admin, which is a different thing and has never been ours to do.
 - **A released phone is genuinely released.** Once ownership is given up, the app can be
   uninstalled and the phone factory reset — by us, by the customer, by anyone holding it.
   That is the correct end of a cleared loan and not a hole in the lock, but it does mean
