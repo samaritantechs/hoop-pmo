@@ -322,3 +322,49 @@ test('portal.html: a tile that leaves its pane sets the destination filter first
   const bad = [...src.matchAll(/goWith\('[a-z]+',\s*function\(\)\{\s*\}\)/g)];
   assert.deepEqual(bad.map(m => m[0]), [], 'goWith with an empty setter should just be goTab');
 });
+
+/* =========================================================================================
+   SELECT-ALL MUST NEVER REACH A ROW THAT IS NOT ON SCREEN.
+
+     "Add Bulk Tick checkbox on the first column before imei that selects all list"
+
+   The column funnels hide rows without unticking them. So a select-all written the obvious
+   way -- every .dvck on the page -- arms Funga against phones nobody can see: filter Devices
+   to one branch, tick all, press Funga, and the other branches' handsets go dark too. Each
+   of those is a customer holding a phone that stopped working for a reason nobody at HOOP
+   can explain, because nobody at HOOP intended it.
+
+   `$all('.dvck')` is the shorter expression and the wrong one, which is exactly why this is
+   pinned: it is the edit a later reader makes while tidying.
+   ========================================================================================= */
+test('Devices select-all and bulk actions only ever touch visible rows', () => {
+  const src = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+
+  // The visibility filter must exist and must test BOTH ways a row gets hidden.
+  const fn = src.slice(src.indexOf('function devVisibleTicks_'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  assert.match(body, /style\.display!=='none'/, 'a row hidden by a search box is still hidden');
+  assert.match(body, /classList\.contains\('fhide'\)/, 'a row hidden by a column funnel is still hidden');
+
+  // And the bulk action must read through it, never straight off the class.
+  const picked = src.slice(src.indexOf('function devPicked'));
+  assert.match(picked.slice(0, picked.indexOf('\n')), /devVisibleTicks_\(\)/,
+    'devPicked must go through the visible-rows filter -- $all(\'.dvck\') would let a bulk '
+    + 'Funga reach phones the operator cannot see on screen');
+});
+
+/* The export drops controls rather than guessing at their text: a tick box exports as an
+   empty column and an action cell as "Token Historia Futa". Marking the cell is the honest
+   way -- a column that legitimately contained the word "Futa" could not be told apart. */
+test('the Excel export drops control cells, and Devices marks them', () => {
+  const src = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  assert.match(src, /filter\(function\(td\)\{\s*return !td\.classList\.contains\('noxl'\)/,
+    'csvOfTable_ stopped dropping control cells; exports regain a blank column and a column '
+    + 'of button labels');
+  // Both ends of that contract: the header cells and the body cells of the Devices table.
+  assert.match(src, /<th class="noxl"><input type="checkbox" id="dvAll"/,
+    'the select-all header cell must be marked noxl, or it exports as a stray empty column');
+  assert.match(src, /<td class="noxl"><input type="checkbox" class="dvck"/,
+    'the row tick cell must be marked noxl');
+  assert.match(src, /<td class="r noxl">/, 'the Token/Historia/Futa cell must be marked noxl');
+});
