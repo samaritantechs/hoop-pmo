@@ -1,7 +1,10 @@
 package com.samaritantechs.hooploanlock;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -58,7 +61,7 @@ public class LockActivity extends Activity {
        reach it without anybody having to start an activity from the background -- which is
        the thing Android 10+ may refuse in silence, and which stranded a customer's phone
        showing a lock screen while the register read "unlocked". See Guard.unlock. */
-    private final android.content.BroadcastReceiver release = new android.content.BroadcastReceiver() {
+    private final BroadcastReceiver release = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent i) { standDown(); }
     };
 
@@ -68,7 +71,7 @@ public class LockActivity extends Activity {
         setShowWhenLocked();
         setContentView(build());
         try {
-            android.content.IntentFilter f = new android.content.IntentFilter(Guard.ACTION_RELEASE);
+            IntentFilter f = new IntentFilter(Guard.ACTION_RELEASE);
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(release, f, Context.RECEIVER_NOT_EXPORTED);
             else registerReceiver(release, f);
         } catch (Exception ignored) { }
