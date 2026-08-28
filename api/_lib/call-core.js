@@ -415,12 +415,36 @@ export function dealMap(rows, rosterIds, day) {
       : (isLocked4(r, day) ? 'L4' : (inWindowOf(r, day) ? 'IN' : 'OUT'));
     strata[k].push(r);
   }
+  /* THE ROTATION CARRIES ACROSS THE STRATA, and that one word is the whole fix.
+     ---------------------------------------------------------------------------------------
+       "customer distribution for credits is always skipping one per credit agent since no
+        matter how many customers there is, the provided day list is always 4 less"
+
+     Every stratum used to start dealing at the SAME officer. A stratum whose size does not
+     divide by the roster hands its remainder to whoever is at the front -- and with four
+     strata all starting in the same place, that is the same person four times over. On a
+     60-customer deck: one officer 18, the other three 14 each. Every one of them exactly
+     four short, and short by the SAME four however big the book gets, because it is one
+     card per stratum rather than a proportion. That is what "always 4 less" was, and the
+     "plus-minus one" this comment used to promise was only ever true WITHIN a stratum.
+
+     Carrying the cursor makes the four strata behave as one continuous round-robin: L7's
+     remainder pushes L4's starting officer along, and so on round. Each stratum is still
+     dealt round-robin, so every TAB stays equal within one -- which is the whole reason the
+     deal is stratified -- and now the TOTAL is equal within one as well, instead of within
+     four.
+
+     Still derived from nothing but the deck date, the IMEI and the roster order, so every
+     screen that recomputes the deal keeps agreeing with every other. */
+  let cursor = rot;
   for (const k of ['L7', 'L4', 'IN', 'OUT']) {
-    strata[k].sort((a, b) => {
+    const dealt = strata[k].sort((a, b) => {
       const sa = seed(String(a.imei)), sb = seed(String(b.imei));
       if (sa !== sb) return sa < sb ? -1 : 1;
       return String(a.imei) < String(b.imei) ? -1 : 1;      // two IMEIs, one hash: still one order
-    }).forEach((r, i) => { out[String(r.imei)] = String(rosterIds[(i + rot) % rosterIds.length]); });
+    });
+    dealt.forEach((r, i) => { out[String(r.imei)] = String(rosterIds[(i + cursor) % rosterIds.length]); });
+    cursor = (cursor + dealt.length) % rosterIds.length;
   }
   return out;
 }

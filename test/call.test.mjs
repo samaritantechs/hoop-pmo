@@ -533,6 +533,68 @@ test('guarantor and agent calls are PORTFOLIO calls', async () => {
    so have random assignement model during distribution per each watu deck upload."
    ===================================================================================== */
 
+/* =====================================================================================
+   EVERY OFFICER'S WHOLE BOOK IS EQUAL, NOT JUST EVERY TAB.
+
+     "customer distribution for credits is always skipping one per credit agent since no
+      matter how many customers there is, the provided day list is always 4 less"
+
+   The deal is cut in four strata, and each one used to start dealing at the SAME officer.
+   A stratum whose size does not divide by the roster gives its remainder to whoever is at
+   the front -- so with four strata that is the same person four times over. On a
+   60-customer deck: one officer 18, the other three 14 each. Every one of them exactly
+   four short, and short by the same four however big the book gets, because it is one card
+   per stratum rather than a proportion.
+
+   The old comment promised "plus-minus one" and that was only ever true WITHIN a stratum.
+   This asserts it across the whole book, which is where the officers actually feel it.
+   ===================================================================================== */
+test('no officer is a whole stratum short -- the deal is equal within one across the book', () => {
+  // Sizes chosen so EVERY stratum leaves a remainder over the roster: the worst case, and
+  // the one the office hit. Under the old deal this produced a spread of four.
+  const mk = (n, extra, from) => Array.from({ length: n }, (_, i) => Object.assign(
+    { imei: 'IM' + from + i, deck_date: '2026-08-14' }, extra));
+  const rows = [
+    ...mk(9, { locked7: true, disbursed_date: '2026-08-10' }, 'a'),
+    ...mk(13, { locked4: true, disbursed_date: '2026-08-10' }, 'b'),
+    ...mk(17, { disbursed_date: '2026-08-10' }, 'c'),
+    ...mk(21, { disbursed_date: '2026-01-01' }, 'd'),          // beyond the 45-day window
+  ];
+  const roster = ['U1', 'U2', 'U3', 'U4'];
+  const deal = dealMap(rows, roster, '2026-08-14');
+
+  const per = Object.fromEntries(roster.map(o => [o, 0]));
+  for (const r of rows) {
+    const held = deal[String(r.imei)];
+    assert.ok(held, 'every customer must be dealt to somebody: ' + r.imei);
+    per[held]++;
+  }
+  const counts = Object.values(per);
+  assert.equal(counts.reduce((a, b) => a + b, 0), rows.length,
+    'the shares must add up to the whole deck -- a lost row is a customer nobody calls');
+  assert.ok(Math.max(...counts) - Math.min(...counts) <= 1,
+    'one officer is carrying a whole stratum more than another: ' + JSON.stringify(per));
+
+  /* AND EVERY TAB STAYS EQUAL TOO, which is what the stratified deal exists for. Fixing the
+     total by dealing one flat round-robin over the whole book would satisfy the assertion
+     above and quietly undo that -- so both are pinned, and neither can be traded away for
+     the other by somebody simplifying this later. */
+  for (const [name, want, pick] of [
+    ['L7', 9, r => r.locked7],
+    ['L4', 13, r => r.locked4],
+    ['IN', 17, r => !r.locked7 && !r.locked4 && r.disbursed_date === '2026-08-10'],
+    ['OUT', 21, r => r.disbursed_date === '2026-01-01'],
+  ]) {
+    const tab = rows.filter(pick);
+    assert.equal(tab.length, want, name + ' fixture drifted; this test is no longer testing it');
+    const t = Object.fromEntries(roster.map(o => [o, 0]));
+    for (const r of tab) t[deal[String(r.imei)]]++;
+    const tc = Object.values(t);
+    assert.ok(Math.max(...tc) - Math.min(...tc) <= 1,
+      name + ' is not dealt evenly: ' + JSON.stringify(t));
+  }
+});
+
 test('the same deck date always cuts the same deal -- a re-upload cannot reshuffle mid-morning', () => {
   const rows = 'ABCDEFGH'.split('').map(x => ({ imei: 'IM' + x, deck_date: '2026-08-14' }));
   const a = dealMap(rows, ['U1', 'U2'], '2026-08-14');
