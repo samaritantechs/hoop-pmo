@@ -511,6 +511,36 @@ function clock(ms){
 }
 /** Minutes as a person says them. One definition, so two columns cannot drift apart. */
 function agoMins(n){ return n==null?'':n<1?'sasa hivi':n<60?money(n)+' dk':money(Math.round(n/60))+'h'; }
+/* WHERE IT WAS, UNDER WHAT IT SAYS IT IS.
+   =========================================================================================
+     "the management gets headache on aged stock [stolen, lost, sold-by-cash etc] am asked if
+      the app could trap last sync with location coordinates and put its link under simu
+      inasema like locked + link"
+
+   The accountability report can already name the handsets nobody can account for; it could
+   never say where one of them is. So an unaccounted IMEI ended in a phone call and somebody's
+   word about what happened. A link turns it into a place to go -- and often into evidence
+   that a phone booked as sold-by-cash has not left one shop in three weeks.
+
+   THE AGE IS NOT OPTIONAL, and it is why this is a function rather than an anchor tag. The
+   phone reports the position the system ALREADY had -- no GPS wake, no battery, no delay to
+   the beat -- so a handset that spoke a minute ago can be carrying a fix from Tuesday. A pin
+   with no date is not information, it is a wrong address somebody drives to. Same reason the
+   accuracy shows when it is coarse: 2km is a suburb, not a doorway.
+
+   Nothing at all when there is no fix, rather than a dash or an empty link: a row that has
+   never reported a position should look like a row with one fact in it, not two. */
+function devWhere(r){
+  if(r.lat==null||r.lng==null) return '';
+  var q=Number(r.lat).toFixed(6)+','+Number(r.lng).toFixed(6);
+  var when=r.locAt?clock(r.locAt):'';
+  var acc=(r.locAcc!=null&&r.locAcc>=500)?' ±'+money(Math.round(r.locAcc/1000*10)/10)+'km':'';
+  return '<div style="font-size:10px;margin-top:2px">'
+    +'<a href="https://www.google.com/maps?q='+encodeURIComponent(q)+'" target="_blank" '
+    +'rel="noopener noreferrer">ilipo / map</a>'
+    +(when?'<span class="mut"> · '+esc(when)+esc(acc)+'</span>':'')
+    +'</div>';
+}
 function telHref(v){ var d=String(v==null?'':v).replace(/\D/g,''); if(!d) return '#'; return d.indexOf('255')===0?'+'+d:'+255'+d.replace(/^0+/,''); }
 function toast(m,bad){ var t=$('#toast'); t.textContent=m; t.className='toast'+(bad?' bad':''); t.style.display='block'; clearTimeout(toast._t); toast._t=setTimeout(function(){t.style.display='none';},3500); }
 
@@ -2265,7 +2295,7 @@ function drawDevices(m){
                 +esc(clock(r.orderAt)||agoMins(r.orderAgeMins))
                 +(r.orderBy?' · '+esc(r.orderBy):'')+'</div>':'')
             +'</td>'
-            +'<td>'+esc(r.reported||'—')+'</td><td>'+seen+'</td>'
+            +'<td>'+esc(r.reported||'—')+devWhere(r)+'</td><td>'+seen+'</td>'
             +'<td class="r noxl"><button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> '
             +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button> '
             +'<button class="btn sm danger" data-dvd="'+esc(r.imei)+'" title="Ondoa kwenye register / Remove from the register">Futa</button></td></tr>';

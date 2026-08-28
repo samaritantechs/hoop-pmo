@@ -76,6 +76,29 @@ class Beat {
                    class of mystery. Empty on a build with no push compiled in. */
                 String fcm = Prefs.str(c, Prefs.FCM_TOKEN, "");
                 if (fcm != null && !fcm.isEmpty()) payload.put("fcmToken", fcm);
+                /* WHERE IT WAS WHEN IT LAST SPOKE.
+                   -------------------------------------------------------------------------
+                     "the management gets headache on aged stock [stolen, lost, sold-by-cash
+                      etc] am asked if the app could trap last sync with location coordinates"
+
+                   The fix's OWN timestamp travels with it, and that is not decoration. This
+                   is the last position the system already had -- no GPS wake, no battery, no
+                   delay -- so a phone that beat a minute ago can be carrying a fix from
+                   Tuesday. Sending the coordinate without its age would let the register
+                   quietly claim a handset is somewhere it left days ago, and somebody would
+                   drive there. Accuracy travels for the same reason: 2000 metres is a
+                   suburb, not an address.
+
+                   Absent entirely when there is no position, rather than sent as zeroes --
+                   0,0 is a real place in the Gulf of Guinea and a report is better with a
+                   blank in it than with a fiction. */
+                android.location.Location at = Loc.last(c);
+                if (at != null) {
+                    payload.put("lat", at.getLatitude());
+                    payload.put("lng", at.getLongitude());
+                    payload.put("locAt", at.getTime());
+                    if (at.hasAccuracy()) payload.put("locAcc", Math.round(at.getAccuracy()));
+                }
             }
             JSONObject body = new JSONObject();
             body.put("fn", hello ? "dev_hello" : "dev_beat");

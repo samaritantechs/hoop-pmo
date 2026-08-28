@@ -1435,10 +1435,11 @@ const FNS = {
     requireNav(user, 'devices');
     const a = args || {};
     const want = String(a.state || '').trim();
-    const build = () => {
-      let q = db.from('devices').select(
-        'imei, item, holder, state, state_reason, state_at, state_by, reported, last_seen, '
-        + 'app_version, battery, android, sold_ref, customer, enrolled_at');
+    const CORE = 'imei, item, holder, state, state_reason, state_at, state_by, reported, '
+      + 'last_seen, app_version, battery, android, sold_ref, customer, enrolled_at';
+    const LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
+    const build = (cols) => {
+      let q = db.from('devices').select(cols);
       if (['enrolled', 'locked', 'released', 'lost'].includes(want)) q = q.eq('state', want);
       return q;
     };
@@ -1451,11 +1452,20 @@ const FNS = {
        An empty register and a register that is not there yet are still DIFFERENT facts, so
        `notReady` rides along and the screen says which one it is looking at. */
     let rows;
-    try { rows = await fetchAll(build); }
+    try { rows = await fetchAll(() => build(CORE + LOC)); }
     catch (e) {
-      if (!tableMissing(e)) throw e;
-      return { ok: true, rows: [], total: 0, notReady: true,
-        counts: { enrolled: 0, locked: 0, lockPending: 0, released: 0, lost: 0, neverSeen: 0, stale: 0 } };
+      if (tableMissing(e)) {
+        return { ok: true, rows: [], total: 0, notReady: true,
+          counts: { enrolled: 0, locked: 0, lockPending: 0, released: 0, lost: 0, neverSeen: 0, stale: 0 } };
+      }
+      /* AND THE LOCATION COLUMNS MAY NOT BE THERE YET, which is a different failure and must
+         not look like the one above. PostgREST refuses an entire select for a single unknown
+         column, so naming last_lat on a deployment whose migration has not been run would
+         take the WHOLE Devices pane dark -- every phone, every state, every lock button --
+         over a feature nobody had asked for yet. The register without a map is the register;
+         the register without itself is an outage. So it drops back and carries on. */
+      if (!/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) throw e;
+      rows = await fetchAll(() => build(CORE));
     }
     const now = Date.now();
     const HOURS = 36 * 3600 * 1000;      // silent longer than this and it is worth asking why
@@ -1510,6 +1520,20 @@ const FNS = {
         orderAgeMins: r.state_at ? Math.max(0, Math.round((now - Date.parse(r.state_at)) / 60000)) : null,
         orderAt: r.state_at ? Date.parse(r.state_at) : null,     // same clock as seenAt, so the two compare
         orderBy: r.state_by || '',
+        /* WHERE IT WAS, AND WHEN THAT WAS TRUE -- two facts, never one.
+           ---------------------------------------------------------------------------------
+             "am asked if the app could trap last sync with location coordinates"
+
+           The handset reports the position the system already had rather than waking its GPS
+           every minute, so the fix can be far older than the beat that carried it. Sending
+           the coordinate without its age would let this column say a phone is somewhere it
+           left days ago -- and somebody would drive there. locAt is what the screen shows
+           beside the pin; locAcc is what stops a 2km cell-tower estimate reading as an
+           address. */
+        lat: r.last_lat == null ? null : Number(r.last_lat),
+        lng: r.last_lng == null ? null : Number(r.last_lng),
+        locAcc: r.last_loc_acc == null ? null : Number(r.last_loc_acc),
+        locAt: r.last_loc_at ? Date.parse(r.last_loc_at) : null,
       };
     }).sort((x, y) => {
       const rank = d => (d.state === 'lost' ? 0 : d.state === 'locked' && d.lockState === 'pending' ? 1

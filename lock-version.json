@@ -1,6 +1,6 @@
 {
-  "versionCode": 9,
-  "versionName": "1.8.0",
-  "notes": "Simu inajiwasha WiFi ikipoteza mtandao, na haiwezi kuzimwa mtandao ikiwa imefungwa. / The handset turns its own Wi-Fi back on when it goes offline, and cannot have its radio switched off while it is locked.",
+  "versionCode": 10,
+  "versionName": "1.9.0",
+  "notes": "Simu inatuma ilipo mara ya mwisho, ili stock isiyojulikana iwe mahali pa kwenda. / The handset reports where it last synced, so unaccounted stock is a place to go rather than a name on a list.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

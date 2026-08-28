@@ -12,6 +12,14 @@
          themselves, not even to free a handset they have already paid off. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Where the handset was when it last synced, so unaccounted stock is a place to go
+         rather than a name on a list. These are RUNTIME permissions and there is nobody at a
+         locked phone to tap Allow, so LockAdmin.harden grants them to itself as Device Owner
+         and unharden hands them back on release. The app never asks for a live fix: it reads
+         whatever position the system already has. See Loc.java. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <!-- Held so the app can install its own updates. As Device Owner Android performs that
          install without prompting anybody, which is the point: there is nobody at a locked
          handset who should be tapping "install". -->
