@@ -1566,11 +1566,32 @@ const FNS = {
     if (!list.length) bad('Weka angalau IMEI moja. / At least one IMEI is required.');
     if (list.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). / Too many at once — 500 max.');
 
+    /* THE TOKEN OF AN IMEI WE ALREADY HOLD IS READ BACK, not replaced.
+       -------------------------------------------------------------------------------------
+         "achia and relock/re-enroll should repick same token used before if the imei exists"
+
+       A handset keeps its credential through every state it can be in. Release does not
+       touch it, and enrolling a known IMEI never minted a second one -- but it also handed
+       the station NOTHING, so a phone being redone dropped out of the enrol flow and had to
+       be chased through the Token drawer one at a time. On a bench doing twenty redos that
+       is twenty detours, and the obvious shortcut is to delete the row and enrol it fresh,
+       which mints a NEW token while the phone in your hand still holds the old one. That is
+       precisely how a register and a handset stop agreeing.
+
+       So a known IMEI comes back with the token it already has. Same phone, same identity,
+       one command, nothing on the handset to change. */
     const [already, stock] = await Promise.all([
-      fetchAll(() => db.from('devices').select('imei').in('imei', list)),
+      fetchAll(() => db.from('devices').select('imei, enrol_token').in('imei', list))
+        .catch(e => {
+          // Pre-migration registries have no enrol_token; enrolling must still work.
+          if (!/enrol_token/.test(String(e && e.message || ''))) throw e;
+          return fetchAll(() => db.from('devices').select('imei').in('imei', list));
+        }),
       fetchAll(() => db.from('hoop_aged_stock').select('serial, item, agent, as_of').in('serial', list)),
     ]);
     const have = new Set(already.map(r => String(r.imei)));
+    const held = new Map(already.filter(r => r.enrol_token)
+      .map(r => [String(r.imei), String(r.enrol_token)]));
     // Newest stock row per serial, so model/holder come from the latest count, not the first.
     const stockBy = new Map();
     for (const s of stock) {
@@ -1610,9 +1631,17 @@ const FNS = {
     }
     return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length,
       unknownToStock: fresh.filter(i => !stockBy.has(i)).length, batch,
-      // For the provisioning station only. Empty when the token column is not there yet.
-      provision: fresh.map(imei => ({ imei, token: minted.get(imei) || null }))
-        .filter(p => p.token) };
+      /* FOR THE PROVISIONING STATION ONLY, and in the order the operator typed the IMEIs so
+         a paper list can be worked down without hunting. `fresh` says whether this is a new
+         phone or one the register already knew: the command is identical either way, but an
+         operator who sees "already on the register" and a token knows the handset kept its
+         identity rather than quietly being given a new one. Empty when the token column is
+         not there yet. */
+      provision: list.map(imei => ({
+        imei,
+        token: minted.get(imei) || held.get(imei) || null,
+        fresh: !have.has(imei),
+      })).filter(p => p.token) };
   },
 
   /* SET STATE -- lock, unlock, release or write off. One door for every state change, so
