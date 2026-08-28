@@ -549,3 +549,120 @@ test('every written form of the enrol broadcast includes stopped packages', () =
     }
   }
 });
+
+/* =========================================================================================
+   A PHONE MUST NEVER GO SILENT WHILE IT IS STILL OWNED.
+   =========================================================================================
+   This is the bug that stranded the first A07, written down so it cannot come back.
+
+   A release does three things: unlock the screen, step down as Device Owner, and stop
+   beating. The old code did them in that fixed order and ignored whether the middle one
+   actually took. But clearDeviceOwnerApp is deprecated and CAN be refused without throwing --
+   Samsung's Knox layer does exactly that on an organisation-owned handset. So the phone kept
+   ownership, and stopped calling home anyway: owned, silent, and unreachable by the office
+   that was supposed to be able to reach it. A factory reset would have cleared it, and the
+   lock forbids factory reset. That is a brick, and it was produced by the release path itself.
+
+   The rule the fix encodes: RETIRED and the cancelled beat are only safe once the phone is
+   ACTUALLY no longer owned. unharden() now reads that back off the system and returns it, and
+   every caller waits on it. A phone the system refused to release keeps beating -- visible to
+   the office, and reachable -- instead of disappearing.
+   ========================================================================================= */
+test('unharden reports whether ownership was truly given up', () => {
+  const admin = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockAdmin.java');
+  assert.match(admin, /static\s+boolean\s+unharden\s*\(/,
+    'unharden must return the truth, not void -- callers decide whether to go silent on it');
+  // The answer is read off the system after the step-down, never presumed from the call that
+  // can lie. `return !isOwner(c)` is that read-back; a bare `return true` would be the lie.
+  assert.match(admin, /return\s+!\s*isOwner\(c\)/,
+    'unharden must read isOwner back after clearDeviceOwnerApp, which can be refused silently');
+});
+
+test('the handset never retires while it is still Device Owner', () => {
+  const beat = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Beat.java');
+  /* Both release paths -- the office "retire", and the sustained-403 self-release -- must gate
+     RETIRED behind a successful unharden. The shape that is safe is `if (unharden(...)) {
+     RETIRED; cancel; }`; the shape that bricked the A07 was setting RETIRED unconditionally
+     next to the unharden call. So: every place RETIRED is written must sit inside an
+     unharden() test, and unharden must never be called and its answer thrown away. */
+  const setsRetired = [...beat.matchAll(/Prefs\.put\(c,\s*Prefs\.RETIRED,\s*true\)/g)];
+  assert.ok(setsRetired.length >= 2, 'both release paths should still set RETIRED');
+  for (const m of setsRetired) {
+    const before = beat.slice(Math.max(0, m.index - 120), m.index);
+    assert.match(before, /if\s*\(\s*LockAdmin\.unharden\(c\)\s*\)/,
+      'RETIRED is set without first confirming unharden() gave up ownership -- that is exactly '
+      + 'the owned-and-silent brick the A07 became');
+  }
+  // And unharden must never be called as a bare statement whose boolean answer is discarded --
+  // the whole fix is that the answer is load-bearing.
+  assert.doesNotMatch(beat, /^\s*LockAdmin\.unharden\(c\);\s*$/m,
+    'unharden() called and its answer thrown away -- the retire decision must depend on it');
+});
+
+test('a released phone never self-locks, even when the step-down was refused', () => {
+  /* THE REGRESSION THE FIX ABOVE COULD HAVE INTRODUCED, caught by reading the diff rather
+     than by a handset a month from now.
+
+     Keeping a refused-release phone beating is right. But it also keeps it subject to
+     enforceGrace -- and the server goes on sending a real graceHours (a week, by default) for
+     any handset that was ever sold, because that figure describes the ROW, not this moment.
+     So a former customer's phone, released, still owned because Knox refused the step-down,
+     that then spends a week out of coverage, would lock itself for a loan the office closed.
+     A lock nobody ordered, on a phone nobody can unlock, for a debt that does not exist.
+
+     Both release paths therefore pin graceHours to -1 -- "never self-lock" -- before they try
+     to step down, so it holds whichever way that goes. */
+  const beat = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Beat.java');
+  const pins = [...beat.matchAll(/Prefs\.put\(c,\s*Prefs\.GRACE_HOURS,\s*"-1"\)/g)];
+  assert.equal(pins.length, 2,
+    'both the retire path and the sustained-403 self-release must pin graceHours to -1');
+
+  // Each pin must come BEFORE its unharden attempt: written after, it would be skipped on
+  // exactly the path that needs it -- the one where the step-down was refused.
+  for (const m of pins) {
+    const after = beat.slice(m.index, m.index + 400);
+    assert.match(after, /LockAdmin\.unharden\(c\)/,
+      'the graceHours pin must sit ahead of the step-down it is protecting against');
+  }
+
+  // -1 is the value enforceGrace actually treats as "never"; anything else self-locks.
+  assert.match(beat, /if \(graceHours <= 0\) return;/,
+    'enforceGrace stopped treating a non-positive grace as "never self-lock"');
+});
+
+/* =========================================================================================
+   THE WAY BACK OUT, over the cable. ReleaseReceiver is the recovery route for a handset the
+   server can no longer reach -- the A07's actual situation. It is exported so adb can reach
+   it, so it must be guarded, and it must tell the truth about what the system let it do.
+   ========================================================================================= */
+test('the release receiver is guarded, and does not lie about a refused step-down', () => {
+  const rel = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/ReleaseReceiver.java');
+
+  // Guarded by this handset's own token: an exported release with no guard is a phone any
+  // sideloaded app could free. It compares the presented token against the stored one.
+  assert.match(rel, /Prefs\.TOKEN/, 'the release receiver must read the stored token to guard on it');
+  assert.match(rel, /\.equals\(given\)/,
+    'release must be refused unless the caller presents this handset\'s own token');
+  assert.match(rel, /setResultData/, 'the receiver must answer in the terminal it was called from');
+
+  // It must branch on the real unharden() result -- a RELEASED that ignored a refused
+  // step-down would be the same lie the old release path told.
+  assert.match(rel, /LockAdmin\.unharden\(c\)/, 'release must actually attempt the step-down');
+  assert.match(rel, /freed/, 'release must report freed vs partial from the real result');
+
+  // Registered and reachable, or none of the above ships.
+  const manifest = androidFile('lock/src/main/AndroidManifest.xml');
+  assert.match(manifest, /\.ReleaseReceiver/, 'ReleaseReceiver is not declared in the manifest');
+  assert.match(manifest, /com\.samaritantechs\.hooploanlock\.RELEASE/,
+    'the RELEASE action is not wired to the receiver');
+
+  // The recovery command is written down for the operator, with the flag a stopped app needs.
+  const doc = fs.readFileSync(new URL('../docs/DEVICE-LOCKING.md', import.meta.url), 'utf8');
+  const casts = [...doc.matchAll(/am broadcast[\s\S]{0,220}?RELEASE/g)];
+  assert.ok(casts.length > 0, 'the release recovery command is missing from DEVICE-LOCKING.md');
+  for (const m of casts) {
+    assert.ok(/--include-stopped-packages/.test(m[0]),
+      'the release broadcast needs --include-stopped-packages too -- adb install -r leaves the '
+      + 'app STOPPED, and a stopped app hears no broadcast without it');
+  }
+});

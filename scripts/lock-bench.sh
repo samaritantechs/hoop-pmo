@@ -65,12 +65,18 @@ SERVER="${SERVER:-https://hoop-pmo.vercel.app}"
 # works without a factory reset.
 TOKEN="${TOKEN:-}"
 REENROL="${REENROL:-}"
+# THE WAY BACK OUT: RELEASE=1 TOKEN=<token> unlocks a handset the office cannot reach and
+# hands it back. See the block below the device scan, and docs/DEVICE-LOCKING.md.
+RELEASE="${RELEASE:-}"
 TOKENS="${1:-}"
 if [ -z "$TOKEN" ] && { [ -z "$TOKENS" ] || [ ! -f "$TOKENS" ]; }; then
     cat <<USAGE
 usage, one phone:    TOKEN=<that token> $0
 usage, many phones:  $0 <token-list.txt>    (one 'IMEI token' per line, from Devices -> Sajili simu)
 prefix REENROL=1 to either if the phone already holds a token from a previous session.
+
+to RELEASE a phone the portal cannot reach (unlock it and hand it back):
+                     RELEASE=1 TOKEN=<that phone's token> $0
 USAGE
     exit 2
 fi
@@ -94,6 +100,42 @@ SERIALS=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
 [ -n "$SERIALS" ] || { echo "No phones ready. Check the cable, and that 'Allow USB debugging' was accepted."; exit 1; }
 N_PHONES=$(printf '%s\n' "$SERIALS" | wc -l | tr -d ' ')
 echo "Phones connected: $N_PHONES"
+
+# THE WAY BACK OUT, for a handset the office cannot reach.
+# =============================================================================================
+# A release normally travels through the portal: press Achia, and the next beat unlocks the
+# phone and steps the app down as Device Owner. That needs a handset still listening. When it
+# is not, every shell route out is shut: `pm clear` is refused (CLEAR_APP_USER_DATA), so is
+# `dpm remove-active-admin` ("non-test admin"), so is `pm uninstall`
+# (DELETE_FAILED_DEVICE_POLICY_MANAGER), and factory reset is blocked by our own restriction.
+#
+# `adb install -r` is NOT shut: setUninstallBlocked blocks uninstall, not update. So a newer
+# APK goes on over the top, and the app does for itself what the shell may not.
+if [ -n "$RELEASE" ]; then
+    [ -n "$TOKEN" ] || { echo "RELEASE=1 needs the phone's own token: RELEASE=1 TOKEN=<token> $0"; exit 2; }
+    for S in $SERIALS; do
+        printf '  ·  %s  releasing  ' "$S"
+        adb -s "$S" install -r "$APK" >/dev/null 2>&1 || { echo "FAILED at install"; continue; }
+        # --include-stopped-packages IS NOT OPTIONAL: install -r leaves the app STOPPED, and a
+        # stopped app hears no broadcast. Without it, result=0 and nothing happens.
+        OUT=$(adb -s "$S" shell am broadcast --include-stopped-packages \
+                  -a "$PKG.RELEASE" -n "$PKG/.ReleaseReceiver" \
+                  -e token "$TOKEN" 2>&1)
+        if printf '%s' "$OUT" | grep -q 'TOKEN MISMATCH'; then
+            echo "WRONG TOKEN — nothing was changed. Check this phone's register row."
+        elif printf '%s' "$OUT" | grep -q 'PARTIAL'; then
+            # Not a failure: unlocked and holding no token, which is the state a fresh enrol is
+            # accepted in. Something else still owns it -- on Watu stock, usually Knox Guard.
+            echo "PARTIAL — unlocked and token cleared, but another admin still owns it."
+            echo "           Re-enrol and re-lock it as it is. Run: adb shell dumpsys device_policy"
+        elif printf '%s' "$OUT" | grep -q 'RELEASED'; then
+            echo "RELEASED — ordinary phone again."
+        else
+            echo "FAILED — $(printf '%s' "$OUT" | sed -n 's/.*data="\([^"]*\)".*/\1/p')"
+        fi
+    done
+    exit 0
+fi
 
 # THE ONE CASE WHERE THE IMEI MATCH IS SKIPPED, because it protects against nothing: one
 # phone, one token. There is no other handset to confuse it with, so the pairing cannot be

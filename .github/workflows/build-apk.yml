@@ -64,7 +64,16 @@ jobs:
           echo "signing certificate checksum: $CKSUM"
 
       - name: Publish the APKs into the site
-        if: github.event_name != 'pull_request'
+        # THE GUARD IS THE BRANCH, NOT THE EVENT, and the difference is not cosmetic. This step
+        # ends in `git pull --rebase origin main` and `git push origin main`, which is only ever
+        # correct when the checkout IS main. The old condition -- "not a pull_request" -- let a
+        # workflow_dispatch on ANY branch through: it committed the APKs onto that branch, then
+        # rebased it onto main and pushed. Caught by dispatching this on a feature branch, where
+        # the rebase hit a conflict in every file the branch had changed and stopped. On a
+        # branch that happened to rebase cleanly it would have pushed unreviewed work straight
+        # to main instead. Dispatching a build to check that it compiles must never be able to
+        # publish anything.
+        if: github.ref == 'refs/heads/main'
         run: |
           # TWO NAMES FOR THE SAME BUILD, and the old one is not dead weight. Installed apps
           # take their download URL from /api/app-version at runtime, so they follow the

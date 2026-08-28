@@ -98,9 +98,17 @@ public class LockAdmin extends DeviceAdminReceiver {
      * Undone when a phone is released for good. A customer who has finished paying should be
      * left with an ordinary phone -- not one that still refuses to factory reset because of a
      * loan they cleared. Releasing has to give back everything locking took.
+     *
+     * RETURNS whether the phone is ACTUALLY no longer Device Owner -- read back, not assumed.
+     * This is the fix for the handset that came out owned, silent and unreachable: the last
+     * step here, clearDeviceOwnerApp, is deprecated and can be refused without throwing
+     * (Samsung's Knox layer does exactly that on an organisation-owned device). The old code
+     * called it, ignored it, then set RETIRED and cancelled the beat -- so a phone the system
+     * had NOT released stopped speaking anyway, and there was no way back to it. Every caller
+     * now checks this return before going quiet: a phone still owned keeps beating.
      */
-    static void unharden(Context c) {
-        if (!isOwner(c)) return;
+    static boolean unharden(Context c) {
+        if (!isOwner(c)) return true;                     // already handed back; nothing to do
         DevicePolicyManager d = dpm(c);
         ComponentName me = who(c);
         try { d.clearUserRestriction(me, UserManager.DISALLOW_FACTORY_RESET); } catch (Exception ignored) { }
@@ -111,5 +119,7 @@ public class LockAdmin extends DeviceAdminReceiver {
         // Deprecated since API 26 but still the only way for an app to give up ownership, and
         // present on every version this stock spans -- so it is called unguarded.
         try { d.clearDeviceOwnerApp(c.getPackageName()); } catch (Exception ignored) { }
+        // The truth, read off the system rather than presumed from a call that can lie.
+        return !isOwner(c);
     }
 }

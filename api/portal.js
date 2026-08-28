@@ -1636,11 +1636,17 @@ const FNS = {
      the ONLY record left is the audit entry this fn is registered for.
 
      WHAT IT DOES NOT DO, and the screen says so before anybody presses it: the handset does
-     not hear about this. It still holds its token and is still Device Owner. Its next beat
-     gets a 403, which device-core deliberately treats as "keep doing what you were doing"
-     rather than as permission to unlock -- a phone un-enrolled by somebody tampering with
-     the database is the last one that should let itself go. Starting that HANDSET afresh
-     means a factory reset, with the phone in your hands.
+     not hear about this. It still holds its token and is still Device Owner, and its next
+     beat gets a 403 -- which is NOT read as permission to unlock. A phone un-enrolled by
+     somebody tampering with the database is the last one that should let itself go.
+
+     But it does not stay that way for ever, and this is the half that used to be missing.
+     Fourteen days of unbroken 403 and the handset releases itself: unlocks, drops the
+     restrictions, steps down as Device Owner (see noteNotEnrolled in Beat.java). Long enough
+     that a bad deploy cannot free the fleet, short enough that a deleted row is not a life
+     sentence. And a phone needed back sooner than that is reachable at a bench with a cable
+     -- ReleaseReceiver, docs/DEVICE-LOCKING.md -- rather than only by a factory reset the
+     lock is still refusing.
 
      A LOCKED PHONE IS REFUSED. Deleting the row of a phone that is currently locked would
      strand it: locked forever, with nothing on the register to unlock it from. Unlock it

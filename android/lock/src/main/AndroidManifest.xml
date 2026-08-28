@@ -62,6 +62,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- The adb release route: the way back out when the server cannot reach a handset.
+             Exported so adb can reach it; guarded by this handset's own token, which only the
+             office holds. See ReleaseReceiver for why that guard is enough and why it does not
+             weaken the lock on a phone in the field. -->
+        <receiver
+            android:name=".ReleaseReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.samaritantechs.hooploanlock.RELEASE" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".BeatJob"
             android:permission="android.permission.BIND_JOB_SERVICE"
