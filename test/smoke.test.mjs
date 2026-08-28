@@ -989,16 +989,47 @@ test('the provisioning handshake never carries retire; the beat always does', ()
     'retire is the released state and nothing else; widening it releases phones nobody freed');
 });
 
-/* Re-registering a known IMEI mints nothing, which is correct -- one token per phone, for the
-   life of that row -- but it is also why the station must use the Token button rather than
-   Sajili simu when redoing a handset the register already knows. Pinned because the filter is
-   one line and reads like an optimisation. */
-test('enrolment mints a token only for an IMEI the register does not already hold', () => {
+/* =========================================================================================
+   ONE PHONE, ONE TOKEN, FOR AS LONG AS THE REGISTER KNOWS IT.
+
+     "achia and relock/re-enroll should repick same token used before if the imei exists"
+
+   Two halves, and the second is what makes the first survive contact with a bench.
+
+   MINT NOTHING for an IMEI already on the register. A second token for a live handset
+   orphans the one that phone is actually carrying: every beat 403s, and after a sustained
+   run of them the phone hands itself back and goes quiet. That filter has always been here.
+
+   BUT ALSO HAND THE EXISTING ONE BACK. It used to return nothing at all for a known IMEI, so
+   a phone being redone fell out of the enrol flow and had to be chased through the Token
+   drawer one at a time. On a bench doing twenty redos that is twenty detours -- and the
+   obvious shortcut is to delete the row and enrol it fresh, which mints a NEW token while
+   the phone in your hand still holds the old one. The friction was the bug: it made the
+   wrong path the convenient one, and a register and a handset stopped agreeing.
+   ========================================================================================= */
+test('a known IMEI keeps the token it already holds, and gets it handed back', () => {
   const portal = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
   assert.match(portal, /const fresh = list\.filter\(i => !have\.has\(i\)\)/,
     'deviceEnrol must skip IMEIs already on the register -- minting a second token for a live '
     + 'phone would orphan the one that handset is actually carrying');
   assert.match(portal, /alreadyOn: list\.length - fresh\.length/,
-    'the count of skipped IMEIs must be reported, or the station cannot tell that the empty '
-    + 'token list was deliberate rather than a failure');
+    'the count of already-known IMEIs must be reported, or the station cannot tell what happened');
+
+  const fn = portal.slice(portal.indexOf('async deviceEnrol('), portal.indexOf('async deviceSetState('));
+  assert.ok(fn.length > 0, 'deviceEnrol moved; this guard needs repointing');
+  assert.match(fn, /select\('imei, enrol_token'\)/,
+    'the existing token must be read back, or a known IMEI cannot be handed its own identity');
+  assert.match(fn, /held\.get\(imei\)/,
+    'provision must fall back to the token the register already holds for that IMEI');
+  assert.match(fn, /provision: list\.map/,
+    'provision must cover EVERY IMEI the operator submitted, not only the newly minted ones -- '
+    + 'a phone missing from that list is a phone somebody deletes and re-enrols instead');
+  assert.match(fn, /fresh: !have\.has\(imei\)/,
+    'and each line must say whether it is a new phone or one that kept its identity');
+
+  /* Pre-migration registries have no enrol_token, and PostgREST refuses the whole select for
+     one unknown column -- naming it here without a way back would break enrolment itself on a
+     deployment that has not run the devices migration. */
+  assert.match(fn, /\/enrol_token\/\.test\(String\(e && e\.message \|\| ''\)\)/,
+    'reading enrol_token must fall back when the column is not there yet');
 });

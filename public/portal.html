@@ -2444,7 +2444,7 @@ function devEnrolForm(m){
     var b=$('#dvEnrolGo'); b.disabled=true;
     srv('deviceEnrol',{imeis:v}).then(function(r){
       toast('Zimesajiliwa '+money(r.enrolled)
-        +(r.alreadyOn?' · '+money(r.alreadyOn)+' zilikuwepo':'')
+        +(r.alreadyOn?' · '+money(r.alreadyOn)+' zilikuwepo (token ile ile)':'')
         +(r.unknownToStock?' · '+money(r.unknownToStock)+' hazipo kwenye stock':''));
       /* THE TOKENS, ONCE. Each phone's credential goes into that phone at provisioning, so
          the station needs them at exactly this moment and nowhere else. They are not put on
@@ -2516,7 +2516,16 @@ function devCopyBox(id){
 function devProvision(m, r){
   var p=r.provision||[];
   if(!p.length){ closeDrawer(); drawDevices(m); return; }
-  var lines=p.map(function(x){ return x.imei+'\t'+x.token; }).join('\n');
+  /* NEW PHONE OR ONE WE ALREADY KNEW, said out loud on every line.
+       "achia and relock/re-enroll should repick same token used before if the imei exists"
+
+     A known IMEI keeps the token it already holds -- so the handset needs nothing done to
+     it, and the operator needs to SEE that rather than wonder whether the register has just
+     handed the phone in their hand a second identity. `tayari` on a line means: same phone,
+     same token, this command only reinstalls and re-arms it. */
+  var lines=p.map(function(x){
+    return x.imei+'\t'+x.token+'\t'+(x.fresh===false?'tayari / known':'mpya / new');
+  }).join('\n');
   drawer('<h3>Token za kuweka kwenye simu</h3>'
     +'<div class="sub">Kila simu ina token yake — ndiyo kitambulisho chake, na inaonyeshwa <b>mara moja tu</b>. '
     +'Simu lazima iwe mpya au imefutwa (bila akaunti yoyote) ndipo iweze kufungwa. '
