@@ -1,6 +1,6 @@
 {
-  "versionCode": 4,
-  "versionName": "1.3.0",
-  "notes": "Simu inarudi kwa sekunde ikiwa kuna agizo linalosubiri, badala ya dakika 15. / A phone comes back within seconds while an order is outstanding, instead of waiting a quarter of an hour.",
+  "versionCode": 5,
+  "versionName": "1.4.0",
+  "notes": "Simu inaripoti kilichopo kwenye skrini kweli, na kufungua kunajaribiwa tena mpaka skrini iondoke. / The phone now reports what is actually on its screen, and an unlock keeps retrying until the screen is really down.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

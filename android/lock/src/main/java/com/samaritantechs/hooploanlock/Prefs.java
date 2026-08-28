@@ -13,7 +13,14 @@ class Prefs {
 
     static final String SERVER = "server";          // where to beat; from the provisioning bundle
     static final String TOKEN = "token";            // this handset's credential -- see device-core.js
-    static final String LOCKED = "locked";          // what we are currently DOING, not what we were told
+    static final String LOCKED = "locked";          // what we were TOLD to do, and intend to do
+    /* WHETHER THE LOCK SCREEN IS ACTUALLY ON THE GLASS, maintained by LockActivity itself
+       rather than inferred from the intention above. They come apart -- an activity the
+       system killed, a startActivity that did nothing, a release the screen never heard --
+       and when they do, this is the one the customer is looking at. See Beat: it is this
+       that gets reported, because a register confidently saying "unlocked" about a phone
+       showing a lock screen is worse than one that says nothing. */
+    static final String SCREEN_UP = "screenUp";
     static final String MESSAGE = "message";        // the lock screen's words, refreshed each beat
     static final String HELP_PHONE = "helpPhone";
     static final String REASON = "reason";

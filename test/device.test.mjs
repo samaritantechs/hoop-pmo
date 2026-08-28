@@ -477,9 +477,14 @@ test('a phone with an order outstanding is told to come back in seconds, not a q
 
   // And once it has done as it was told, straight back to the cheap pace.
   const done = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: true }], NOW);
-  assert.equal(done.nextBeatSeconds, 15 * 60,
-    'a settled phone must go back to the fifteen-minute beat -- polling fast forever spends '
-    + "the customer's own data bundle to repeat what the register already knows");
+  /* The RELATIONSHIP, not the number. The ordinary pace is a business judgement about data
+     cost that is meant to be changed on the server without a release -- it has already gone
+     from fifteen minutes to one -- so pinning the literal here would break this test every
+     time somebody exercises that freedom, and teach them to edit the test rather than think.
+     What must never change is that a settled phone is CHEAPER than a waiting one. */
+  assert.ok(done.nextBeatSeconds > pending.nextBeatSeconds,
+    'a settled phone must beat less often than one with an order outstanding -- polling fast '
+    + "forever spends the customer's own data bundle to repeat what the register already knows");
 });
 
 test('an unlock order is just as urgent as a lock, and a released phone is not hurried', async () => {
@@ -495,5 +500,7 @@ test('an unlock order is just as urgent as a lock, and a released phone is not h
   const rel = fleet([{ imei: 'D3', state: 'released', reported: 'locked', enrol_token: 'tok3' }]);
   const q = await deviceApi(rel, 'dev_beat', [{ token: 'tok3', locked: true }], NOW);
   assert.equal(q.retire, true);
-  assert.equal(q.nextBeatSeconds, 15 * 60, 'a retiring phone is never put on the fast pace');
+  assert.ok(q.nextBeatSeconds > r.nextBeatSeconds,
+    'a retiring phone is never put on the fast pace -- a step-down the platform keeps refusing '
+    + 'would then beat every few seconds for ever');
 });

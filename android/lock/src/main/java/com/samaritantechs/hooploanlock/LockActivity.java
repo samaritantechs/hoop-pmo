@@ -54,12 +54,44 @@ public class LockActivity extends Activity {
     private TextView imeiView;
     private TextView whyView;
 
+    /* THE SCREEN'S OWN DOORBELL. Registered while this activity is alive, so an unlock can
+       reach it without anybody having to start an activity from the background -- which is
+       the thing Android 10+ may refuse in silence, and which stranded a customer's phone
+       showing a lock screen while the register read "unlocked". See Guard.unlock. */
+    private final android.content.BroadcastReceiver release = new android.content.BroadcastReceiver() {
+        @Override public void onReceive(Context ctx, Intent i) { standDown(); }
+    };
+
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
         setShowWhenLocked();
         setContentView(build());
+        try {
+            android.content.IntentFilter f = new android.content.IntentFilter(Guard.ACTION_RELEASE);
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(release, f, Context.RECEIVER_NOT_EXPORTED);
+            else registerReceiver(release, f);
+        } catch (Exception ignored) { }
         handle(getIntent());
+    }
+
+    @Override
+    protected void onDestroy() {
+        try { unregisterReceiver(release); } catch (Exception ignored) { }
+        /* THE GLASS IS THE TRUTH. However this activity ended -- released, finished, or killed
+           by the system to reclaim memory -- the lock screen is no longer in front of anybody,
+           and the next beat must say so. If the office still wants this phone locked, that beat
+           gets "lock" back and Guard.show() puts it up again, which is the loop working rather
+           than a gap in it. */
+        Prefs.put(this, Prefs.SCREEN_UP, false);
+        super.onDestroy();
+    }
+
+    /** Leave lock task and go. Only the activity that entered it may leave it. */
+    private void standDown() {
+        try { stopLockTask(); } catch (Exception ignored) { }
+        Prefs.put(this, Prefs.SCREEN_UP, false);
+        finish();
     }
 
     @Override
@@ -73,11 +105,13 @@ public class LockActivity extends Activity {
         if (intent != null && intent.getBooleanExtra(EXTRA_RELEASE, false)) {
             // Told to stand down. Only the activity that entered lock task may leave it,
             // which is why unlocking is routed back through here rather than done in Guard.
-            try { stopLockTask(); } catch (Exception ignored) { }
-            finish();
+            standDown();
             return;
         }
         refresh();
+        // Recorded BEFORE the pin attempt, because the screen is in front of the customer
+        // either way -- startLockTask decides whether they can leave it, not whether it shows.
+        Prefs.put(this, Prefs.SCREEN_UP, true);
         try { startLockTask(); } catch (Exception ignored) {
             /* Not Device Owner -- a hand-installed test build, or provisioning that did not
                take. The screen still shows, and it can still be left. Failing softly here is
