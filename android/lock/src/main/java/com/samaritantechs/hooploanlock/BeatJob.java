@@ -22,6 +22,34 @@ public class BeatJob extends JobService {
     private static final int JOB_ID = 4711;
     private static final long PERIOD_MS = 15L * 60 * 1000;
 
+    /* THE SECOND JOB, and why fifteen minutes could not simply be made smaller.
+       =========================================================================================
+         "funga and fungua and release should not take even a minute they should all be
+          immediate effect whenever online and phone pings"
+
+       JobScheduler's floor for a PERIODIC job is fifteen minutes -- setPeriodic with anything
+       less is silently raised to it, so shortening the beat that way is not available at any
+       price. A one-shot job has no such floor, so the follow-up below is how the phone comes
+       back sooner, rescheduled after every beat.
+
+       It runs on one of two grounds, and the difference is whose money is being spent:
+
+         AN ORDER IS OUTSTANDING. The server said come back in seconds because the register and
+         the handset disagree -- a lock ordered and not yet carried out. Any network, because
+         this is the case that matters and the window is seconds long.
+
+         IT IS SITTING ON THE BENCH. Charging AND on unmetered wifi, which is exactly Sipho's
+         station and nowhere else. Android itself enforces both, so this job simply never runs
+         on a customer's phone out in Dar on cellular -- it costs them nothing, and needs no
+         cleverness here to decide that.
+
+       What neither can do is wake a sleeping phone that has nothing pending and is not on the
+       bench: the office presses Funga and that handset still finds out at its next ordinary
+       beat. Beating that needs a push channel (FCM). Polling faster cannot get there without
+       spending a customer's data bundle all day to say "still locked". */
+    private static final int SOON_ID = 4712;
+    private static final long BENCH_MS = 60L * 1000;
+
     static void schedule(Context c) {
         try {
             JobScheduler js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
@@ -35,10 +63,32 @@ public class BeatJob extends JobService {
         } catch (Exception ignored) { }
     }
 
+    /** Queue the next early check-in, if this phone has earned one. Called after every beat. */
+    static void scheduleSoon(Context c) {
+        try {
+            JobScheduler js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+            if (js == null || Prefs.of(c).getBoolean(Prefs.RETIRED, false)) return;
+            long wait = Prefs.of(c).getLong(Prefs.NEXT_BEAT, 0) * 1000L;
+            boolean pending = wait > 0 && wait < PERIOD_MS;
+            JobInfo.Builder b = new JobInfo.Builder(SOON_ID, new ComponentName(c, BeatJob.class))
+                    .setMinimumLatency(pending ? wait : BENCH_MS)
+                    // A deadline, or Doze can hold a one-shot indefinitely on an idle handset.
+                    .setOverrideDeadline((pending ? wait : BENCH_MS) + 30_000L);
+            if (pending) {
+                b.setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY);
+            } else {
+                // The bench, and only the bench. Android decides, so a field phone is exempt
+                // by construction rather than by a rule this code has to get right.
+                b.setRequiredNetworkType(JobInfo.NETWORK_TYPE_UNMETERED).setRequiresCharging(true);
+            }
+            js.schedule(b.build());
+        } catch (Exception ignored) { }
+    }
+
     static void cancel(Context c) {
         try {
             JobScheduler js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
-            if (js != null) js.cancel(JOB_ID);
+            if (js != null) { js.cancel(JOB_ID); js.cancel(SOON_ID); }
         } catch (Exception ignored) { }
     }
 
@@ -51,6 +101,9 @@ public class BeatJob extends JobService {
             Beat.enforceGrace(c);
             Beat.run(c, false);
             SelfUpdate.check(c);
+            // Queue the next early check-in, if this phone has earned one. Always after the
+            // beat, so it acts on the pace the server just asked for.
+            scheduleSoon(c);
             jobFinished(params, false);
         }).start();
         return true;   // still working on another thread

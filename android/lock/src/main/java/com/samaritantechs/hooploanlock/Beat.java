@@ -76,6 +76,12 @@ class Beat {
         /* WHAT WE WERE DOING WHEN THIS BEAT STARTED, so the confirming beat at the bottom can
            tell whether this answer actually changed anything. */
         final boolean before = Prefs.of(c).getBoolean(Prefs.LOCKED, false);
+        /* HOW LONG THE SERVER WANTS US TO WAIT. Short only while an order is outstanding, so
+           a phone that has just been told to lock comes back in seconds instead of a quarter
+           of an hour -- and a phone with nothing pending goes on costing what it always did.
+           Zero or missing means "the usual", which is what an older deployment sends. */
+        int next = r.optInt("nextBeatSeconds", 0);
+        if (next > 0) Prefs.put(c, Prefs.NEXT_BEAT, (long) next);
         Prefs.put(c, Prefs.LAST_OK, System.currentTimeMillis());
         Prefs.put(c, Prefs.GRACE_HOURS, String.valueOf(r.optInt("graceHours", -1)));
         String msg = r.optString("message", "");

@@ -451,3 +451,49 @@ test('a partial IMEI still finds the phone, and a missing devices table does not
   assert.equal(r.ok, true, 'a missing devices table must not take the whole search down');
   assert.deepEqual(r.devices, []);
 });
+
+/* =========================================================================================
+   HOW LONG UNTIL THE PHONE COMES BACK -- decided by the server, because only it knows
+   whether an order is still outstanding.
+
+     "funga and fungua and release should not take even a minute they should all be
+      immediate effect whenever online and phone pings"
+
+   A fixed quarter-hour beat is right for a fleet at rest and far too slow the moment somebody
+   presses a button. But polling every half-minute all day spends a CUSTOMER's data bundle to
+   say "still locked, still locked" -- and they pay that airtime, not HOOP. So the fast pace
+   applies only while the register and the handset disagree, which is a window seconds long.
+
+   Both halves are load-bearing, and a later reader tidying this into one constant would drop
+   whichever half they did not have in mind -- so both are asserted.
+   ========================================================================================= */
+test('a phone with an order outstanding is told to come back in seconds, not a quarter hour', async () => {
+  // Ordered to lock, and the handset still says unlocked: the office is waiting.
+  const d = fleet([{ imei: 'D1', state: 'locked', reported: 'unlocked', enrol_token: 'tok1' }]);
+  const pending = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: false }], NOW);
+  assert.equal(pending.command, 'lock');
+  assert.ok(pending.nextBeatSeconds > 0 && pending.nextBeatSeconds <= 60,
+    'an outstanding order must bring the phone back within a minute, not fifteen');
+
+  // And once it has done as it was told, straight back to the cheap pace.
+  const done = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: true }], NOW);
+  assert.equal(done.nextBeatSeconds, 15 * 60,
+    'a settled phone must go back to the fifteen-minute beat -- polling fast forever spends '
+    + "the customer's own data bundle to repeat what the register already knows");
+});
+
+test('an unlock order is just as urgent as a lock, and a released phone is not hurried', async () => {
+  // The customer paid; nobody should stare at a lock screen for fifteen minutes.
+  const un = fleet([{ imei: 'D2', state: 'enrolled', reported: 'locked', enrol_token: 'tok2' }]);
+  const r = await deviceApi(un, 'dev_beat', [{ token: 'tok2', locked: true }], NOW);
+  assert.equal(r.command, 'unlock');
+  assert.ok(r.nextBeatSeconds <= 60, 'an unlock the phone has not applied yet is outstanding too');
+
+  /* A retiring phone is on its way out and hurrying it changes nothing -- and if the
+     step-down keeps being refused, a fast pace would have it beating every few seconds for
+     ever. */
+  const rel = fleet([{ imei: 'D3', state: 'released', reported: 'locked', enrol_token: 'tok3' }]);
+  const q = await deviceApi(rel, 'dev_beat', [{ token: 'tok3', locked: true }], NOW);
+  assert.equal(q.retire, true);
+  assert.equal(q.nextBeatSeconds, 15 * 60, 'a retiring phone is never put on the fast pace');
+});
