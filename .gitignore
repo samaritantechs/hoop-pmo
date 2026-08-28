@@ -7,3 +7,16 @@ android/build/
 android/app/build/
 android/build-noagp/
 android/local.properties
+
+# FIREBASE SERVICE ACCOUNT KEYS -- never in the repo.
+#
+# Not to be confused with android/lock/google-services.json, which IS committed and belongs
+# there: that one is the app's client config, it ships inside the APK, and it is public by
+# design. These are the other thing entirely -- the server credential Firebase generates under
+# Project settings -> Service accounts, which lets its holder act as the project. It belongs in
+# Vercel's environment variables and nowhere else, least of all in git history, where deleting
+# it later does not remove it.
+*-adminsdk-*.json
+service-account*.json
+serviceAccount*.json
+firebase-adminsdk*.json
