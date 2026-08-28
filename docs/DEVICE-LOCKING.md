@@ -113,28 +113,42 @@ real session:
 - `public/HOOPLOAN-Lock.apk` is a path inside this repo, which the station does not have.
 
 Download the APK from **<https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk>** first — it lands in
-Downloads, which is where the first line looks. Then, one line at a time:
+Downloads, which is where the command looks. Then **one line, pasted once**:
 
 ```bat
-adb install -r "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk"
-```
-```bat
-adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin
-```
-```bat
-adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.ENROL -n com.samaritantechs.hooploanlock/.EnrolReceiver -e server https://hoop-pmo.vercel.app -e token PASTE_THE_TOKEN_HERE
+adb install -r "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk" && (adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin & adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.ENROL -n com.samaritantechs.hooploanlock/.EnrolReceiver -e server https://hoop-pmo.vercel.app -e token PASTE_THE_TOKEN_HERE)
 ```
 
-Replace `PASTE_THE_TOKEN_HERE` with the token from step 1 — no brackets, no quotes.
+Replace `PASTE_THE_TOKEN_HERE` with the token from step 1 — no brackets, no quotes. **Or
+don't type it at all:** Devices → the phone's row → **Token** hands you this exact line with
+the token already in it, ready to paste.
 
-On Linux or a Mac the same three commands work with `adb install -r <path>` instead of the
-`%USERPROFILE%` form.
+> **Why `&&` once and `&` once, and not three `&&`.**
+>
+> > "token copying just have 3 cmd at once dont confuse me nor sipho we taking it nowhere all
+> > we need is cmd to sinle paste and run"
+>
+> `&&` runs the next command only if the last one succeeded; `&` runs it regardless. The
+> install keeps `&&`, because if the APK is not there nothing downstream can work and one
+> error is easier to read than three. The enrol gets `&` on purpose: the commonest stop on
+> this bench is `set-device-owner` answering **device owner is already set**, which is the
+> finished state of every phone being redone, not a failure — and `&&` there would swallow
+> the enrol and leave the handset installed, provisioned and unregistered.
+>
+> The parentheses are explicit rather than relying on cmd's precedence. This is not a line to
+> be clever on.
 
-Three commands, about ten seconds. **Neither half works without the other:** the APK on its
-own is an ordinary app that a thief uninstalls in seconds, and `set-device-owner` names a
-component that has to already be on the phone, so it fails on a handset with nothing
-installed. Installing is itself an adb command, though, which is why all three are above and
-why nothing here needs touching the phone's screen.
+On Linux or a Mac the same line works with `;` between the commands and a real path instead of
+the `%USERPROFILE%` form.
+
+One paste, about ten seconds. **Neither half works without the other:** the APK on its own is
+an ordinary app that a thief uninstalls in seconds, and `set-device-owner` names a component
+that has to already be on the phone, so it fails on a handset with nothing installed.
+Installing is itself an adb command, though, which is why it leads the line and why nothing
+here needs touching the phone's screen.
+
+**The line that decides it is the last one**: `result=1` with `ENROLLED`. Anything above it —
+`Success`, or a red `already set` stack trace — has already been accounted for.
 
 **For a batch, do not type these 200 times.** The bench script takes the IMEI/token list from
 step 1, walks every phone that `adb devices` can see, and runs all three on each — matching

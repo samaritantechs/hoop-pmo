@@ -1475,6 +1475,18 @@ const FNS = {
 
            So the age is carried in minutes and the screen picks the unit. */
         silentMins: seen ? Math.max(0, Math.round((now - seen) / 60000)) : null,
+        /* AND THE MOMENT ITSELF, as epoch milliseconds.
+             "you said you'll 00:00:00 for last pinged so as we see actual time"
+
+           An age cannot put two events in order. A beat "4 dk" old beside an order "4 dk"
+           old could have happened either way round, and which way round it was IS the
+           diagnosis: a phone that spoke after the order and stayed locked is a fault; one
+           that has not spoken since is simply asleep. The clock settles it in one glance.
+
+           A NUMBER, deliberately, not the timestamp text. A zone-less string is read as
+           local by the browser and as UTC by this server -- the same row would be three
+           hours out in Dar es Salaam, on the one column whose whole job is to say when. */
+        seenAt: seen || null,
         stale: !seen || (now - seen) > HOURS,
         // The honest three-way reading of a lock order, never collapsed into a boolean.
         lockState: r.state !== 'locked' ? null
@@ -1496,6 +1508,7 @@ const FNS = {
         lastOrder: r.state === 'locked' ? 'Funga' : r.state === 'released' ? 'Achia'
           : r.state === 'lost' ? 'Imepotea' : 'Fungua',
         orderAgeMins: r.state_at ? Math.max(0, Math.round((now - Date.parse(r.state_at)) / 60000)) : null,
+        orderAt: r.state_at ? Date.parse(r.state_at) : null,     // same clock as seenAt, so the two compare
         orderBy: r.state_by || '',
       };
     }).sort((x, y) => {
