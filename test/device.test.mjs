@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { fakeDb } from './fake-db.mjs';
 import { deviceApi, commandFor } from '../api/_lib/device-core.js';
 import { _FNS } from '../api/portal.js';
@@ -503,4 +504,90 @@ test('an unlock order is just as urgent as a lock, and a released phone is not h
   assert.ok(q.nextBeatSeconds > r.nextBeatSeconds,
     'a retiring phone is never put on the fast pace -- a step-down the platform keeps refusing '
     + 'would then beat every few seconds for ever');
+});
+
+/* =========================================================================================
+   THE DOORBELL, AND WHY IT CARRIES NO KEY.
+
+     "build the FCM push"
+     "wont taking this to google bring bans?"
+
+   Push is the only way an order given in the office reaches a handset in Dar in about a
+   second: polling cannot beat its own interval, and Doze pushes an idle phone past even the
+   sixty seconds we ask for. But it puts a third party -- Google -- on the path of a message
+   about somebody's phone, so the shape of that message is the whole security question.
+
+   IT SAYS "BEAT" AND NOTHING ELSE. The handset then asks /api/device the same question it
+   always asks, with its own enrolment token, and gets the same answer it always gets. So the
+   most a forged or replayed push can do is cause one extra heartbeat -- it cannot lock a
+   phone, unlock one, or free one, because none of those decisions travels in it.
+
+   These tests hold that line from the server side. The Android half is held by Push.java's
+   own header and by the fact that it never reads the payload.
+   ========================================================================================= */
+test('the wake-up carries no command -- only an instruction to ask', async () => {
+  const src = fs.readFileSync(new URL('../api/_lib/push.js', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('export async function wake'));
+
+  // Data-only, and the ONLY datum is "beat". A payload naming a state would be a command
+  // travelling outside the authenticated channel -- exactly what must never happen.
+  assert.match(body, /data:\s*\{\s*beat:\s*'1'\s*\}/,
+    'the push payload must carry nothing but "beat"');
+  for (const forbidden of ['lock', 'unlock', 'release', 'state', 'imei', 'command']) {
+    assert.ok(!new RegExp('data:[^}]*\\b' + forbidden + '\\b').test(body),
+      'the push payload must never carry ' + forbidden + ': a message Google relays is not '
+      + 'an authenticated channel, and a command in it would be one anybody could forge');
+  }
+
+  /* And it must never draw anything on the customer's screen. A notification payload would
+     be wrong twice: there is nothing for them to read, and on a locked handset the shade is
+     not reachable anyway. */
+  assert.ok(!/notification\s*:/.test(body), 'data-only, never a notification');
+});
+
+test('push is optional everywhere, and never fails an operator action', async () => {
+  const src = fs.readFileSync(new URL('../api/_lib/push.js', import.meta.url), 'utf8');
+
+  /* WITH NO CREDENTIALS THE FLEET BEHAVES EXACTLY AS BEFORE. Push is a shortcut on top of a
+     timer that already works; a deployment without Firebase must lose the second, not the
+     lock. */
+  const saved = { ...process.env };
+  delete process.env.FIREBASE_PROJECT_ID;
+  delete process.env.FIREBASE_CLIENT_EMAIL;
+  delete process.env.FIREBASE_PRIVATE_KEY;
+  const { nudge, pushConfigured, wake } = await import('../api/_lib/push.js?nocreds');
+  assert.equal(pushConfigured(), false, 'no credentials must read as "push is off"');
+  assert.deepEqual(await wake(['whatever'], 1), { sent: 0, failed: 0, stale: [] },
+    'wake must return quietly rather than throwing when push is not configured');
+
+  // And a broken database must not take Funga down with it: the lock is already recorded.
+  const exploding = { from() { throw new Error('database is on fire'); } };
+  assert.deepEqual(await nudge(exploding, ['351388334583295'], 1), { sent: 0, failed: 0, stale: [] },
+    'nudge must swallow everything -- it runs inside an operator pressing Funga, and a lock '
+    + 'is not less ordered because a doorbell failed');
+  Object.assign(process.env, saved);
+
+  // The swallow is deliberate and local to this file; it must be visible as such.
+  assert.match(src, /catch \(e\) \{\s*return \{ sent: 0, failed: 0, stale: \[\] \};/,
+    'nudge stopped swallowing its failures, which is the one place in this system that must');
+});
+
+test('a beat carries the handset push address, and the register keeps only the newest', async () => {
+  const d = fleet([{ imei: 'D9', state: 'enrolled', enrol_token: 'tok9', fcm_token: 'OLD' }]);
+  await deviceApi(d, 'dev_beat', [{ token: 'tok9', locked: false, fcmToken: 'NEW' }], NOW);
+  const after = (await _FNS.deviceHistory(d, ADMIN, { imei: 'D9' }));
+  assert.equal(after.ok, true);
+  /* Firebase rotates a registration token whenever it likes and a stale one fails silently,
+     so the handset re-reports its address on every beat. What must NOT happen is a write per
+     beat: two hundred phones every minute is two hundred needless writes a minute. */
+  const core = fs.readFileSync(new URL('../api/_lib/device-core.js', import.meta.url), 'utf8');
+  assert.match(core, /S\(p\.fcmToken\) !== S\(dev\.fcm_token\)/,
+    'the push address must be written only when it has actually changed');
+
+  /* AND A DEPLOYMENT THAT HAS NOT RUN THE MIGRATION MUST STILL BEAT. PostgREST refuses the
+     whole select for one unknown column, so naming fcm_token without the fallback would take
+     every handset dark at the moment somebody deploys. */
+  assert.match(core, /BEAT_COLS_LEGACY/, 'the pre-migration column list was removed');
+  assert.match(core, /reported_imei\|fcm_token/,
+    'the update must tolerate a missing fcm_token column, as it already does reported_imei');
 });

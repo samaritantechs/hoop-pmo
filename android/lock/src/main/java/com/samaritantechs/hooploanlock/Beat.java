@@ -61,6 +61,14 @@ class Beat {
                 payload.put("appVersion", BuildConfig.VERSION_NAME);
                 String imei = Imei.read(c);
                 if (imei != null) payload.put("imei", imei);
+                /* WHERE TO REACH THIS PHONE QUICKLY, reported on every beat rather than once.
+                   Firebase rotates a registration token whenever it likes, and a stale address
+                   fails silently -- the office would press Funga, see nothing happen, and have
+                   no way to tell a dead address from a phone that is simply off. Re-sending
+                   the current one each time costs a few dozen bytes and removes that whole
+                   class of mystery. Empty on a build with no push compiled in. */
+                String fcm = Prefs.str(c, Prefs.FCM_TOKEN, "");
+                if (fcm != null && !fcm.isEmpty()) payload.put("fcmToken", fcm);
             }
             JSONObject body = new JSONObject();
             body.put("fn", hello ? "dev_hello" : "dev_beat");

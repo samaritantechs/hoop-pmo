@@ -1,6 +1,6 @@
 {
-  "versionCode": 5,
-  "versionName": "1.4.0",
-  "notes": "Simu inaripoti kilichopo kwenye skrini kweli, na kufungua kunajaribiwa tena mpaka skrini iondoke. / The phone now reports what is actually on its screen, and an unlock keeps retrying until the screen is really down.",
+  "versionCode": 6,
+  "versionName": "1.5.0",
+  "notes": "Kufunga na kufungua kunafika mara moja kwa Firebase, na app inajisasisha bila kuulizwa. / Lock and unlock arrive instantly by Firebase push, and the app updates itself without asking.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

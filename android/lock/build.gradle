@@ -57,8 +57,33 @@ android {
     }
 }
 
+/* PUSH IS OPTIONAL, AND THE CONDITION IS LOAD-BEARING.
+   =============================================================================================
+   Everything else in this APK is platform API -- JobScheduler, DevicePolicyManager,
+   HttpURLConnection -- with nothing to resolve, which is what has kept it buildable anywhere.
+   Firebase is the first real dependency and it brings a tree with it.
+
+   So it switches on with the file. With lock/google-services.json present the SDK is compiled
+   in and Push.java with it; without it this builds exactly as it always did -- no dependency,
+   no plugin, nothing that can fail to resolve. A clone that strips the file, or a fork that
+   never had one, still produces a working lock app that simply beats on its timer.
+
+   That is not defensive decoration. This APK is how two hundred handsets get locked, and "the
+   build broke because a dependency would not resolve" is a day nobody at HOOP can spend. The
+   lock must never depend on Google being reachable -- at build time or at run time. */
+def hasPush = file('google-services.json').exists()
+
 dependencies {
-    // Platform APIs only, same as the calls app: JobScheduler, DevicePolicyManager and
-    // HttpURLConnection are all in the framework. No androidx means nothing to resolve,
-    // which is what keeps this buildable in a restricted CI environment.
+    /* The messaging SDK alone. Not the BOM, not analytics, not crashlytics: this app sends
+       Google nothing and reports Google nothing. It receives one wake-up that carries no
+       command -- see push.js and Push.java. */
+    if (hasPush) implementation 'com.google.firebase:firebase-messaging:24.1.0'
+}
+
+/* Applied after the android block because it reads it. Push.java sits in its own source set
+   so a build WITHOUT the json never tries to compile a class whose superclass is not on the
+   classpath -- which is what would make "optional" a fiction. */
+if (hasPush) {
+    apply plugin: 'com.google.gms.google-services'
+    android.sourceSets.main.java.srcDirs += 'src/push/java'
 }

@@ -34,7 +34,11 @@ import { fetchAll } from './supabase.js';
    rows, so the trail records TRANSITIONS only -- the moment a phone's own story changed. */
 // sold_ref and customer are here for one reason: together they answer "has this phone left
 // our hands", which is what decides whether silence may ever lock it. See graceFor().
-const BEAT_COLS = 'imei, item, state, state_reason, reported, enrol_token, customer, holder, sold_ref';
+const BEAT_COLS_LEGACY = 'imei, item, state, state_reason, reported, enrol_token, customer, holder, sold_ref';
+// fcm_token is read only so the beat can tell whether the handset's address has CHANGED --
+// two hundred phones beating every minute would otherwise be two hundred needless writes a
+// minute. See byToken for what happens where the migration has not run yet.
+const BEAT_COLS = BEAT_COLS_LEGACY + ', fcm_token';
 
 const S = v => String(v == null ? '' : v).trim();
 
@@ -176,7 +180,19 @@ async function graceFor(db, dev) {
 async function byToken(db, p) {
   const token = S(p && p.token);
   if (!token) { const e = new Error('Token required'); e.status = 400; throw e; }
-  const rows = await fetchAll(() => db.from('devices').select(BEAT_COLS).eq('enrol_token', token));
+  /* PRE-MIGRATION TOLERANCE, and this one is not a nicety. PostgREST refuses the WHOLE select
+     for one unknown column, so naming fcm_token here on a deployment that has not run
+     RUN-ME-2026-08-28-push.sql would fail every beat from every handset -- the entire fleet
+     dark, at the exact moment somebody is deploying. The beat matters more than the address,
+     so it falls back to the columns that have always existed and simply forgoes the "only
+     write when it changed" saving until the migration lands. */
+  let rows;
+  try {
+    rows = await fetchAll(() => db.from('devices').select(BEAT_COLS).eq('enrol_token', token));
+  } catch (e) {
+    if (!/fcm_token/.test(String(e && e.message || ''))) throw e;
+    rows = await fetchAll(() => db.from('devices').select(BEAT_COLS_LEGACY).eq('enrol_token', token));
+  }
   const dev = rows.find(r => S(r.enrol_token) === token) || null;
   if (!dev) { const e = new Error('Not enrolled'); e.status = 403; throw e; }
   return dev;
@@ -204,14 +220,25 @@ async function beat(db, [payload], nowMs) {
      ordinary hardware. Recorded, surfaced on the device's own screen, and left for a person
      to judge -- which is the honest handling of a signal this noisy. */
   if (S(p.imei)) patch.reported_imei = S(p.imei).slice(0, 32);
+  /* WHERE TO REACH THIS PHONE QUICKLY. Firebase rotates a registration token whenever it
+     likes and a stale one fails silently, so the handset re-reports the current address on
+     every beat and this simply keeps the newest. Only written when it CHANGES: two hundred
+     phones beating every minute would otherwise be two hundred pointless writes a minute
+     against a column nobody read. */
+  if (S(p.fcmToken) && S(p.fcmToken) !== S(dev.fcm_token)) {
+    patch.fcm_token = S(p.fcmToken).slice(0, 512);
+  }
   // A battery reading is only ever 0-100; anything else is a bug on the handset, not a fact.
   const bat = Number(p.battery);
   if (Number.isFinite(bat) && bat >= 0 && bat <= 100) patch.battery = Math.round(bat);
 
   let { error } = await db.from('devices').update(patch).eq('imei', imei);
-  // Pre-migration: reported_imei may not be there yet. The beat itself still matters more.
-  if (error && /reported_imei/.test(String(error.message || ''))) {
-    const { reported_imei, ...rest } = patch;
+  /* Pre-migration: reported_imei or fcm_token may not be there yet, and PostgREST refuses the
+     whole update for one unknown column. The beat itself matters more than either of them --
+     a phone that cannot report its state is a phone the office has lost, while a phone that
+     cannot report its battery or its push address is merely one the office cannot hurry. */
+  if (error && /reported_imei|fcm_token/.test(String(error.message || ''))) {
+    const { reported_imei, fcm_token, ...rest } = patch;
     ({ error } = await db.from('devices').update(rest).eq('imei', imei));
   }
   if (error) throw new Error(error.message);

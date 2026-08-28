@@ -92,6 +92,31 @@ public class LockAdmin extends DeviceAdminReceiver {
         // Only this package may hold the screen. Set once, here, so LockActivity's
         // startLockTask() is allowed to pin without a prompt when the moment comes.
         try { d.setLockTaskPackages(me, new String[]{ c.getPackageName() }); } catch (Exception ignored) { }
+        /* PLAY PROTECT IS NOT SWITCHED OFF HERE, AND THE REASON IS WORTH KEEPING.
+           -------------------------------------------------------------------------------
+             "it asked b/se app is dangerous continue anyway"
+
+           That dialog is Play Protect, not the install confirmation -- two gates, and only
+           the second is the one SelfUpdate's setRequireUserAction silences. The obvious
+           answer is for a Device Owner to turn package verification off, and this code did
+           that for one commit before the compiler pointed out that
+           Settings.Global.PACKAGE_VERIFIER_ENABLE is @hide: not public API, no public
+           constant, does not build.
+
+           Reaching past that with the raw string would have compiled and then done nothing.
+           From Android 9 setGlobalSetting is restricted to a short allowlist and package
+           verification is not on it, so the call would be accepted and ignored -- a line that
+           reads like a fix, ships like a fix, and leaves the prompt exactly where it was.
+           This feature has produced enough of those.
+
+           WHAT ACTUALLY HAPPENS, which is less alarming than it looked: Play Protect warns
+           when an unknown app is FIRST installed. That is at the bench, with an operator
+           holding the phone, who taps through it once. Updates afterwards are the same
+           package with the same signature and do not re-warn -- and those are the ones that
+           reach a boxed handset with nobody nearby, which is the case that mattered.
+
+           If it ever does need suppressing across a fleet, the supported route is Android
+           Enterprise enrolment through an EMM, not a bare Device Owner. */
     }
 
     /**

@@ -37,6 +37,11 @@ class Prefs {
        outstanding; a quarter of an hour otherwise. Kept here so the pace survives a reboot
        and so the office can change it for a whole fleet without shipping an APK. */
     static final String NEXT_BEAT = "nextBeatSeconds";
+    /* This handset's Firebase address, so the office can wake it instead of waiting for the
+       timer. Written by Push.onNewToken and reported on the beat -- NOT sent from Push
+       itself, because the beat is the one authenticated channel this app has. Absent on a
+       build without google-services.json, which simply means no push and the timer alone. */
+    static final String FCM_TOKEN = "fcmToken";
     static final String RETIRED = "retired";        // released for good; stop beating
     /* When the register first said "I do not know this token". Cleared by any successful
        beat; after long enough the handset releases itself rather than staying a brick with
