@@ -145,7 +145,9 @@ for S in $SERIALS; do
 
     # EnrolReceiver answers with a result code and a readable message, so a refusal says why
     # rather than printing result=0 and meaning nothing.
-    OUT=$(adb -s "$S" shell am broadcast -a "$PKG.ENROL" -n "$PKG/.EnrolReceiver" \
+    # --include-stopped-packages IS NOT OPTIONAL. See the note at the top of this file.
+    OUT=$(adb -s "$S" shell am broadcast --include-stopped-packages \
+              -a "$PKG.ENROL" -n "$PKG/.EnrolReceiver" \
               -e server "$SERVER" -e token "$TOK" 2>&1)
     if printf '%s' "$OUT" | grep -q 'ALREADY ENROLLED'; then
         echo "ALREADY ENROLLED (prefix REENROL=1 to replace its token)"
@@ -169,7 +171,7 @@ THE UNMATCHED ONES, one at a time. Read the IMEI off the box, then:
 
     adb -s <serial> install -r $APK
     adb -s <serial> shell dpm set-device-owner $ADMIN
-    adb -s <serial> shell am broadcast -a $PKG.ENROL \\
+    adb -s <serial> shell am broadcast --include-stopped-packages -a $PKG.ENROL \\
         -n $PKG/.EnrolReceiver -e server $SERVER -e token <that phone's token>
 
 Serials waiting:$UNMATCHED

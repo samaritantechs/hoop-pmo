@@ -104,7 +104,8 @@ phones, and unlike a QR it gives you an error you can read):
 ```sh
 adb install -r public/HOOPLOAN-Lock.apk
 adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin
-adb shell am broadcast -a com.samaritantechs.hooploanlock.ENROL \
+adb shell am broadcast --include-stopped-packages \
+    -a com.samaritantechs.hooploanlock.ENROL \
     -n com.samaritantechs.hooploanlock/.EnrolReceiver \
     -e server https://hoop-pmo.vercel.app \
     -e token <that phone's token>
@@ -157,6 +158,22 @@ stack trace, which is not how a success usually looks), and the broadcast saying
 > bench is not a slow path, it is no path. The two must stay in step; a smoke test holds the
 > PowerShell one to the same command order and the same never-guess rule, and checks both
 > still name the same package and receiver.
+
+> **`--include-stopped-packages` is not optional**, and leaving it off is the third time this
+> feature has produced a failure shaped exactly like a success. A freshly installed app — and
+> any app that has had `pm clear` run on it — sits in Android's **stopped** state and receives
+> no broadcast at all unless the sender asks for one. Without the flag, `am` reports:
+>
+> ```
+> Broadcast completed: result=0
+> ```
+>
+> No result code, no message, nothing in logcat: `EnrolReceiver` is never constructed, so not
+> one of its carefully-worded guards can fire. Learn the signature — **`result=0` with no
+> `data=` means the receiver did not run**; `result=1..4` *with* a message means it did.
+>
+> Found on a real handset that had been silent for twenty hours while the register went on
+> recording locks and releases against it.
 
 **Two messages that read like failures and are not.** `set-device-owner` answering
 `device owner is already set`, and the enrol broadcast answering `ALREADY ENROLLED`, both
