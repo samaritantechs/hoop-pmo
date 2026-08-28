@@ -193,6 +193,52 @@ stopping: `set-device-owner` saying **device owner is already set** (arriving as
 stack trace, which is not how a success usually looks), and the broadcast saying
 **ALREADY ENROLLED**. Both mean the handset was provisioned before.
 
+### When the register and the handset hold different tokens
+
+This is the worst state this system can reach, and it cost a live presentation. Both ways out
+look shut at once:
+
+- Every beat comes back **403**, so the phone will not lock, unlock or release.
+- The phone is still Device Owner, so it **refuses the factory reset** that would clear it.
+- A release ordered from the portal cannot reach it, because the release travels through a
+  token the handset does not recognise.
+
+**It is normally caused by deleting a device row.** Futa is a register operation — it never
+reaches the phone — so the handset carries on presenting a credential that no longer exists.
+The register now remembers a deleted IMEI's token and hands it back on re-enrolment
+(`RUN-ME-2026-08-28-token-memory.sql`), which closes the common path into this state. What
+follows is how to get out of it when a handset is already there.
+
+**If you know what the phone holds**, move it onto the register's token without a reset:
+
+```bat
+adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.ENROL -n com.samaritantechs.hooploanlock/.EnrolReceiver -e token REGISTER_TOKEN -e current PHONE_TOKEN
+```
+
+Substitute both values before running it — `REGISTER_TOKEN` from Devices → the row → Token,
+`PHONE_TOKEN` being whatever that handset was last enrolled with. Answers **RE-ENROLLED** on a
+match and **ALREADY ENROLLED, under a different token** on a miss, changing nothing either way,
+so guessing between two candidates is safe.
+
+> **Never paste a placeholder.** Both words above are placeholders and will be stored verbatim
+> if you run the line unedited — the receiver has no way to know `REGISTER_TOKEN` is not a real
+> token, and a phone whose credential is the word REGISTER_TOKEN is in this same broken state
+> one layer deeper. This has happened, with a placeholder called `NEW`.
+
+**If you do not know what the phone holds**, stop guessing and take the door that always
+terminates. Release it over the cable with the token it holds — or, having lost that too,
+whatever you can establish it holds — which drops the factory-reset block:
+
+```bat
+adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.RELEASE -n com.samaritantechs.hooploanlock/.ReleaseReceiver -e token PHONE_TOKEN
+```
+
+**RELEASED** or **PARTIAL** both mean the handset is free: factory reset it, then enrol once
+from the Token drawer and you are on clean ground with nothing to reconcile. **TOKEN MISMATCH**
+means nothing was changed and the phone holds something else.
+
+Slower than the re-enrol, and it always ends. On a bench under time pressure, take it.
+
 > The Windows version exists because the first thing the station saw was
 > `'.' is not recognized as an internal or external command` — a bash script on a Windows
 > bench is not a slow path, it is no path. The two must stay in step; a smoke test holds the

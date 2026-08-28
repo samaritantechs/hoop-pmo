@@ -1599,6 +1599,25 @@ const FNS = {
       if (!had || String(s.as_of) > String(had.as_of)) stockBy.set(k, s);
     }
     const fresh = list.filter(i => !have.has(i));
+    /* AND AN IMEI THAT HAS BEEN HERE BEFORE GETS ITS OWN TOKEN BACK.
+       -------------------------------------------------------------------------------------
+         "then futa shouldnt lose token record"
+
+       Deleting a row used to destroy the token with it, so re-enrolling the same handset
+       minted a new identity while the phone in your hand still held the old one -- and that
+       phone then answered every beat with a 403 and could be neither released nor reset.
+       device_tokens remembers the string; this is where it comes back.
+
+       Best effort: no table yet means no memory, and enrolment mints as it always did. */
+    let remembered = new Map();
+    if (fresh.length) {
+      try {
+        const past = await fetchAll(() => db.from('device_tokens')
+          .select('imei, enrol_token').in('imei', fresh));
+        remembered = new Map(past.filter(r => r.enrol_token)
+          .map(r => [String(r.imei), String(r.enrol_token)]));
+      } catch (ignored) { /* table not created yet */ }
+    }
     const at = new Date().toISOString();
     const batch = randomUUID();
     /* ONE TOKEN PER PHONE, minted here and nowhere else. This is the credential the handset
@@ -1606,7 +1625,9 @@ const FNS = {
        moment the phone is physically in our hands, and returned ONCE, to the station that
        is about to write it into that phone. It is never read back onto a list screen. */
     const token = () => randomUUID().replace(/-/g, '');
-    const minted = new Map(fresh.map(imei => [imei, token()]));
+    // Its own token back if we have ever known one for this IMEI; a new one only for a phone
+    // this register has genuinely never seen.
+    const minted = new Map(fresh.map(imei => [imei, remembered.get(imei) || token()]));
     if (fresh.length) {
       const rows = fresh.map(imei => {
         const s = stockBy.get(imei);
@@ -1640,7 +1661,11 @@ const FNS = {
       provision: list.map(imei => ({
         imei,
         token: minted.get(imei) || held.get(imei) || null,
-        fresh: !have.has(imei),
+        // "New" means a token this register has never issued for this IMEI. A row that was
+        // deleted and re-enrolled is NOT new: it is the same phone, carrying the same
+        // credential, and telling the operator otherwise is what sent them looking for a
+        // problem that was not there.
+        fresh: !have.has(imei) && !remembered.has(imei),
       })).filter(p => p.token) };
   },
 
@@ -1814,7 +1839,13 @@ const FNS = {
     const imei = String((args && args.imei) || '').trim();
     if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
     const rows = await fetchAll(() => db.from('devices')
-      .select('imei, state, reported, last_seen').eq('imei', imei));
+      .select('imei, state, reported, last_seen, enrol_token').eq('imei', imei))
+      .catch(e => {
+        // Pre-migration registries have no enrol_token; deleting must still work.
+        if (!/enrol_token/.test(String(e && e.message || ''))) throw e;
+        return fetchAll(() => db.from('devices')
+          .select('imei, state, reported, last_seen').eq('imei', imei));
+      });
     const dev = rows.find(r => String(r.imei) === imei);
     if (!dev) bad('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
     if (String(dev.state) === 'locked' || String(dev.reported) === 'locked') {
@@ -1837,6 +1868,33 @@ const FNS = {
       bad('Simu bado ipo chini ya udhibiti. Bonyeza <b>Achia</b> kwanza — ndipo simu ijiachie '
         + 'yenyewe — kisha uifute. / This handset is still under management. Release it first '
         + '(Achia), or deleting the row leaves it locked down with nothing able to reach it.');
+    }
+    /* THE TOKEN OUTLIVES THE ROW, and the history does not.
+       -------------------------------------------------------------------------------------
+         "then futa shouldnt lose token record"
+         "I used futa at devices I expect non of its previous histories"
+
+       Two asks that sound opposed and are not. The operator wants the phone's PAST gone --
+       events, states, reasons -- and does NOT want its IDENTITY changed underneath them.
+       Deleting both is what produced a phone and a register holding different tokens: the
+       handset was never wiped, so it went on presenting a credential the register had just
+       thrown away. Every beat 403s, and the way out is shut in both directions -- the phone
+       is still Device Owner so it refuses a factory reset, and a release cannot reach it
+       through a token it does not recognise.
+
+       So one string per IMEI is remembered here and nothing else, and enrolling that IMEI
+       again hands the handset back what it is still carrying. device_events is still deleted
+       below, and stays deleted.
+
+       Best effort on purpose: on a deployment that has not run the migration this table does
+       not exist, and a delete that WORKS without remembering is far better than a delete
+       that fails. The register is the thing that must keep working. */
+    if (dev.enrol_token) {
+      try {
+        await db.from('device_tokens').upsert(
+          [{ imei, enrol_token: String(dev.enrol_token), retired_at: new Date().toISOString(),
+             retired_by: user.name }], { onConflict: 'imei' });
+      } catch (ignored) { /* no table yet; the delete still goes ahead */ }
     }
     // History first: a device_events row whose device is gone is a row nobody can read.
     await db.from('device_events').delete().eq('imei', imei);
