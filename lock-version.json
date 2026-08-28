@@ -1,6 +1,6 @@
 {
-  "versionCode": 2,
-  "versionName": "1.1.0",
-  "notes": "Kuachia simu sasa kunathibitishwa kweli, na simu iliyokwama inaweza kurudishwa kwa kebo. / A release now confirms the phone was really handed back, and a stuck handset can be recovered over the cable.",
+  "versionCode": 3,
+  "versionName": "1.2.0",
+  "notes": "Simu inathibitisha mara moja ikifungwa au kufunguliwa, badala ya kusubiri dakika 15. / A phone now confirms a lock or unlock within seconds instead of waiting for the next quarter-hour beat.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

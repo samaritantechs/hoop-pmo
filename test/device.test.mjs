@@ -397,3 +397,57 @@ test('deviceDelete is audited and needs write access', async () => {
   const { AUDITED } = await import('../api/_lib/audit.js');
   assert.ok(AUDITED.has('deviceDelete'), 'an eraser that leaves no trace at all is not acceptable');
 });
+
+
+/* =========================================================================================
+   THE SEARCH BOX MUST FIND A HANDSET BY ITS IMEI.
+
+     "search should also find imei from devices too"
+
+   The register was the one place an IMEI lives that the search could not reach -- so the
+   single question the box exists for, "what is going on with this handset", was the one it
+   could not answer. It matters most for NEW stock: a phone joins the register the moment it
+   is enrolled, which is often before it appears on any stock report and long before it has a
+   customer, so for those handsets this is the only leg that finds them at all.
+   ========================================================================================= */
+test('globalSearch finds a phone by IMEI, and never hands back its token', async () => {
+  const d = fakeDb({
+    devices: [{ imei: '351388334583295', item: 'A07', holder: 'Sipho', state: 'locked',
+      state_reason: 'stock, unsold', reported: 'unlocked', enrol_token: 'SECRET-TOKEN',
+      last_seen: new Date(NOW - 3600000).toISOString() }],
+    device_events: [], settings: [], watu_loans: [], hoop_agents: [], hoop_aged_stock: [],
+  });
+  const r = await _FNS.globalSearch(d, ADMIN, { q: '351388334583295' });
+  assert.equal(r.ok, true);
+  assert.equal((r.devices || []).length, 1, 'an enrolled handset must be findable by its IMEI');
+
+  const hit = r.devices[0];
+  assert.equal(hit.imei, '351388334583295');
+  // Ordered is not confirmed, and the result has to say which -- the same distinction the
+  // Devices tab draws with "imeagizwa · bado".
+  assert.equal(hit.lockState, 'pending', 'state locked + reported unlocked is ORDERED, not confirmed');
+  assert.equal(hit.item, 'A07');
+
+  /* THE TOKEN IS A CREDENTIAL AND THIS IS A SEARCH RESULT -- the screen most likely to be
+     open with a stranger at the counter. deviceHistory names its columns rather than using
+     `*` for exactly this reason, and this leg has to hold the same line. */
+  assert.ok(!JSON.stringify(r).includes('SECRET-TOKEN'),
+    'globalSearch leaked enrol_token into its results');
+});
+
+test('a partial IMEI still finds the phone, and a missing devices table does not 500 the search', async () => {
+  const d = fakeDb({
+    devices: [{ imei: '351388334583295', item: 'A07', state: 'enrolled', enrol_token: 't' }],
+    device_events: [], settings: [], watu_loans: [], hoop_agents: [], hoop_aged_stock: [],
+  });
+  // Nobody types fifteen digits off a report without fumbling one; a tail has to work.
+  const part = await _FNS.globalSearch(d, ADMIN, { q: '583295' });
+  assert.equal((part.devices || []).length, 1, 'a partial IMEI must still find the handset');
+
+  /* A deployment that has not run the devices migration must still get customers, office and
+     stock. One missing leg breaking all four is how a search stops being trusted. */
+  const noTable = fakeDb({ watu_loans: [], hoop_agents: [], hoop_aged_stock: [] });
+  const r = await _FNS.globalSearch(noTable, ADMIN, { q: '351388334583295' });
+  assert.equal(r.ok, true, 'a missing devices table must not take the whole search down');
+  assert.deepEqual(r.devices, []);
+});

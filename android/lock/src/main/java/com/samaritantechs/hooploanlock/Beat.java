@@ -26,7 +26,13 @@ class Beat {
         new Thread(() -> run(c.getApplicationContext(), hello)).start();
     }
 
-    static void run(Context c, boolean hello) {
+    static void run(Context c, boolean hello) { run(c, hello, true); }
+
+    /**
+     * `mayConfirm` is false only on the extra beat fired by apply() to report a state it has
+     * just changed -- that one must never spawn another, or a phone would beat forever.
+     */
+    private static void run(Context c, boolean hello, boolean mayConfirm) {
         if (Prefs.of(c).getBoolean(Prefs.RETIRED, false)) return;   // released; nothing left to say
         String token = Prefs.str(c, Prefs.TOKEN, "");
         if (token == null || token.isEmpty()) return;               // never provisioned
@@ -54,7 +60,7 @@ class Beat {
             // Any answer at all means the register still knows us; forget the 403 clock.
             Prefs.of(c).edit().remove(Prefs.GONE_SINCE).apply();
 
-            apply(c, r);
+            apply(c, r, mayConfirm);
         } catch (Exception ignored) {
             /* A failed beat is not an event. The phone keeps doing whatever it was already
                doing, and the offline grace below is what eventually decides otherwise. */
@@ -65,8 +71,11 @@ class Beat {
      * What to do with the answer. The order matters: retire before lock, because a released
      * phone must never be caught by the grace rule on its way out.
      */
-    private static void apply(Context c, JSONObject r) {
+    private static void apply(Context c, JSONObject r, boolean mayConfirm) {
         String command = r.optString("command", "");
+        /* WHAT WE WERE DOING WHEN THIS BEAT STARTED, so the confirming beat at the bottom can
+           tell whether this answer actually changed anything. */
+        final boolean before = Prefs.of(c).getBoolean(Prefs.LOCKED, false);
         Prefs.put(c, Prefs.LAST_OK, System.currentTimeMillis());
         Prefs.put(c, Prefs.GRACE_HOURS, String.valueOf(r.optInt("graceHours", -1)));
         String msg = r.optString("message", "");
@@ -108,6 +117,27 @@ class Beat {
         }
         if ("lock".equals(command)) Guard.lock(c);
         else Guard.unlock(c);
+
+        /* SAY SO STRAIGHT AWAY WHEN THIS BEAT CHANGED SOMETHING.
+           =====================================================================================
+             "LOCKING worked, unlocking worked, relocking didnt"
+             "351388334583295 — — imeagizwa · bado    unlocked   0h"
+
+           That row is what a SUCCESSFUL lock looks like for the first quarter of an hour, and
+           it reads exactly like a failure. The beat reports what the handset was doing when
+           the request left -- it has to, the report and the answer are one round trip -- so a
+           phone told to lock reports `unlocked`, then locks. The register only hears the truth
+           on the NEXT beat, up to fifteen minutes later, and until then shows "imeagizwa ·
+           bado": ordered, not confirmed.
+
+           Nobody watching a screen waits fifteen minutes before deciding something is broken.
+           So when an answer actually changes what this phone is doing, we spend one more
+           request saying so, and the register flips in seconds. Only on a real change --
+           steady state is still one beat every fifteen minutes -- and the second beat can
+           never spawn a third. */
+        if (mayConfirm && Prefs.of(c).getBoolean(Prefs.LOCKED, false) != before) {
+            new Thread(() -> run(c, false, false)).start();
+        }
     }
 
     /* A PHONE WHOSE ROW IS GONE MUST NOT BE A BRICK FOREVER.

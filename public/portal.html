@@ -843,8 +843,8 @@ window.GOPEN=null;
   }
   function draw(d){
     var g=$('#gres'); if(!g) return;
-    var cs=d.customers||[], pe=d.people||[], st=d.stock||[];
-    if(!cs.length&&!pe.length&&!st.length){
+    var cs=d.customers||[], pe=d.people||[], st=d.stock||[], dv=d.devices||[];
+    if(!cs.length&&!pe.length&&!st.length&&!dv.length){
       g.innerHTML='<div class="mut" style="padding:6px">Hakuna kilichopatikana. / Nothing found.</div>';
       g.classList.remove('hide'); return;
     }
@@ -867,6 +867,27 @@ window.GOPEN=null;
             +'<b>'+esc(p.name)+'</b>'+(p.active?'':' <span class="chip bad">OFF</span>')
             +'<div class="mut" style="font-size:11.5px">'+esc(p.role||'')+(p.branch?' · '+esc(p.branch):'')
             +(p.phone?' · '+(hh!=='#'?'<a href="tel:'+hh+'">'+esc(p.phone)+'</a>':esc(p.phone)):'')+'</div></div>';
+        }).join('');
+    }
+    /* DEVICES FIRST OF THE THREE, and above stock deliberately. Somebody typing an IMEI into
+       this box is nearly always asking "what is this handset doing" -- locked, ordered, gone
+       quiet -- and that answer is here. A phone is on the register from the moment it is
+       enrolled, which is often before it reaches a stock report and long before it has a
+       customer, so for new stock this is the only section that finds it at all. */
+    if(dv.length){
+      h+='<div style="font-weight:800;font-size:12px;color:var(--mut);margin:10px 0 6px">SIMU / DEVICES — '+dv.length+'</div>'
+        +dv.map(function(x){
+          var st2=x.state==='locked'?(x.lockState==='pending'
+              ?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
+            :x.state==='released'?'<span class="chip ok">imeachiwa</span>'
+            :x.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
+          var seen=x.neverSeen?'<span class="mut">hajawahi kuongea</span>'
+            :(x.silentHours!=null?'iliongea '+money(x.silentHours)+'h zilizopita':'');
+          return '<div style="padding:8px 10px;border-bottom:1px solid var(--line)">'
+            +'<b style="font-size:11.5px">'+esc(x.imei)+'</b> '+st2
+            +'<div class="mut" style="font-size:11.5px">'+esc(x.item||'—')
+            +(x.holder?' · kwa '+esc(x.holder):'')+(x.customer?' · '+esc(x.customer):'')
+            +(x.reason?' · '+esc(x.reason):'')+(seen?' · '+seen:'')+'</div></div>';
         }).join('');
     }
     if(st.length){
