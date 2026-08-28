@@ -178,8 +178,15 @@ or double-click `scripts\lock-bench.bat`.)
 > Device Owner takes. With several phones the match is back, because then there IS a wrong
 > pairing to make and it costs a customer their handset.
 >
-> **`-ReEnrol` replaces the token a handset is already holding** — it clears the app's stored
-> data first, and Device Owner survives that, so it works without a factory reset.
+> **`-ReEnrol` replaces the token a handset is already holding** — by naming the current one,
+> so the phone can tell the office from anybody else. No factory reset, no `pm clear`.
+>
+> > This flag used to run `adb shell pm clear`, and the comment three lines above that call —
+> > in the same file — records that `pm clear` is **refused** on a Device Owner app
+> > (`CLEAR_APP_USER_DATA`). So it silently did nothing, and the only real route to a new
+> > token was a factory reset: an operator wiping a working handset to change a string. It
+> > now passes `-e current <the token it holds now>` to the receiver instead, which is
+> > accepted because only the office can know that value.
 
 **Two answers that are not failures**, and both scripts now count them as done rather than
 stopping: `set-device-owner` saying **device owner is already set** (arriving as a red Java
@@ -286,16 +293,26 @@ not after it has been reboxed.
 
 > ### Make a phone check in RIGHT NOW, instead of waiting a quarter of an hour
 >
-> ```bat
-> adb shell am broadcast --include-stopped-packages -a android.intent.action.BOOT_COMPLETED -n com.samaritantechs.hooploanlock/.BootReceiver
-> ```
->
-> The beat is every fifteen minutes, which is right for a fleet and wrong for a bench — and
-> hopeless in front of an audience. `BootReceiver` re-asserts the restrictions, restores
-> whatever the phone should be doing, and beats immediately, so this is the same work the
-> phone does after a reboot, without the reboot.
+> **Run the enrol command again — the same one the portal hands you, same token.** It is not
+> only for a new phone: a re-run re-asserts the restrictions, clears a stale `retired` flag,
+> arms the beat and reports in immediately, and answers
+> `ENROLLED - already held this token; re-armed and reporting in now.`
 >
 > **Order the lock in the portal, run that line, refresh.** Confirmed in seconds.
+>
+> > **What used to be written here could never have worked**, and cost a rehearsal. It told
+> > the operator to fire this app's `BootReceiver` by broadcasting the system's own
+> > `BOOT_COMPLETED` from adb. That is a *protected broadcast*: only the system may send it,
+> > and adb runs as uid 2000, so it answers
+> > `SecurityException: Permission Denial: not allowed to send broadcast` every time, on every
+> > phone. It was never run on hardware before being written down.
+> >
+> > The line is not reproduced here even as an example, and a test enforces that: it would
+> > read like a command, and the next person in a hurry would paste it.
+> >
+> > `adb reboot` does the same work honestly — the system sends the real broadcast — but it is
+> > slower, and it does **not** revive a handset carrying `retired`, because `BootReceiver`
+> > calls straight into the guards that flag closes. The enrol re-run is the one that does.
 >
 > It needs a cable, so it is a bench and demo tool, not a field one — a phone in a customer's
 > pocket still gets its orders on the ordinary fifteen-minute beat.

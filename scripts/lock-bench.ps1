@@ -23,9 +23,9 @@
 #
 #     powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 -Token <that token>
 #
-# Add -ReEnrol to either form when the handset already holds a token from an earlier session.
-# It clears the app's stored data first so a new token is accepted; Device Owner survives the
-# clear, so this replaces a token without a factory reset.
+# Add -Was <the token it holds now> to move a handset onto a NEW token, with no factory reset:
+# the receiver takes a second token from anybody who can name the first, which only the office
+# can. Re-running with the SAME token needs nothing -- it re-arms a phone that has gone quiet.
 #
 #   tokens.txt -- one phone per line, IMEI then token, from Devices -> + Sajili simu:
 #
@@ -58,10 +58,10 @@ param(
     # friction with no purpose, and the station hits the single-phone case constantly -- a
     # redo, a replacement, one that failed the first time.
     [string]$Token,
-    # Re-provision a handset that already holds a token: clears the app's stored data first,
-    # so EnrolReceiver will accept a new one. Device Owner survives the clear, which is why
-    # this works without a factory reset.
-    [switch]$ReEnrol,
+    # Move a handset onto a NEW token: pass the one it holds now, which is what EnrolReceiver
+    # requires as proof before it will accept a replacement. This used to run `pm clear`, which
+    # is refused on a Device Owner app (see the note below the device scan) and did nothing.
+    [string]$Was,
     # THE WAY BACK OUT, for a handset the server can no longer reach. See the -Release block
     # below, and docs/DEVICE-LOCKING.md, "The way back out, over the cable".
     [switch]$Release,
@@ -82,7 +82,7 @@ if (-not $Token -and -not $TokenFile) {
     Fail @"
 usage, one phone:    .\lock-bench.ps1 -Token f1b942f3991b43dd8d8f857535a0d468
 usage, many phones:  .\lock-bench.ps1 tokens.txt
-add -ReEnrol to either if the phone already holds a token from a previous session.
+add -Was <the token it holds now> to move a phone onto a new token (no factory reset).
 
 to RELEASE a phone the portal cannot reach (unlock it and hand it back):
                      .\lock-bench.ps1 -Release -Token <that phone's token>
@@ -202,10 +202,6 @@ foreach ($s in $serials) {
 
     Write-Host "  .  $s  imei $(if ($imei) { $imei } else { '(not read)' })  " -NoNewline
 
-    # -ReEnrol first, so a handset that already holds a token can take a new one. Device
-    # Owner survives `pm clear`; only the app's own stored data goes.
-    if ($ReEnrol) { $null = adb -s $s shell pm clear $pkg 2>&1 }
-
     $null = adb -s $s install -r "$Apk" 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host 'FAILED at install' -ForegroundColor Red; $failed++; continue
@@ -225,13 +221,16 @@ foreach ($s in $serials) {
     # EnrolReceiver answers with a result code and a readable message, so a refusal says why
     # instead of printing result=0 and meaning nothing.
     # --include-stopped-packages IS NOT OPTIONAL. See the note at the top of this file.
+    # -Was is what lets a handset move onto a different token: the receiver takes a second one
+    # from anybody who can name the first, which only the office can.
+    $extra = if ($Was) { @('-e', 'current', $Was) } else { @() }
     $out = (adb -s $s shell am broadcast --include-stopped-packages `
                 -a "$pkg.ENROL" -n "$pkg/.EnrolReceiver" `
-                -e server $Server -e token $token 2>&1) -join ' '
+                -e server $Server -e token $token @extra 2>&1) -join ' '
     if ($out -match 'ALREADY ENROLLED') {
-        # Finished already, and only confusing if reported as a failure. Add -ReEnrol to
-        # deliberately replace the token this handset is holding.
-        Write-Host 'ALREADY ENROLLED (add -ReEnrol to replace its token)' -ForegroundColor Yellow
+        # Holding a DIFFERENT token, which is the only case left that refuses: a re-run with
+        # the same token now re-arms the phone and answers ENROLLED.
+        Write-Host 'ALREADY ENROLLED under another token (add -Was <the token it holds now>)' -ForegroundColor Yellow
         $ok++
     } elseif ($out -match 'ENROLLED') {
         Write-Host 'ENROLLED' -ForegroundColor Green; $ok++

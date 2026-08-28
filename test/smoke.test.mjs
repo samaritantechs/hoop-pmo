@@ -639,6 +639,83 @@ test('the handset never retires while it is still Device Owner', () => {
     'unharden() called and its answer thrown away -- the retire decision must depend on it');
 });
 
+/* =========================================================================================
+   AND THE WAY BACK FROM A PHONE THAT IS ALREADY CARRYING THE FLAG.
+
+     "so if a customer never reboots the phone?"
+
+   The test above stops RETIRED being set wrongly from now on. It does nothing for a handset
+   that already has it, and that phone is genuinely unreachable: every path checks the flag --
+   Beat.run returns on its first line, BeatJob will not arm, Guard will not restore, SelfUpdate
+   will not fetch -- and BootReceiver calls straight into those, so a reboot does not help
+   either. `pm clear` is refused on a Device Owner app. There was no route home short of a
+   factory reset.
+
+   Found on a real handset: JobScheduler showed BeatJob running and finishing in 14
+   MILLISECONDS, far too fast to be a network call, while the register showed it had not
+   spoken for 51 minutes. That gap is the signature of this guard.
+
+   Enrolling is the office saying "this handset is in service", and there is no reading of
+   that which leaves it retired. So the one command the station already copies is the way
+   back, and these are the three things that make it one.
+   ========================================================================================= */
+test('enrolling a handset puts it back in service, whatever it was carrying', () => {
+  const enrol = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java');
+
+  assert.match(enrol, /remove\(Prefs\.RETIRED\)/,
+    'enrolment must clear RETIRED -- otherwise a phone that once carried it can never beat '
+    + 'again, and no reboot and no reinstall will bring it back');
+  assert.match(enrol, /remove\(Prefs\.GONE_SINCE\)/,
+    'the unreachable-for-how-long clock must stop too; enrolment is when it stops being true');
+
+  /* THE SAME TOKEN MUST FALL THROUGH, not bail. This is the case that happens on EVERY
+     reinstall: `adb install -r` leaves the app in Android's stopped state, and the enrol
+     broadcast is the only thing that starts it again. The old guard returned above the
+     re-arming lines, so every cable install left a phone installed, owned, enrolled -- and
+     silent until something rebooted it. */
+  const armAt = Math.min(...['Beat.now(c, true)', 'BeatJob.schedule(c)'].map(s => enrol.indexOf(s)));
+  const bail = enrol.indexOf('say(2,');
+  assert.ok(armAt > 0, 'the enrol must still arm the beat and report in');
+  assert.ok(bail > 0 && bail < armAt,
+    'the refusal must sit above the re-arming lines -- and only the different-token case may reach it');
+  assert.match(enrol, /boolean\s+same\s*=/,
+    're-running with the same token must be recognised and allowed through, to re-arm the phone');
+
+  /* THE SERVER STAYS PUT. A new token is a change of identity inside one office; a new
+     server is a change of WHO OWNS THE PHONE, and is the one thing that could turn a leaked
+     token into an unlock. So it is written at first enrolment only. */
+  assert.ok(/if\s*\(fresh\)\s*\{[\s\S]{0,260}?Prefs\.SERVER/.test(enrol),
+    'the server must only be settable on a FIRST enrolment -- a re-enrol that could re-point '
+    + 'the phone at another server is a complete bypass of the lock');
+});
+
+/* Two commands that were written down, never run on hardware, and could not work. Both cost
+   bench time before anybody tried them, so both are pinned here as absences. */
+test('nothing tells an operator to send BOOT_COMPLETED, which adb may not send', () => {
+  for (const f of ['docs/DEVICE-LOCKING.md', 'scripts/lock-bench.sh', 'scripts/lock-bench.ps1',
+                   'public/portal.html']) {
+    const src = fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8');
+    for (const m of [...src.matchAll(/am broadcast[^\n]{0,200}/g)]) {
+      assert.ok(!/BOOT_COMPLETED/.test(m[0]),
+        f + ': BOOT_COMPLETED is a protected broadcast -- only the system may send it, and adb '
+        + 'runs as uid 2000. It answers SecurityException every time, on every phone.');
+    }
+  }
+});
+
+test('the bench scripts never run pm clear, which a Device Owner app refuses', () => {
+  for (const f of ['scripts/lock-bench.sh', 'scripts/lock-bench.ps1']) {
+    const src = fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8');
+    for (const line of src.split('\n')) {
+      if (/^\s*#/.test(line)) continue;                  // prose explaining why it cannot work
+      assert.ok(!/pm clear/.test(line),
+        f + ': `pm clear` is refused on a Device Owner app (CLEAR_APP_USER_DATA). It did '
+        + 'nothing, silently, and left a factory reset as the only route to a new token. '
+        + 'Re-enrol with -e current <the token it holds now> instead.');
+    }
+  }
+});
+
 test('a released phone never self-locks, even when the step-down was refused', () => {
   /* THE REGRESSION THE FIX ABOVE COULD HAVE INTRODUCED, caught by reading the diff rather
      than by a handset a month from now.
