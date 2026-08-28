@@ -748,6 +748,58 @@ test('a new lock reason repaints a screen that is already up', () => {
     'and coming back to the front must repaint too, for a broadcast that arrived too early');
 });
 
+/* =========================================================================================
+   A PHONE THAT CANNOT HEAR US IS NOT LOCKED, IT IS LOST.
+
+     "wifi is off, let me connect it"     "the reset took it off"
+
+   A handset sat locked for thirty-five minutes after the office had already released it.
+   Every layer read healthy: the job was scheduled, the app was armed, the enrol answered
+   "reporting in now". The phone simply had no network.
+
+   The reason it could not recover on its own is the part worth pinning. BeatJob asked for
+   NETWORK_TYPE_ANY, and a job with a network requirement DOES NOT RUN while there is no
+   network -- so the app never woke, and an app that never wakes cannot notice it is offline
+   or turn the radio back on. Being offline sustained itself.
+
+   And nobody could fix it from the handset either: a locked phone is pinned in lock task, so
+   Settings is out of reach. A customer who has PAID IN FULL would be holding a phone that
+   neither they nor the office can open, and the only way in is a cable.
+   ========================================================================================= */
+test('a phone with no network can still wake up and get its radio back', () => {
+  const job = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/BeatJob.java');
+  const sched = job.slice(job.indexOf('static void schedule'));
+  const body = sched.slice(0, sched.indexOf('\n    }'));
+  assert.ok(!/setRequiredNetworkType/.test(body),
+    'the PERIODIC beat must have no network constraint -- with one it never runs on an '
+    + 'offline phone, so the app can never notice it is offline or fix it');
+
+  const beat = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Beat.java');
+  const run = beat.slice(beat.indexOf('private static void run('));
+  const ensure = run.indexOf('Net.ensureOnline');
+  const http = run.indexOf('HttpURLConnection');
+  assert.ok(ensure > 0, 'every beat must try to restore connectivity first');
+  assert.ok(http < 0 || ensure < http, 'and it must do so BEFORE attempting the request');
+
+  // Turning a radio on needs the permission even as Device Owner; without it the call fails
+  // on precisely the phone nobody can reach to find out.
+  const man = fs.readFileSync(
+    new URL('../android/lock/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+  assert.match(man, /permission\.CHANGE_WIFI_STATE/, 'setWifiEnabled needs CHANGE_WIFI_STATE');
+
+  /* And the radio must not be switchable off from under us while the phone is ours.
+     Airplane mode is one tap from any screen; on Android 13+ so is Wi-Fi. Both are held for
+     exactly as long as Device Owner is, and unharden must give them back -- a phone handed
+     back to a customer is an ordinary phone. */
+  const admin = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockAdmin.java');
+  const hard = admin.slice(admin.indexOf('static void harden'), admin.indexOf('static boolean unharden'));
+  const soft = admin.slice(admin.indexOf('static boolean unharden'));
+  for (const r of ['DISALLOW_AIRPLANE_MODE', 'DISALLOW_CHANGE_WIFI_STATE']) {
+    assert.ok(hard.includes(r), 'harden must hold ' + r + ' -- a lock that can be switched off is not a lock');
+    assert.ok(soft.includes(r), 'unharden must release ' + r + ' -- a released phone is an ordinary phone');
+  }
+});
+
 /* Two commands that were written down, never run on hardware, and could not work. Both cost
    bench time before anybody tried them, so both are pinned here as absences. */
 test('nothing tells an operator to send BOOT_COMPLETED, which adb may not send', () => {

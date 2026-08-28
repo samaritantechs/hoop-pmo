@@ -54,8 +54,22 @@ public class BeatJob extends JobService {
         try {
             JobScheduler js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
             if (js == null) return;
+            /* NO NETWORK CONSTRAINT ON THE PERIODIC BEAT, and that is the whole point of it.
+               -----------------------------------------------------------------------------
+                 "wifi is off, let me connect it"     "the reset took it off"
+
+               This used to ask for NETWORK_TYPE_ANY, which reads as thrift and was a
+               deadlock. A job with a network requirement DOES NOT RUN while there is no
+               network -- so a handset that went offline never woke, and an app that never
+               wakes cannot notice it is offline or turn the radio back on. Being offline
+               kept itself that way, on a locked phone whose holder cannot reach Settings to
+               fix it because the screen is pinned.
+
+               Thirty-five minutes of a released handset staying locked came out of this one
+               line. Waking without a network is nearly free: Net.online answers from the
+               system, and a beat with no route fails immediately on DNS rather than waiting
+               out a timeout. Being able to heal is worth that much. */
             JobInfo job = new JobInfo.Builder(JOB_ID, new ComponentName(c, BeatJob.class))
-                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
                     .setPeriodic(PERIOD_MS)
                     .setPersisted(true)          // survives reboot; RECEIVE_BOOT_COMPLETED backs it up
                     .build();

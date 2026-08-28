@@ -4,6 +4,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Turning the radio back on when a handset has gone dark. setWifiEnabled has been
+         refused for ordinary apps since Android 10 and a Device Owner is exempt, but the
+         permission is still required, and without it the call fails on a phone nobody can
+         reach to find out. See Net.java for why this matters more than it looks: a locked
+         phone is pinned in lock task, so whoever is holding it cannot rejoin a network
+         themselves, not even to free a handset they have already paid off. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- Held so the app can install its own updates. As Device Owner Android performs that
          install without prompting anybody, which is the point: there is nobody at a locked
          handset who should be tapping "install". -->
