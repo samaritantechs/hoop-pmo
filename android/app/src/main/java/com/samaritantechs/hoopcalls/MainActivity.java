@@ -128,9 +128,43 @@ public class MainActivity extends Activity {
                     startActivity(new Intent(Intent.ACTION_DIAL, u));
                     return true;
                 }
-                if ("mailto".equals(scheme) || "sms".equals(scheme) || "whatsapp".equals(scheme)) {
+                if ("mailto".equals(scheme) || "sms".equals(scheme) || "whatsapp".equals(scheme)
+                        || "geo".equals(scheme)) {
                     startActivity(new Intent(Intent.ACTION_VIEW, u));
                     return true;
+                }
+                /* ANYWHERE THAT IS NOT OUR OWN SITE BELONGS OUTSIDE THIS APP.
+                   ---------------------------------------------------------------------------
+                     "opening map via app lands on failure because it doesn't redirect into
+                      browser app"
+
+                   Everything used to stay in the WebView, which is right for the portal and
+                   wrong for every link that leaves it. The map pin under "Simu inasema" was
+                   the first one to matter, and it fails in the most confusing way available:
+                   Google will not serve Maps to a bare WebView, so the officer gets an error
+                   page instead of the place they tapped for. `target="_blank"` does not save
+                   it either -- with multiple windows off, which is the default here, the link
+                   just loads in this same view and hits the same wall.
+
+                   Decided by HOST rather than by listing sites: the question is "is this still
+                   the system", and everything else is the phone's browser's business. That
+                   covers the next external link without another release, which matters for an
+                   app that only reaches officers when they accept an update.
+
+                   Falling back to `false` when nothing will take it keeps the old behaviour as
+                   the floor: a phone with no browser registered shows the page in-app rather
+                   than doing nothing at all. */
+                if ("http".equals(scheme) || "https".equals(scheme)) {
+                    String host = u.getHost() == null ? "" : u.getHost();
+                    String mine = Uri.parse(startUrl()).getHost();
+                    if (mine != null && !mine.isEmpty() && !host.equalsIgnoreCase(mine)) {
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, u));
+                            return true;
+                        } catch (Exception ignored) {
+                            return false;       // nothing to hand it to; keep it in-app
+                        }
+                    }
                 }
                 return false;                   // the portal itself stays inside the app
             }

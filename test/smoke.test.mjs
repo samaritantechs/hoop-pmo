@@ -861,6 +861,41 @@ test('the devices pane still works before the location migration is run', () => 
     'and fall back to a select without them, rather than letting the pane 500');
 });
 
+/* =========================================================================================
+   A LINK THAT LEAVES THE SYSTEM MUST LEAVE THE APP.
+
+     "opening map via app lands on failure because it doesn't redirect into browser app"
+
+   The wrapper kept every http(s) URL inside its WebView, which is right for the portal and
+   wrong for everything the portal links OUT to. The map pin was the first one to matter and
+   it fails in the most confusing way available: Google will not serve Maps to a bare
+   WebView, so the officer taps a location and gets an error page.
+
+   `target="_blank"` does not rescue it. With multiple windows off -- the default, and what
+   this app uses -- the link loads in the same view and hits the same wall, so the fix has to
+   be in shouldOverrideUrlLoading and nowhere else.
+   ========================================================================================= */
+test('the wrapper hands an off-site link to the browser instead of eating it', () => {
+  const main = javaCode('app/src/main/java/com/samaritantechs/hoopcalls/MainActivity.java');
+  const fn = main.slice(main.indexOf('shouldOverrideUrlLoading'));
+  const body = fn.slice(0, fn.indexOf('\n            }'));
+
+  assert.match(body, /"https"\.equals\(scheme\)/,
+    'https links must be considered at all -- returning false for every one of them is what '
+    + 'left the map pin dying inside the WebView');
+  assert.match(body, /getHost\(\)/,
+    'the decision must be made on the HOST: is this still the system, or somebody else');
+  assert.match(body, /startUrl\(\)/,
+    'and compared against OUR host, not a hardcoded domain -- the start URL is configurable');
+  assert.match(body, /ACTION_VIEW[\s\S]{0,120}return true/,
+    'an off-site link must be handed out and reported as handled');
+
+  /* The floor stays where it was: a phone with no browser registered keeps showing the page
+     in-app rather than doing nothing at all, which is worse than the bug being fixed. */
+  assert.match(body, /catch \(Exception ignored\) \{\s*\n\s*return false;/,
+    'if nothing will take the link, fall back to the old in-app behaviour');
+});
+
 /* Two commands that were written down, never run on hardware, and could not work. Both cost
    bench time before anybody tried them, so both are pinned here as absences. */
 test('nothing tells an operator to send BOOT_COMPLETED, which adb may not send', () => {
