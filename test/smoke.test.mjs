@@ -896,6 +896,49 @@ test('the wrapper hands an off-site link to the browser instead of eating it', (
     'if nothing will take the link, fall back to the old in-app behaviour');
 });
 
+/* =========================================================================================
+   "RELEASED" IS NOT THE SAME AS "LET GO".
+
+     "I used achia the phone was still owned by organization and I futa and reenrolled the
+      device, now it's not locking after I funga"
+
+   Achia asks the handset to unlock, drop its restrictions and step down as Device Owner. The
+   step-down CAN be refused -- Knox does exactly that on organisation-owned stock -- and when
+   it is, the phone deliberately keeps beating so the office can still reach it. The register
+   says `released`; the handset is still ours.
+
+   Deleting that row is the trap, and Futa never reaches the phone. The handset goes on
+   presenting a credential that no longer exists: every beat 403s, and both exits are shut at
+   once -- it will not factory reset because it is still Device Owner, and a release cannot
+   reach it through a token it does not recognise. Three separate afternoons.
+
+   The register CAN see it: a phone that spoke SINCE it was released did not let go. Same
+   fact the lock refusal reads, inverted.
+   ========================================================================================= */
+test('a released phone that never let go cannot be deleted out from under itself', () => {
+  const src = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  const del = src.slice(src.indexOf('async deviceDelete('), src.indexOf('async stockMovement('));
+  assert.ok(del.length > 0, 'deviceDelete moved; this guard needs repointing');
+
+  assert.match(del, /released_at/,
+    'the delete must read released_at -- without it there is no way to tell a handset that '
+    + 'let go from one that refused to');
+  assert.match(del, /spokeAt > freedAt/,
+    'the test is whether the phone has spoken SINCE the release; a beat afterwards means the '
+    + 'step-down was refused and the handset is still Device Owner');
+
+  /* Bounded by the stale window: a phone that beat once after its release and then died is
+     genuinely gone, and its row must not be undeletable for ever on that one heartbeat. */
+  assert.match(del, /Date\.now\(\) - spokeAt\) < STILL_ALIVE_MS/,
+    'the refusal must lapse once the handset really has gone quiet, or dead rows are stuck');
+
+  // And the refusal has to be reachable BEFORE anything is deleted.
+  const refuse = del.indexOf('spokeAt > freedAt');
+  const wipeEvents = del.indexOf("from('device_events').delete()");
+  assert.ok(refuse > 0 && refuse < wipeEvents,
+    'the guard must run before the history is deleted, not after');
+});
+
 /* Two commands that were written down, never run on hardware, and could not work. Both cost
    bench time before anybody tried them, so both are pinned here as absences. */
 test('nothing tells an operator to send BOOT_COMPLETED, which adb may not send', () => {
