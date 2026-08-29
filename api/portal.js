@@ -1839,12 +1839,12 @@ const FNS = {
     const imei = String((args && args.imei) || '').trim();
     if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
     const rows = await fetchAll(() => db.from('devices')
-      .select('imei, state, reported, last_seen, enrol_token').eq('imei', imei))
+      .select('imei, state, reported, last_seen, released_at, enrol_token').eq('imei', imei))
       .catch(e => {
         // Pre-migration registries have no enrol_token; deleting must still work.
         if (!/enrol_token/.test(String(e && e.message || ''))) throw e;
         return fetchAll(() => db.from('devices')
-          .select('imei, state, reported, last_seen').eq('imei', imei));
+          .select('imei, state, reported, last_seen, released_at').eq('imei', imei));
       });
     const dev = rows.find(r => String(r.imei) === imei);
     if (!dev) bad('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
@@ -1863,6 +1863,45 @@ const FNS = {
        there is nothing on the handset to strand), or one already RELEASED -- which is the
        state that tells the handset to hand itself back. Released-but-not-yet-heard is fine:
        the order is standing, and the phone applies it the moment it reaches us. */
+    /* AND "RELEASED" IS NOT THE SAME AS "LET GO", which is the hole this closes.
+       ------------------------------------------------------------------------------------
+         "I used achia the phone was still owned by organization and I futa and reenrolled
+          the device, now it's not locking after I funga"
+
+       Achia asks the handset to unlock, drop its restrictions and step down as Device Owner.
+       The step-down CAN be refused -- Knox does exactly that on organisation-owned stock --
+       and when it is, the phone deliberately keeps beating so the office can still reach it.
+       That is the design working. The register says `released`; the handset is still ours.
+
+       Deleting that row is the trap. Futa never reaches the phone, so the handset goes on
+       presenting a credential that no longer exists: every beat 403s, and both exits are
+       shut at once -- it will not factory reset because it is still Device Owner, and a
+       release cannot reach it through a token it does not recognise. Recovering it means
+       guessing the old token or a cable. This has now cost three separate afternoons.
+
+       THE REGISTER CAN SEE IT COMING: a phone that has spoken SINCE it was released did not
+       let go. That is the same fact the lock refusal reads, inverted -- there it proves a
+       released handset is still reachable and so a Funga is worth sending; here it proves
+       the same handset is still ours and so the row is not ours to delete.
+
+       Bounded by the stale window on purpose. A phone that beat after its release and then
+       went silent for days is genuinely gone, and its row should not be undeletable for
+       ever on the strength of one heartbeat from last week. */
+    const freedAt = dev.released_at ? Date.parse(dev.released_at) : 0;
+    const spokeAt = dev.last_seen ? Date.parse(dev.last_seen) : 0;
+    const STILL_ALIVE_MS = 36 * 3600 * 1000;
+    if (String(dev.state) === 'released' && freedAt && spokeAt > freedAt
+        && (Date.now() - spokeAt) < STILL_ALIVE_MS) {
+      bad('Simu iliambiwa iachiwe lakini <b>bado ni mali ya kampuni</b> — imeendelea kuongea '
+        + 'baada ya kuachiwa, maana yake haikukubali kujitoa. Ukiifuta sasa, simu itabaki na '
+        + 'token isiyokuwepo: haitafungwa, haitafunguliwa, na haitakubali kufutwa (factory '
+        + 'reset). Itoe kwa waya kwanza (RELEASE kwa adb), ndipo uifute. '
+        + '/ This handset was told to release but is STILL Device Owner — it has gone on '
+        + 'beating since, which means the step-down was refused. Deleting the row now leaves '
+        + 'it holding a token that no longer exists: it cannot be locked, unlocked, released '
+        + 'or factory reset. Release it over the cable first, then delete. '
+        + 'See docs/DEVICE-LOCKING.md.');
+    }
     const spoke = !!String(dev.last_seen || '').trim();
     if (spoke && String(dev.state) !== 'released') {
       bad('Simu bado ipo chini ya udhibiti. Bonyeza <b>Achia</b> kwanza — ndipo simu ijiachie '
