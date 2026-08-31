@@ -132,7 +132,13 @@ public class LockAdmin extends DeviceAdminReceiver {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             for (String perm : new String[]{
                     android.Manifest.permission.ACCESS_FINE_LOCATION,
-                    android.Manifest.permission.ACCESS_COARSE_LOCATION }) {
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                    /* READ_PHONE_STATE is here for the same reason and by the same mechanism:
+                       getImei() needs device-owner AND this grant, not device-owner alone. It
+                       was optional while the IMEI was only ever extra information on the
+                       register; it is required now that a handset must name itself to claim
+                       its own token out of a hub batch. */
+                    android.Manifest.permission.READ_PHONE_STATE }) {
                 try {
                     d.setPermissionGrantState(me, c.getPackageName(), perm,
                             DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);

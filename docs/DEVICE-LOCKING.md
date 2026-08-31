@@ -78,6 +78,45 @@ Every phone gets three things: enrolled on the register, made Device Owner, hand
    one phone). Takes about ten seconds per handset.
 4. **Watch it appear** on Devices while the box is still open. If it does not, provisioning
    did not take — fix it now, not after it has been reboxed.
+
+### A hub full of phones — one command for all of them
+
+Needs `db/migrations/RUN-ME-2026-08-31-enrol-batch.sql`, and lock app **1.10.1 or newer** on
+the handsets (the command installs it, so this only matters if `/HOOPLOAN-Lock.apk` is stale).
+
+1. Paste **all** the IMEIs into Sajili simu, as usual.
+2. Plug every handset into the hub. Accept **Allow USB debugging** on each screen — a phone
+   still showing `unauthorized` in `adb devices` is skipped, not half-provisioned.
+3. **Open `cmd`.** Not PowerShell — Windows Terminal opens PowerShell by default and this is
+   cmd syntax; there it dies on a parse error that explains nothing. Type `cmd`, press enter.
+4. Copy the **hub command** and paste it once. It installs, takes ownership, and enrols every
+   connected phone.
+5. Watch them appear on Devices.
+
+**Why the order you plug them in cannot matter.** The hub command carries a *batch*, not a
+token — the same string for every phone, which is what makes it safe to send to all of them.
+Each handset then reads its own IMEI and asks the office which token is *its* one. A token is
+minted per IMEI, so a command that carried one could only ever be run against one phone; a
+batch can be run against all of them.
+
+**It fails closed.** A handset whose IMEI is not in the batch, or that cannot read its IMEI, or
+that cannot reach the office, gets **no token at all** and stays off the register. It is never
+given a fallback identity. Enrol it on its own with its per-phone command — every row in the
+list has its own Copy button.
+
+**The phones need working Wi-Fi**, because each one calls home to claim. USB debugging alone is
+not enough. If the bench network is down every phone answers `NOT IN THIS BATCH`; that is the
+safe failure, not a broken handset. Re-run once the network is back.
+
+**The batch expires after a day.** It is a bearer secret for the length of a bench session:
+whoever holds it, plus an IMEI that is in it, can obtain that device's token. Enrolling the
+same phones again issues a fresh batch, so an older command from scrollback will refuse them —
+copy the current one.
+
+> **Never paste several per-phone commands as a block.** cmd runs them line by line against
+> whatever single handset is plugged in: the first line enrols it, the rest are refused, and
+> that phone ends up holding the *first* row's identity. The multi-phone screen no longer
+> offers a button that does this, but a block assembled by hand would still do it.
 5. **Funga → reason → wait for CONFIRMED**, not pending. Only then power off and box it.
 
 Steps 1, 3, 4 and 5 are near-instant. **Step 2 is the day**: two to three minutes of tapping

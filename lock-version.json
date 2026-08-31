@@ -1,6 +1,6 @@
 {
-  "versionCode": 11,
-  "versionName": "1.10.0",
-  "notes": "Simu nyingi kwa amri MOJA: kila simu inasoma IMEI yake na kuchukua token yake yenyewe, hivyo mpangilio wa kuchomeka hauna maana. / Many phones from ONE command: each handset reads its own IMEI and claims its own token, so the order they were plugged in cannot matter.",
+  "versionCode": 12,
+  "versionName": "1.10.1",
+  "notes": "Simu nyingi kwa amri MOJA, na ruhusa ya kusoma IMEI ambayo ilikuwa haipo. / Many phones from ONE command -- plus the IMEI permission that was missing, without which no handset could name itself.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

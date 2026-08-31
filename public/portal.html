@@ -694,13 +694,29 @@ function fromApp_(){
   var b = window.HoopLoan || window.HopeCalls;
   return !!(b && b.getDeviceId);
 }
+/* WHAT THE PERSON READS WHEN SOMETHING IS REFUSED.
+   ---------------------------------------------------------------------------------------------
+   Two things went wrong here and both showed on screen.
+
+   1. A REFUSAL THE SERVER WROTE IS NEVER A DATA DUMP, however long it is. The length test was a
+      proxy for "this is a JSON blob that escaped", and it caught the wrong thing: the Futa
+      refusal for a released-but-still-beating handset is 639 characters of carefully worded
+      explanation, and every one of them was replaced by "the server did not answer properly".
+      The single most important sentence in the Devices pane read as a crash. srv() marks a
+      refusal the server ANSWERED, so that is what is trusted now; the length test still guards
+      the unexpected failures it was written for.
+
+   2. THESE STRINGS ARE WRITTEN WITH textContent, so a <b> in one is not bold -- it is the four
+      characters <b>. Two server refusals carry markup and the operator was reading it aloud.
+      Stripped here, at the one funnel every message passes through, rather than trusting every
+      future message to remember. */
 function safeErr(e){
   var raw=String((e&&e.message)||e||'');
-  var looksLikeData=raw.charAt(0)==='['||raw.charAt(0)==='{'||raw.length>300;
+  var answered=!!(e&&e.answered);
+  var looksLikeData=!answered&&(raw.charAt(0)==='['||raw.charAt(0)==='{'||raw.length>300);
   if(looksLikeData&&window.console) console.error('[hoop] raw failure:', raw.slice(0,2000));
-  return looksLikeData
-    ? 'Mfumo haukujibu vizuri. Jaribu tena baada ya sekunde chache. / The server did not answer properly \u2014 try again in a few seconds.'
-    : raw;
+  if(looksLikeData) return 'Mfumo haukujibu vizuri. Jaribu tena baada ya sekunde chache. / The server did not answer properly \u2014 try again in a few seconds.';
+  return raw.replace(/<\/?[a-z][^>]*>/gi,'');
 }
 function paneFailed(m, e){
   if(!m) return;
@@ -2626,7 +2642,23 @@ function drawDevices(m){
       +'<span style="flex:1"></span><button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button></div>';
     /* neverSeen and stale ride on the row, so this fence is the same fact the tile counted
        -- never a second definition of "silent" that could drift from the one in the tile. */
-    var rows=(d.rows||[]).filter(function(r){ return !DEV.flag || r[DEV.flag]===true; });
+    /* THE FENCE MUST BE THE TILE'S OWN ARITHMETIC, not something near it.
+       -------------------------------------------------------------------------------------
+       `r.stale` on a row means "not reporting" and INCLUDES a phone that has never spoken --
+       that is deliberate and tested, because it is what paints the clock red. The TILE beside
+       it counts something narrower on purpose: `stale && !neverSeen`, so the two tiles
+       partition the fleet instead of double-counting it.
+
+       Filtering on the bare flag therefore drew a different set from the one the tile had
+       counted, and the gap was widest in the state a demo is most likely to be in: a bench of
+       phones just enrolled, none of which has beaten yet. "Kimya / silent" read 0, and
+       clicking it opened the entire register. A tile that says none and then shows all is the
+       kind of thing an audience remembers. */
+    var rows=(d.rows||[]).filter(function(r){
+      if(!DEV.flag) return true;
+      if(DEV.flag==='stale') return r.stale===true && r.neverSeen!==true;
+      return r[DEV.flag]===true;
+    });
     var table=rows.length
       ? '<div class="scroll"><table><thead><tr>'
         +'<th class="noxl"><input type="checkbox" id="dvAll" title="Chagua zote zinazoonekana / select all shown"></th>'
@@ -2965,6 +2997,10 @@ function devProvision(m, r){
         : '<textarea id="dvHub" rows="4" readonly style="width:100%;font-family:ui-monospace,'
           +'monospace;font-size:10.5px">'+esc(devHubLine(r.batch))+'</textarea>'
           +'<button class="btn w" id="dvHubCopy">Nakili amri ya hub / Copy the one command</button>')
+      +'<div class="note" style="margin-top:8px;font-size:12px">Fungua <b>cmd</b> — siyo '
+      +'PowerShell. Windows Terminal hufungua PowerShell, na amri hii ni ya cmd. / Open '
+      +'<b>cmd</b>, not PowerShell: Windows Terminal opens PowerShell by default and this '
+      +'command is cmd syntax. Type <code>cmd</code> and press enter first.</div>'
       +'<div class="mut" style="font-size:11px;margin-top:8px">Simu iliyo <b>unauthorized</b> '
       +'inarukwa — kubali kwenye skrini yake kisha rudia. Simu ambayo IMEI yake haipo kwenye '
       +'orodha uliyobandika <b>haitapewa token yoyote</b> na itaonekana haipo kwenye register. '
@@ -2974,9 +3010,24 @@ function devProvision(m, r){
       +'</div>'
       +'<div class="sub" style="margin:10px 0">Au moja moja, kwa simu iliyokosa hapo juu. '
       +'/ Or one at a time, for any handset the batch missed.</div>')
-    +'<textarea id="dvAdb" rows="'+(one?5:Math.min(14,Math.max(4,p.length*2)))+'" readonly '
-    +'style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'+esc(cmds)+'</textarea>'
-    +'<button class="btn w" id="dvAdbCopy">Nakili amri / Copy the command'+(one?'':'s')+'</button>'
+    /* ONE PHONE, ONE BOX. For a single handset the command is one line and copying it
+       wholesale is exactly right.
+
+       FOR MANY, THIS BOX AND ITS BUTTON ARE GONE, and that is a safety fix rather than tidying.
+       They held every phone's line joined by newlines, under a full-width button reading "Copy
+       the commands" -- and cmd runs a pasted block line by line against whatever single handset
+       is plugged in. Line one enrols it; lines two onward are refused as ALREADY ENROLLED under
+       a different token. So the phone in your hand quietly ends up holding the FIRST row's
+       identity, whichever phone it actually is. That is the swap this whole design exists to
+       make impossible, reachable by pressing the biggest button on the screen.
+
+       The per-phone rows below give each command on its own, and the hub command above does
+       all of them at once and safely. Nothing is lost by removing the trap between them. */
+    +(one
+      ? '<textarea id="dvAdb" rows="5" readonly '
+        +'style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'+esc(cmds)+'</textarea>'
+        +'<button class="btn w" id="dvAdbCopy">Nakili amri / Copy the command</button>'
+      : '')
     /* ONE BUTTON PER PHONE, AND IT REMEMBERS WHERE YOU GOT TO.
        =====================================================================================
          "my concern was getting a multi-device token cmd to go and run in cmd-like am
@@ -3022,7 +3073,7 @@ function devProvision(m, r){
     +'<div class="sub" style="margin-top:12px">Ya mwisho ndiyo muhimu: <b>result=1</b> na neno '
     +'<b>ENROLLED</b>. / The line that matters is the last one: <b>result=1 … ENROLLED</b>.</div>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
-  $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
+  if($('#dvAdbCopy')) $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
   if($('#dvHubCopy')) $('#dvHubCopy').onclick=function(){ devCopyBox('dvHub'); };
   /* Copies THAT phone's finished command -- built from the same devOneLiner as the block
      above, so the two can never disagree -- and marks the row done. */
