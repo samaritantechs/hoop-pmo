@@ -731,23 +731,295 @@ function csvOfTable_(t){
   });
   return '\ufeff'+out.join('\r\n');
 }
-function xlName_(){
+function expName_(ext){
   var d=new Date(),p=function(n){return ('0'+n).slice(-2);};
-  return 'HOOP-'+(TAB||'report')+'-'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'.csv';
+  return 'HOOP-'+(TAB||'report')+'-'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'.'+ext;
 }
+function xlName_(){ return expName_('csv'); }
+
+/* ONE WAY OUT FOR EVERY EXPORT, and it has to be the phone's way first.
+   ---------------------------------------------------------------------------------------------
+     "downloading exports able to work in app in a phone too"
+
+   A browser saves a file it built itself by pointing an <a download> at a blob: URL. Inside the
+   Android app that is a dead end: the WebView hands blob: to Android's DownloadManager, which
+   does not understand the scheme and throws, and the wrapper's fallback then asks the system to
+   open that same URL with an ordinary app -- which nothing on the handset can. The old symptom
+   was the app simply closing; the wrapper now catches it and says "open the system in Chrome",
+   which is honest but still means the officer does not get their file.
+
+   The wrapper has carried HoopLoan.saveBase64 for exactly this the whole time -- it writes the
+   bytes into the phone's own Downloads folder through MediaStore -- and nothing on this page
+   ever called it. So every export in the system goes through here, bridge first, browser second.
+   Not just the newest report: routing it at the one place all the buttons already share means
+   Wateja, Devices, Stoo and every pane added later save on a phone too, without being told.
+
+   `data` is either a string (text: CSV) or a Uint8Array (binary: PDF). */
+function b64_(data){
+  var bytes = typeof data!=='string' ? data
+    : (window.TextEncoder ? new TextEncoder().encode(data)
+      /* btoa is byte-wise, so a string has to become UTF-8 bytes first or one Swahili
+         character throws and the whole export is lost. */
+      : new Uint8Array(unescape(encodeURIComponent(data)).split('').map(function(c){ return c.charCodeAt(0); })));
+  var s='', CH=0x8000;   // chunked: fromCharCode.apply blows the stack on a long report
+  for(var i=0;i<bytes.length;i+=CH) s+=String.fromCharCode.apply(null, bytes.subarray(i,i+CH));
+  return btoa(s);
+}
+function saveFile_(name, mime, data){
+  var bridge = window.HoopLoan || window.HopeCalls;
+
+  /* RUNG ONE: the wrapper writes it straight into the phone's Downloads folder. */
+  if(bridge && typeof bridge.saveBase64==='function'){
+    try{
+      var r=bridge.saveBase64(name, mime, b64_(data));
+      /* The bridge answers "OK <name>" or "ERR <reason>". A save that fails silently is the
+         whole reason it reports back at all, so the reason is shown rather than swallowed. */
+      if(typeof r==='string' && r.indexOf('ERR')===0) toast(r.slice(4).trim()||'Imeshindikana kuhifadhi', true);
+      else toast('Imehifadhiwa Downloads: '+name);
+      return;
+    }catch(e){ /* fall through rather than lose the file */ }
+  }
+
+  var blob=new Blob([data],{type:mime});
+
+  /* RUNG TWO: an OLDER WRAPPER, which is most of the handsets in the field on any day an APK
+     goes out. saveBase64 is newer than the app people already have installed, and without this
+     rung those officers get rung three -- which inside a WebView is a dead end -- so a report
+     they could export last week would silently stop coming out. The share sheet keeps the file
+     on the phone: Files saves it to Downloads, Drive keeps it, WhatsApp sends it. Same route
+     call.html has used for its own export since before the bridge could save anything. */
+  if(bridge && navigator.share){
+    try{
+      var f=new File([blob],name,{type:mime});
+      if(navigator.canShare && navigator.canShare({files:[f]})){
+        navigator.share({files:[f],title:name}).catch(function(){});
+        return;
+      }
+    }catch(e){ /* no File constructor on a very old WebView */ }
+  }
+
+  /* RUNG THREE: a real browser, which owns its own downloads. */
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=name; document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },500);
+}
+/* ---------- A PDF WRITTEN BY HAND, BECAUSE THERE IS NOWHERE TO FETCH ONE FROM ----------
+   This portal loads no third-party script -- not one, deliberately -- so "export to PDF" here
+   cannot mean pulling jsPDF off a CDN. It is written out instead, and a PDF is a small enough
+   format that this is a page of code rather than a library: a catalog, a page tree, two of the
+   fourteen fonts every reader on earth already has, and one content stream per page.
+
+   It is worth the page of code because of what these sheets are for. HR's advance report is
+   carried to a bank; a CSV is a spreadsheet somebody must still format, while a PDF is the
+   document itself -- same columns, same order, header repeated on every page, and it cannot be
+   quietly edited between the office and the counter.
+
+   LANDSCAPE, because these tables are wide. The advance report alone is ten columns, and a
+   portrait page would truncate half of them into uselessness.
+
+   ONE CAUTION worth stating: the file is assembled as a string whose every character is a
+   single byte, because the cross-reference table at the end is a list of BYTE offsets and they
+   are counted with .length. That is why pdfEsc_ maps everything outside WinAnsi down to one
+   byte rather than letting a stray character through -- a two-byte character would put every
+   offset after it out by one and the reader would refuse the file. */
+function pdfEsc_(s){
+  var out='';
+  for(var i=0;i<s.length;i++){
+    var c=s.charCodeAt(i);
+    /* The base-14 fonts are WinAnsi: ASCII below 127, Latin-1 from 160 up. Anything else has
+       no glyph. The few that genuinely appear in these tables are mapped to plain equivalents
+       -- an em dash is the empty cell in every table in this file -- and the rest become '?'
+       rather than silent noise. */
+    if(c===8211||c===8212){ out+='-'; continue; }
+    if(c===8216||c===8217){ out+="'"; continue; }
+    if(c===8220||c===8221){ out+='"'; continue; }
+    if(c===8230){ out+='...'; continue; }
+    if(c===8226){ out+='·'; continue; }
+    if(c<32||(c>=127&&c<160)||c>255){ out+='?'; continue; }
+    if(c===40||c===41||c===92) out+='\\';        // ( ) \ would end the string literal early
+    out+=String.fromCharCode(c);
+  }
+  return out;
+}
+/* HELVETICA'S REAL WIDTHS, because guessing them shows.
+   Character widths live inside the font file, which we are not shipping -- the reader supplies
+   Helvetica itself. So the widths have to be known here to place a right-aligned figure or to
+   decide where a long comment gets cut, and a rule of thumb does not survive contact with a
+   header like BANK/CARRIER NAME: W is 944 units and O is 778, while a lowercase l is 222, so
+   any single average is wrong by a factor of four and the column either overlaps its neighbour
+   or wastes half the page.
+   Three digits per character from space (32) to tilde (126), thousandths of the point size --
+   these are the published AFM numbers. Only '@' is rounded, from 1015 down to 999, because it
+   does not fit in three digits and does not appear in these tables. */
+var HELVW='278278355556556889667191333333389584278333278278'
+  +'556556556556556556556556556556'
+  +'278278584584584556999'
+  +'667667722722667611778722278500667556833722778667778722667611722667944667667611'
+  +'278278278469556333'
+  +'556556500556556278556556222222500222833556556556556333500278556500722500500500'
+  +'334260334584';
+function pdfW_(s,size,bold){
+  var w=0;
+  for(var i=0;i<s.length;i++){
+    var c=s.charCodeAt(i);
+    // Latin-1 accented letters are 556 to 722 in this font; 611 is the middle of that.
+    w += (c>=32&&c<=126) ? Number(HELVW.substr((c-32)*3,3)) : 611;
+  }
+  /* Helvetica-Bold is wider than Helvetica, mostly across the lowercase. Eight per cent over
+     the regular table is a shade generous, which is the safe direction to be wrong in: a
+     column guessed too wide loses one character to the ellipsis, one guessed too narrow runs
+     into the column beside it and the sheet stops being readable at all. */
+  return w*(bold?1.08:1)*size/1000;
+}
+function pdfFit_(s,w,size,bold){
+  if(w<=0) return '';
+  if(pdfW_(s,size,bold)<=w) return s;
+  var t=s;
+  while(t.length>1 && pdfW_(t+'..',size,bold)>w) t=t.slice(0,-1);
+  return t+'..';
+}
+function pdfOfTable_(t,title){
+  // Same rules as the CSV: hidden rows are not exported, control cells are not data.
+  var all=[];
+  [].slice.call(t.rows).forEach(function(tr){
+    if(tr.style.display==='none'||tr.classList.contains('fhide')) return;
+    var cells=[].slice.call(tr.cells).filter(function(td){ return !td.classList.contains('noxl'); });
+    if(!cells.length) return;
+    all.push({
+      head: !!(tr.parentNode && tr.parentNode.nodeName==='THEAD'),
+      vals: cells.map(cellText_),
+      align: cells.map(function(td){ return td.classList.contains('r')?'r':'l'; }),
+    });
+  });
+  var head = all.filter(function(r){ return r.head; })[0] || all.shift() || {vals:[],align:[]};
+  var body = all.filter(function(r){ return r!==head && !r.head; });
+  var n = head.vals.length || 1;
+  var align = head.align.slice();
+  /* The header cell is not always the one marked right-aligned; the figures under it are. Take
+     the stronger claim from the first data row so money lines up on a printed sheet. */
+  if(body.length) body[0].align.forEach(function(a,i){ if(a==='r') align[i]='r'; });
+  while(align.length<n) align.push('l');
+
+  var W=842, H=595, M=26, AVAIL=W-2*M;            // A4 landscape, in points
+  var FS=7.2, HFS=7.8, RH=12.2, TOP=H-M-28, BOT=M+14;
+
+  /* Column widths in proportion to what is actually in them, but capped: one long comment must
+     not squeeze nine other columns down to nothing. */
+  var nat=[], i, j;
+  for(i=0;i<n;i++){
+    var wd=pdfW_(String(head.vals[i]||''),HFS,true);
+    for(j=0;j<body.length;j++) wd=Math.max(wd,pdfW_(String(body[j].vals[i]||''),FS,false));
+    nat.push(Math.min(wd+8, AVAIL*0.26));
+  }
+  /* NO COLUMN IS NARROWER THAN ITS OWN HEADING, when the page can afford it. Proportional
+     widths alone truncated BANK/CARRIER NAME down to "BANK/CARRIER N..", because the cells
+     under it say M-Pesa and the arithmetic only saw short content. A clipped heading costs far
+     more than a clipped comment: the heading is what tells the reader which figure they are
+     looking at, and this sheet is carried to a bank by somebody who did not build it. */
+  var floors=[];
+  for(i=0;i<n;i++) floors.push(Math.min(pdfW_(String(head.vals[i]||''),HFS,true)+7, AVAIL*0.22));
+  // Unless there are so many headings they will not fit at full width, in which case a table
+  // that fits beats a heading that reads.
+  if(floors.reduce(function(a,b){ return a+b; },0)>AVAIL) floors=floors.map(function(){ return 26; });
+
+  var tot=nat.reduce(function(a,b){ return a+b; },0)||1;
+  var cw=nat.map(function(v,ci){ return Math.max(floors[ci], v*AVAIL/tot); });
+  // Those floors can push the row wider than the page; take the excess back off the roomy ones.
+  var over=cw.reduce(function(a,b){ return a+b; },0)-AVAIL;
+  if(over>0){
+    var slack=cw.reduce(function(a,v,ci){ return a+Math.max(0,v-floors[ci]); },0)||1;
+    cw=cw.map(function(v,ci){ return v-over*Math.max(0,v-floors[ci])/slack; });
+  }
+  var x=[M]; for(i=0;i<n;i++) x.push(x[i]+cw[i]);
+
+  var cell_=function(txt,ci,y,size,font){
+    var bold=font==='/F2';
+    var s=pdfFit_(String(txt==null?'':txt), cw[ci]-6, size, bold);
+    var tx = align[ci]==='r' ? x[ci]+cw[ci]-3-pdfW_(s,size,bold) : x[ci]+3;
+    return 'BT '+font+' '+size+' Tf '+tx.toFixed(1)+' '+y.toFixed(1)+' Td ('+pdfEsc_(s)+') Tj ET';
+  };
+
+  var perPage=Math.max(1, Math.floor((TOP-BOT-RH)/RH));
+  var pages=[];
+  for(i=0;i<body.length;i+=perPage) pages.push(body.slice(i,i+perPage));
+  if(!pages.length) pages.push([]);
+
+  var now=new Date(), p2=function(v){ return (v<10?'0':'')+v; };
+  var stamp=p2(now.getDate())+'/'+p2(now.getMonth()+1)+'/'+now.getFullYear()
+    +' '+p2(now.getHours())+':'+p2(now.getMinutes());
+
+  var streams=pages.map(function(rows,pi){
+    var o=[], y=TOP;
+    o.push('BT /F2 12 Tf 0 0 0 rg '+M+' '+(H-M-8)+' Td ('+pdfEsc_('HOOPLOAN — '+title)+') Tj ET');
+    o.push('BT /F1 7.5 Tf 0.35 0.35 0.35 rg '+M+' '+(H-M-20)+' Td ('
+      +pdfEsc_(stamp+'  ·  ukurasa '+(pi+1)+'/'+pages.length+'  ·  safu '+body.length)+') Tj ET');
+    // The header is repeated on every page: page four of a bank run is unreadable without it.
+    o.push('0.90 0.92 0.95 rg '+M+' '+(y-3).toFixed(1)+' '+AVAIL.toFixed(1)+' '+RH+' re f');
+    o.push('0 0 0 rg');
+    for(var c=0;c<n;c++) o.push(cell_(head.vals[c],c,y+0.5,HFS,'/F2'));
+    y-=RH;
+    rows.forEach(function(r,ri){
+      if(ri%2===1){
+        o.push('0.965 0.965 0.965 rg '+M+' '+(y-3).toFixed(1)+' '+AVAIL.toFixed(1)+' '+RH+' re f');
+        o.push('0 0 0 rg');
+      }
+      for(var c2=0;c2<n;c2++) o.push(cell_(r.vals[c2],c2,y+0.5,FS,'/F1'));
+      y-=RH;
+    });
+    return o.join('\n');
+  });
+
+  /* Objects 1-4 are fixed; each page then adds a page object and its content stream, so page q
+     is object 5+2q and its stream 6+2q. */
+  var objs=[], ids=pages.map(function(_,q){ return 5+q*2; });
+  objs.push('<< /Type /Catalog /Pages 2 0 R >>');
+  objs.push('<< /Type /Pages /Count '+pages.length+' /Kids ['
+    +ids.map(function(id){ return id+' 0 R'; }).join(' ')+'] >>');
+  objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+  objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+  streams.forEach(function(sc,q){
+    objs.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 '+W+' '+H+'] '
+      +'/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents '+(6+q*2)+' 0 R >>');
+    objs.push('<< /Length '+sc.length+' >>\nstream\n'+sc+'\nendstream');
+  });
+
+  var out='%PDF-1.4\n', offs=[];
+  objs.forEach(function(b,idx){ offs.push(out.length); out+=(idx+1)+' 0 obj\n'+b+'\nendobj\n'; });
+  var xref=out.length;
+  out+='xref\n0 '+(objs.length+1)+'\n0000000000 65535 f \n';
+  offs.forEach(function(o){ out+=('0000000000'+o).slice(-10)+' 00000 n \n'; });
+  out+='trailer\n<< /Size '+(objs.length+1)+' /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF';
+  var bytes=new Uint8Array(out.length);
+  for(i=0;i<out.length;i++) bytes[i]=out.charCodeAt(i)&0xff;
+  return bytes;
+}
+
 function injectExports_(){
   $all('#main table').forEach(function(t){
     if(!t.__xp){ t.__xp=1;
       if(t.tHead){
+        var bar=document.createElement('div');
+        bar.style.cssText='display:flex;gap:6px;margin:0 0 8px';
         var b=document.createElement('button');
-        b.textContent='\u2913 Excel'; b.className='btn sm ghost'; b.style.cssText='margin:0 0 8px;font-size:11.5px;padding:5px 10px';
+        b.textContent='\u2913 Excel'; b.className='btn sm ghost'; b.style.cssText='font-size:11.5px;padding:5px 10px';
         b.onclick=function(){
-          var a=document.createElement('a');
-          a.href=URL.createObjectURL(new Blob([csvOfTable_(t)],{type:'text/csv;charset=utf-8'}));
-          a.download=xlName_(); document.body.appendChild(a); a.click();
-          setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },500);
+          saveFile_(expName_('csv'),'text/csv;charset=utf-8',csvOfTable_(t));
         };
-        t.parentNode.insertBefore(b,t);
+        var p=document.createElement('button');
+        p.textContent='\u2913 PDF'; p.className='btn sm ghost'; p.style.cssText='font-size:11.5px;padding:5px 10px';
+        p.onclick=function(){
+          var n=(typeof tabMeta==='function'&&tabMeta(TAB))?navLabel(tabMeta(TAB)):(TAB||'Ripoti');
+          saveFile_(expName_('pdf'),'application/pdf',pdfOfTable_(t,n));
+        };
+        bar.appendChild(b); bar.appendChild(p);
+        /* ABOVE THE SCROLL BOX, NOT INSIDE IT. A wide table lives in a `.scroll` div, and a
+           button placed next to the table scrolls sideways with it -- so on a phone the
+           export buttons for the widest tables in the system, which are exactly the ones
+           worth exporting, slide off the left edge as soon as you look at the last column. */
+        var host=t.parentNode, box=(host&&host.classList&&host.classList.contains('scroll'))?host:null;
+        if(box&&box.parentNode) box.parentNode.insertBefore(bar,box);
+        else host.insertBefore(bar,t);
       }
     }
     // The tick-list funnel on every header -- group any table by one agent, one
@@ -1131,6 +1403,17 @@ var NAV=[
   { g:'stock', t:'move',     nav:'movement',   sw:'Mwenendo wa stoo', en:'Stock movement',
     ic:'<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/><path d="M11 18l-6-6 6-6"/>' },
 
+  /* SALARY ADVANCE: three panes, because they are three different jobs done by three
+     different people. Asking, deciding and paying are not one screen with hidden buttons --
+     each is granted on its own in Access codes, and holding one says nothing about the
+     others. A leader who may approve need not be able to see the bank details HR files. */
+  { g:'adv',   t:'advreq',   nav:'advreq',     sw:'Omba advance',     en:'Advance request',
+    ic:'<path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>' },
+  { g:'adv',   t:'advappr',  nav:'advappr',    sw:'Idhini ya advance', en:'Advance approval',
+    ic:'<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/>' },
+  { g:'adv',   t:'advrep',   nav:'advrep',     sw:'Ripoti ya advance', en:'Advance report',
+    ic:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/>' },
+
   { g:'admin', t:'staff',    nav:'staff',      sw:'Wafanyakazi',      en:'Staff',
     ic:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
   { g:'admin', t:'codes',    nav:'codes',      sw:'Misimbo ya kuingia', en:'Access codes',
@@ -1142,6 +1425,7 @@ var GROUPS=[
   { g:'siku',  sw:'Kila siku',  en:'Daily' },
   { g:'mauzo', sw:'Mauzo',      en:'Sales' },
   { g:'stock', sw:'Stoo',       en:'Stock' },
+  { g:'adv',   sw:'Advance',    en:'Salary advance' },
   { g:'admin', sw:'Usimamizi',  en:'Admin' },
 ];
 function navLabel(n){ return LANG==='en' ? n.en : n.sw; }
@@ -1250,6 +1534,9 @@ function draw(){
   if(TAB==='move') return drawMove(m);
   if(TAB==='acct') return drawStockAccount(m);
   if(TAB==='dev') return drawDevices(m);
+  if(TAB==='advreq') return drawAdvReq(m);
+  if(TAB==='advappr') return drawAdvAppr(m);
+  if(TAB==='advrep') return drawAdvRep(m);
   if(TAB==='sales') return drawSalesPerf(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
@@ -2629,6 +2916,288 @@ function devHistory(imei){
     var x=$('#dvHistClose'); if(x) x.onclick=function(){ h.innerHTML=''; };
   }).catch(function(e){ h.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
 }
+
+/* ---------- salary advance: ask, decide, pay ----------
+   "hoop users should get a nav pane and be able to make advance requests, their leaders will
+    be assigned with another approval nav ... there is salary advance report nav that I'll
+    grant to hr which hr will use for filing and bank payment report"
+
+   Three panes over one table. Nothing here asks what anybody's ROLE is -- which pane you see
+   is which nav you were granted, and that is the whole permission model. The owner makes an
+   HR role and ticks the report on it; the code never learns the word HR.
+
+   THE AMOUNTS COME FROM THE SERVER, not from a list typed in here. The server enforces the
+   same four when the request lands, and a dropdown built from a second copy of that list is a
+   dropdown that will one day disagree with what the server will accept. */
+function advWhen(ms){
+  if(!ms) return '';
+  var d=new Date(Number(ms)); if(isNaN(d.getTime())) return '';
+  var p=function(n){ return (n<10?'0':'')+n; };
+  return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear()
+    +' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+/* One vocabulary for the three states, so the requester's pane, the queue and HR's report
+   never label the same row differently. */
+function advChip(r){
+  if(r.status==='approved') return '<span class="chip ok">imekubaliwa'
+    +(r.approved!=null&&r.approved!==r.amount?' · '+money(r.approved):'')+'</span>';
+  if(r.status==='declined') return '<span class="chip bad">imekataliwa</span>';
+  return '<span class="chip warn">inasubiri</span>';
+}
+function advNotReady(){
+  return '<div class="note bad">Jedwali la advance halijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-08-29-salary-advance.sql</b> kwenye Supabase, kisha rudi hapa. '
+    +'/ The salary advance table has not been created yet — run that migration, then come back.</div>';
+}
+function advAmountOptions(list, sel, max){
+  return (list||[]).filter(function(v){ return max==null||v<=max; })
+    .map(function(v){ return '<option value="'+v+'"'+(Number(sel)===v?' selected':'')+'>'
+      +money(v)+'</option>'; }).join('');
+}
+
+/* THE REQUEST PANE. Everybody granted advreq sees the same thing: a form, and their OWN
+   history under it. Not anybody else's -- holding the right to ask is not the right to read
+   what colleagues are borrowing. */
+function drawAdvReq(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('advMine',{}).then(function(d){
+    if(d.notReady){ m.innerHTML=advNotReady(); return; }
+    var today=new Date(), p=function(n){ return (n<10?'0':'')+n; };
+    var todayKey=today.getFullYear()+'-'+p(today.getMonth()+1)+'-'+p(today.getDate());
+    var rows=d.rows||[];
+    m.innerHTML='<div class="card" style="padding:14px;max-width:560px">'
+      +'<h3 style="margin:0 0 4px">Omba advance / Request an advance</h3>'
+      +'<div class="sub">Chagua kiasi, tarehe, na wapi pesa zitumwe. '
+      +'/ Choose an amount and a date, and say where the money should go.</div>'
+      +'<label class="lbl">Kiasi / Amount</label>'
+      +'<select id="avAmt" class="inp">'+advAmountOptions(d.amounts,null,null)+'</select>'
+      +'<label class="lbl">Tarehe ya maombi / Application date</label>'
+      +'<input id="avDate" class="inp" type="date" value="'+esc(todayKey)+'">'
+      +'<label class="lbl">Benki au mtandao / Bank or mobile carrier</label>'
+      +'<input id="avBank" class="inp" placeholder="CRDB, NMB, M-Pesa, Airtel Money…">'
+      +'<label class="lbl">Namba ya akaunti / Account number</label>'
+      +'<input id="avAcct" class="inp" placeholder="0000000000">'
+      +'<button class="btn w" id="avSend" style="margin-top:10px">Tuma ombi / Send request</button>'
+      +'<div class="mut" style="font-size:11px;margin-top:8px">Ombi likishatumwa linakwenda kwa '
+      +'anayeidhinisha. Hutaweza kulibadilisha. / Once sent it goes to an approver and cannot be edited.</div>'
+      +'</div>'
+      +'<h3 style="margin:18px 0 6px">Maombi yangu / My requests</h3>'
+      +(rows.length?advTable(rows,false):'<div class="mut">Bado hujaomba advance. / No requests yet.</div>');
+    $('#avSend').onclick=function(){
+      var b=this; b.disabled=true;
+      srv('advRequest',{
+        amount:Number($('#avAmt').value),
+        applyDate:$('#avDate').value,
+        bank:$('#avBank').value,
+        account:$('#avAcct').value,
+      }).then(function(){
+        toast('Ombi limetumwa / Request sent');
+        drawAdvReq(m);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+  }).catch(function(e){ m.innerHTML=paneFailed(safeErr(e)); });
+}
+
+/* The requester's own list and the approver's queue share a table: the same request, and the
+   same words for what happened to it. `act` adds the decide column, which only the approval
+   pane passes. */
+function advTable(rows, act){
+  return '<div class="scroll"><table><thead><tr>'
+    +'<th>Muda / Timestamp</th><th>Jina / Staff</th><th>Wadhifa / Role</th>'
+    +'<th>Tarehe / Applied for</th><th class="r">Kiasi / Requested</th>'
+    +'<th>Hali / Status</th><th class="r">Kimekubaliwa / Approved</th><th>Maoni / Comment</th>'
+    +(act?'<th class="noxl"></th>':'')+'</tr></thead><tbody>'
+    +rows.map(function(r){
+      return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
+        +'<td>'+esc(r.staffName||'—')+'</td><td>'+esc(r.staffRole||'—')+'</td>'
+        +'<td>'+esc(r.applyDate||'—')+'</td>'
+        +'<td class="r">'+money(r.amount||0)+'</td>'
+        +'<td>'+advChip(r)+'</td>'
+        +'<td class="r">'+(r.approved==null?'—':money(r.approved))+'</td>'
+        +'<td style="font-size:11px">'+esc(r.comment||'')
+          +(r.decidedBy?'<div class="mut" style="font-size:10px">'+esc(r.decidedBy)+'</div>':'')+'</td>'
+        +(act?'<td class="r noxl">'+(r.status==='pending'
+          ? '<button class="btn sm" data-avd="'+esc(r.id)+'">Amua / Decide</button>' : '')+'</td>':'')
+        +'</tr>';
+    }).join('')+'</tbody></table></div>';
+}
+
+/* THE APPROVAL PANE. Pending first, because the queue is a worklist. */
+function drawAdvAppr(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('advQueue',{state:ADVQ}).then(function(d){
+    if(d.notReady){ m.innerHTML=advNotReady(); return; }
+    var rows=d.rows||[];
+    var chip=function(k,label){ return '<button class="btn sm'+(ADVQ===k?'':' ghost')
+      +'" data-avq="'+k+'">'+label+'</button>'; };
+    m.innerHTML='<div class="tiles">'
+      +tile('Yanasubiri',money(d.pending||0),'maombi ambayo hayajaamuliwa',
+        Object.assign({color:(d.pending?'bad':'')},
+          { on:ADVQ==='pending', cta:'chuja ›', go:function(){ ADVQ=(ADVQ==='pending'?'':'pending'); drawAdvAppr(m); } }))
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
+      +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')
+      +'</div>'
+      +(rows.length?advTable(rows,true)
+        :'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
+    wireTiles(m);
+    [].slice.call(m.querySelectorAll('[data-avq]')).forEach(function(b){
+      b.onclick=function(){ ADVQ=b.getAttribute('data-avq'); drawAdvAppr(m); };
+    });
+    [].slice.call(m.querySelectorAll('[data-avd]')).forEach(function(b){
+      b.onclick=function(){
+        var id=b.getAttribute('data-avd');
+        var r=rows.filter(function(x){ return String(x.id)===id; })[0];
+        if(r) advDecideDrawer(m, r, d.amounts, d.me);
+      };
+    });
+  }).catch(function(e){ m.innerHTML=paneFailed(safeErr(e)); });
+}
+var ADVQ='pending';
+
+/* ONE DRAWER, BOTH ANSWERS. Approving for less than was asked is a dropdown rather than a
+   typed figure -- "give this 200k request just 100k" is the owner's own example, and it is
+   the same four amounts the request came from. The list is capped at what was requested:
+   approving MORE than somebody asked for is not a decision anybody delegated. */
+function advDecideDrawer(m, r, amounts, me){
+  var mine = me && r.staffCode && String(me)===String(r.staffCode);
+  drawer('<h3>Ombi la '+esc(r.staffName||'—')+'</h3>'
+    +'<div class="sub">'+esc(r.staffRole||'')+' · tarehe '+esc(r.applyDate||'—')
+    +' · aliomba <b>'+money(r.amount||0)+'</b></div>'
+    +(mine
+      /* Shown, not hidden: a leader who cannot find the button assumes the screen is broken.
+         The server refuses this too -- this is the explanation, not the lock. */
+      ? '<div class="note bad">Hili ni ombi lako mwenyewe. Mtu mwingine mwenye idhini ndiye '
+        +'atakayeamua. / This is your own request — another approver must decide it.</div>'
+      : '<label class="lbl">Kiasi cha kuidhinisha / Amount to approve</label>'
+        +'<select id="avdAmt" class="inp">'+advAmountOptions(amounts,r.amount,r.amount)+'</select>'
+        +'<label class="lbl">Maoni / Comment</label>'
+        +'<textarea id="avdCmt" class="inp" rows="3" placeholder="Lazima ukikataa. / Required when declining."></textarea>'
+        +'<button class="btn w" id="avdOk" style="margin-top:10px">Idhinisha / Approve</button>'
+        +'<button class="btn w danger ghost" id="avdNo" style="margin-top:6px">Kataa / Decline</button>'));
+  if(mine) return;
+  var send=function(approve){
+    var b=$('#avdOk'), n=$('#avdNo'); if(b) b.disabled=true; if(n) n.disabled=true;
+    srv('advDecide',{ id:r.id, approve:approve,
+      approvedAmount:approve?Number($('#avdAmt').value):null,
+      comment:$('#avdCmt').value }).then(function(){
+      toast(approve?'Imeidhinishwa / Approved':'Imekataliwa / Declined');
+      closeDrawer(); drawAdvAppr(m);
+    }).catch(function(e){
+      if(b) b.disabled=false; if(n) n.disabled=false; toast(safeErr(e), true);
+    });
+  };
+  $('#avdOk').onclick=function(){ send(true); };
+  $('#avdNo').onclick=function(){ send(false); };
+}
+
+/* THE REPORT'S OWN WORD FOR THE STATE.
+     "advance salaries report have status column of requested, approved or rejected too"
+
+   Three words, and they are deliberately not quite the queue's three. A request nobody has
+   decided yet is REQUESTED here, not "waiting": on a filing sheet the question is what the
+   staff member did, and what they did was ask. English single words, like the headers around
+   them -- this is the one pane in the system that is a payroll document rather than a screen,
+   and a word that changes with the language toggle is a word that cannot be filed. */
+function advReportStatus(r){
+  if(r.status==='approved') return '<span class="chip ok">Approved</span>';
+  if(r.status==='declined') return '<span class="chip bad">Rejected</span>';
+  return '<span class="chip warn">Requested</span>';
+}
+
+/* THE MONTH, AS THE DEFAULT RATHER THAN AS A THING TO TYPE.
+     "default start and end dates calenders defaulted to start and end of current month
+      unless altered"
+
+   HR opens this pane to do one job -- this month's advances -- so that is what it opens
+   showing. Two empty date boxes would be an unbounded query dressed up as a blank form: it
+   loads every advance ever granted, and the total tile above it is then a figure for all time
+   sitting where a monthly figure belongs. Wrong on a sheet somebody pays from.
+
+   Built from the local calendar, not from UTC -- day 0 of next month is the last day of this
+   one, which is the only leap-year-proof way to write it. */
+function monthRange_(){
+  var d=new Date(), p=function(n){ return (n<10?'0':'')+n; };
+  var y=d.getFullYear(), mo=d.getMonth();
+  return { from: y+'-'+p(mo+1)+'-01',
+           to:   y+'-'+p(mo+1)+'-'+p(new Date(y, mo+1, 0).getDate()) };
+}
+
+/* HR'S PANE: the filing copy and the bank run. The columns are the owner's list, in the
+   owner's order, because this is the sheet that gets printed and taken to a bank. */
+function drawAdvRep(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('advReport',ADVR).then(function(d){
+    if(d.notReady){ m.innerHTML=advNotReady(); return; }
+    var rows=d.rows||[], t=d.totals||{};
+    m.innerHTML='<div class="tiles">'
+      /* Both tiles are doors onto the status filter, because that is the question each of
+         them raises: "how many" is answered by the whole period, "how much to pay" only by
+         the approved ones. Clicking a lit tile puts the filter back. */
+      +tile('Maombi',money(t.count||0),'kwenye kipindi hiki',
+        { on:ADVR.status==='', cta:ADVR.status===''?'zote':'onyesha zote ›',
+          go:function(){ ADVR.status=''; drawAdvRep(m); } })
+      /* The only figure safe to hand a cashier: approved rows only. A total that quietly
+         included pending or declined requests would be a bank instruction for money nobody
+         agreed to pay. */
+      +tile('Za kulipa',money(t.approved||0),'TZS — zilizoidhinishwa pekee',
+        { color:'ok', on:ADVR.status==='approved',
+          cta:ADVR.status==='approved'?'imechujwa':'chuja ›',
+          go:function(){ ADVR.status=(ADVR.status==='approved'?'':'approved'); drawAdvRep(m); } })
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<span class="mut" style="font-size:12px">Tarehe ya maombi:</span>'
+      +'<input id="avrFrom" class="inp" type="date" style="width:auto" value="'+esc(ADVR.from||'')+'">'
+      +'<input id="avrTo" class="inp" type="date" style="width:auto" value="'+esc(ADVR.to||'')+'">'
+      +'<select id="avrSt" class="inp" style="width:auto">'
+      +['','pending','approved','declined'].map(function(k){
+        return '<option value="'+k+'"'+(ADVR.status===k?' selected':'')+'>'
+          +(k===''?'Zote / All':k==='pending'?'Zinasubiri / Pending'
+            :k==='approved'?'Zilizokubaliwa / Approved':'Zilizokataliwa / Declined')+'</option>';
+      }).join('')+'</select>'
+      +'<button class="btn sm" id="avrGo">Chuja / Filter</button>'
+      +'<button class="btn sm ghost" id="avrClr">Mwezi huu / This month</button>'
+      +'<button class="btn sm ghost" id="avrAll">Tarehe zote / All dates</button>'
+      +'</div>'
+      +(rows.length?'<div class="scroll"><table><thead><tr>'
+        +'<th>TIMESTAMP</th><th>STAFF ROLE</th><th>STAFF NAME</th><th>APPLICATION DATE</th>'
+        /* TWO FIGURES, NAMED AS TWO FIGURES. "2 columns of requested amt and approved amt" --
+           the pair is the whole point of the sheet: the approver may grant less than was
+           asked, and a reader who cannot see both cannot tell that they did. APPROVED AMOUNT
+           is the column the bank pays from. */
+        +'<th class="r">REQUESTED AMOUNT</th><th>STATUS</th><th class="r">APPROVED AMOUNT</th><th>COMMENT</th>'
+        +'<th>BANK/CARRIER NAME</th><th>ACCOUNTS NO.</th></tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
+            +'<td>'+esc(r.staffRole||'—')+'</td><td>'+esc(r.staffName||'—')+'</td>'
+            +'<td>'+esc(r.applyDate||'—')+'</td>'
+            +'<td class="r">'+money(r.amount||0)+'</td>'
+            +'<td>'+advReportStatus(r)+'</td>'
+            /* APPROVAL is the figure and nothing else, now that STATUS carries the word. A
+               row that is not approved shows a dash rather than a zero: a zero in a payment
+               column reads as "pay nothing", which is a different instruction from "there is
+               nothing to pay here yet". */
+            +'<td class="r">'+(r.status==='approved'?money(r.approved||0):'—')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.comment||'')
+              +(r.decidedBy?'<div class="mut" style="font-size:10px">'+esc(r.decidedBy)+'</div>':'')+'</td>'
+            +'<td>'+esc(r.bank||'—')+'</td><td>'+esc(r.account||'—')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">Hakuna maombi kwenye kipindi hiki. / No requests in this period.</div>');
+    wireTiles(m);
+    $('#avrGo').onclick=function(){
+      ADVR={ from:$('#avrFrom').value, to:$('#avrTo').value, status:$('#avrSt').value };
+      drawAdvRep(m);
+    };
+    /* Two ways back, because they are two different questions. "This month" returns to the
+       default the pane opens on; "All dates" is the deliberate unbounded look, chosen rather
+       than arrived at by leaving two boxes empty. */
+    $('#avrClr').onclick=function(){
+      var r=monthRange_(); ADVR={from:r.from,to:r.to,status:''}; drawAdvRep(m);
+    };
+    $('#avrAll').onclick=function(){ ADVR={from:'',to:'',status:''}; drawAdvRep(m); };
+  }).catch(function(e){ m.innerHTML=paneFailed(safeErr(e)); });
+}
+var ADVR=(function(){ var r=monthRange_(); return { from:r.from, to:r.to, status:'' }; })();
 
 /* ---------- stock accountability ----------
    "the stock is too large and hoop agents are stealing stock"

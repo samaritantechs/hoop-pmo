@@ -498,3 +498,338 @@ test('the Excel export keeps a cell and its sub-line apart', () => {
   assert.equal(cellText({ childNodes: [{ nodeType: 3, textContent: '  spaced  out ' }] }),
     'spaced out', 'ordinary cells still collapse and trim exactly as before');
 });
+
+/* =========================================================================================
+   EVERY NAVIGATION STILL WORKS -- checked as wiring rather than by opening each one.
+
+     "making sure all functionallities are working in all existing navigations"
+
+   A pane breaks in three silent ways, and none of them is a syntax error, so nothing else in
+   this suite would notice:
+
+     1. The page asks the server for a function the server does not have. srv() posts a name;
+        an unknown name comes back as an error inside a pane that just says it could not load.
+     2. A nav is granted in NAV_TABS but has no entry in the sidebar, so the permission can be
+        ticked on a role and opens nothing -- or the reverse, a sidebar entry whose permission
+        no role can ever be given.
+     3. A sidebar entry whose tab key reaches draw() and matches nothing, leaving a blank pane.
+
+   This runs over ALL of them at once, so a pane added next month is covered the day it lands.
+   ========================================================================================= */
+test('every pane the page can open is wired end to end', () => {
+  const html = read('portal.html');
+  const api = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+
+  // 1. Every function the page calls must exist on the server.
+  const called = [...new Set([...html.matchAll(/srv\(\s*'([A-Za-z0-9_]+)'/g)].map(m => m[1]))];
+  const defined = new Set([...api.matchAll(/^ {2}async ([A-Za-z0-9_]+)\(/gm)].map(m => m[1]));
+  assert.ok(called.length > 40, 'the srv() scan found almost nothing -- it has stopped matching');
+  assert.deepEqual(called.filter(n => !defined.has(n)).sort(), [],
+    'the page calls these and the server does not answer to them');
+
+  // 2. Every grantable nav has a door, and every door has a grantable nav.
+  const navTabs = (/const NAV_TABS = \[([^\]]+)\]/.exec(api) || [])[1]
+    .split(',').map(s => s.trim().replace(/'/g, '')).filter(Boolean);
+  assert.ok(navTabs.includes('advreq') && navTabs.includes('advappr') && navTabs.includes('advrep'),
+    'the three advance panes must be grantable in Access codes, or the roles editor cannot '
+    + 'offer them and the owner cannot hand advrep to HR');
+  const entries = [...html.matchAll(/\{ g:'[a-z]+',\s*t:'([a-z]+)',\s*nav:'([a-z]+)'/g)]
+    .map(m => ({ t: m[1], nav: m[2] }));
+  const navsOnPage = new Set(entries.map(e => e.nav));
+  assert.deepEqual(navTabs.filter(n => n !== 'dashboard' && !navsOnPage.has(n)), [],
+    'these navs can be ticked on a role and open nothing');
+  assert.deepEqual([...navsOnPage].filter(n => !navTabs.includes(n)), [],
+    'these sidebar entries need a permission no role can ever be granted');
+
+  // 3. Every sidebar entry reaches a draw function that is actually defined.
+  const dispatch = html.slice(html.indexOf('function draw()'), html.indexOf('function draw()') + 2000);
+  for (const e of entries) {
+    const m = new RegExp("TAB==='" + e.t + "'\\) return (\\w+)\\(").exec(dispatch);
+    assert.ok(m, 'the ' + e.t + ' tab is in the sidebar but draw() does nothing with it');
+    assert.ok(defines(html, m[1]), 'draw() calls ' + m[1] + '(), which is not defined');
+  }
+});
+
+/* =========================================================================================
+   THE EXPORTS, AND THE PHONE.
+
+     "export enabled of pdf and excel and downloading exports able to work in app in a phone too"
+
+   Three separate things can go wrong here, and every one of them is silent on the handset --
+   which is where these reports are actually read:
+
+     1. An export that builds a blob: URL and points an <a download> at it. Inside the Android
+        wrapper that is a dead end: the WebView hands blob: to DownloadManager, which does not
+        understand the scheme, and the officer gets no file. Every export must go through
+        saveFile_, which tries the native bridge first. A future pane reaching for an anchor of
+        its own would reintroduce the bug for that one report only, which is exactly the kind
+        of hole nobody finds by clicking around.
+
+     2. A PDF that is not a PDF. It is written out by hand here -- no CDN, no library -- and the
+        cross-reference table at the end is a list of byte offsets. One wrong offset and every
+        reader refuses the whole file, so it is parsed back the way a reader parses it.
+
+     3. A PDF that opens but is unreadable because the columns overlap. Character widths live
+        inside the font, which is not shipped, so they are tabulated in the page; if that table
+        is wrong the text runs into the next column and the sheet cannot be taken to a bank.
+   ========================================================================================= */
+
+/** The source text of one top-level function, for composing a runnable bundle. */
+function srcOf(src, name) {
+  const at = src.indexOf('function ' + name + '(');
+  assert.ok(at > 0, name + ' is not defined in portal.html any more');
+  return src.slice(at, src.indexOf('\n}', at) + 2) + '\n';
+}
+
+test('every export goes through saveFile_, which tries the phone bridge first', () => {
+  const src = read('portal.html');
+  const save = srcOf(src, 'saveFile_');
+
+  assert.match(save, /window\.HoopLoan\s*\|\|\s*window\.HopeCalls/,
+    'saveFile_ must look for the native bridge under both names -- the wrapper registers it '
+    + 'twice while the HOPE-to-HOOP rename crosses over');
+  assert.match(save, /saveBase64/,
+    'the bridge method that writes into the phone Downloads folder must actually be called');
+  assert.match(save, /indexOf\('ERR'\)===0/,
+    'the bridge answers OK or ERR; a save that failed must say so rather than look successful');
+  /* THE MIDDLE RUNG IS THE ONE THAT IS EASY TO DROP, and it covers most handsets in the field
+     on any day an APK goes out: saveBase64 is newer than the app people already have, and
+     without the share sheet those officers fall to the browser rung, which inside a WebView is
+     a dead end -- so a report that exported last week would silently stop coming out. */
+  assert.match(save, /navigator\.share/,
+    'an older wrapper, with no saveBase64, must still get its file out through the share sheet');
+  assert.match(save, /createObjectURL/,
+    'and a plain browser, with no bridge at all, must still get its file');
+  assert.ok(save.indexOf('saveBase64') < save.indexOf('navigator.share')
+    && save.indexOf('navigator.share') < save.indexOf('createObjectURL'),
+    'the three routes must be tried best-first: write to Downloads, then share, then download');
+
+  /* THE GUARD THAT MATTERS: nowhere else may build a download of its own. */
+  const rogue = src.split('\nfunction ').slice(1)
+    .filter(f => /\.download\s*=|createObjectURL/.test(f))
+    .map(f => f.slice(0, f.indexOf('(')))
+    .filter(n => n !== 'saveFile_');
+  assert.deepEqual(rogue, [],
+    'these build their own download instead of calling saveFile_, so on a phone they hand the '
+    + 'WebView a blob: URL it cannot save');
+});
+
+test('the PDF export writes a file a reader will actually accept', () => {
+  const src = read('portal.html');
+  const wm = /\nvar HELVW=[\s\S]*?;\n/.exec(src);
+  assert.ok(wm, 'the Helvetica width table is gone; the PDF cannot place text without it');
+  const deps = wm[0] + ['cellText_', 'pdfEsc_', 'pdfW_', 'pdfFit_'].map(n => srcOf(src, n)).join('');
+  const pdfOfTable = lift(src, 'pdfOfTable_', deps);
+  const pdfW = lift(src, 'pdfW_', wm[0]);
+
+  /* THE WIDTH TABLE IS THE FONT'S OWN, not a rule of thumb. These are the published Helvetica
+     values; W really is more than four times l, which is why no single average can work. */
+  const AFM = { ' ': 278, W: 944, O: 778, M: 833, A: 667, l: 222, i: 222, m: 833, 0: 556 };
+  for (const ch of Object.keys(AFM)) {
+    assert.equal(Math.round(pdfW(ch, 1000, false)), AFM[ch],
+      'the width table is wrong for ' + JSON.stringify(ch) + ', so columns will not line up');
+  }
+
+  // A fake table: wide headers, a long comment, enough rows to force several pages.
+  const cls = list => ({ contains: c => list.indexOf(c) >= 0 });
+  const td = (text, classes) => ({ classList: cls(classes || []), textContent: text,
+    childNodes: [{ nodeType: 3, nodeName: '#text', textContent: text }] });
+  const tr = (cells, head) => ({ style: {}, classList: cls([]), cells,
+    parentNode: { nodeName: head ? 'THEAD' : 'TBODY' } });
+  const HEAD = ['TIMESTAMP', 'STAFF ROLE', 'STAFF NAME', 'APPLICATION DATE', 'REQUESTED',
+    'STATUS', 'APPROVAL', 'COMMENT', 'BANK/CARRIER NAME', 'ACCOUNTS NO.'];
+  const RIGHT = [4, 6];
+  const rows = [];
+  for (let n = 0; n < 120; n++) {
+    rows.push(['0' + (n % 9 + 1) + '/08/2026 09:1' + (n % 10), 'Credit officer',
+      'A NAME THAT IS DELIBERATELY LONG', '2026-08-0' + (n % 9 + 1), '200,000',
+      ['Requested', 'Approved', 'Rejected'][n % 3], n % 3 === 1 ? '100,000' : '—',
+      'Hakuna fedha mwezi huu — omba tena mwezi ujao', 'M-Pesa', '07' + (10000000 + n)]);
+  }
+  const table = { tHead: {},
+    rows: [tr(HEAD.map((h, i) => td(h, RIGHT.indexOf(i) >= 0 ? ['r'] : [])), true)]
+      .concat(rows.map(r => tr(r.map((v, i) => td(v, RIGHT.indexOf(i) >= 0 ? ['r'] : []))))) };
+
+  const s = Buffer.from(pdfOfTable(table, 'Ripoti ya advance')).toString('latin1');
+  assert.ok(s.startsWith('%PDF-1.'), 'no PDF header');
+  assert.ok(s.endsWith('%%EOF'), 'no end-of-file marker');
+
+  /* PARSED THE WAY A READER PARSES IT: follow startxref to the table, then follow every offset
+     in the table and check it lands exactly on the object it claims. This is the check that
+     catches a stray multi-byte character, which shifts every offset after it by one and turns
+     the whole file into something nothing will open. */
+  const startxref = parseInt(s.slice(s.lastIndexOf('startxref') + 9).trim(), 10);
+  assert.equal(s.slice(startxref, startxref + 4), 'xref', 'startxref does not point at the table');
+  const xm = /xref\n0 (\d+)\n([\s\S]*?)trailer/.exec(s.slice(startxref));
+  assert.ok(xm, 'the cross-reference table is unparseable');
+  const size = Number(xm[1]);
+  // NOT trimmed: every entry legally ends in a space, twenty bytes each, and that is the format.
+  const entries = xm[2].split('\n').filter(l => l.length);
+  assert.equal(entries.length, size, 'the xref count disagrees with the entries under it');
+  for (let n = 1; n < size; n++) {
+    assert.match(entries[n], /^\d{10} \d{5} n $/, 'xref entry ' + n + ' is malformed');
+    const off = parseInt(entries[n].slice(0, 10), 10);
+    assert.equal(s.slice(off, off + (n + ' 0 obj').length), n + ' 0 obj',
+      'object ' + n + ' is not where the xref says it is, so no reader will open this file');
+  }
+  assert.ok(s.indexOf('trailer\n<< /Size ' + size + ' /Root 1 0 R >>') > 0,
+    'the trailer must agree with the xref and name the catalog');
+
+  // A declared /Length that is not the real byte count truncates the page it belongs to.
+  let streams = 0;
+  for (const m of s.matchAll(/<< \/Length (\d+) >>\nstream\n/g)) {
+    streams++;
+    const from = m.index + m[0].length;
+    assert.equal(s.indexOf('\nendstream', from) - from, Number(m[1]),
+      'a content stream declares a length it does not have');
+  }
+  assert.ok(streams > 1, 'a 120-row table must run to more than one page');
+  assert.equal((size - 1 - 4) / 2, streams, 'every page needs exactly one content stream');
+
+  for (const m of s.matchAll(/(\d+) 0 R/g)) {
+    assert.ok(Number(m[1]) >= 1 && Number(m[1]) < size, 'dangling reference to object ' + m[1]);
+  }
+
+  /* THE GEOMETRY. Every line of text is re-measured and must sit inside the page and clear of
+     the cell beside it. This is what a wrong width table looks like from the outside. */
+  let lines = 0;
+  for (const m of s.matchAll(/<< \/Length \d+ >>\nstream\n([\s\S]*?)\nendstream/g)) {
+    const byY = new Map();
+    for (const o of m[1].matchAll(/BT (\/F[12]) ([\d.]+) Tf ([\d.]+) ([\d.]+) Td \((.*?)\) Tj ET/g)) {
+      if (!byY.has(o[4])) byY.set(o[4], []);
+      byY.get(o[4]).push({ bold: o[1] === '/F2', size: Number(o[2]), x: Number(o[3]), t: o[5] });
+    }
+    for (const line of byY.values()) {
+      lines++;
+      line.sort((a, b) => a.x - b.x);
+      line.forEach((c, i) => {
+        const end = c.x + pdfW(c.t, c.size, c.bold);
+        assert.ok(c.x >= 25.99 && end <= 816.01,
+          '"' + c.t + '" runs off the page (' + c.x.toFixed(1) + '..' + end.toFixed(1) + ')');
+        if (i + 1 < line.length) assert.ok(end <= line[i + 1].x + 0.01,
+          '"' + c.t + '" overlaps the cell beside it, which is what an unreadable sheet is');
+      });
+    }
+  }
+  assert.ok(lines > 100, 'far too few lines of text for 120 rows -- rows are being dropped');
+
+  // The header is reprinted on every page: page four of a bank run is useless without it.
+  assert.equal([...s.matchAll(/\(BANK\/CARRIER NAME\)/g)].length, streams,
+    'the column headers must be reprinted on every page');
+});
+
+test('the PDF never emits a byte the font has no glyph for', () => {
+  const pdfEsc = lift(read('portal.html'), 'pdfEsc_');
+  /* The em dash is the empty cell in every table in this file, so it is the one that would
+     have shipped broken. WinAnsi has no code point for it; a bare '?' would be honest but
+     ugly, so the handful that actually occur are mapped down to their plain equivalents. */
+  assert.equal(pdfEsc('—'), '-', 'an em dash must become a hyphen, not a question mark');
+  assert.equal(pdfEsc('‘a’'), "'a'", 'curly quotes must flatten');
+  assert.equal(pdfEsc('中'), '?', 'a character with no glyph must not be emitted raw');
+  // ( ) and backslash end a PDF string early; unescaped, they corrupt the page they land on.
+  assert.equal(pdfEsc('a(b)c\\d'), 'a\\(b\\)c\\\\d');
+  for (const ch of pdfEsc('—‘“…•中 M-Pesa')) {
+    const c = ch.charCodeAt(0);
+    assert.ok(c >= 32 && c <= 255 && !(c >= 127 && c < 160),
+      'byte ' + c + ' is outside WinAnsi and would print as noise');
+  }
+});
+
+/* =========================================================================================
+   THE ADVANCE REPORT opens on the month it is about.
+
+     "default start and end dates calenders defaulted to start and end of current month
+      unless altered"
+
+   Two empty date boxes are an unbounded query dressed up as a blank form: the pane loads every
+   advance ever granted, and the total tile above the table then shows an all-time figure
+   sitting exactly where a monthly one belongs. On the sheet somebody pays from.
+   ========================================================================================= */
+test('the advance report defaults to the current month, and says so in the filter boxes', () => {
+  const src = read('portal.html');
+  const monthRange = lift(src, 'monthRange_');
+  const r = monthRange();
+  const now = new Date();
+  const p = n => (n < 10 ? '0' : '') + n;
+  const mm = now.getFullYear() + '-' + p(now.getMonth() + 1);
+
+  assert.equal(r.from, mm + '-01', 'the range must start on the first of this month');
+  /* Day 0 of NEXT month is the last day of this one -- the only way to write it that is right
+     in February, and right in a leap February. */
+  assert.equal(r.to, mm + '-' + p(new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()),
+    'the range must end on the last day of this month, whatever length it is');
+
+  assert.match(src, /var ADVR=\(function\(\)\{ var r=monthRange_\(\);/,
+    'the report state must be seeded from monthRange_, or the pane still opens unbounded');
+  assert.match(src, /id="avrAll"/,
+    'there must still be a deliberate way to ask for all dates -- the default is a default, '
+    + 'not a cage');
+});
+
+/* "advance salaries report have status column of requested, approved or rejected too" --
+   the owner's three words, which are not quite the approval queue's three. */
+test('the advance report carries a status column in the owner three words', () => {
+  const src = read('portal.html');
+  const status = lift(src, 'advReportStatus');
+
+  assert.match(status({ status: 'pending' }), />Requested</,
+    'an undecided row is REQUESTED on this sheet: what the staff member did was ask');
+  assert.match(status({ status: 'approved' }), />Approved</);
+  assert.match(status({ status: 'declined' }), />Rejected</,
+    'the owner said rejected, so the sheet says rejected');
+
+  const rep = src.slice(src.indexOf('function drawAdvRep('));
+  const head = /<th>TIMESTAMP<\/th>[\s\S]*?ACCOUNTS NO\.<\/th>/.exec(rep);
+  assert.ok(head, 'the report header row has changed shape');
+  assert.ok(head[0].indexOf('<th>STATUS</th>') > 0, 'the STATUS column is missing');
+  /* BOTH FIGURES, NAMED AS FIGURES. "2 columns of requested amt and approved amt" -- an
+     approver may grant less than was asked, and a reader who cannot see both numbers cannot
+     tell that they did. STATUS sits between them because that is the order the three facts
+     are read in: asked X, answer Y, therefore pay Z. */
+  /* Matched as MARKUP, not as bare words: the comment above these headers names them too, and
+     a bare indexOf finds the prose first and then reports the columns in the wrong order. */
+  assert.ok(head[0].indexOf('>REQUESTED AMOUNT<') >= 0, 'the requested figure must be named as one');
+  assert.ok(head[0].indexOf('>APPROVED AMOUNT<') >= 0, 'the approved figure must be named as one');
+  assert.ok(head[0].indexOf('>REQUESTED AMOUNT<') < head[0].indexOf('>STATUS<')
+    && head[0].indexOf('>STATUS<') < head[0].indexOf('>APPROVED AMOUNT<'),
+    'STATUS belongs between the two figures');
+
+  /* And APPROVAL is now a figure and nothing else. A row that is not approved shows a dash,
+     never a zero: a zero in a payment column is an instruction to pay nothing, which is a
+     different statement from "there is nothing to pay here yet". */
+  assert.match(rep, /r\.status==='approved'\?money\(r\.approved\|\|0\):'—'/,
+    'the approved column must show the figure or a dash, now that STATUS carries the word');
+});
+
+/* "approved at approval are default of requested but approver can alter so that the final
+   report has this detail and use the approved column" -- the approver opens the drawer on the
+   answer YES, at the full amount asked for. Approving in full is the common case and must cost
+   one click; granting less is the deliberate act. */
+test('the approval drawer opens at the requested amount and cannot go above it', () => {
+  const src = read('portal.html');
+  // money() only formats the label; which options exist and which is selected is the question.
+  const options = lift(src, 'advAmountOptions', 'function money(n){ return String(n); }\n');
+  const AMOUNTS = [50000, 100000, 150000, 200000];
+
+  const onA200 = options(AMOUNTS, 200000, 200000);
+  assert.equal((onA200.match(/<option/g) || []).length, 4, 'all four are offered on a 200k ask');
+  assert.match(onA200, /<option value="200000" selected>/,
+    'the drawer must open pre-set to the full amount requested');
+
+  /* Capped at what was asked. More than requested is somebody mis-clicking a dropdown, and the
+     server refuses it too -- this is so the option is never on screen to click. */
+  const onA100 = options(AMOUNTS, 100000, 100000);
+  assert.equal((onA100.match(/<option/g) || []).length, 2, 'a 100k ask offers only 50k and 100k');
+  assert.ok(onA100.indexOf('200000') < 0 && onA100.indexOf('150000') < 0,
+    'amounts above the request must not be offered at all');
+  assert.match(onA100, /<option value="100000" selected>/);
+
+  // The requester's own form has no default and no cap: they are choosing, not answering.
+  const fresh = options(AMOUNTS, null, null);
+  assert.equal((fresh.match(/<option/g) || []).length, 4);
+  assert.ok(fresh.indexOf('selected') < 0, 'the request form must not pre-pick an amount');
+
+  // And the drawer passes the requested amount in as both the selection and the ceiling.
+  assert.match(src, /advAmountOptions\(amounts,r\.amount,r\.amount\)/,
+    'the decide drawer must seed the dropdown from the requested amount, both ways');
+});

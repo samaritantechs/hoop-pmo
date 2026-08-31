@@ -141,7 +141,22 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    alias below with fraud/scorecards/stock/movement: locking somebody's phone is a
    different power from reading a stock report, and it is granted on purpose or not at
    all. ADMIN and AUDITOR still see every pane, as everywhere. */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'staff', 'codes', 'settings'];
+/* THE THREE SALARY-ADVANCE PANES, granted the ordinary way and to nobody by default.
+   -------------------------------------------------------------------------------------
+     "i'll grant navs to who performs what so the navs are the roles"   "not roles"
+
+   Asking for an advance, deciding on one, and paying it are three different powers held by
+   three different people, so they are three panes rather than one pane with hidden buttons.
+
+   NOTHING IN THIS CODE EVER ASKS WHAT SOMEBODY'S ROLE IS. There is no `role === 'HR'` and no
+   LEADER role; the gate is only ever "do you hold this nav". The owner makes an HR role and
+   ticks advrep on it, and that IS the permission -- the role name is a container for the
+   grant, never a rule the server reads.
+
+   Adding them here grants them to no existing code: navsFor returns `chosen` for any role
+   that has deliberately picked panes, so a role saved yesterday keeps exactly what it had
+   until somebody ticks a new box. ADMIN and AUDITOR see every pane, as everywhere. */
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 function navsFor(user) {
   if (isAdminRole(user) || isReadOnly(user)) return NAV_TABS.slice();
@@ -157,6 +172,42 @@ function navsFor(user) {
   if (t.includes('settings') || t.includes('upload')) base.push('fraud', 'scorecards', 'stock', 'movement');
   return base;
 }
+/* ---------- SALARY ADVANCE: the shape all three panes agree on ---------- */
+/* THE ONLY AMOUNTS THERE ARE. The owner named four and the request is a dropdown, so this is
+   the whole vocabulary -- and it is enforced on the SERVER as well as drawn on the screen,
+   because a dropdown is only a suggestion to anything that is not a browser. The approver
+   picks from the same four, which is what makes "give this 200k request just 100k" a click
+   rather than a typed figure nobody can check. */
+const ADV_AMOUNTS = [50000, 100000, 150000, 200000];
+const ADV_COLS = 'id, requested_at, staff_code, staff_name, staff_role, apply_date, amount, '
+  + 'status, approved_amount, comment, decided_by, decided_at, bank_name, account_no';
+const ADV_NOT_READY = 'Jedwali la advance halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-08-29-salary-advance.sql kwenye Supabase. '
+  + '/ The salary advance table has not been created yet — run that migration first.';
+/* ONE row shape, built once, so the requester's pane, the approver's queue and HR's report
+   cannot drift into three slightly different opinions about the same request.
+
+   Timestamps go out as epoch MILLISECONDS, never as text: a zone-less string is read as local
+   by the browser and as UTC by this server, which is three hours of disagreement in Dar es
+   Salaam on a payment record. apply_date stays a plain YYYY-MM-DD -- it is a calendar day the
+   requester chose, not a moment, and giving it a time zone would be inventing precision. */
+const advRow = r => ({
+  id: String(r.id),
+  at: r.requested_at ? Date.parse(r.requested_at) : null,
+  staffName: r.staff_name || '',
+  staffRole: r.staff_role || '',
+  staffCode: r.staff_code || '',
+  applyDate: r.apply_date ? String(r.apply_date).slice(0, 10) : '',
+  amount: r.amount == null ? null : Number(r.amount),
+  status: r.status || 'pending',
+  approved: r.approved_amount == null ? null : Number(r.approved_amount),
+  comment: r.comment || '',
+  decidedBy: r.decided_by || '',
+  decidedAt: r.decided_at ? Date.parse(r.decided_at) : null,
+  bank: r.bank_name || '',
+  account: r.account_no || '',
+});
+
 function requireNav(user, k) {
   if (!navsFor(user).includes(k)) {
     const e = new Error('Your role has no access to the ' + k + ' pane.');
@@ -1940,6 +1991,211 @@ const FNS = {
     const { error } = await db.from('devices').delete().eq('imei', imei);
     if (error) throw new Error(error.message);
     return { ok: true, imei };
+  },
+
+  /* =====================================================================================
+     SALARY ADVANCE -- ask, decide, pay.
+     =====================================================================================
+       "hoop users should get a nav pane and be able to make advance requests, their leaders
+        will be assigned with another approval nav ... there is salary advance report nav
+        that I'll grant to hr which hr will use for filing and bank payment report"
+
+     Three panes over ONE table, gated by three navs and by nothing else. No role is ever
+     named in this code: the owner grants advreq to whoever may ask, advappr to whoever may
+     decide, and advrep to whoever pays. Moving the authority is moving a tick.
+
+     WHO IS ASKING IS NOT A PARAMETER. The requester's name, role and code come off the
+     signed-in access code on the server; the client cannot send them and cannot spoof them.
+     They are then STAMPED on the row rather than joined later -- see the migration for why a
+     payment record must not rewrite itself when the register changes. */
+  async advRequest(db, user, args) {
+    requireNav(user, 'advreq');
+    requireWrite(user);
+    const a = args || {};
+    const amount = Number(a.amount);
+    if (!ADV_AMOUNTS.includes(amount)) {
+      bad('Chagua kiasi kutoka kwenye orodha. / Choose one of the listed amounts.');
+    }
+    /* THE DATE THE REQUESTER PICKS, which is not the date they pressed the button. Both are
+       kept: requested_at is stamped by the database, this is the applicant's own calendar
+       choice, and the report shows the two side by side. */
+    const applyDate = String(a.applyDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(applyDate)) {
+      bad('Weka tarehe ya maombi. / Pick an application date.');
+    }
+    const bank = String(a.bank || '').trim();
+    const account = String(a.account || '').trim();
+    /* THE BANK DETAILS ARE REQUIRED AT THE ASK, not chased afterwards. HR's pane is a payment
+       instruction: a row that reaches it without somewhere to send the money is a row that
+       stops the run while somebody makes a phone call. The requester is the only person who
+       knows these, so this is the only moment to get them. */
+    if (!bank) bad('Weka jina la benki au mtandao. / Enter the bank or mobile carrier.');
+    if (!account) bad('Weka namba ya akaunti. / Enter the account number.');
+
+    const at = new Date().toISOString();
+    const row = {
+      requested_at: at, updated_at: at,
+      staff_code: user.code || null,
+      staff_name: user.name || '',
+      staff_role: user.role || '',
+      apply_date: applyDate,
+      amount,
+      status: 'pending',
+      bank_name: bank.slice(0, 120),
+      account_no: account.slice(0, 60),
+    };
+    const { error } = await db.from('staff_advances').insert([row]);
+    if (error) {
+      if (tableMissing(error)) bad(ADV_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, amount, applyDate };
+  },
+
+  /** A requester's own history, and only their own: this pane grants the right to ASK, which
+      is not the right to read what anybody else earns or owes. Keyed on the access code they
+      signed in with rather than their name, because two people can share a name. */
+  async advMine(db, user) {
+    requireNav(user, 'advreq');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('staff_advances').select(ADV_COLS)
+        .eq('staff_code', user.code || '~none~'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS };
+    }
+    return { ok: true, amounts: ADV_AMOUNTS,
+      rows: rows.map(advRow).sort((x, y) => (y.at || 0) - (x.at || 0)) };
+  },
+
+  /** THE APPROVER'S QUEUE. Pending first because that is the whole job; recently decided
+      below it so somebody can see what they just did and catch a slip immediately. */
+  async advQueue(db, user, args) {
+    requireNav(user, 'advappr');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('staff_advances').select(ADV_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS, pending: 0 };
+    }
+    const all = rows.map(advRow);
+    const want = String(a.state || '').trim();
+    const shown = want === 'decided' ? all.filter(r => r.status !== 'pending')
+      : want === 'pending' ? all.filter(r => r.status === 'pending') : all;
+    return { ok: true, amounts: ADV_AMOUNTS,
+      pending: all.filter(r => r.status === 'pending').length,
+      // Pending first, then newest -- the queue is a worklist, not a diary.
+      rows: shown.sort((x, y) => (x.status === 'pending' ? 0 : 1) - (y.status === 'pending' ? 0 : 1)
+        || (y.at || 0) - (x.at || 0)),
+      me: user.code || '' };
+  },
+
+  /** APPROVE (possibly for less) OR DECLINE, with a comment either way. */
+  async advDecide(db, user, args) {
+    requireNav(user, 'advappr');
+    requireWrite(user);
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!id) bad('Ombi halijachaguliwa. / No request chosen.');
+    const approve = a.approve === true;
+    const comment = String(a.comment || '').trim();
+    /* A REFUSAL MUST SAY WHY. An approval need not -- the money is the answer -- but "no" with
+       no reason is the thing the requester brings back to the office to argue about, and the
+       owner asked for the comment precisely so that conversation happens once, in writing. */
+    if (!approve && !comment) {
+      bad('Andika sababu ya kukataa. / A comment is required when declining.');
+    }
+
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('staff_advances').select(ADV_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(ADV_NOT_READY);
+    }
+    const dev = rows.find(r => String(r.id) === id);
+    if (!dev) bad('Ombi halipo. / That request no longer exists.');
+    if (String(dev.status) !== 'pending') {
+      bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
+    }
+    /* NOBODY DECIDES THEIR OWN. An approver who also holds advreq can ask for an advance like
+       anybody else -- and would otherwise be able to grant it to themselves in one click.
+       This is the cheapest financial control there is and the most expensive one to add back
+       after somebody has used it. Compared on the access code, which is the identity the
+       server actually knows. */
+    if (user.code && String(dev.staff_code || '') === String(user.code)) {
+      bad('Huwezi kuamua ombi lako mwenyewe. / You cannot decide your own request — '
+        + 'another approver must action it.');
+    }
+
+    const asked = Number(dev.amount) || 0;
+    let granted = null;
+    if (approve) {
+      granted = a.approvedAmount == null || a.approvedAmount === '' ? asked : Number(a.approvedAmount);
+      /* LESS THAN ASKED IS THE POINT ("give this 200k request just 100k"); MORE THAN ASKED is
+         somebody mis-clicking a dropdown, and an approver quietly handing out more than was
+         requested is not a decision anybody asked them to be able to make. */
+      if (!ADV_AMOUNTS.includes(granted)) {
+        bad('Chagua kiasi kutoka kwenye orodha. / Choose one of the listed amounts.');
+      }
+      if (granted > asked) {
+        bad('Huwezi kuidhinisha zaidi ya kilichoombwa. / You cannot approve more than was requested.');
+      }
+    }
+
+    const at = new Date().toISOString();
+    const patch = {
+      status: approve ? 'approved' : 'declined',
+      approved_amount: approve ? granted : null,
+      comment: comment || null,
+      decided_by: user.name || '',
+      decided_at: at,
+      updated_at: at,
+    };
+    /* Guarded on status so two approvers pressing at the same moment cannot both win: the
+       second update matches no row, and that person is told it was already decided rather
+       than silently overwriting the first decision. */
+    const { data, error } = await db.from('staff_advances')
+      .update(patch).eq('id', id).eq('status', 'pending').select('id');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) {
+      bad('Ombi hili limeamuliwa na mtu mwingine sasa hivi. / Somebody else just decided this one.');
+    }
+    return { ok: true, id, status: patch.status, granted };
+  },
+
+  /** HR'S PANE: the filing copy and the bank payment run, in the owner's column order. */
+  async advReport(db, user, args) {
+    requireNav(user, 'advrep');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('staff_advances').select(ADV_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, totals: { approved: 0, count: 0 } };
+    }
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? String(a.from) : null;
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? String(a.to) : null;
+    const want = String(a.status || '').trim();
+    /* FILTERED ON THE APPLICATION DATE, not on when the row was created. HR files and pays
+       against the period the advance is FOR, and those two dates can fall either side of a
+       month end -- which is exactly the row that goes missing from a payment run otherwise. */
+    let out = rows.map(advRow)
+      .filter(r => !from || (r.applyDate && r.applyDate >= from))
+      .filter(r => !to || (r.applyDate && r.applyDate <= to))
+      .filter(r => !['pending', 'approved', 'declined'].includes(want) || r.status === want)
+      .sort((x, y) => (y.at || 0) - (x.at || 0));
+    return { ok: true, rows: out,
+      totals: {
+        count: out.length,
+        // What the bank run actually comes to. Declined and pending rows contribute nothing,
+        // which is the only reading of this number that is safe to hand a cashier.
+        approved: out.reduce((s, r) => s + (r.status === 'approved' ? (r.approved || 0) : 0), 0),
+      } };
   },
 
   async stockMovement(db, user, args) {
