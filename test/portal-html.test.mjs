@@ -842,3 +842,30 @@ test('the approval drawer opens at the requested amount and cannot go above it',
   assert.match(src, /advAmountOptions\(amounts,r\.amount,r\.amount\)/,
     'the decide drawer must seed the dropdown from the requested amount, both ways');
 });
+
+/* "the leader button i need it visible as a column before the hariri and futa ones" -- the
+   position is the request, so the position is what is pinned. */
+test('the Kiongozi switch sits in the row, immediately before Hariri and Futa', () => {
+  const src = read('portal.html');
+  const head = /<tr><th>Code<\/th>[\s\S]{0,400}?<\/tr>/.exec(src);
+  assert.ok(head, 'the access-codes header row has changed shape');
+  const cols = [...head[0].matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map(m => m[1]);
+  assert.deepEqual(cols, ['Code', 'Jina', 'Role', 'Timu', 'Tabs', 'Kiongozi', ''],
+    'Kiongozi must be the last named column, just before the actions cell');
+
+  const row = src.slice(src.indexOf("<tr><td class=\"code\">"));
+  const lead = row.indexOf('data-lead="');
+  const edit = row.indexOf('data-ed="');
+  const del = row.indexOf('data-del="');
+  assert.ok(lead > 0 && edit > 0 && del > 0, 'all three row controls must be present');
+  assert.ok(lead < edit && edit < del,
+    'the Kiongozi button must come before Hariri, which comes before Futa');
+
+  // It is a switch, not a label: the face shows the state and one click flips it.
+  assert.match(src, /srv\('accessCodeLeader',\{code:code,leader:!on\}\)/,
+    'the button must post the OPPOSITE of what it currently shows');
+  assert.match(src, /confirm\(on/,
+    'it hands over the approval pane, so it confirms rather than firing on a stray tap');
+  assert.match(src, /c\.leader===null/,
+    'before the migration it must show a dash, not a button that cannot work');
+});

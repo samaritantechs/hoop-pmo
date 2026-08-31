@@ -41,6 +41,10 @@ export const AUDITED = new Set([
   // teams & staff
   'saveTeam', 'deleteTeam', 'saveStaffTeams', 'saveRole', 'deleteRole',
   'saveAccessCode', 'deleteAccessCode', 'changeMyCode',
+  /* Making somebody a department leader hands them the advance approval pane and every
+     request their department has filed. That is a permission change, so it is logged like
+     one -- and `code` is in KEEP below, so the entry names whose switch was flipped. */
+  'accessCodeLeader',
   'saveCallAgent', 'removeCallUser', 'saveOfficerAccount', 'deleteOfficerAccount',
   // settings & the system switch
   'settingSet', 'settingDelete', 'systemOpenSet', 'commissionSave', 'announceSave',

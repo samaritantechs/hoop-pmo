@@ -2656,6 +2656,33 @@ const FNS = {
     return { ok: true, from, to, self: from === user.code };
   },
 
+  /** THE KIONGOZI SWITCH, ON ITS OWN.
+        "the leader button i need it visible as a column before the hariri and futa ones"
+
+      Deliberately NOT saveAccessCode with a leader field bolted on. That call rewrites the
+      whole row -- name, role, teams, tabs -- from whatever the screen happened to be holding,
+      and a one-click toggle in a table row has none of that to hand. Routing a toggle through
+      it would mean reconstructing a person's teams and panes from data attributes on a button
+      and hoping they came back identical; the day they do not, somebody loses their access by
+      pressing a switch about something else entirely.
+
+      This touches one column and can lose nothing else. */
+  async accessCodeLeader(db, user, args) {
+    requireWrite(user); requireSettings(user);
+    const code = String((args && args.code) || '').trim();
+    if (!code) throw new Error('code is required.');
+    const leader = (args && args.leader) === true;
+    const { data, error } = await db.from('access_codes')
+      .update({ is_leader: leader }).eq('code', code).select('code');
+    if (error) {
+      // The migration has not been run: say which file, rather than a raw database message.
+      if (/is_leader/i.test(String(error.message))) bad(ADV_LEADER_NOT_READY);
+      throw new Error(error.message);
+    }
+    if (!data || !data.length) throw new Error('Unknown code: ' + code);
+    return { ok: true, code, leader };
+  },
+
   async deleteAccessCode(db, user, args) {
     requireWrite(user); requireSettings(user);
     const code = String((args && args.code) || '').trim();

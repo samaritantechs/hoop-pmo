@@ -103,7 +103,10 @@ Every other pane in this system is granted by role alone. The approval pane is t
 and it needs **both**:
 
 - `advappr` ticked on the **role**, and
-- **Kiongozi** ticked on the individual **access code** (Access codes → the tick under the form).
+- **Kiongozi** ticked on the individual **access code** — a one-click button in its own column
+  in the codes table, sitting just before Hariri and Futa. It confirms first, because pressing
+  it hands that person the approval pane and every request their department has filed. (The
+  same switch is on the form below, for setting it while creating a new code.)
 
 Ticking `advappr` on CREDIT would otherwise hand the approval pane to every credit officer, when
 what is meant is the one person who leads them. "Leads their department" is a fact about a

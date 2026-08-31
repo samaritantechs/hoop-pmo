@@ -3981,16 +3981,22 @@ function drawCodes(m){
   Promise.all([srv('accessCodes'),srv('officers')]).then(function(res){
     var d=res[0], off=res[1];
     m.innerHTML='<div class="card"><h2>Access codes — mfumo (portal)</h2>'
-      +'<div class="scroll"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Kiongozi</th><th>Timu</th><th>Tabs</th><th class="noxl"></th></tr></thead><tbody>'
+      +'<div class="scroll"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Timu</th><th>Tabs</th><th>Kiongozi</th><th class="noxl"></th></tr></thead><tbody>'
       +(d.codes||[]).map(function(c){
         return '<tr><td class="code">'+esc(c.code)+'</td><td>'+esc(c.name)+'</td><td>'+esc(c.role)+'</td>'
-          /* KIONGOZI: the per-person half of the approval grant. Shown as its own column
-             because it decides who opens the advance approval pane, and a switch that only
-             exists inside an edit form is a switch nobody audits at a glance. */
-          +'<td>'+(c.leader===null?'<span class="mut">—</span>'
-            :c.leader?'<span class="chip ok">Kiongozi</span>':'<span class="mut">—</span>')+'</td>'
           +'<td>'+esc(c.teams?c.teams.join(', '):'ZOTE')+'</td><td class="mut">'+esc((c.tabs||[]).join(', '))+'</td>'
-          +'<td class="r noxl"><button class="btn sm ghost" data-ed="'+esc(c.code)+'" data-name="'+esc(c.name)+'" data-role="'+esc(c.role)+'" data-lead="'+(c.leader?1:0)+'" data-teams="'+esc(c.teams&&c.teams.length?c.teams.join(','):'ALL')+'">Hariri</button> '
+          /* KIONGOZI, AS A SWITCH RATHER THAN A LABEL, and sitting where the eye already goes
+             for the row's actions.
+               "the leader button i need it visible as a column before the hariri and futa ones"
+             This one tick decides who opens the advance approval pane, so it is the thing most
+             worth being able to see down a column and change without opening anything. The
+             button's face IS the state -- solid means yes -- so it reads at a glance and
+             exports as a word rather than as a control. */
+          +'<td>'+(c.leader===null
+            ? '<span class="mut" title="Endesha migration ya kiongozi">—</span>'
+            : '<button class="btn sm'+(c.leader?'':' ghost')+'" data-lead="'+esc(c.code)+'"'
+              +' data-on="'+(c.leader?1:0)+'">'+(c.leader?'Kiongozi':'Si kiongozi')+'</button>')+'</td>'
+          +'<td class="r noxl"><button class="btn sm ghost" data-ed="'+esc(c.code)+'" data-name="'+esc(c.name)+'" data-role="'+esc(c.role)+'" data-lead2="'+(c.leader?1:0)+'" data-teams="'+esc(c.teams&&c.teams.length?c.teams.join(','):'ALL')+'">Hariri</button> '
           +'<button class="btn sm ghost" data-del="'+esc(c.code)+'">Futa</button></td></tr>';
       }).join('')+'</tbody></table></div>'
       +'<div class="row" style="margin-top:14px"><input class="inp" id="acCode" placeholder="Code (siri)"><input class="inp" id="acName" placeholder="Jina">'
@@ -4125,7 +4131,7 @@ function drawCodes(m){
         $('#acCode').value=EDIT_FROM;
         $('#acName').value=b.getAttribute('data-name')||'';
         $('#acRole').value=b.getAttribute('data-role')||'ADMIN';
-        if($('#acLead')) $('#acLead').checked=b.getAttribute('data-lead')==='1';
+        if($('#acLead')) $('#acLead').checked=b.getAttribute('data-lead2')==='1';
         $('#acTeams').value=b.getAttribute('data-teams')||'';
         $('#acAdd').textContent='Hifadhi / Save';
         $('#acCode').focus();
@@ -4155,6 +4161,25 @@ function drawCodes(m){
         if(!confirm('Futa code hii?')) return;
         srv('deleteAccessCode',{code:b.getAttribute('data-del')})
           .then(function(){drawCodes(m);}).catch(function(e){toast(String(e.message||e),true);});
+      };
+    });
+    /* THE KIONGOZI SWITCH, ONE CLICK, IN THE ROW. Confirmed first because it is a permission
+       change and not a display preference: ticking it hands that person the advance approval
+       pane and every request their department has ever filed. The button is disabled while the
+       call is in flight, so a double-click cannot send two opposite instructions. */
+    $all('[data-lead]',m).forEach(function(b){
+      b.onclick=function(){
+        var code=b.getAttribute('data-lead'), on=b.getAttribute('data-on')==='1';
+        if(!confirm(on
+          ? 'Ondoa '+code+' kwenye viongozi? Hataona tena Idhini ya advance.'
+            +'\n/ Remove leader from '+code+'? They lose the advance approval pane.'
+          : 'Fanya '+code+' kiongozi? Ataona maombi ya advance ya role yake.'
+            +'\n/ Make '+code+' a leader? They will see advance requests from their own role.')) return;
+        b.disabled=true;
+        srv('accessCodeLeader',{code:code,leader:!on}).then(function(){
+          toast(on?'Ameondolewa / leader removed':'Amewekwa kiongozi / leader set');
+          drawCodes(m);
+        }).catch(function(e){ b.disabled=false; toast(safeErr(e),true); });
       };
     });
   }).catch(function(e){ paneFailed(m,e); });
