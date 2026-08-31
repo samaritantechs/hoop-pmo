@@ -2638,142 +2638,185 @@ function devMore_(d){ return (d && d.total != null && d.total > ((d.rows||[]).le
 function drawDevices(m){
   m.innerHTML='<div class="card"><h2>Devices</h2><div class="sk"></div></div>';
   srv('deviceList',{state:DEV.filter}).then(function(d){
-    var c=d.counts||{};
-    var chips=[['','Zote / all'],['enrolled','Enrolled'],['locked','Locked'],['released','Released'],['lost','Lost']];
-    // A chip reads as ON only when nothing else is filtering; otherwise two controls would
-    // both look live while only one of them is deciding what is on screen.
-    var chipOn=function(v){ return !DEV.flag && DEV.filter===v; };
-    /* THE FIVE TILES ARE THE FIVE LISTS, and clicking one filters the table under it.
-       Three of them are states the server can ask the database for; the other two --
-       "never spoke" and "silent" -- are judgements the server makes per row and hands down
-       as flags, so they filter here, on rows already loaded. Clicking the live one clears
-       it, which is the only way back to "zote" that does not need a second control. */
-    var byState=function(st){ return { on:DEV.filter===st&&!DEV.flag, cta:'chuja ›',
-      go:function(){ DEV.filter=(DEV.filter===st&&!DEV.flag?'':st); DEV.flag=''; drawDevices(m); } }; };
-    var byFlag=function(f){ return { on:DEV.flag===f, cta:'chuja ›',
-      go:function(){ DEV.flag=(DEV.flag===f?'':f); DEV.filter=''; drawDevices(m); } }; };
-    var tiles='<div class="tiles">'
-      +tile('Zimesajiliwa',money(c.enrolled||0),'tayari, hazijafungwa',byState('enrolled'))
-      +tile('Zimefungwa',money(c.locked||0),
-        ((c.lockPending||0)?money(c.lockPending)+' bado hazijathibitisha':'zote zimethibitisha'),
-        Object.assign({color:((c.locked||0)?'bad':'')},byState('locked')))
-      +tile('Hazijawahi kuongea',money(c.neverSeen||0),'app haijafunguliwa',byFlag('neverSeen'))
-      +tile('Kimya / silent',money(c.stale||0),'zaidi ya saa 36',byFlag('stale'))
-      +tile('Zimeachiwa',money(c.released||0),'mkopo umeisha',
-        Object.assign({color:'ok'},byState('released')))
-      +'</div>';
-    var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
-      +chips.map(function(x){ return '<button class="btn sm'+(chipOn(x[0])?'':' ghost')+'" data-dvf="'+x[0]+'">'+x[1]+'</button>'; }).join('')
-      +'<span style="flex:1"></span>'
-      +(BOOT.readOnly?'':'<button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button>')+'</div>';
-    /* neverSeen and stale ride on the row, so this fence is the same fact the tile counted
-       -- never a second definition of "silent" that could drift from the one in the tile. */
-    /* THE FENCE MUST BE THE TILE'S OWN ARITHMETIC, not something near it.
-       -------------------------------------------------------------------------------------
-       `r.stale` on a row means "not reporting" and INCLUDES a phone that has never spoken --
-       that is deliberate and tested, because it is what paints the clock red. The TILE beside
-       it counts something narrower on purpose: `stale && !neverSeen`, so the two tiles
-       partition the fleet instead of double-counting it.
-
-       Filtering on the bare flag therefore drew a different set from the one the tile had
-       counted, and the gap was widest in the state a demo is most likely to be in: a bench of
-       phones just enrolled, none of which has beaten yet. "Kimya / silent" read 0, and
-       clicking it opened the entire register. A tile that says none and then shows all is the
-       kind of thing an audience remembers. */
-    var rows=(d.rows||[]).filter(function(r){
-      if(!DEV.flag) return true;
-      if(DEV.flag==='stale') return r.stale===true && r.neverSeen!==true;
-      return r[DEV.flag]===true;
-    });
-    var table=rows.length
-      ? '<div class="scroll"><table><thead><tr>'
-        +'<th class="noxl"><input type="checkbox" id="dvAll" title="Chagua zote zinazoonekana / select all shown"></th>'
-        +'<th>IMEI</th><th>Item</th><th>Holder</th><th>Hali / state</th>'
-        +'<th>Uliagiza / last order</th>'
-        +'<th>Simu inasema</th><th>Iliongea lini</th><th class="noxl"></th></tr></thead><tbody>'
-        +rows.map(function(r){
-          var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
-            :r.state==='released'?'<span class="chip ok">imeachiwa</span>'
-            :r.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
-          /* THE TIME IT SPOKE, with the age underneath. The clock is what lets you place the
-             beat either side of the order you gave; the age is what makes a dead phone
-             obvious without doing arithmetic. Both, because they answer different questions,
-             and the red still belongs to the age's fact -- silence, not lateness. */
-          var age=agoMins(r.silentMins);
-          var seen=r.neverSeen?'<span class="mut">hajawahi</span>'
-            :(r.stale?'<span style="color:var(--bad)">':'<span>')+esc(clock(r.seenAt)||age)+'</span>'
-              +(age?'<div class="mut" style="font-size:10px">'+esc(age)+'</div>':'');
-          return '<tr><td class="noxl"><input type="checkbox" class="dvck" value="'+esc(r.imei)+'"></td>'
-            +'<td style="font-size:11px">'+esc(r.imei)+'</td><td>'+esc(r.item||'—')+'</td>'
-            +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
-            /* WHAT YOU LAST ORDERED, next to what the phone says about itself.
-               "simu inasema = locked but i just unlocked"
-               Those two columns disagreeing is normal for a moment and alarming without
-               this one: an unlock given ten seconds ago and one given yesterday mean
-               completely different things about a handset still reporting locked. The age
-               is what turns "is this broken" into "has it had time to hear me". */
-            +'<td>'+esc(r.lastOrder||'—')
-              +(r.orderAt||r.orderAgeMins!=null?'<div class="mut" style="font-size:10px">'
-                +esc(clock(r.orderAt)||agoMins(r.orderAgeMins))
-                +(r.orderBy?' · '+esc(r.orderBy):'')+'</div>':'')
-            +'</td>'
-            +'<td>'+esc(r.reported||'—')+devWhere(r)+'</td><td>'+seen+'</td>'
-            /* Historia is a read and stays for everyone. Token DISCLOSES A CREDENTIAL and
-               Futa erases a row -- the server treats both as writes, so a view-only code is
-               not offered either. */
-            +'<td class="r noxl">'
-            +(BOOT.readOnly?'':'<button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> ')
-            +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button>'
-            +(BOOT.readOnly?'':' <button class="btn sm danger" data-dvd="'+esc(r.imei)+'" title="Ondoa kwenye register / Remove from the register">Futa</button>')
-            +'</td></tr>';
-        }).join('')+'</tbody></table></div>'
-        /* THE TABLE STOPS AT 500 AND THE TILES DO NOT.
-           -----------------------------------------------------------------------------
-           deviceList sends the newest 500 rows and the count of ALL of them. The pane used
-           to read `rows` and ignore `total`, so a fleet of 640 showed five tiles adding up
-           to 640 above a table holding 500 -- with nothing on screen to say which number
-           was wrong. In front of a room, arithmetic that does not add up is the question
-           you get asked, and "the table is truncated" is only a good answer if the screen
-           said so first. */
-        +(devMore_(d)
-          ? '<div class="note" style="margin-top:8px">Jedwali linaonyesha '+money((d.rows||[]).length)
-            +' kati ya '+money(d.total)+'. Tumia vichujio hapo juu kupunguza. '
-            +'/ Showing '+money((d.rows||[]).length)+' of '+money(d.total)
-            +' — the tiles count them all; narrow with the filters above.</div>'
-          : '')
-        +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">'
-        +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
-        /* A view-only code cannot change a device, and every one of these buttons answered
-           that with a 403 the operator had to press to discover. Permission is decided in
-           one place on the server; this only stops offering what it will refuse. */
-        +(BOOT.readOnly ? '<span class="mut" style="font-size:11px">View-only — huwezi kubadilisha hali. / no state changes from this code.</span>'
-          : '<button class="btn sm danger" data-dvs="locked">Funga / Lock</button>'
-          +'<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
-          +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'
-          +'<button class="btn sm ghost" data-dvs="lost">Imepotea / Write off</button>')
-        +'</div>'
-      : (d.notReady
-        /* NOT THE SAME THING as an empty register, and it must not read like one: nobody
-           would ever guess from "no devices yet" that the answer is to run a SQL file. */
-        ? '<div class="note bad">Jedwali la vifaa halijatengenezwa bado. Endesha '
-          +'<b>db/migrations/RUN-ME-2026-08-24-devices.sql</b> kwenye Supabase, kisha rudi hapa. '
-          +'/ The devices table has not been created yet — run that migration, then come back.</div>'
-        : '<div class="mut">Hakuna kifaa kwenye kundi hili. Bofya "Sajili simu" — weka IMEI kutoka ripoti ya stock. '
-          +'/ No devices here yet; enrol IMEIs from the stock report to begin.</div>');
-    m.innerHTML='<div class="card"><h2>Devices / Kufunga simu</h2>'
-      +'<div class="mut" style="margin-bottom:8px">Simu tulizozidhibiti, kwa IMEI. <b>Kuagiza kufunga si sawa na kufungwa</b> — '
-      +'simu ikishathibitisha ndipo inasomeka "imefungwa". App ya simu ikiwa bado haijajengwa, zote zitasoma "hajawahi kuongea". '
-      +'/ Ordering a lock is not the same as a confirmed lock.</div>'
-      +tiles+bar+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
-    wireTiles(m);
-    $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
-    var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
-    $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
-    $all('[data-dvh]').forEach(function(b){ b.onclick=function(){ devHistory(b.getAttribute('data-dvh')); }; });
-    $all('[data-dvt]').forEach(function(b){ b.onclick=function(){ devToken(b.getAttribute('data-dvt')); }; });
-    $all('[data-dvd]').forEach(function(b){ b.onclick=function(){ devDelete(m, b.getAttribute('data-dvd')); }; });
-    devWireTicks_();
+    devPaint_(m, d, Date.now());
   }).catch(function(e){ paneFailed(m,e); });
+}
+
+/* PAINTING IS NOT FETCHING, and the two used to be one thing.
+   =========================================================================================
+   Five tiles sit above this table and three of them are questions for the DATABASE --
+   enrolled, locked, released are `state` on a row, so narrowing to one means a different
+   query and a new answer. The other two are not. "Hazijawahi kuongea" and "Kimya" are
+   judgements the server stamps onto each row as it sends it, so filtering by them is
+   arithmetic on rows the browser is ALREADY HOLDING.
+
+   Both kinds went through drawDevices, which blanks the pane to a skeleton and asks the
+   server again -- so clicking Kimya threw away a screen of rows, waited out a round trip,
+   and painted back the same bytes it had just discarded. On office wifi that is a blink; in
+   a room, on a borrowed connection, it is a second of grey where the fleet used to be, every
+   time somebody presses the tile you brought them there to look at.
+
+   So the fetch keeps the name and this holds the drawing. The body below is unchanged --
+   only its indentation moved, when it stopped living inside a .then().
+
+   WHAT THE SPLIT COSTS, said out loud rather than hidden. Re-painting shows the register as
+   of the last read, not as of now; the accidental refresh those two tiles used to perform is
+   gone with the round trip that caused it. That is the right trade -- filtering a list is a
+   view action and refreshing it is not the same thing -- but it is only honest if the screen
+   says WHEN it read, which is what `at` is for and what the line under the tiles prints.
+   Every chip, every state tile, and every action still fetches, so the way back to now is
+   never more than one click away. */
+function devPaint_(m, d, at){
+  var c=d.counts||{};
+  var chips=[['','Zote / all'],['enrolled','Enrolled'],['locked','Locked'],['released','Released'],['lost','Lost']];
+  // A chip reads as ON only when nothing else is filtering; otherwise two controls would
+  // both look live while only one of them is deciding what is on screen.
+  var chipOn=function(v){ return !DEV.flag && DEV.filter===v; };
+  /* THE FIVE TILES ARE THE FIVE LISTS, and clicking one filters the table under it.
+     Three of them are states the server can ask the database for; the other two --
+     "never spoke" and "silent" -- are judgements the server makes per row and hands down
+     as flags, so they filter here, on rows already loaded. Clicking the live one clears
+     it, which is the only way back to "zote" that does not need a second control. */
+  var byState=function(st){ return { on:DEV.filter===st&&!DEV.flag, cta:'chuja ›',
+    go:function(){ DEV.filter=(DEV.filter===st&&!DEV.flag?'':st); DEV.flag=''; drawDevices(m); } }; };
+  /* A FLAG TILE FILTERS ROWS THAT ARE ALREADY HERE, so it repaints instead of re-reading.
+     One exception: if a state chip is live, clearing DEV.filter WIDENS what the server would
+     send, and those extra rows are not in hand -- so that case still has to ask. */
+  var byFlag=function(f){ return { on:DEV.flag===f, cta:'chuja ›',
+    go:function(){
+      var widening=DEV.filter!=='';
+      DEV.flag=(DEV.flag===f?'':f); DEV.filter='';
+      if(widening) drawDevices(m); else devPaint_(m, d, at);
+    } }; };
+  var tiles='<div class="tiles">'
+    +tile('Zimesajiliwa',money(c.enrolled||0),'tayari, hazijafungwa',byState('enrolled'))
+    +tile('Zimefungwa',money(c.locked||0),
+      ((c.lockPending||0)?money(c.lockPending)+' bado hazijathibitisha':'zote zimethibitisha'),
+      Object.assign({color:((c.locked||0)?'bad':'')},byState('locked')))
+    +tile('Hazijawahi kuongea',money(c.neverSeen||0),'app haijafunguliwa',byFlag('neverSeen'))
+    +tile('Kimya / silent',money(c.stale||0),'zaidi ya saa 36',byFlag('stale'))
+    +tile('Zimeachiwa',money(c.released||0),'mkopo umeisha',
+      Object.assign({color:'ok'},byState('released')))
+    +'</div>';
+  var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;align-items:center">'
+    +chips.map(function(x){ return '<button class="btn sm'+(chipOn(x[0])?'':' ghost')+'" data-dvf="'+x[0]+'">'+x[1]+'</button>'; }).join('')
+    /* WHEN THIS WAS READ. The two flag tiles now repaint from rows already in hand instead of
+       fetching, which is what makes them instant -- and the cost of that is a register showing
+       the fleet as of a moment ago rather than as of now. A screen that is a little behind and
+       SAYS SO is honest; one that is a little behind and looks live is the thing this pane has
+       been fixed for twice already. Onyesha upya re-reads, and so does every chip. */
+    +'<span class="mut" style="font-size:11px">Ilisomwa '+esc(clock(at))+'</span>'
+    +'<button class="btn sm ghost" id="dvRefresh" title="Soma upya kutoka seva / re-read from the server">↻</button>'
+    +'<span style="flex:1"></span>'
+    +(BOOT.readOnly?'':'<button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button>')+'</div>';
+  /* neverSeen and stale ride on the row, so this fence is the same fact the tile counted
+     -- never a second definition of "silent" that could drift from the one in the tile. */
+  /* THE FENCE MUST BE THE TILE'S OWN ARITHMETIC, not something near it.
+     -------------------------------------------------------------------------------------
+     `r.stale` on a row means "not reporting" and INCLUDES a phone that has never spoken --
+     that is deliberate and tested, because it is what paints the clock red. The TILE beside
+     it counts something narrower on purpose: `stale && !neverSeen`, so the two tiles
+     partition the fleet instead of double-counting it.
+
+     Filtering on the bare flag therefore drew a different set from the one the tile had
+     counted, and the gap was widest in the state a demo is most likely to be in: a bench of
+     phones just enrolled, none of which has beaten yet. "Kimya / silent" read 0, and
+     clicking it opened the entire register. A tile that says none and then shows all is the
+     kind of thing an audience remembers. */
+  var rows=(d.rows||[]).filter(function(r){
+    if(!DEV.flag) return true;
+    if(DEV.flag==='stale') return r.stale===true && r.neverSeen!==true;
+    return r[DEV.flag]===true;
+  });
+  var table=rows.length
+    ? '<div class="scroll"><table><thead><tr>'
+      +'<th class="noxl"><input type="checkbox" id="dvAll" title="Chagua zote zinazoonekana / select all shown"></th>'
+      +'<th>IMEI</th><th>Item</th><th>Holder</th><th>Hali / state</th>'
+      +'<th>Uliagiza / last order</th>'
+      +'<th>Simu inasema</th><th>Iliongea lini</th><th class="noxl"></th></tr></thead><tbody>'
+      +rows.map(function(r){
+        var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
+          :r.state==='released'?'<span class="chip ok">imeachiwa</span>'
+          :r.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
+        /* THE TIME IT SPOKE, with the age underneath. The clock is what lets you place the
+           beat either side of the order you gave; the age is what makes a dead phone
+           obvious without doing arithmetic. Both, because they answer different questions,
+           and the red still belongs to the age's fact -- silence, not lateness. */
+        var age=agoMins(r.silentMins);
+        var seen=r.neverSeen?'<span class="mut">hajawahi</span>'
+          :(r.stale?'<span style="color:var(--bad)">':'<span>')+esc(clock(r.seenAt)||age)+'</span>'
+            +(age?'<div class="mut" style="font-size:10px">'+esc(age)+'</div>':'');
+        return '<tr><td class="noxl"><input type="checkbox" class="dvck" value="'+esc(r.imei)+'"></td>'
+          +'<td style="font-size:11px">'+esc(r.imei)+'</td><td>'+esc(r.item||'—')+'</td>'
+          +'<td>'+esc(r.holder||'—')+'</td><td>'+st+'</td>'
+          /* WHAT YOU LAST ORDERED, next to what the phone says about itself.
+             "simu inasema = locked but i just unlocked"
+             Those two columns disagreeing is normal for a moment and alarming without
+             this one: an unlock given ten seconds ago and one given yesterday mean
+             completely different things about a handset still reporting locked. The age
+             is what turns "is this broken" into "has it had time to hear me". */
+          +'<td>'+esc(r.lastOrder||'—')
+            +(r.orderAt||r.orderAgeMins!=null?'<div class="mut" style="font-size:10px">'
+              +esc(clock(r.orderAt)||agoMins(r.orderAgeMins))
+              +(r.orderBy?' · '+esc(r.orderBy):'')+'</div>':'')
+          +'</td>'
+          +'<td>'+esc(r.reported||'—')+devWhere(r)+'</td><td>'+seen+'</td>'
+          /* Historia is a read and stays for everyone. Token DISCLOSES A CREDENTIAL and
+             Futa erases a row -- the server treats both as writes, so a view-only code is
+             not offered either. */
+          +'<td class="r noxl">'
+          +(BOOT.readOnly?'':'<button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> ')
+          +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button>'
+          +(BOOT.readOnly?'':' <button class="btn sm danger" data-dvd="'+esc(r.imei)+'" title="Ondoa kwenye register / Remove from the register">Futa</button>')
+          +'</td></tr>';
+      }).join('')+'</tbody></table></div>'
+      /* THE TABLE STOPS AT 500 AND THE TILES DO NOT.
+         -----------------------------------------------------------------------------
+         deviceList sends the newest 500 rows and the count of ALL of them. The pane used
+         to read `rows` and ignore `total`, so a fleet of 640 showed five tiles adding up
+         to 640 above a table holding 500 -- with nothing on screen to say which number
+         was wrong. In front of a room, arithmetic that does not add up is the question
+         you get asked, and "the table is truncated" is only a good answer if the screen
+         said so first. */
+      +(devMore_(d)
+        ? '<div class="note" style="margin-top:8px">Jedwali linaonyesha '+money((d.rows||[]).length)
+          +' kati ya '+money(d.total)+'. Tumia vichujio hapo juu kupunguza. '
+          +'/ Showing '+money((d.rows||[]).length)+' of '+money(d.total)
+          +' — the tiles count them all; narrow with the filters above.</div>'
+        : '')
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">'
+      +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
+      /* A view-only code cannot change a device, and every one of these buttons answered
+         that with a 403 the operator had to press to discover. Permission is decided in
+         one place on the server; this only stops offering what it will refuse. */
+      +(BOOT.readOnly ? '<span class="mut" style="font-size:11px">View-only — huwezi kubadilisha hali. / no state changes from this code.</span>'
+        : '<button class="btn sm danger" data-dvs="locked">Funga / Lock</button>'
+        +'<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
+        +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'
+        +'<button class="btn sm ghost" data-dvs="lost">Imepotea / Write off</button>')
+      +'</div>'
+    : (d.notReady
+      /* NOT THE SAME THING as an empty register, and it must not read like one: nobody
+         would ever guess from "no devices yet" that the answer is to run a SQL file. */
+      ? '<div class="note bad">Jedwali la vifaa halijatengenezwa bado. Endesha '
+        +'<b>db/migrations/RUN-ME-2026-08-24-devices.sql</b> kwenye Supabase, kisha rudi hapa. '
+        +'/ The devices table has not been created yet — run that migration, then come back.</div>'
+      : '<div class="mut">Hakuna kifaa kwenye kundi hili. Bofya "Sajili simu" — weka IMEI kutoka ripoti ya stock. '
+        +'/ No devices here yet; enrol IMEIs from the stock report to begin.</div>');
+  m.innerHTML='<div class="card"><h2>Devices / Kufunga simu</h2>'
+    +'<div class="mut" style="margin-bottom:8px">Simu tulizozidhibiti, kwa IMEI. <b>Kuagiza kufunga si sawa na kufungwa</b> — '
+    +'simu ikishathibitisha ndipo inasomeka "imefungwa". App ya simu ikiwa bado haijajengwa, zote zitasoma "hajawahi kuongea". '
+    +'/ Ordering a lock is not the same as a confirmed lock.</div>'
+    +tiles+bar+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
+  wireTiles(m);
+  $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
+  var rf=$('#dvRefresh'); if(rf) rf.onclick=function(){ drawDevices(m); };
+  var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
+  $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
+  $all('[data-dvh]').forEach(function(b){ b.onclick=function(){ devHistory(b.getAttribute('data-dvh')); }; });
+  $all('[data-dvt]').forEach(function(b){ b.onclick=function(){ devToken(b.getAttribute('data-dvt')); }; });
+  $all('[data-dvd]').forEach(function(b){ b.onclick=function(){ devDelete(m, b.getAttribute('data-dvd')); }; });
+  devWireTicks_();
 }
 
 /* TICK ALL, AND THE COUNT BESIDE THE BUTTONS.
@@ -2922,6 +2965,10 @@ function devEnrolForm(m){
     srv('deviceEnrol',{imeis:v}).then(function(r){
       toast('Zimesajiliwa '+money(r.enrolled)
         +(r.alreadyOn?' · '+money(r.alreadyOn)+' zilikuwepo (token ile ile)':'')
+        /* A phone that had been released comes back as enrolled, so Funga works on it without
+           an override to argue with. It is a state change the operator did not ask for in so
+           many words, so it is named rather than done quietly. */
+        +(r.revived?' · '+money(r.revived)+' zimerudi kutoka "imeachiwa"':'')
         +(r.unknownToStock?' · '+money(r.unknownToStock)+' hazipo kwenye stock':''));
       /* THE TOKENS, ONCE. Each phone's credential goes into that phone at provisioning, so
          the station needs them at exactly this moment and nowhere else. They are not put on

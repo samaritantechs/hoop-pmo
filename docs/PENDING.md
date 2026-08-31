@@ -300,3 +300,63 @@ Two smaller things went with it: **every** unreachable IMEI is named rather than
 twenty (the client retries exactly the list it is handed, so a truncated one is a set of phones
 the override silently leaves unlocked), and `withApi` gained a third opt-in field on a refusal —
 a count, never a payload.
+
+---
+
+## 8. Achia, enrol it again, Funga
+
+> "all i need is to connect phone(s), copy cmd and lock, and unlock should work as long as i
+> have not achia.. if i achia and re-enloll the same phone pick its old imei so that funga works"
+
+**The identity half was already solved, and by a migration.** `device_tokens` remembers the
+string, so a handset that comes back is handed the token it is still carrying rather than a
+second one. That is what stops the register and the phone from disagreeing, and it holds.
+
+**The state half was not.** Achia leaves the row reading `released`. Re-enrolling only updated
+its batch, so the row stayed `released` — and Funga then hit the released-and-silent refusal.
+The operator had just re-provisioned that phone by cable, which is the one honest reason the
+override exists, and was made to argue with a warning about it anyway. A confirmation you
+dismiss on every phone is a confirmation nobody reads by the third one.
+
+Enrolling a handset **is** the statement that it is under our control again, so it is now
+recorded as one: `released` → `enrolled`, `released_at` cleared, and a row in Historia so
+*"why is this enrolled when I released it in March"* has an answer.
+
+**Only from `released`, and that limit is the whole safety of it.** A **locked** phone stays
+locked. If enrolment reset state generally, plugging a defaulter's dark handset into the bench
+and running the same command anyone can copy off the screen would quietly free it — a lock
+bypass with no decision behind it and nothing in the register to show one was made. `lost` is
+held for the same reason: writing a handset off is a judgement, and a cable is not an appeal.
+
+**No migration.** Every column involved has existed since the register did.
+
+### The bench round trip, end to end
+
+Enrol → Achia → enrol again → Funga is now one test, and it asserts the phone keeps `tok-p1`
+throughout. One caveat that is physics, not code: Achia makes the handset **drop Device
+Owner**, so re-enrolling it needs `dpm set-device-owner` to succeed again — which Android
+refuses if any account has been added to the phone since. That is a factory reset, and no
+amount of server code changes it.
+
+## 9. Clicking a tile stopped re-downloading the register
+
+`drawDevices` was one function: blank the pane, fetch, render. But only three of the five tiles
+are questions for the **database** — `enrolled`, `locked`, `released` are `state` on a row.
+The other two are not: **"Hazijawahi kuongea"** and **"Kimya / silent"** filter on flags the
+server stamps onto each row as it sends it, so narrowing to them is arithmetic on rows the
+browser is already holding.
+
+Both kinds went through the same path, so clicking Kimya threw away a screen of rows, waited
+out a round trip, and painted back the same bytes it had just discarded. On office wifi that is
+a blink; in a room on a borrowed connection it is a second of grey where the fleet used to be,
+every time somebody presses the tile you brought them there to look at.
+
+Split into `drawDevices` (fetch) and `devPaint_` (draw). The render body moved **verbatim** —
+proven byte-identical after a two-space dedent. The flag tiles repaint; everything else still
+fetches, including the one case where a flag tile has to: clearing a live state chip *widens*
+what the server would send, and those extra rows are by definition not in hand.
+
+**What the split costs, on screen rather than hidden.** Repainting shows the register as of the
+last read. So the chip bar now carries **`Ilisomwa 14:32`** and a **↻** button. A screen that is
+slightly behind and says so is honest; one that is slightly behind and looks live is the exact
+failure this pane has been fixed for twice.

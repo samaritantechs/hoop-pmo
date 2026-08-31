@@ -1107,3 +1107,57 @@ test('portal.html: sorting reads the value, not the value with its subline stuck
   assert.ok(!/td\.textContent\.trim\(\)/.test(fn),
     'and never the raw cell text that welded the two together');
 });
+
+/* =========================================================================================
+   PAINTING SPLIT OFF FROM FETCHING.
+   Three of the five tiles are questions for the database; two are arithmetic on rows the
+   browser already holds. Both kinds went through drawDevices, which blanks the pane and
+   re-reads -- so clicking Kimya discarded a screen of rows and painted back the same bytes.
+   ========================================================================================= */
+
+test('portal.html: drawDevices fetches, devPaint_ draws, and only one of them calls the server', () => {
+  const src = read('portal.html');
+  const fetchFn = src.slice(src.indexOf('function drawDevices(m){'),
+                            src.indexOf('/* PAINTING IS NOT FETCHING'));
+  assert.match(fetchFn, /srv\('deviceList'/, 'the fetch half still reads the register');
+  assert.match(fetchFn, /devPaint_\(m, d, Date\.now\(\)\)/,
+    'and hands the answer, with the time it arrived, to the paint half');
+  assert.match(fetchFn, /paneFailed\(m,e\)/, 'a failed read still reports as a failed pane');
+
+  const paint = src.slice(src.indexOf('function devPaint_(m, d, at){'),
+                          src.indexOf('function devVisibleTicks_'));
+  assert.ok(paint.length > 3000, 'the paint half is the body that used to live in the .then');
+  assert.ok(!/srv\(/.test(paint), 'drawing must never itself go to the server');
+});
+
+test('portal.html: a flag tile repaints, a state tile re-reads', () => {
+  /* neverSeen and stale are stamped on rows already in hand, so narrowing to them is
+     arithmetic. enrolled/locked/released change the QUERY, so they have to ask again. */
+  const src = read('portal.html');
+  const paint = src.slice(src.indexOf('function devPaint_(m, d, at){'),
+                          src.indexOf('function devVisibleTicks_'));
+
+  const flag = paint.slice(paint.indexOf('var byFlag='), paint.indexOf("var tiles='"));
+  assert.match(flag, /devPaint_\(m, d, at\)/, 'the flag tiles repaint from rows already loaded');
+  /* The one case that still must fetch: clearing a live state chip WIDENS what the server
+     would send, and the extra rows are by definition not in hand. */
+  assert.match(flag, /widening\s*=\s*DEV\.filter!==''/);
+  assert.match(flag, /if\(widening\)\s*drawDevices\(m\)/);
+
+  const state = paint.slice(paint.indexOf('var byState='), paint.indexOf('var byFlag='));
+  assert.match(state, /drawDevices\(m\)/, 'a state tile changes the query, so it re-reads');
+  assert.ok(!/devPaint_/.test(state), 'and must never satisfy itself from the old rows');
+});
+
+test('portal.html: the register says when it was read, and offers a way to read it again', () => {
+  /* Repainting instead of fetching means the screen can be a moment behind. That is the
+     right trade -- filtering a list is not the same act as refreshing it -- but only if the
+     screen says so, which is the failure mode this pane has been fixed for twice. */
+  const src = read('portal.html');
+  const paint = src.slice(src.indexOf('function devPaint_(m, d, at){'),
+                          src.indexOf('function devVisibleTicks_'));
+  assert.match(paint, />Ilisomwa '\+esc\(clock\(at\)\)/, 'the read time is printed, from `at`');
+  assert.match(paint, /id="dvRefresh"/, 'and there is a control that re-reads');
+  assert.match(paint, /rf\.onclick=function\(\)\{ drawDevices\(m\); \}/,
+    'which goes through the FETCH half, not the paint half');
+});
