@@ -265,7 +265,9 @@ public class EnrolReceiver extends BroadcastReceiver {
         }
         token = token.trim();
 
-        if (!fresh && !same) {
+        // Compared directly rather than through a `same` flag: that flag now lives in adopt(),
+        // which is the only place that needs to phrase the outcome.
+        if (!fresh && !existing.equals(token)) {
             // A DIFFERENT token: allowed, but only to somebody who can name the current one.
             String proof = intent.getStringExtra("current");
             if (proof == null || !existing.equals(proof.trim())) {
