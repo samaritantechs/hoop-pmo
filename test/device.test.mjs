@@ -867,3 +867,72 @@ test('reading the register does not ask for a column the table does not have', (
   assert.match(map, /devices:\s*'imei'/,
     'so the real key is named, and the first attempt is the only attempt');
 });
+
+test('one unreachable phone does not cancel the lock on the nineteen beside it', async () => {
+  /* THE WORST BUG THIS PANE HAD, and it hid behind a refusal that looks careful.
+
+     The released-and-silent check threw BEFORE touching anything, so one such handset among
+     twenty ticked ones refused the whole order and locked NONE of them. The client then did
+     the right thing with the wrong facts: it offered its confirmation and retried only the
+     phone the server had named. The other nineteen were never locked at all, and the toast
+     that followed read "Zimebadilishwa: 1" -- which an operator reads as the job being done.
+
+     Twenty customers' phones left open while the office believes they are shut. Three
+     separate comments -- on the client, on the server, and on the test above -- already
+     described the intended behaviour in the words "they were locked the first time". */
+  const freed = new Date(NOW - 3 * 3600000).toISOString();
+  const rows = [{ imei: 'GONE1', state: 'released', enrol_token: 't0',
+    released_at: freed, last_seen: new Date(NOW - 5 * 3600000).toISOString() }];
+  for (let i = 1; i <= 19; i++) {
+    rows.push({ imei: 'OK' + i, state: 'enrolled', enrol_token: 't' + i,
+      last_seen: new Date(NOW).toISOString() });
+  }
+  const d = fleet(rows);
+
+  await assert.rejects(
+    () => _FNS.deviceSetState(d, ADMIN,
+      { imeis: rows.map(r => r.imei), state: 'locked', reason: 'stock' }),
+    err => {
+      assert.equal(err.code, 'RELEASED_NOT_LISTENING');
+      assert.deepEqual(err.imeis, ['GONE1'], 'the question is about the phone it cannot reach');
+      assert.equal(err.changed, 19,
+        'and it carries what the click already did, so the dialog cannot imply nothing happened');
+      return true;
+    });
+
+  const after = d._dump('devices');
+  assert.equal(after.filter(r => r.state === 'locked').length, 19,
+    'every reachable phone is locked BEFORE the question about the one that is not');
+  assert.equal(after.find(r => r.imei === 'GONE1').state, 'released',
+    'and the one it asked about is untouched until the operator answers');
+});
+
+test('every unreachable phone is named, not the first twenty', async () => {
+  /* The client retries exactly the list it is handed, so a truncated one is a set of phones
+     the override silently leaves unlocked -- after the operator has said yes to locking them. */
+  const freed = new Date(NOW - 3 * 3600000).toISOString();
+  const rows = [];
+  for (let i = 1; i <= 25; i++) {
+    rows.push({ imei: 'GONE' + i, state: 'released', enrol_token: 't' + i,
+      released_at: freed, last_seen: new Date(NOW - 5 * 3600000).toISOString() });
+  }
+  const d = fleet(rows);
+  await assert.rejects(
+    () => _FNS.deviceSetState(d, ADMIN,
+      { imeis: rows.map(r => r.imei), state: 'locked', reason: 'x' }),
+    err => {
+      assert.equal(err.imeis.length, 25, 'all of them, or the override cannot cover them');
+      assert.equal(err.changed, 0, 'and nothing was reachable to lock');
+      return true;
+    });
+});
+
+test('a refusal can carry the count of what already succeeded', () => {
+  /* withApi forwards a deliberately narrow set of fields off a throw. `changed` is the third,
+     and without it the dialog on the client cannot say "19 already locked" -- it would ask
+     about one handset on a click that changed nineteen. */
+  const src = fs.readFileSync(new URL('../api/_lib/auth.js', import.meta.url), 'utf8');
+  const block = src.slice(src.indexOf('const extra = {}'), src.indexOf('res.status(status).json'));
+  assert.match(block, /typeof e\.changed === 'number'/);
+  assert.match(block, /extra\.imeis = e\.imeis/, 'and the rows it is about still travel too');
+});

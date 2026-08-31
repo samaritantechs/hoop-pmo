@@ -2876,13 +2876,22 @@ function devSend_(m, imeis, state, reason, force){
     devBusy_(false);
     var stuck=(e&&e.imeis)||[];
     if(!stuck.length||force){ toast(safeErr(e), true); return; }
-    if(!confirm('Simu iliyoachiwa haisikii tena.\n\n'+stuck.join('\n')+'\n\n'
+    /* WHAT THE CLICK ALREADY DID, BEFORE THE QUESTION IT COULD NOT ANSWER.
+       Every reachable phone is locked by the time this refusal arrives, so a dialog naming
+       one handset -- on a press that just locked nineteen -- would read as "nothing
+       happened". The count travels with the refusal for exactly this sentence. */
+    var done=(e&&typeof e.changed==='number')?e.changed:0;
+    // A dialog is not a table: name a few and say how many more, rather than filling a screen.
+    var show=stuck.slice(0,12).join('\n')
+      +(stuck.length>12?'\n… na nyingine '+(stuck.length-12)+' / and '+(stuck.length-12)+' more':'');
+    if(!confirm((done?'Simu '+done+' zimeshafungwa. / '+done+' already locked.\n\n':'')
+      +'Simu '+stuck.length+' iliyoachiwa haisikii tena:\n\n'+show+'\n\n'
       +'Iliachiwa (Achia) na haijaongea tangu wakati huo — ilishaacha kuwa chini ya udhibiti '
       +'na haitasikia agizo hili.\n\n'
       +'Bonyeza OK IKIWA unakwenda kuiweka app tena kwa kebo — agizo litakuwa linasubiri '
       +'itakapoamka.\n\n'
-      +'This phone was released and has not spoken since, so it is not listening. Press OK '
-      +'only if you are about to re-provision it by cable; the order will be waiting.')) return;
+      +'These were released and have not spoken since, so they are not listening. Press OK '
+      +'only if you are about to re-provision them by cable; the order will be waiting.')) return;
     devSend_(m, stuck, state, reason, true);
   });
 }
