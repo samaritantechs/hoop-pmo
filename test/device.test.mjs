@@ -936,3 +936,77 @@ test('a refusal can carry the count of what already succeeded', () => {
   assert.match(block, /typeof e\.changed === 'number'/);
   assert.match(block, /extra\.imeis = e\.imeis/, 'and the rows it is about still travel too');
 });
+
+/* =========================================================================================
+   ACHIA, ENROL IT AGAIN, FUNGA. The whole bench round trip, in one test.
+
+     "all i need is to connect phone(s), copy cmd and lock, and unlock should work as long as
+      i have not achia.. if i achia and re-enloll the same phone pick its old imei so that
+      funga works"
+
+   The identity half was already solved by a migration: device_tokens remembers the string, so
+   a handset that comes back gets the token it is still carrying rather than a second one.
+
+   The STATE half was not. Achia leaves the row reading `released` and re-enrolling only
+   updated its batch -- so Funga afterwards hit the released-and-silent refusal and made the
+   operator dismiss a warning about re-provisioning a phone they had just re-provisioned.
+   ========================================================================================= */
+test('a released phone that is enrolled again comes back locked-able, with its own token', async () => {
+  const d = fleet([{ imei: 'P1', state: 'enrolled', enrol_token: 'tok-p1',
+    last_seen: new Date(NOW - 60000).toISOString() }]);
+
+  // Achia.
+  await _FNS.deviceSetState(d, ADMIN, { imeis: ['P1'], state: 'released' });
+  let row = d._dump('devices')[0];
+  assert.equal(row.state, 'released');
+  assert.ok(row.released_at, 'and it is stamped with when, which is what the stale check reads');
+
+  // Funga now is refused, and rightly: it dropped Device Owner and stopped calling home.
+  await assert.rejects(
+    () => _FNS.deviceSetState(d, ADMIN, { imeis: ['P1'], state: 'locked', reason: 'x' }),
+    e => e.code === 'RELEASED_NOT_LISTENING');
+
+  // Enrol it again -- the cable job the override exists for.
+  const en = await _FNS.deviceEnrol(d, ADMIN, { imeis: 'P1' });
+  assert.equal(en.enrolled, 0, 'not a new phone');
+  assert.equal(en.alreadyOn, 1);
+  assert.equal(en.revived, 1, 'and the screen is told the row came back from "imeachiwa"');
+  assert.equal(en.provision[0].token, 'tok-p1',
+    'the handset keeps the credential it is still carrying');
+  assert.equal(en.provision[0].fresh, false, 'and is shown as known, not as a new phone');
+
+  row = d._dump('devices')[0];
+  assert.equal(row.state, 'enrolled', 'enrolling IS the statement that it is ours again');
+  assert.equal(row.released_at, null, 'nothing left behind for the stale check to read');
+  assert.equal(row.enrol_token, 'tok-p1', 'and its identity is untouched');
+
+  // Which is the whole point: Funga now just works, with no override to argue with.
+  const lock = await _FNS.deviceSetState(d, ADMIN, { imeis: ['P1'], state: 'locked', reason: 'arrears' });
+  assert.equal(lock.changed, 1);
+  assert.equal(d._dump('devices')[0].state, 'locked');
+
+  // And it is in the history as a state change, not as a silent edit.
+  const hist = await _FNS.deviceHistory(d, ADMIN, { imei: 'P1' });
+  assert.ok(hist.events.some(e => e.from_state === 'released' && e.to_state === 'enrolled'),
+    '"why is this enrolled when I released it in March" is answered by a row');
+});
+
+test('enrolling a LOCKED phone again does not unlock it', async () => {
+  /* The limit that makes the above safe. If enrolment reset state generally, then plugging a
+     defaulter's dark handset into the bench and running the same command anyone can copy off
+     the screen would quietly free it -- a lock bypass with no decision behind it and nothing
+     in the register to show one was made. `lost` is held for the same reason: writing a
+     handset off is a judgement, and a cable is not an appeal. */
+  const d = fleet([
+    { imei: 'L1', state: 'locked', enrol_token: 'tl', state_reason: 'arrears' },
+    { imei: 'X1', state: 'lost', enrol_token: 'tx', state_reason: 'stolen' },
+  ]);
+  const r = await _FNS.deviceEnrol(d, ADMIN, { imeis: 'L1 X1' });
+  assert.equal(r.revived, 0, 'neither of these is a release coming back');
+
+  const rows = d._dump('devices');
+  assert.equal(rows.find(x => x.imei === 'L1').state, 'locked', 'a cable is not an unlock');
+  assert.equal(rows.find(x => x.imei === 'L1').state_reason, 'arrears',
+    'and the reason it was locked survives');
+  assert.equal(rows.find(x => x.imei === 'X1').state, 'lost');
+});

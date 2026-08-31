@@ -1677,11 +1677,11 @@ const FNS = {
        So a known IMEI comes back with the token it already has. Same phone, same identity,
        one command, nothing on the handset to change. */
     const [already, stock] = await Promise.all([
-      fetchAll(() => db.from('devices').select('imei, enrol_token').in('imei', list))
+      fetchAll(() => db.from('devices').select('imei, enrol_token, state').in('imei', list))
         .catch(e => {
           // Pre-migration registries have no enrol_token; enrolling must still work.
           if (!/enrol_token/.test(String(e && e.message || ''))) throw e;
-          return fetchAll(() => db.from('devices').select('imei').in('imei', list));
+          return fetchAll(() => db.from('devices').select('imei, state').in('imei', list));
         }),
       fetchAll(() => db.from('hoop_aged_stock').select('serial, item, agent, as_of').in('serial', list)),
     ]);
@@ -1774,8 +1774,61 @@ const FNS = {
       else if (error) throw new Error(error.message);
     }
 
+    /* ACHIA, THEN ENROL IT AGAIN, AND FUNGA HAS TO JUST WORK.
+       =====================================================================================
+         "unlock should work as long as i have not achia.. if i achia and re-enloll the same
+          phone pick its old imei so that funga works"
+
+       The identity half of that was already solved, and by a migration: device_tokens
+       remembers the string, so a handset that comes back gets the token it already carries
+       instead of a second one. That part holds.
+
+       What did not was the STATE. Achia leaves the row reading `released`, and re-enrolling
+       only updated its batch -- so the row was still `released` afterwards, and Funga hit the
+       released-and-silent refusal. The operator had just re-provisioned that phone by cable,
+       which is the one honest reason the override exists, and was made to argue with a
+       warning about it anyway. A confirmation you have to dismiss every single time is a
+       confirmation nobody reads by the third phone.
+
+       Enrolling a handset IS the statement that it is under our control again, so it is
+       recorded as one.
+
+       ONLY FROM `released`, AND THAT LIMIT IS THE WHOLE SAFETY OF THIS.
+       -------------------------------------------------------------------------------------
+       A LOCKED phone stays locked. Somebody's loan is in arrears and their handset is dark;
+       if enrolment reset state generally, then plugging that phone in and running the same
+       bench command anyone can copy would quietly free it -- a lock bypass with no decision
+       behind it and nothing in the register to show one was made. `lost` stays `lost` for the
+       same reason: writing a handset off is a judgement, and a cable is not an appeal.
+
+       So: released -> enrolled, and nothing else moves. No migration -- every column here has
+       existed since the register did. */
+    const revive = already
+      .filter(r => String(r.state) === 'released')
+      .map(r => String(r.imei))
+      .filter(i => list.includes(i));
+    if (revive.length) {
+      const { error } = await db.from('devices').update({
+        state: 'enrolled', state_reason: null, state_by: user.name, state_at: at,
+        // It is not released any more, and a released_at left behind on a row that is not
+        // released is exactly what the stale check in deviceSetState reads.
+        released_at: null, updated_at: at,
+      }).in('imei', revive);
+      if (error) throw new Error(error.message);
+      /* It goes in the history like any other state change. "Why is this phone enrolled when
+         I released it in March" is a real question, and the answer is a row, not a shrug. */
+      const { error: eErr } = await db.from('device_events').insert(revive.map(imei => ({
+        imei, event: 'enrolled', from_state: 'released', to_state: 'enrolled',
+        reason: 'imesajiliwa upya / re-enrolled', actor: user.name, at })));
+      if (eErr) throw new Error(eErr.message);
+    }
+
     return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length,
       unknownToStock: fresh.filter(i => !stockBy.has(i)).length,
+      /* Said out loud on the screen, because it is a state change the operator did not
+         explicitly ask for -- they asked to enrol. Silently un-releasing rows would be the
+         right behaviour reported as nothing at all. */
+      revived: revive.length,
       batch, batchReady,
       /* FOR THE PROVISIONING STATION ONLY, and in the order the operator typed the IMEIs so
          a paper list can be worked down without hunting. `fresh` says whether this is a new
