@@ -2667,6 +2667,75 @@ const FNS = {
       pressing a switch about something else entirely.
 
       This touches one column and can lose nothing else. */
+  /* =========================================================================================
+     CHANGING YOUR OWN PASSCODE, FROM THE SIGN-IN SCREEN.
+
+       "i want created users with these rolebased access codes .. can update their passcodes at
+        loginpage by iputing current one and double input new one to overwrite"
+
+     THE CURRENT CODE IS THE AUTHENTICATION. There is no session to change a code inside of --
+     the point is to do it at the door -- so the caller proves who they are the only way this
+     system knows how: by presenting the code that is about to be replaced. portalApi has
+     already resolved it into `user` before this runs, which is exactly what makes it safe.
+
+     IT CAN ONLY EVER CHANGE THE CALLER'S OWN ROW. The new code is the only thing taken from
+     the arguments; whose code changes comes from `user.code` and cannot be steered. That is
+     the difference between this and saveAccessCode, which is an admin tool that can rename
+     anybody and is gated on requireSettings.
+
+     TYPED TWICE, COMPARED HERE. The second box is checked on the server as well as on the
+     screen, because a browser is not the only thing that can post to this endpoint and a
+     typo that locks somebody out of a system they need is not recoverable by them.
+
+     THE NEW CODE NEVER REACHES THE AUDIT LOG. The arguments are deliberately named `next` and
+     `again` rather than `code`: KEEP in _lib/audit.js records anything called `code`, and an
+     audit row carrying somebody's live passcode would be a credential sitting in a table that
+     the audit nav can be granted on. The actor's OLD code identifies who did it, and by the
+     time anybody reads the line that code no longer opens anything.
+     ========================================================================================= */
+  async changeMyCode(db, user, args) {
+    requireWrite(user);
+    const a = args || {};
+    const next = String(a.next || '').trim();
+    const again = String(a.again || '').trim();
+
+    if (!next) bad('Weka msimbo mpya. / Enter a new code.');
+    if (next !== again) {
+      bad('Misimbo miwili haifanani. / The two new codes do not match.');
+    }
+    /* Short enough to type on a phone, long enough not to be guessed by somebody watching the
+       queue. Eight is the shortest that is not trivially brute-forced by hand. */
+    if (next.length < 8) {
+      bad('Msimbo mpya uwe na herufi 8 au zaidi. / The new code must be at least 8 characters.');
+    }
+    if (/\s/.test(next)) {
+      bad('Msimbo usiwe na nafasi. / The code cannot contain spaces.');
+    }
+    if (next === user.code) {
+      bad('Msimbo mpya ni ule ule wa zamani. / That is the code you already have.');
+    }
+
+    /* CASE-INSENSITIVELY TAKEN IS STILL TAKEN. authCode falls back to a case-insensitive match
+       when the exact one misses, so allowing "credit1" beside "CREDIT1" would create a pair
+       that the door refuses to choose between -- and BOTH people would be told their code is
+       invalid. Checked before the write rather than left to a unique index, which is on the
+       exact string only. */
+    const clash = await fetchAll(() => db.from('access_codes').select('code')
+      .ilike('code', String(next).replace(/([\\%_])/g, '\\$1')));
+    if (clash.some(r => String(r.code) !== String(user.code))) {
+      bad('Msimbo huo tayari unatumika. Chagua mwingine. / That code is already in use — pick another.');
+    }
+
+    const { data, error } = await db.from('access_codes')
+      .update({ code: next }).eq('code', user.code).select('code');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) {
+      bad('Msimbo wa sasa haupo. / The current code no longer exists.');
+    }
+    // The caller must sign in again with the new one; nothing here hands back a session.
+    return { ok: true };
+  },
+
   async accessCodeLeader(db, user, args) {
     requireWrite(user); requireSettings(user);
     const code = String((args && args.code) || '').trim();

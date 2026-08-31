@@ -383,6 +383,21 @@ body.dark .tabs button.on{background:var(--b700);color:#fff}
     <input class="inp" type="password" id="inCode" placeholder="Access code" autocomplete="off">
     <div class="err" id="inErr"></div>
     <button class="btn w" id="inBtn">Ingia / Sign in</button>
+    <button class="btn w ghost" id="inChg" style="margin-top:8px">Badilisha msimbo / Change my code</button>
+
+    <!-- CHANGING YOUR OWN CODE HAPPENS AT THE DOOR, because that is the only place somebody
+         who wants to change it can be: they are not inside yet, and the current code is what
+         proves who they are. Hidden until asked for, so the ordinary act of signing in stays
+         one box and one button. -->
+    <div id="chgBox" class="hide" style="margin-top:12px;text-align:left">
+      <input class="inp" type="password" id="chgNow" placeholder="Msimbo wa sasa / Current code" autocomplete="off">
+      <input class="inp" type="password" id="chgNew" placeholder="Msimbo mpya / New code" autocomplete="off" style="margin-top:6px">
+      <input class="inp" type="password" id="chgNew2" placeholder="Rudia msimbo mpya / Repeat new code" autocomplete="off" style="margin-top:6px">
+      <div class="err" id="chgErr"></div>
+      <div class="mut" style="font-size:11.5px;margin-top:6px">Herufi 8 au zaidi, bila nafasi. Baada ya kubadilisha utaingia na mpya. / At least 8 characters, no spaces. You sign in with the new one afterwards.</div>
+      <button class="btn w" id="chgGo" style="margin-top:8px">Hifadhi msimbo / Save code</button>
+      <button class="btn w ghost" id="chgCancel" style="margin-top:6px">Ghairi / Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -1391,6 +1406,39 @@ $('#inBtn').onclick=function(){
   });
 };
 $('#inCode').addEventListener('keydown',function(e){ if(e.key==='Enter') $('#inBtn').onclick(); });
+
+/* CHANGE MY CODE. srv() sends whatever CODE currently holds, so the current code is set into
+   it for exactly this one call and put back afterwards -- a failed attempt must not leave the
+   sign-in box authenticating as something the person did not type. */
+$('#inChg').onclick=function(){
+  var box=$('#chgBox'), open=!box.classList.contains('hide');
+  box.classList.toggle('hide', open);
+  $('#inChg').textContent=open?'Badilisha msimbo / Change my code':'Ficha / Hide';
+  if(!open) $('#chgNow').focus();
+};
+$('#chgCancel').onclick=function(){ $('#inChg').onclick(); };
+$('#chgGo').onclick=function(){
+  var now=$('#chgNow').value.trim(), a=$('#chgNew').value.trim(), b=$('#chgNew2').value.trim();
+  var err=$('#chgErr');
+  var fail=function(msg){ err.textContent=msg; err.style.display='block'; };
+  err.style.display='none';
+  if(!now||!a||!b) return fail('Jaza visanduku vyote vitatu. / Fill all three boxes.');
+  // Checked here for a fast answer, and again on the server, which is where it counts.
+  if(a!==b) return fail('Misimbo miwili mipya haifanani. / The two new codes do not match.');
+  if(a.length<8) return fail('Msimbo mpya uwe na herufi 8 au zaidi. / At least 8 characters.');
+  var btn=$('#chgGo'); btn.disabled=true;
+  var was=CODE; CODE=now;
+  srv('changeMyCode',{next:a,again:b}).then(function(){
+    CODE='';
+    $('#chgNow').value=''; $('#chgNew').value=''; $('#chgNew2').value='';
+    $('#inChg').onclick();                      // close the panel
+    $('#inCode').value=''; $('#inCode').focus();
+    btn.disabled=false;
+    toast('Msimbo umebadilishwa — ingia na mpya. / Code changed — sign in with the new one.');
+  }).catch(function(e){
+    CODE=was; btn.disabled=false; fail(safeErr(e));
+  });
+};
 
 /* =======================================================================================
    THE NAV, AS ONE LIST.
@@ -2868,6 +2916,38 @@ function devProvision(m, r){
     +'<textarea id="dvAdb" rows="'+(one?5:Math.min(14,Math.max(4,p.length*2)))+'" readonly '
     +'style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'+esc(cmds)+'</textarea>'
     +'<button class="btn w" id="dvAdbCopy">Nakili amri / Copy the command'+(one?'':'s')+'</button>'
+    /* ONE BUTTON PER PHONE, AND IT REMEMBERS WHERE YOU GOT TO.
+       =====================================================================================
+         "my concern was getting a multi-device token cmd to go and run in cmd-like am
+          copying one when i add one device just before doing anything else"
+
+       A single command for the whole batch is not possible safely, and the reason is three
+       hundred lines up in api/_lib/device-core.js: the server deliberately does NOT check the
+       IMEI a handset reports against the one the token was minted for, because a dual-SIM
+       phone has two IMEIs and the API for reading them changed shape across the Android
+       versions this stock spans -- an honest phone reading the wrong slot looked exactly like
+       an attack. Nothing downstream would catch a phone that received the wrong phone's
+       token; the register would simply record its beats under the wrong IMEI, and the way
+       back is a factory reset.
+
+       So the pairing has to be made by a person, one handset at a time. What was wrong was
+       never the one-at-a-time part -- it was making them find their place in a wall of text
+       twenty lines long, select exactly one line without catching the next, and remember
+       which ones were done. Each phone now gets its own row and its own button: press, plug,
+       enter, next. The row greys out once copied, so the place is kept for you. */
+    +(one?'' : '<div class="sub" style="margin-top:14px">Kwa kila simu: bofya <b>Nakili</b>, '
+      +'unganisha simu, bandika, enter. Safu hufifia ikishanakiliwa. / For each phone: press '
+      +'<b>Nakili</b>, plug that handset in, paste, enter. The row fades once copied, so you '
+      +'keep your place.</div>'
+      +'<div id="dvRows">'+p.map(function(x,i){
+        return '<div class="row" data-dvrow="'+i+'" style="align-items:center;gap:8px;'
+          +'padding:6px 0;border-bottom:1px solid var(--line)">'
+          +'<span class="mut" style="min-width:28px;font-size:11px">'+(i+1)+'/'+p.length+'</span>'
+          +'<span class="code" style="flex:1;font-size:12px">'+esc(x.imei)+'</span>'
+          +(x.fresh===false?'<span class="chip">tayari</span>':'')
+          +'<button class="btn sm" data-dvcopy="'+i+'">Nakili / Copy</button>'
+          +'</div>';
+      }).join('')+'</div>')
     /* The IMEI-to-token list stays for MANY phones and goes for one, because with a single
        handset the token is already inside the command above and a second box holding the
        same string was exactly the confusion that got the Token drawer cut down to one. */
@@ -2882,6 +2962,23 @@ function devProvision(m, r){
     +'<b>ENROLLED</b>. / The line that matters is the last one: <b>result=1 … ENROLLED</b>.</div>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
   $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
+  /* Copies THAT phone's finished command -- built from the same devOneLiner as the block
+     above, so the two can never disagree -- and marks the row done. */
+  $all('[data-dvcopy]').forEach(function(b){
+    b.onclick=function(){
+      var x=p[Number(b.getAttribute('data-dvcopy'))]; if(!x) return;
+      var ta=document.createElement('textarea');
+      ta.value=devOneLiner(x.token);
+      ta.style.cssText='position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); toast('Imenakiliwa · '+x.imei); }
+      catch(e){ toast('Chagua na nakili mwenyewe. / Select and copy manually.', true); }
+      ta.remove();
+      var row=b.closest('[data-dvrow]');
+      if(row){ row.style.opacity='.45'; }
+      b.className='btn sm ghost'; b.textContent='Imenakiliwa / copied';
+    };
+  });
   if($('#dvTokCopy')) $('#dvTokCopy').onclick=function(){ devCopyBox('dvTok'); };
   $('#dvTokDone').onclick=function(){ closeDrawer(); drawDevices(m); };
 }
