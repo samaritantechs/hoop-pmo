@@ -801,3 +801,69 @@ test('enrolling puts every phone in the call into one claimable batch', async ()
     [{ batch: r.batch, imeis: ['111111111111111'] }], Date.now());
   assert.equal(got.token, 'kept');
 });
+
+/* =========================================================================================
+   THE SECOND SWEEP OF THE DEVICES PANE, ahead of the presentation.
+
+     "please re-inspect all the devices pane functions are good and effecient: am going to
+      presentation and more shocks like the directors meeting is unbearable"
+
+   None of what follows is a crash. Every one of them is the pane stating something with
+   confidence that is not true -- a clock three hours out, a table quietly shorter than the
+   tiles above it, a count beside an irreversible button that stopped being the number of
+   phones it is about to act on. In a room, those are worse than an error, because an error
+   is at least visibly an error.
+   ========================================================================================= */
+
+test('history times go out as numbers, on the same clock as the row above them', async () => {
+  /* device_events.at is a timestamptz and PostgREST hands it back as UTC text. The panel used
+     to print that text, while the register row directly above it renders last_seen through
+     clock(), which is fed milliseconds and is therefore local. Dar es Salaam is UTC+3, so the
+     one panel you open to prove WHEN a lock was ordered disagreed with the row above it by
+     three hours -- on the same screen, at the same moment. */
+  const d = fleet([{ imei: 'D1', state: 'enrolled', enrol_token: 't' }]);
+  d._dump('device_events').push({
+    id: 'e1', imei: 'D1', event: 'enrolled', from_state: null, to_state: 'enrolled',
+    reason: 'x', actor: 'Peter', at: '2026-08-24T09:30:00Z' });
+
+  const hist = await _FNS.deviceHistory(d, ADMIN, { imei: 'D1' });
+  const ev = hist.events[0];
+  assert.equal(typeof ev.atMs, 'number', 'the panel is fed a number it cannot misread');
+  assert.equal(ev.atMs, Date.parse('2026-08-24T09:30:00Z'));
+  assert.equal(ev.at, '2026-08-24T09:30:00Z',
+    'and the original text stays on the row -- removing a field to fix a rendering bug breaks '
+    + 'callers to save nothing');
+});
+
+test('a truncated history says how much of it you are looking at', async () => {
+  /* .limit(100) never worked here: fetchAll pages with .range(), which overwrites the Range
+     header limit() had set. So the cap was imaginary AND unstated. It is now applied where it
+     actually applies, and the count of what was left out goes with it. */
+  const d = fleet([{ imei: 'D1', state: 'enrolled', enrol_token: 't' }]);
+  const evs = d._dump('device_events');
+  for (let i = 0; i < 130; i++) {
+    evs.push({ id: 'e' + i, imei: 'D1', event: 'lock', at: '2026-08-24T09:00:00Z' });
+  }
+  const hist = await _FNS.deviceHistory(d, ADMIN, { imei: 'D1' });
+  assert.equal(hist.events.length, 100, 'the newest hundred');
+  assert.equal(hist.total, 130, 'and the pane is told there were more, so it can say so');
+});
+
+test('reading the register does not ask for a column the table does not have', () => {
+  /* devices is keyed by IMEI and has NO id column. pageKeyFor defaults to `id` for any table
+     not named in PAGE_KEY, so every read of the register asked PostgREST to order by a column
+     that does not exist -- a certain 400, absorbed by fetchAll's fallback and then re-issued
+     unordered. Nothing broke, which is why it survived: it only ever cost a wasted round trip
+     per read, on the busiest pane in the system and on every heartbeat that looks a phone up. */
+  const sql = fs.readFileSync(
+    new URL('../db/migrations/RUN-ME-2026-08-24-devices.sql', import.meta.url), 'utf8');
+  const table = sql.slice(sql.indexOf('create table if not exists devices'));
+  const body = table.slice(0, table.indexOf(');'));
+  assert.ok(/imei\s+text primary key/.test(body), 'the key is the IMEI');
+  assert.ok(!/^\s*id\s/m.test(body), 'and there is no id column for the default to have found');
+
+  const supa = fs.readFileSync(new URL('../api/_lib/supabase.js', import.meta.url), 'utf8');
+  const map = supa.slice(supa.indexOf('const PAGE_KEY'), supa.indexOf('/** The table a built'));
+  assert.match(map, /devices:\s*'imei'/,
+    'so the real key is named, and the first attempt is the only attempt');
+});

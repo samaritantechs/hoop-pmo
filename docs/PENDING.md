@@ -212,3 +212,63 @@ The save tries three routes, best first, and the middle one is the easy one to l
 
 You export **what you see**: rows hidden by a column filter or a search box stay out of the
 file, and control cells (tick boxes, action buttons) are never exported as data.
+
+---
+
+## 7. The Devices pane, re-read before the presentation
+
+> "please re-inspect all the devices pane functions are good and effecient: am going to
+> presentation and more shocks like the directors meeting is unbearable"
+
+An adversarial sweep of every function this pane calls. Nothing below was a crash — all of it
+was the pane **stating something with confidence that was not true**, which in front of a room
+is worse than an error, because an error is at least visibly an error.
+
+### What the screen was getting wrong
+
+- **Historia ran three hours behind the row above it.** `device_events.at` is a timestamptz and
+  PostgREST hands it over as UTC text; the panel printed that text, while the register row
+  directly above renders `last_seen` through `clock()`, which is fed milliseconds and is
+  therefore local. Dar es Salaam is UTC+3. The one panel you open to prove *when* a lock was
+  ordered and when the handset confirmed it disagreed with the row above it, on the same
+  screen, at the same moment. The server now sends `atMs`, like every other time in this system.
+- **The table stopped at 500 and the tiles did not.** `deviceList` sends the newest 500 rows and
+  a count of all of them; the pane read `rows` and ignored `total`. A fleet of 640 showed tiles
+  adding to 640 above a table holding 500, with nothing on screen to say which number was the
+  truncated one. It now says so.
+- **The count beside Funga went stale under a column funnel.** Ticks are scoped to visible rows
+  on purpose — you act on what you see — so hiding a ticked row drops it from what Funga will
+  touch. The tick handlers resync the count; the funnel is not a tick handler. "Zilizochaguliwa:
+  35" could sit beside a button about to darken nine.
+- **Achia asked nothing.** Funga and Imepotea both stop to demand a reason. Achia — which tells
+  the handset to drop Device Owner and stop calling home, undoable only with a cable and the
+  phone in hand — fired on the first click, on however many rows were ticked. It now confirms,
+  and names the number.
+- **The bulk buttons stayed live during the request**, so a double-click sent the order twice:
+  two rows in Historia for one decision, and a second toast reading "Zimebadilishwa: 0".
+- **Sorting "Iliongea lini" sorted on `"14:3236h"`** — the clock and its grey age subline welded
+  together by `textContent`, leaving the column ordered by a leading `14`. The sort now reads
+  the same value the funnel on that header already reads.
+- **A view-only code got every write button** — Funga, Achia, Fungua, Imepotea, Token, Futa,
+  Enrol — and discovered the 403 by pressing it. Historia is a read and stays for everyone.
+- **"The line that matters is the last one" was wrong for the hub command.** One phone ends in
+  one broadcast; the hub command broadcasts once *per handset* and prints a result line for
+  each. An operator with nine phones told to read the last line reads one, calls the bench
+  finished, and discovers the other eight missing later. It now says how many `ENROLLED` lines
+  to count.
+- **Historia opened below the whole table**, which on a long register is off-screen — so the
+  button read as doing nothing. It scrolls to what it opened.
+
+### What it was doing wastefully
+
+- **Every read of the register fired a guaranteed-failing query first.** `devices` is keyed by
+  IMEI and has no `id` column, but `PAGE_KEY` had no entry for it, so the paging tiebreaker
+  defaulted to `id` and asked PostgREST to order by a column that does not exist. `fetchAll`
+  caught the 400 and re-read the table unordered, exactly as designed — so nothing broke and
+  nobody saw it. The cost was two round trips for every read, one of them certain to fail, on
+  the busiest pane in the system and on every heartbeat that looks a handset up.
+- **`deviceHistory`'s `.limit(100)` never applied** — `fetchAll` pages with `.range()`, which
+  overwrites the Range header `limit()` set. The cap now applies where it actually works, and
+  the pane is told the total so a truncated history says so.
+
+No migration. The register itself is unchanged.
