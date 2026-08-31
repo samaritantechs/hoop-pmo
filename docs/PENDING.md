@@ -72,3 +72,61 @@ name + phone + location, the phone must match `hoop_agents`, and the app shows o
 customers whose register row names them. Unknown phone = empty book (fails closed) with a
 note to ask the office. Distribution stays CREDIT-only — agents never join the deal.
 Remaining refinement if wanted later: an agent portal view of their sales/commissions.
+
+## 6. SHIPPED 2026-08-31: salary advance — ask, decide, pay
+
+Three navs, because they are three different jobs done by three different people. Grant them
+in **Portal → Access codes → roles**, one tick each; holding one says nothing about the others.
+
+| nav | pane | who |
+|---|---|---|
+| `advreq` | Omba advance / Advance request | anybody with a portal code you tick it on |
+| `advappr` | Idhini ya advance / Advance approval | the leaders who decide |
+| `advrep` | Ripoti ya advance / Advance report | HR — the filing copy and the bank run |
+
+**RUN THE MIGRATION FIRST — `db/migrations/RUN-ME-2026-08-29-salary-advance.sql`.** Until it is
+run, every one of the three panes says so in plain words rather than showing an empty table,
+because "no rows" and "no table" must never look the same on a screen about money.
+
+Four amounts only — 50,000 / 100,000 / 150,000 / 200,000 — enforced on the server as well as in
+the dropdown. The requester supplies their own bank or mobile-money details at the moment of
+asking, because they are the only person who knows them and a row without them stops HR's
+payment run while somebody makes a phone call.
+
+**Two figures, kept apart on purpose.** The approver's drawer opens pre-set to the full amount
+requested and can be lowered but never raised, and `approved_amount` is its own column — so the
+report shows what was asked AND what was granted. Overwriting one with the other would destroy
+the record of a part-approval, which is exactly the gap somebody argues about at the counter.
+
+Two financial controls worth knowing about, both enforced on the server:
+
+- **Nobody decides their own request**, however many navs they hold. A leader who may approve
+  can also ask, so the two panes meet on one person by design; this is the line between them.
+- **Two approvers pressing at once**: the update is guarded on `status='pending'`, so the second
+  is told it was already decided rather than silently overwriting the first decision.
+
+Identity is **stamped, never joined** — HOOP has no staff table, a person is the access code
+they signed in with, and a payment record that rewrote itself when a code was renamed or deleted
+would not be a record.
+
+The report opens on the **current month** (start and end of month already in the two date boxes)
+and can be widened, narrowed by status, or set to all dates. Its total counts **approved rows
+only** — the only figure safe to hand a cashier.
+
+### Exports, including on a phone
+
+Every table in the portal now carries **⤓ Excel** and **⤓ PDF**, and both save inside the
+Android app as well as in a browser. The PDF is written by the page itself — no third-party
+script is loaded anywhere in this portal — landscape, with the column headers reprinted on
+every page.
+
+The save tries three routes, best first, and the middle one is the easy one to lose:
+
+1. `HoopLoan.saveBase64` — the wrapper writes straight into the phone's Downloads folder.
+2. The **share sheet**, for handsets on an older APK with no `saveBase64` yet. Without this rung
+   those officers fall to route 3, which inside a WebView is a dead end, and a report that
+   exported last week would quietly stop coming out.
+3. An ordinary browser download.
+
+You export **what you see**: rows hidden by a column filter or a search box stay out of the
+file, and control cells (tick boxes, action buttons) are never exported as data.

@@ -50,6 +50,13 @@ export const AUDITED = new Set([
   'addRestructure', 'decideRestructure', 'addDemandNotice',
   // destructive maintenance
   'purgeSnapshots', 'purgeSuperseded', 'followupClean',
+  /* SALARY ADVANCE -- money, so both ends of it are logged. advRequest records that somebody
+     asked; advDecide records who granted or refused it. Neither the amount nor the bank
+     details reach this table: KEEP below drops everything it is not told to keep, and an
+     audit log readable by whoever holds the switch must never become a second copy of the
+     payroll. Who decided on which request is what a supervisor needs; the figures live in
+     staff_advances, behind the advrep nav. */
+  'advRequest', 'advDecide',
 ]);
 
 /** The ONLY argument fields that ever reach the table. Anything not named here is dropped --
