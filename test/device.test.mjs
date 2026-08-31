@@ -1010,3 +1010,81 @@ test('enrolling a LOCKED phone again does not unlock it', async () => {
     'and the reason it was locked survives');
   assert.equal(rows.find(x => x.imei === 'X1').state, 'lost');
 });
+
+/* =========================================================================================
+   THE TOKEN MEMORY, ACTUALLY EXERCISED.
+
+     "Means we never lose record of an imei token even if futa"
+
+   True, and it now has a round-trip test rather than a grep of the source. Two holes were
+   found under it while checking that claim, and both are closed here.
+   ========================================================================================= */
+
+test('futa remembers the token, and re-enrolling that IMEI hands the same one back', async () => {
+  const d = fleet([{ imei: 'F1', state: 'enrolled', enrol_token: 'keep-me' }]);
+  d._dump('device_events').push({ id: 'e1', imei: 'F1', event: 'enrolled', at: '2026-08-01T00:00:00Z' });
+
+  await _FNS.deviceDelete(d, ADMIN, { imei: 'F1' });
+  assert.equal(d._dump('devices').length, 0, 'the row is gone');
+  assert.equal(d._dump('device_events').length, 0, 'and its history with it');
+  assert.equal(d._dump('device_tokens')[0].enrol_token, 'keep-me', 'but never the identity');
+
+  const back = await _FNS.deviceEnrol(d, ADMIN, { imeis: 'F1' });
+  assert.equal(back.provision[0].token, 'keep-me',
+    'the handset is still carrying this string, so the register must hand back the same one');
+  assert.equal(back.provision[0].fresh, false, 'and it is not a new phone');
+});
+
+test('a futa that cannot remember the token does not happen', async () => {
+  /* The write was `await db.from(...).upsert(...)` with the result discarded, inside a
+     try/catch. The Supabase client does not throw on a database error unless .throwOnError()
+     is called -- which this codebase never does -- it RESOLVES with { error }. So the catch
+     could only fire on a network throw, and every database error passed silently into the
+     delete: row gone, memory never written, and a handset left carrying a credential the
+     register can no longer name. It cannot beat, cannot be released, and refuses a factory
+     reset because it is still Device Owner. That phone is scrap and nothing would have said so. */
+  const d = fleet([{ imei: 'F2', state: 'enrolled', enrol_token: 'precious' }]);
+  const real = d.from.bind(d);
+  d.from = name => (name !== 'device_tokens' ? real(name) : {
+    upsert: async () => ({ data: null, error: { message: 'timeout', code: '57014' } }),
+  });
+
+  await assert.rejects(() => _FNS.deviceDelete(d, ADMIN, { imei: 'F2' }),
+    e => e.status === 503 && /token|remember/i.test(e.message));
+
+  d.from = real;
+  assert.equal(d._dump('devices').length, 1, 'nothing was deleted');
+  assert.equal(d._dump('devices')[0].enrol_token, 'precious');
+});
+
+test('a deployment without the memory table can still delete', async () => {
+  /* The deliberate tolerance, and the only one: "a delete that WORKS without remembering is
+     far better than a delete that fails." Narrowing the catch must not take this with it. */
+  const d = fleet([{ imei: 'F3', state: 'enrolled', enrol_token: 't3' }]);
+  const real = d.from.bind(d);
+  d.from = name => (name !== 'device_tokens' ? real(name) : {
+    upsert: async () => ({ data: null, error: { message: 'relation "device_tokens" does not exist', code: '42P01' } }),
+  });
+  await _FNS.deviceDelete(d, ADMIN, { imei: 'F3' });
+  d.from = real;
+  assert.equal(d._dump('devices').length, 0, 'the register keeps working');
+});
+
+test('the Token button can still answer for a handset that was deleted', async () => {
+  /* The case that needs it most: the phone is still Device Owner and still carrying its
+     token, so it can be neither released nor factory reset without that string -- and
+     docs/DEVICE-LOCKING.md sends the operator to this button to fetch it. deviceToken read
+     the devices table only, so once the row was gone the memory was write-only and the
+     recovery it exists for could not be done through any screen. */
+  const d = fleet([{ imei: 'F4', state: 'enrolled', enrol_token: 'still-on-the-phone' }]);
+  await _FNS.deviceDelete(d, ADMIN, { imei: 'F4' });
+
+  const t = await _FNS.deviceToken(d, ADMIN, { imei: 'F4' });
+  assert.equal(t.token, 'still-on-the-phone');
+  assert.equal(t.retired, true, 'and the drawer is told this is a phone the register dropped');
+  assert.ok(t.retiredBy, 'with who dropped it');
+
+  // An IMEI nobody has ever heard of is still refused, exactly as before.
+  await assert.rejects(() => _FNS.deviceToken(d, ADMIN, { imei: 'NEVER' }),
+    e => /hakijasajiliwa|not on the registry/i.test(e.message));
+});

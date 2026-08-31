@@ -2021,8 +2021,27 @@ const FNS = {
     const imei = String((args && args.imei) || '').trim();
     if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
     const rows = await fetchAll(() => db.from('devices').select('imei, enrol_token').eq('imei', imei));
-    if (!rows.length) bad('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
-    return { ok: true, imei, token: rows[0].enrol_token || null };
+    if (rows.length) return { ok: true, imei, token: rows[0].enrol_token || null, retired: false };
+    /* AND IF THE ROW IS GONE, ASK THE MEMORY. A deleted handset is the case that needs this
+       MOST, not least: it is still Device Owner and still carrying its token, so it can be
+       neither released nor factory reset without that string -- and docs/DEVICE-LOCKING.md
+       sends the operator to this very button to fetch it for the `-e current` recovery
+       broadcast. deviceDelete has been writing the token to device_tokens all along; nothing
+       could read it back, so the memory was write-only and the recovery it exists for could
+       not be performed through any screen.
+
+       `retired: true` so the drawer can say what this is: the token of a phone the register
+       no longer lists, which is the whole reason somebody is looking it up. */
+    try {
+      const past = await fetchAll(() => db.from('device_tokens')
+        .select('imei, enrol_token, retired_at, retired_by').eq('imei', imei));
+      if (past.length && past[0].enrol_token) {
+        return { ok: true, imei, token: String(past[0].enrol_token), retired: true,
+          retiredAt: past[0].retired_at ? Date.parse(past[0].retired_at) : null,
+          retiredBy: past[0].retired_by || null };
+      }
+    } catch (ignored) { /* migration not run: fall through to the same refusal as before */ }
+    bad('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');
   },
 
   /* TAKE A PHONE OFF THE REGISTER ENTIRELY -- for starting a handset over.
@@ -2144,12 +2163,44 @@ const FNS = {
        Best effort on purpose: on a deployment that has not run the migration this table does
        not exist, and a delete that WORKS without remembering is far better than a delete
        that fails. The register is the thing that must keep working. */
+    /* "BEST EFFORT" HAS TO MEAN THE MISSING TABLE AND NOTHING ELSE.
+       -------------------------------------------------------------------------------------
+       This read as a guarded write and was not one. The Supabase client does not throw on a
+       database error unless .throwOnError() is called, which this codebase never does -- it
+       RESOLVES with { data: null, error }. The result was discarded here, so the catch could
+       only ever fire on a fetch-level network throw, and every database error -- a timeout, a
+       permission change, a transient 503 -- passed silently into the delete below.
+
+       That is the one failure this whole mechanism exists to prevent. The row goes, the
+       memory was never written, and the handset walks away still carrying a credential the
+       register can no longer name: every beat 403s, a release cannot reach it, and it refuses
+       a factory reset because it is still Device Owner. A phone in that state is scrap, and
+       nothing anywhere would have said so.
+
+       So the error is now read. A table that does not exist is still waved through -- that is
+       the deliberate tolerance for a deployment that has not run
+       RUN-ME-2026-08-28-token-memory.sql, and a delete that works without remembering really
+       is better than one that fails. Anything else stops the delete, because a Futa that
+       cannot remember is a Futa that should not happen. */
     if (dev.enrol_token) {
+      let remembered = null;
       try {
-        await db.from('device_tokens').upsert(
+        remembered = await db.from('device_tokens').upsert(
           [{ imei, enrol_token: String(dev.enrol_token), retired_at: new Date().toISOString(),
              retired_by: user.name }], { onConflict: 'imei' });
-      } catch (ignored) { /* no table yet; the delete still goes ahead */ }
+      } catch (netErr) {
+        remembered = { error: { message: String((netErr && netErr.message) || netErr) } };
+      }
+      const remErr = remembered && remembered.error;
+      if (remErr && !tableMissing(remErr)) {
+        const e = new Error(
+          'Imeshindikana kuhifadhi kumbukumbu ya token, kwa hiyo hakijafutwa — jaribu tena. '
+          + '/ The token could not be remembered, so nothing was deleted. Deleting anyway would '
+          + 'strand this handset: it keeps a credential the register could no longer name, and '
+          + 'a phone in that state can neither be released nor factory reset. Try again.');
+        e.status = 503;
+        throw e;
+      }
     }
     // History first: a device_events row whose device is gone is a row nobody can read.
     await db.from('device_events').delete().eq('imei', imei);

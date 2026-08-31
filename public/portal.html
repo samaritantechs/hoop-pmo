@@ -3253,6 +3253,19 @@ function devToken(imei){
        inside the command already, so showing it on its own was never a second thing to know,
        only a second thing to choose between. */
     drawer('<h3>Simu · '+esc(imei)+'</h3>'
+      /* A TOKEN THAT OUTLIVED ITS ROW. Futa erases the register entry, never the credential --
+         the handset walks away still carrying it, still Device Owner, so it can be neither
+         released nor factory reset without this string. That is exactly when somebody looks it
+         up, and until now this drawer could not answer: it read the devices table only, and
+         the row was gone. It says which kind of answer this is, because re-running the command
+         on a phone the register no longer lists also puts it back on the register. */
+      +(r.retired
+        ? '<div class="note">Simu hii ilifutwa kwenye register'
+          +(r.retiredAt?' ('+esc(clock(r.retiredAt))+(r.retiredBy?' · '+esc(r.retiredBy):'')+')':'')
+          +', lakini token yake tunaikumbuka — ndiyo hii. Amri hii itairudisha kwenye register. '
+          +'/ This handset was deleted from the register; its token was remembered and is the one '
+          +'below. Running the command puts it back on the register as well.</div>'
+        : '')
       +'<div class="sub"><b>Bandika kwenye cmd, bonyeza enter. Ndiyo yote.</b> '
       +'/ Paste into the black cmd window, press enter. That is all. '
       +'Pakua APK kwanza kutoka <a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a> '
