@@ -665,3 +665,139 @@ test('the refusal is only about locking, and only about released phones', async 
     { imeis: ['NEW1'], state: 'locked', reason: 'stock' })).changed, 1,
     'a never-seen STOCK phone must still be lockable -- that is the normal bench flow');
 });
+
+/* =========================================================================================
+   ONE COMMAND, EVERY PHONE ON THE HUB.
+
+     "and thats my intention of pasting multiple imei and copyng signle cmd to run and get
+      many phones registered at once"
+
+   The command carries a BATCH -- the same string for every handset, which is what makes it
+   safe to broadcast to all of them at once -- and each phone sends back the IMEI it reads off
+   itself to collect the token minted for IT. Plug-in order stops meaning anything.
+
+   The property that makes this safe rather than merely convenient is that it FAILS CLOSED:
+   every way of getting it wrong ends in no token, never in the wrong one. A handset that is
+   absent from the register is a problem somebody can see; a handset quietly carrying its
+   neighbour's identity is one nobody can, and the way back is a factory reset.
+   ========================================================================================= */
+const BATCH = '11112222-3333-4444-5555-666677778888';
+const batchFleet = (over = {}) => fleet([
+  { imei: '111111111111111', enrol_token: 'tok-one', state: 'enrolled',
+    enrol_batch: BATCH, enrol_batch_at: '2026-08-24T11:50:00Z', ...over },
+  { imei: '222222222222222', enrol_token: 'tok-two', state: 'enrolled',
+    enrol_batch: BATCH, enrol_batch_at: '2026-08-24T11:50:00Z' },
+  { imei: '999999999999999', enrol_token: 'tok-other', state: 'enrolled',
+    enrol_batch: 'a-different-batch', enrol_batch_at: '2026-08-24T11:50:00Z' },
+]);
+
+test('a phone in the batch claims its OWN token, whatever order it was plugged in', async () => {
+  const d = batchFleet();
+  assert.deepEqual(
+    await deviceApi(d, 'dev_claim', [{ batch: BATCH, imeis: ['111111111111111'] }], NOW),
+    { ok: true, token: 'tok-one' });
+  // The other phone gets the other token. Same command, same batch, different answer.
+  assert.deepEqual(
+    await deviceApi(d, 'dev_claim', [{ batch: BATCH, imeis: ['222222222222222'] }], NOW),
+    { ok: true, token: 'tok-two' });
+
+  /* A DUAL-SIM HANDSET OFFERS BOTH, because which IMEI the stock report wrote down is a coin
+     toss -- Imei.java has said so since the beginning. Either one matching is a match. */
+  assert.deepEqual(
+    await deviceApi(d, 'dev_claim',
+      [{ batch: BATCH, imeis: ['888888888888888', '222222222222222'] }], NOW),
+    { ok: true, token: 'tok-two' });
+
+  // Claiming twice is the same answer: a retry after a dropped reply must not be a failure.
+  assert.deepEqual(
+    await deviceApi(d, 'dev_claim', [{ batch: BATCH, imeis: ['111111111111111'] }], NOW),
+    { ok: true, token: 'tok-one' });
+});
+
+test('every way of getting a claim wrong ends in no token, never the wrong one', async () => {
+  const d = batchFleet();
+  const refused = async (args, why) => {
+    await assert.rejects(() => deviceApi(d, 'dev_claim', [args], NOW),
+      e => e.status === 403 || e.status === 400, why);
+  };
+  await refused({ batch: BATCH, imeis: ['777777777777777'] },
+    'an IMEI that is not in this batch gets nothing -- not the nearest row, not the first row');
+  await refused({ batch: BATCH, imeis: ['999999999999999'] },
+    'a phone from ANOTHER batch is not in this one');
+  await refused({ batch: BATCH, imeis: [] }, 'a handset that could not read its IMEI');
+  await refused({ batch: BATCH }, 'no IMEI field at all');
+  await refused({ batch: 'not-a-batch-anybody-issued', imeis: ['111111111111111'] },
+    'a guessed batch');
+  await refused({ imeis: ['111111111111111'] }, 'no batch');
+
+  /* THE BATCH IS A BEARER SECRET FOR THE LENGTH OF A BENCH SESSION. Whoever holds it plus an
+     IMEI in it can obtain that device's token -- exactly the power the bench needs, and
+     exactly the power nobody should still hold next week. */
+  const later = NOW + 25 * 60 * 60 * 1000;
+  await assert.rejects(
+    () => deviceApi(d, 'dev_claim', [{ batch: BATCH, imeis: ['111111111111111'] }], later),
+    e => e.status === 403, 'a batch older than a day is refused');
+
+  // A row carrying no token cannot hand one out.
+  const noTok = fleet([{ imei: '111111111111111', enrol_token: null, state: 'enrolled',
+    enrol_batch: BATCH, enrol_batch_at: '2026-08-24T11:50:00Z' }]);
+  await assert.rejects(
+    () => deviceApi(noTok, 'dev_claim', [{ batch: BATCH, imeis: ['111111111111111'] }], NOW),
+    e => e.status === 403);
+});
+
+test('the claim never becomes an oracle for what the office is holding', async () => {
+  /* Every refusal is the same refusal. Distinguishing "not in this batch" from "no such batch"
+     from "expired" would let anybody with the endpoint ask which IMEIs the office has. */
+  const d = batchFleet();
+  const msgs = [];
+  for (const args of [
+    { batch: BATCH, imeis: ['777777777777777'] },
+    { batch: 'nobody-issued-this', imeis: ['111111111111111'] },
+    { batch: BATCH, imeis: ['999999999999999'] },
+  ]) {
+    try { await deviceApi(d, 'dev_claim', [args], NOW); assert.fail('should refuse'); }
+    catch (e) { msgs.push(e.message + '|' + e.status); }
+  }
+  assert.equal(new Set(msgs).size, 1, 'every refusal must read identically: ' + msgs.join(' / '));
+});
+
+test('the handsets\' door answers to its own functions and nothing inherited', async () => {
+  /* Same hole as the portal dispatcher had, and it matters more here: this is the one door
+     that is not behind an access code at all. */
+  const d = batchFleet();
+  for (const probe of ['constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
+    await assert.rejects(() => deviceApi(d, probe, [{}], NOW),
+      e => e.status === 400 && /Unknown function/.test(e.message),
+      probe + ' is inherited and must not resolve to a handler');
+  }
+});
+
+test('enrolling puts every phone in the call into one claimable batch', async () => {
+  /* A handset the register already knew keeps its own token -- deliberately -- so its row is
+     not re-inserted. Without an explicit update it would still carry a batch from some earlier
+     session, and the hub command would refuse it: on the bench that reads as a broken phone
+     rather than as one that was never in the batch. */
+  const d = fleet([
+    { imei: '111111111111111', enrol_token: 'kept', state: 'enrolled',
+      enrol_batch: 'last-week', enrol_batch_at: '2026-08-01T09:00:00Z' },
+  ]);
+  const r = await _FNS.deviceEnrol(d, ADMIN, { imeis: '111111111111111 222222222222222' });
+  assert.ok(r.batch, 'the enrol hands back the batch the command will carry');
+  assert.equal(r.batchReady, true);
+
+  const rows = d._dump('devices');
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.equal(String(row.enrol_batch), String(r.batch),
+      'every phone in the call joins this batch, new or already known');
+    assert.ok(row.enrol_batch_at, 'and is stamped with when, so the batch can expire');
+  }
+  assert.equal(rows.find(x => x.imei === '111111111111111').enrol_token, 'kept',
+    'a known handset keeps the token it already holds');
+
+  // And the phones can now claim against it.
+  const got = await deviceApi(d, 'dev_claim',
+    [{ batch: r.batch, imeis: ['111111111111111'] }], Date.now());
+  assert.equal(got.token, 'kept');
+});

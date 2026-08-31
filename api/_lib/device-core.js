@@ -360,11 +360,84 @@ async function hello(db, [payload], nowMs) {
     brand: words.brand, message: words.message, helpPhone: words.helpPhone };
 }
 
-const FNS = { dev_hello: hello, dev_beat: beat };
+/* ---------------------------------------------------------------------------------------
+   THE CLAIM: a phone asks which of the batch it is, instead of being told.
+
+     "and thats my intention of pasting multiple imei and copyng signle cmd to run and get
+      many phones registered at once"
+
+   The enrol command used to carry a token minted for ONE IMEI, so the person at the bench was
+   the thing pairing handset to identity -- one cable, one phone, one line. Looping that across
+   a hub is the dangerous shape: plug-in ORDER would decide who got what, and nothing catches a
+   swap, because beat() resolves a handset BY ITS TOKEN and files what it says under the row
+   that token belongs to. A phone handed its neighbour's token simply becomes its neighbour.
+
+   So the command now carries a BATCH token -- the same string for every handset, which is what
+   makes it safe to broadcast to all of them at once -- and the phone sends back the IMEI it
+   reads off itself to collect the token minted for it.
+
+   THE IMEI IS A SELECTOR HERE, NEVER A CREDENTIAL, and that distinction is the whole reason
+   this is allowed when device-core's own rule says the handset's claim about itself is not its
+   identity. It cannot be used to obtain a token on its own: it only picks between the handful
+   of rows the office deliberately put in one batch, minutes earlier, and every other outcome is
+   a refusal. Getting it wrong loses you a phone from the batch; it can never win you another
+   phone's identity.
+
+   BOTH SLOTS, because a dual-SIM handset has two IMEIs and which one Sipho's stock report wrote
+   down is a coin toss (see Imei.java, which has said so all along). Matching on either closes
+   that gap; matching on neither means this handset is simply not in this batch.
+
+   IT FAILS CLOSED. No batch, an expired batch, an unreadable IMEI, an IMEI that is not in the
+   batch, a row with no token -- every one of them is the same refusal, and the handset stays
+   un-enrolled and visibly missing from the register rather than quietly becoming somebody else.
+   The refusals are deliberately identical: distinguishing them would turn this into an oracle
+   for asking the office which IMEIs it is holding. */
+const BATCH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+async function claim(db, [payload], nowMs) {
+  const p = payload || {};
+  const batch = S(p && p.batch);
+  const refuse = () => { const e = new Error('Not in this batch'); e.status = 403; throw e; };
+  if (!batch) { const e = new Error('Batch required'); e.status = 400; throw e; }
+
+  /* Whatever the handset managed to read. One entry on a single-SIM phone, two on a dual, and
+     none at all on a build that refuses -- which is a refusal here, not a guess. */
+  const said = (Array.isArray(p.imeis) ? p.imeis : [p.imei])
+    .map(S).map(x => x.trim()).filter(Boolean);
+  if (!said.length) refuse();
+
+  let rows = [];
+  try {
+    rows = await fetchAll(() => db.from('devices')
+      .select('imei, enrol_token, enrol_batch_at').eq('enrol_batch', batch));
+  } catch (e) {
+    // Before RUN-ME-2026-08-31-enrol-batch.sql there is no such column, so there is no batch
+    // to be in. Same refusal: this endpoint never explains itself to a handset.
+    if (/enrol_batch_at/i.test(String(e && e.message || ''))) refuse();
+    throw e;
+  }
+  if (!rows.length) refuse();
+
+  /* The batch is a bearer secret for the length of a bench session. Whoever holds it, plus an
+     IMEI that is in it, can obtain that device's token -- exactly the power the bench needs and
+     exactly the power nobody should still hold next week. */
+  const issued = rows.map(r => Date.parse(r.enrol_batch_at || '')).filter(t => !isNaN(t));
+  if (!issued.length || nowMs - Math.max(...issued) > BATCH_MAX_AGE_MS) refuse();
+
+  const dev = rows.find(r => said.includes(S(r.imei).trim()));
+  if (!dev || !S(dev.enrol_token)) refuse();
+  return { ok: true, token: S(dev.enrol_token) };
+}
+
+const FNS = { dev_hello: hello, dev_beat: beat, dev_claim: claim };
 
 /** Same transport shape as callApi: one route, a named fn, positional args. */
 export async function deviceApi(db, fn, args, nowMs = Date.now()) {
-  const f = FNS[S(fn)];
-  if (!f) { const e = new Error('Unknown function: ' + S(fn)); e.status = 400; throw e; }
+  /* OWN PROPERTIES ONLY. FNS is an object literal, so `FNS['constructor']` and friends are
+     truthy and would be CALLED with (db, args, nowMs) -- past every guard each real handler
+     begins with. The same hole was found and closed on the portal's dispatcher; this door is
+     the one that is not behind an access code at all, so it matters more here. */
+  const f = Object.prototype.hasOwnProperty.call(FNS, S(fn)) ? FNS[S(fn)] : null;
+  if (typeof f !== 'function') { const e = new Error('Unknown function: ' + S(fn)); e.status = 400; throw e; }
   return f(db, Array.isArray(args) ? args : [args], nowMs);
 }

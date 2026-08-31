@@ -1716,6 +1716,10 @@ const FNS = {
     }
     const at = new Date().toISOString();
     const batch = randomUUID();
+    /* Whether this batch can actually be claimed against. enrol_batch_at is what decides:
+       without it the server cannot tell a batch issued minutes ago from one issued last month,
+       and a bearer secret that never expires is not one worth handing out. */
+    let batchReady = true;
     /* ONE TOKEN PER PHONE, minted here and nowhere else. This is the credential the handset
        will carry -- it has no access code and never will -- so it is generated at the only
        moment the phone is physically in our hands, and returned ONCE, to the station that
@@ -1727,7 +1731,8 @@ const FNS = {
     if (fresh.length) {
       const rows = fresh.map(imei => {
         const s = stockBy.get(imei);
-        return { imei, enrolled_at: at, enrolled_by: user.name, enrol_batch: batch,
+        return { imei, enrolled_at: at, enrolled_by: user.name,
+          enrol_batch: batch, enrol_batch_at: at,
           item: (s && s.item) || null, holder: (s && s.agent) || null,
           enrol_token: minted.get(imei),
           state: 'enrolled', state_by: user.name, state_at: at, updated_at: at };
@@ -1736,18 +1741,42 @@ const FNS = {
       // and PostgREST refuses the whole insert for one unknown column. Enrol still works --
       // those phones simply cannot beat until the alter in RUN-ME-2026-08-24-devices.sql runs.
       let { error } = await db.from('devices').insert(rows);
+      if (error && /enrol_batch_at/.test(String(error.message || ''))) {
+        // Before RUN-ME-2026-08-31-enrol-batch.sql. Enrolling still works; only the
+        // one-command hub claim is unavailable, and the drawer says so rather than offering a
+        // command that would be refused by every handset.
+        ({ error } = await db.from('devices').insert(
+          rows.map(({ enrol_batch_at, ...rest }) => rest)));
+        batchReady = false;
+      }
       if (error && /enrol_token/.test(String(error.message || ''))) {
         minted.clear();
         ({ error } = await db.from('devices').insert(
-          rows.map(({ enrol_token, ...rest }) => rest)));
+          rows.map(({ enrol_token, enrol_batch_at, ...rest }) => rest)));
+        batchReady = false;
       }
       if (error) throw new Error(error.message);
       const { error: eErr } = await db.from('device_events').insert(fresh.map(imei => ({
         imei, event: 'enrolled', from_state: null, to_state: 'enrolled', actor: user.name, at })));
       if (eErr) throw new Error(eErr.message);
     }
+    /* A PHONE THE REGISTER ALREADY KNEW HAS TO JOIN THIS BATCH TOO. Its row is not
+       re-inserted -- it keeps its own token, deliberately -- so without this it would still
+       carry the enrol_batch of some previous session, and the hub command would refuse it.
+       On the bench that reads as "this handset is broken" rather than "it was never in the
+       batch you just made", which is the kind of confusion that sends somebody looking for a
+       hardware fault. */
+    const rejoin = list.filter(i => have.has(i));
+    if (batchReady && rejoin.length) {
+      const { error } = await db.from('devices')
+        .update({ enrol_batch: batch, enrol_batch_at: at }).in('imei', rejoin);
+      if (error && /enrol_batch_at/.test(String(error.message || ''))) batchReady = false;
+      else if (error) throw new Error(error.message);
+    }
+
     return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length,
-      unknownToStock: fresh.filter(i => !stockBy.has(i)).length, batch,
+      unknownToStock: fresh.filter(i => !stockBy.has(i)).length,
+      batch, batchReady,
       /* FOR THE PROVISIONING STATION ONLY, and in the order the operator typed the IMEIs so
          a paper list can be worked down without hunting. `fresh` says whether this is a new
          phone or one the register already knew: the command is identical either way, but an

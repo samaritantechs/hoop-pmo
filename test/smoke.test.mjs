@@ -1154,3 +1154,58 @@ test('deleting a device remembers its token but forgets its history', () => {
   assert.match(enrol, /fresh: !have\.has\(imei\) && !remembered\.has\(imei\)/,
     'a phone whose token we remembered is NOT new, and must not be reported as new');
 });
+
+/* =========================================================================================
+   ONE COMMAND FOR A HUB FULL OF PHONES, and the three things that keep it safe.
+
+     "and thats my intention of pasting multiple imei and copyng signle cmd to run and get
+      many phones registered at once"
+     "all devices on usb will be on wifi and usb debugging enabled"
+
+   A token is minted for ONE IMEI. Looping a command that carries one across a hub would let
+   plug-in ORDER decide which handset got which identity, and nothing downstream catches a
+   swap: the beat resolves a phone BY ITS TOKEN and files what it says under that token's row.
+   A phone handed its neighbour's token simply becomes its neighbour, and the way back is a
+   factory reset.
+
+   So the command carries a BATCH -- one string for every phone, safe to broadcast to all of
+   them -- and each handset reads its own IMEI and claims the token minted for it.
+   ========================================================================================= */
+test('a batch claim happens off the main thread and can never invent an identity', () => {
+  const enrol = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java');
+
+  /* OFF THE MAIN THREAD. A claim is a network call and onReceive runs on the main thread; a
+     receiver sitting on a socket is one Android is entitled to kill. Nothing else in this app
+     does blocking network there -- Beat.now spawns a Thread for exactly this reason. */
+  const batchAt = enrol.indexOf('getStringExtra("batch")');
+  assert.ok(batchAt > 0, 'the batch extra must be read');
+  assert.match(enrol, /final PendingResult pending = goAsync\(\);/,
+    'the claim must use goAsync so onReceive returns at once and adb still gets its answer');
+  assert.match(enrol, /new Thread\(new Runnable\(\)/, 'and do the work on a thread');
+  assert.match(enrol, /pending\.finish\(\);/,
+    'and finish it, or `am broadcast` waits for ever and the bench looks hung');
+  /* say() writes through setResultCode on the receiver, which only works while onReceive is
+     still on the stack -- the async answer must go through the PendingResult instead. */
+  assert.match(enrol, /pending\.setResultCode\(code\)/,
+    'the async result must be reported on the PendingResult, not through say()');
+
+  /* IT FAILS CLOSED. Every way of failing ends with no token written, never a fallback one. */
+  const thread = enrol.slice(enrol.indexOf('final PendingResult pending'),
+                             enrol.indexOf('pending.finish();'));
+  assert.match(thread, /if \(got == null\)/, 'a refused or unreachable claim is handled');
+  assert.ok(!/Prefs\.put\([^)]*TOKEN/.test(thread),
+    'nothing may be written to TOKEN on the failure branch -- a handset that cannot prove which '
+    + 'phone it is must end with NO identity rather than somebody else\'s');
+  assert.match(thread, /!wasFresh && !was\.equals\(got\)/,
+    'a phone already in service must not be re-identified by a batch: same rule as -e current');
+
+  /* BOTH SIM SLOTS. A dual-SIM handset has two IMEIs and which one the stock report wrote
+     down is a coin toss -- Imei.java has said so from the start. */
+  assert.match(enrol, /getImei\(slot\)/, 'both slots must be offered, or dual-SIM phones drop out');
+  assert.match(enrol, /if \(imeis\.length\(\) == 0\) return null;/,
+    'a handset that cannot read any IMEI must refuse, not guess');
+
+  // The single-phone path is untouched and still the fallback the message points at.
+  assert.match(enrol, /-e token <its token from the register>/,
+    'a phone the batch missed must be told how to enrol on its own');
+});
