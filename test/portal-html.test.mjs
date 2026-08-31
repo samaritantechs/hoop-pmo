@@ -944,3 +944,65 @@ test('bulk enrolment gives one button per phone, each carrying that phone\'s own
   assert.ok(!/for \s*\/f[^\n]*ENROL|for %\w[^\n]*-e token/i.test(src),
     'nothing may enrol several phones in one paste');
 });
+
+/* =========================================================================================
+   THREE THINGS THAT WOULD HAVE SHOWN ON A PROJECTOR.
+
+     "am going to presentation ... if i get a breakage like before the service may not be
+      received"
+
+   Found by an adversarial sweep of the Devices pane. None of them is a crash; all three are
+   the pane confidently showing something wrong, which in front of an audience is worse.
+   ========================================================================================= */
+test('a refusal the server wrote is shown, however long, and never as markup', () => {
+  const src = read('portal.html');
+  // safeErr logs a raw failure to the console when it hides one; give it a window.
+  const safeErr = lift(src, 'safeErr', 'var window={console:{error:function(){}}};');
+
+  /* 1. THE 639-CHARACTER REFUSAL. Pressing Futa on a released-but-still-beating handset
+        produces the longest and most important sentence in this pane, and a bare length test
+        replaced every word of it with "the server did not answer properly" -- a careful
+        explanation rendered as a crash. srv() marks what the server ANSWERED; that is the
+        thing to trust, not the length. */
+  const long = 'Simu iliambiwa iachiwe lakini bado ni mali ya kampuni. '.repeat(12);
+  assert.ok(long.length > 300, 'fixture must exceed the old cut-off');
+  const answered = Object.assign(new Error(long), { answered: true });
+  assert.equal(safeErr(answered), long, 'an answered refusal must survive intact');
+
+  /* ...and the guard it replaced still works for what it was written for: an unexpected
+     failure that dumped data into a message. */
+  assert.match(safeErr(new Error('[{"code":"PGRST","detail":"' + 'x'.repeat(400) + '"}]')),
+    /haukujibu vizuri|did not answer properly/, 'a data dump is still hidden');
+  assert.match(safeErr(new Error('y'.repeat(400))),
+    /haukujibu vizuri|did not answer properly/, 'an unanswered wall of text is still hidden');
+
+  /* 2. MARKUP READ ALOUD. These strings reach the screen through textContent, so a <b> in one
+        is not bold -- it is the four characters <b>. Two server refusals carry markup. */
+  const withTags = Object.assign(
+    new Error('Simu bado ipo chini ya udhibiti. Bonyeza <b>Achia</b> kwanza.'), { answered: true });
+  assert.equal(safeErr(withTags), 'Simu bado ipo chini ya udhibiti. Bonyeza Achia kwanza.',
+    'tags must be stripped at the one funnel every message passes through');
+  assert.ok(!/[<>]/.test(safeErr(withTags)));
+
+  // A short ordinary refusal is still passed straight through.
+  assert.equal(safeErr(new Error('Weka IMEI.')), 'Weka IMEI.');
+  assert.equal(safeErr(null), '');
+});
+
+test('the silent tile and the list it opens are the same arithmetic', () => {
+  /* 3. `r.stale` on a row means "not reporting" and INCLUDES a phone that never spoke -- that
+        is deliberate, tested, and what paints the clock red. The TILE counts something
+        narrower on purpose (`stale && !neverSeen`) so the two tiles partition the fleet.
+        Filtering on the bare flag drew a different set from the one the tile had counted, and
+        the gap is widest in the state a demo is most likely to be in. */
+  const src = read('portal.html');
+  assert.match(src, /if\(DEV\.flag==='stale'\) return r\.stale===true && r\.neverSeen!==true;/,
+    'the silent filter must exclude never-spoken phones, exactly as the tile does');
+
+  // And the server still counts it that way, so the two cannot drift apart.
+  const api = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  assert.match(api, /stale: count\(r => r\.stale && !r\.neverSeen\)/,
+    'the tile count is the definition the filter above mirrors');
+  assert.match(api, /stale: !seen \|\| \(now - seen\) > HOURS,/,
+    'and the row flag keeps its own, broader meaning -- it is what colours the clock');
+});

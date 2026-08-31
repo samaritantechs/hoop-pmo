@@ -694,13 +694,29 @@ function fromApp_(){
   var b = window.HoopLoan || window.HopeCalls;
   return !!(b && b.getDeviceId);
 }
+/* WHAT THE PERSON READS WHEN SOMETHING IS REFUSED.
+   ---------------------------------------------------------------------------------------------
+   Two things went wrong here and both showed on screen.
+
+   1. A REFUSAL THE SERVER WROTE IS NEVER A DATA DUMP, however long it is. The length test was a
+      proxy for "this is a JSON blob that escaped", and it caught the wrong thing: the Futa
+      refusal for a released-but-still-beating handset is 639 characters of carefully worded
+      explanation, and every one of them was replaced by "the server did not answer properly".
+      The single most important sentence in the Devices pane read as a crash. srv() marks a
+      refusal the server ANSWERED, so that is what is trusted now; the length test still guards
+      the unexpected failures it was written for.
+
+   2. THESE STRINGS ARE WRITTEN WITH textContent, so a <b> in one is not bold -- it is the four
+      characters <b>. Two server refusals carry markup and the operator was reading it aloud.
+      Stripped here, at the one funnel every message passes through, rather than trusting every
+      future message to remember. */
 function safeErr(e){
   var raw=String((e&&e.message)||e||'');
-  var looksLikeData=raw.charAt(0)==='['||raw.charAt(0)==='{'||raw.length>300;
+  var answered=!!(e&&e.answered);
+  var looksLikeData=!answered&&(raw.charAt(0)==='['||raw.charAt(0)==='{'||raw.length>300);
   if(looksLikeData&&window.console) console.error('[hoop] raw failure:', raw.slice(0,2000));
-  return looksLikeData
-    ? 'Mfumo haukujibu vizuri. Jaribu tena baada ya sekunde chache. / The server did not answer properly \u2014 try again in a few seconds.'
-    : raw;
+  if(looksLikeData) return 'Mfumo haukujibu vizuri. Jaribu tena baada ya sekunde chache. / The server did not answer properly \u2014 try again in a few seconds.';
+  return raw.replace(/<\/?[a-z][^>]*>/gi,'');
 }
 function paneFailed(m, e){
   if(!m) return;
@@ -2626,7 +2642,23 @@ function drawDevices(m){
       +'<span style="flex:1"></span><button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button></div>';
     /* neverSeen and stale ride on the row, so this fence is the same fact the tile counted
        -- never a second definition of "silent" that could drift from the one in the tile. */
-    var rows=(d.rows||[]).filter(function(r){ return !DEV.flag || r[DEV.flag]===true; });
+    /* THE FENCE MUST BE THE TILE'S OWN ARITHMETIC, not something near it.
+       -------------------------------------------------------------------------------------
+       `r.stale` on a row means "not reporting" and INCLUDES a phone that has never spoken --
+       that is deliberate and tested, because it is what paints the clock red. The TILE beside
+       it counts something narrower on purpose: `stale && !neverSeen`, so the two tiles
+       partition the fleet instead of double-counting it.
+
+       Filtering on the bare flag therefore drew a different set from the one the tile had
+       counted, and the gap was widest in the state a demo is most likely to be in: a bench of
+       phones just enrolled, none of which has beaten yet. "Kimya / silent" read 0, and
+       clicking it opened the entire register. A tile that says none and then shows all is the
+       kind of thing an audience remembers. */
+    var rows=(d.rows||[]).filter(function(r){
+      if(!DEV.flag) return true;
+      if(DEV.flag==='stale') return r.stale===true && r.neverSeen!==true;
+      return r[DEV.flag]===true;
+    });
     var table=rows.length
       ? '<div class="scroll"><table><thead><tr>'
         +'<th class="noxl"><input type="checkbox" id="dvAll" title="Chagua zote zinazoonekana / select all shown"></th>'
