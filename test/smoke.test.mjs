@@ -1209,3 +1209,35 @@ test('a batch claim happens off the main thread and can never invent an identity
   assert.match(enrol, /-e token <its token from the register>/,
     'a phone the batch missed must be told how to enrol on its own');
 });
+
+/* =========================================================================================
+   THE PERMISSION THE HUB CLAIM STANDS ON.
+
+   getImei() is NOT unlocked by being Device Owner alone. The platform requires the caller to
+   be device or profile owner AND to hold READ_PHONE_STATE, and the lock app declared neither.
+   Imei.read therefore returned null on every Android 8 and later handset -- invisible for as
+   long as the IMEI was only ever "reported for information, omitted when it cannot be read",
+   and fatal the moment a phone had to name itself to claim its own token out of a batch.
+
+   Without this, every handset on the hub answers NOT IN THIS BATCH and nothing enrols.
+   ========================================================================================= */
+test('the lock app can actually read the IMEI it claims its identity with', () => {
+  const manifest = fs.readFileSync(
+    new URL('../android/lock/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+  assert.match(manifest, /uses-permission android:name="android\.permission\.READ_PHONE_STATE"/,
+    'READ_PHONE_STATE must be declared, or getImei() is refused however privileged the app is');
+
+  /* DECLARING IT IS HALF. It is a runtime permission, and nobody is standing at the phone to
+     tap Allow -- a Device Owner grants it to itself, which is the same mechanism the location
+     permissions already use here. */
+  const admin = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockAdmin.java');
+  const granted = admin.slice(admin.indexOf('setPermissionGrantState') - 900,
+                              admin.indexOf('PLAY PROTECT IS NOT SWITCHED OFF'));
+  assert.match(granted, /Manifest\.permission\.READ_PHONE_STATE/,
+    'harden() must grant READ_PHONE_STATE to itself -- a declared runtime permission nobody '
+    + 'grants is a permission the app does not have');
+
+  // And the reader asks for it the way that needs the grant.
+  const imei = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Imei.java');
+  assert.match(imei, /tm\.getImei\(\)/, 'the Android 8+ path is the one the grant unlocks');
+});

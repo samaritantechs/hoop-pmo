@@ -17,6 +17,14 @@
          locked phone to tap Allow, so LockAdmin.harden grants them to itself as Device Owner
          and unharden hands them back on release. The app never asks for a live fix: it reads
          whatever position the system already has. See Loc.java. -->
+    <!-- THE IMEI, AND WHY A DEVICE OWNER STILL NEEDS THIS.
+         getImei() is not unlocked by being Device Owner alone: the platform requires the
+         caller to be device or profile owner AND to hold READ_PHONE_STATE. Without this line
+         Imei.read returns null on every Android 8 and later handset, which was invisible for
+         as long as the IMEI was only ever "reported for information, omitted when it cannot
+         be read", and became load-bearing the moment a phone had to name itself to claim
+         its own token out of a hub batch. Granted to itself in LockAdmin.harden. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
