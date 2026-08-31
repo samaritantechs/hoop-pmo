@@ -8,12 +8,34 @@ import { requireSystemOpen } from './system-gate.js';
    does not is the single most consequential rule in this system, and it was the one rule with
    no test at all, because the client was reached for directly instead of passed in. Every
    caller still calls authCode(code) and nothing about them changes. */
+/* THE COLUMN LIST SIGN-IN ASKS FOR, and the narrower one it falls back to.
+   ---------------------------------------------------------------------------------------------
+   is_leader arrives with db/migrations/RUN-ME-2026-08-31-advance-leader.sql. PostgREST refuses a
+   WHOLE select when one named column is unknown -- so naming it here without a fallback would
+   not darken some pane, it would fail THE SIGN-IN QUERY, and every person in the company would
+   be told their access code is invalid until somebody ran a migration. That is the worst failure
+   this file is capable of, so the narrower list is kept and used the instant the wider one is
+   refused for mentioning the column. */
+const CODE_COLS = 'code, name, role, teams, tabs, is_leader';
+const CODE_COLS_PRE_LEADER = 'code, name, role, teams, tabs';
+const missingLeader = err =>
+  /is_leader/i.test(String((err && (err.message || err.details || err.code)) || ''));
+
 export async function authCode(code, db = supabase) {
   if (!code) throw new AuthError('Access code required.');
   // Sign-in is the one request EVERYTHING else waits behind, so it is the one that most needs
   // to survive a momentary blip rather than turn the whole company away at the door.
-  const { data: exact, error } = await runQuery(() =>
-    db.from('access_codes').select('code, name, role, teams, tabs').eq('code', code).maybeSingle());
+  let { data: exact, error } = await runQuery(() =>
+    db.from('access_codes').select(CODE_COLS).eq('code', code).maybeSingle());
+  /* leaderKnown=false means "this database has not been told about leaders yet", which is a
+     different fact from "this person is not a leader" -- and the approval pane says which,
+     rather than showing an empty queue that would read as "nobody has asked for anything". */
+  let leaderKnown = true;
+  if (error && missingLeader(error)) {
+    leaderKnown = false;
+    ({ data: exact, error } = await runQuery(() =>
+      db.from('access_codes').select(CODE_COLS_PRE_LEADER).eq('code', code).maybeSingle()));
+  }
   if (error) throw new AuthError(friendlyDbError(error));
   /* CASE IS NOT PART OF THE SECRET.
      The sign-in box used to carry autocapitalize="characters", so on a phone the code was
@@ -26,7 +48,8 @@ export async function authCode(code, db = supabase) {
      This is only a second look for the same code typed in a different case. `code` is escaped
      for LIKE first: `%` and `_` are wildcards there, and a code containing one would otherwise
      match more rows than itself. */
-  const data = exact || await caseInsensitiveCode(code, db);
+  const found = await caseInsensitiveCode(code, db, leaderKnown);
+  const data = exact || found.row;
   if (!data) throw new AuthError('Invalid access code.');
   return {
     code: data.code,
@@ -34,6 +57,8 @@ export async function authCode(code, db = supabase) {
     role: data.role,
     teams: data.teams && data.teams.length ? data.teams : null,   // null = ALL teams, matching Code.gs's convention
     tabs: data.tabs || [],
+    /* Three states, not two: true, false, and null for "the column is not there yet". */
+    leader: (leaderKnown && found.leaderKnown) ? !!data.is_leader : null,
   };
 }
 
@@ -41,12 +66,15 @@ export async function authCode(code, db = supabase) {
     matches: two codes differing only in case are a real (if unlikely) possibility, and guessing
     between them would hand somebody another person's teams. Better to refuse and be told the
     code is invalid than to sign the wrong person in. */
-async function caseInsensitiveCode(code, db) {
+async function caseInsensitiveCode(code, db, leaderKnown = true) {
   const pattern = String(code).replace(/([\\%_])/g, '\\$1');
-  const { data, error } = await runQuery(() =>
-    db.from('access_codes').select('code, name, role, teams, tabs').ilike('code', pattern).limit(2));
+  const ask = cols => runQuery(() =>
+    db.from('access_codes').select(cols).ilike('code', pattern).limit(2));
+  let { data, error } = await ask(leaderKnown ? CODE_COLS : CODE_COLS_PRE_LEADER);
+  let known = leaderKnown;
+  if (error && missingLeader(error)) { known = false; ({ data, error } = await ask(CODE_COLS_PRE_LEADER)); }
   if (error) throw new AuthError(friendlyDbError(error));
-  return (data && data.length === 1) ? data[0] : null;
+  return { row: (data && data.length === 1) ? data[0] : null, leaderKnown: known };
 }
 
 /** Same as teamAllowed_() -- null teams (ALL access) always passes. */

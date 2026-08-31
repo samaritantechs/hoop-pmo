@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { fakeDb } from './fake-db.mjs';
 import { _FNS } from '../api/portal.js';
 
@@ -1271,11 +1272,24 @@ test('a future-dated row never drags the dashboard into a week that has not happ
    thereby read the bank details HR files, and somebody who may ask must not see what their
    colleagues are borrowing.
    ========================================================================================= */
-const ASKER = { code: 'A1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: ['advreq'], readOnly: false };
-const APPROVER = { code: 'L1', name: 'NEEMA M', role: 'RSM', teams: null, tabs: ['advappr'], readOnly: false };
-const HRUSER = { code: 'H1', name: 'SIPHO K', role: 'HR', teams: null, tabs: ['advrep'], readOnly: false };
+const ASKER = { code: 'A1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: ['advreq'],
+  readOnly: false, leader: false };
+/* THE APPROVER LEADS THEIR OWN ROLE. Both halves matter: `leader: true` is the per-person switch
+   in Access codes, and the role is what the department scope compares against -- an approver
+   sees only advances asked for by people carrying the SAME role they do. */
+const APPROVER = { code: 'L1', name: 'NEEMA M', role: 'OFFICER', teams: null, tabs: ['advappr'],
+  readOnly: false, leader: true };
+const HRUSER = { code: 'H1', name: 'SIPHO K', role: 'HR', teams: null, tabs: ['advrep'],
+  readOnly: false, leader: false };
 
 const advDb = rows => fakeDb({ staff_advances: rows || [] });
+/* advDecide checks the shape of `id` before it reaches Postgres, because a uuid column answers
+   a malformed filter with an error rather than an empty result. So the fixtures carry real
+   uuids; uid('r1') just makes them readable and stable across runs. */
+const uid = tag => {
+  const h = [...tag].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7).toString(16).padStart(8, '0');
+  return `${h}-1111-4222-8333-${h}${h.slice(0, 4)}`;
+};
 const anAdvance = o => ({
   id: o.id, requested_at: o.at || '2026-08-10T08:00:00Z', staff_code: o.code || 'A1',
   staff_name: o.name || 'JUMA G', staff_role: 'OFFICER', apply_date: o.apply || '2026-08-15',
@@ -1286,21 +1300,21 @@ const anAdvance = o => ({
 });
 
 test('the three advance panes are three separate grants, not one', async () => {
-  const d = advDb([anAdvance({ id: 'r1' })]);
+  const d = advDb([anAdvance({ id: uid('r1') })]);
   const denied = async (fn, user, args) => {
     await assert.rejects(() => _FNS[fn](d, user, args || {}), e => e.status === 403,
       fn + ' must refuse a user who was never granted its pane');
   };
   // Holding advreq is the right to ASK, and nothing else.
   await denied('advQueue', ASKER);
-  await denied('advDecide', ASKER, { id: 'r1', approve: true });
+  await denied('advDecide', ASKER, { id: uid('r1'), approve: true });
   await denied('advReport', ASKER);
   // Holding advappr is the right to DECIDE, which is not the right to read HR's payment sheet.
   await denied('advMine', APPROVER);
   await denied('advReport', APPROVER);
   // And HR files; HR does not approve.
   await denied('advQueue', HRUSER);
-  await denied('advDecide', HRUSER, { id: 'r1', approve: true });
+  await denied('advDecide', HRUSER, { id: uid('r1'), approve: true });
 });
 
 test('a request is stamped with who asked, from the session and never from the arguments', async () => {
@@ -1334,12 +1348,12 @@ test('a request is stamped with who asked, from the session and never from the a
 
 test('the request pane shows you your own advances and nobody else\'s', async () => {
   const d = advDb([
-    anAdvance({ id: 'mine1', code: 'A1', at: '2026-08-01T08:00:00Z' }),
-    anAdvance({ id: 'mine2', code: 'A1', at: '2026-08-09T08:00:00Z' }),
-    anAdvance({ id: 'theirs', code: 'B2', name: 'ANOTHER PERSON' }),
+    anAdvance({ id: uid('mine1'), code: 'A1', at: '2026-08-01T08:00:00Z' }),
+    anAdvance({ id: uid('mine2'), code: 'A1', at: '2026-08-09T08:00:00Z' }),
+    anAdvance({ id: uid('theirs'), code: 'B2', name: 'ANOTHER PERSON' }),
   ]);
   const r = await _FNS.advMine(d, ASKER);
-  assert.deepEqual(r.rows.map(x => x.id), ['mine2', 'mine1'],
+  assert.deepEqual(r.rows.map(x => x.id), [uid('mine2'), uid('mine1')],
     'own rows only, newest first -- holding the right to ask is not the right to read what '
     + 'colleagues are borrowing');
   assert.deepEqual(r.amounts, [50000, 100000, 150000, 200000],
@@ -1347,9 +1361,9 @@ test('the request pane shows you your own advances and nobody else\'s', async ()
 });
 
 test('an approver may grant less than was asked, but never more', async () => {
-  const d = advDb([anAdvance({ id: 'r1', amount: 200000 })]);
+  const d = advDb([anAdvance({ id: uid('r1'), amount: 200000 })]);
   const r = await _FNS.advDecide(d, APPROVER,
-    { id: 'r1', approve: true, approvedAmount: 100000, comment: 'Nusu mwezi huu' });
+    { id: uid('r1'), approve: true, approvedAmount: 100000, comment: 'Nusu mwezi huu' });
   assert.equal(r.status, 'approved');
   assert.equal(r.granted, 100000);
 
@@ -1361,28 +1375,28 @@ test('an approver may grant less than was asked, but never more', async () => {
   assert.equal(row.decided_by, 'NEEMA M');
 
   // More than was requested is somebody mis-clicking, not a decision anybody delegated.
-  const d2 = advDb([anAdvance({ id: 'r2', amount: 50000 })]);
+  const d2 = advDb([anAdvance({ id: uid('r2'), amount: 50000 })]);
   await assert.rejects(() => _FNS.advDecide(d2, APPROVER,
-    { id: 'r2', approve: true, approvedAmount: 200000 }), /zaidi|more than/i);
+    { id: uid('r2'), approve: true, approvedAmount: 200000 }), /zaidi|more than/i);
   assert.equal(d2._dump('staff_advances')[0].status, 'pending', 'and nothing was written');
 });
 
 test('a decline must say why; an approval need not', async () => {
-  const d = advDb([anAdvance({ id: 'r1' })]);
-  await assert.rejects(() => _FNS.advDecide(d, APPROVER, { id: 'r1', approve: false, comment: '  ' }),
+  const d = advDb([anAdvance({ id: uid('r1') })]);
+  await assert.rejects(() => _FNS.advDecide(d, APPROVER, { id: uid('r1'), approve: false, comment: '  ' }),
     /sababu|comment is required/i,
     '"no" with no reason is the thing the requester brings back to the office to argue about');
   assert.equal(d._dump('staff_advances')[0].status, 'pending');
 
-  await _FNS.advDecide(d, APPROVER, { id: 'r1', approve: false, comment: 'Hakuna fedha mwezi huu' });
+  await _FNS.advDecide(d, APPROVER, { id: uid('r1'), approve: false, comment: 'Hakuna fedha mwezi huu' });
   const row = d._dump('staff_advances')[0];
   assert.equal(row.status, 'declined');
   assert.equal(row.approved_amount, null, 'a decline with a figure on it is not a decline');
   assert.equal(row.comment, 'Hakuna fedha mwezi huu');
 
   // An approval carries no comment requirement: the money is the answer.
-  const d2 = advDb([anAdvance({ id: 'r2' })]);
-  await _FNS.advDecide(d2, APPROVER, { id: 'r2', approve: true });
+  const d2 = advDb([anAdvance({ id: uid('r2') })]);
+  await _FNS.advDecide(d2, APPROVER, { id: uid('r2'), approve: true });
   assert.equal(d2._dump('staff_advances')[0].status, 'approved');
 });
 
@@ -1399,10 +1413,10 @@ test('holding both navs means holding both powers, own request included', async 
      The control lives in who gets advappr at all, not in a second opinion held by the code.
 
      This test exists so nobody helpfully puts the block back. */
-  const both = { code: 'L1', name: 'NEEMA M', role: 'RSM', teams: null,
-    tabs: ['advreq', 'advappr'], readOnly: false };
-  const d = advDb([anAdvance({ id: 'r1', code: 'L1', name: 'NEEMA M', amount: 200000 })]);
-  const r = await _FNS.advDecide(d, both, { id: 'r1', approve: true, approvedAmount: 100000 });
+  const both = { code: 'L1', name: 'NEEMA M', role: 'OFFICER', teams: null,
+    tabs: ['advreq', 'advappr'], readOnly: false, leader: true };
+  const d = advDb([anAdvance({ id: uid('r1'), code: 'L1', name: 'NEEMA M', amount: 200000 })]);
+  const r = await _FNS.advDecide(d, both, { id: uid('r1'), approve: true, approvedAmount: 100000 });
   assert.equal(r.status, 'approved', 'a self-decision must go through, not be refused');
 
   const row = d._dump('staff_advances')[0];
@@ -1415,21 +1429,21 @@ test('holding both navs means holding both powers, own request included', async 
     'both columns name the same person, which is what makes it visible after the fact');
 
   // Somebody else's request, same person: unchanged.
-  const d2 = advDb([anAdvance({ id: 'r2', code: 'A1' })]);
-  await _FNS.advDecide(d2, both, { id: 'r2', approve: true });
+  const d2 = advDb([anAdvance({ id: uid('r2'), code: 'A1' })]);
+  await _FNS.advDecide(d2, both, { id: uid('r2'), approve: true });
   assert.equal(d2._dump('staff_advances')[0].status, 'approved');
 
   /* And a code holding ONLY advreq still cannot decide anything: removing the self-approval
      refusal must not have loosened the nav gate underneath it. */
-  await assert.rejects(() => _FNS.advDecide(advDb([anAdvance({ id: 'r3' })]), ASKER,
-    { id: 'r3', approve: true }), e => e.status === 403);
+  await assert.rejects(() => _FNS.advDecide(advDb([anAdvance({ id: uid('r3') })]), ASKER,
+    { id: uid('r3'), approve: true }), e => e.status === 403);
 });
 
 test('two approvers pressing at once: the second is told, not silently overwritten', async () => {
-  const d = advDb([anAdvance({ id: 'r1' })]);
-  await _FNS.advDecide(d, APPROVER, { id: 'r1', approve: true });
+  const d = advDb([anAdvance({ id: uid('r1') })]);
+  await _FNS.advDecide(d, APPROVER, { id: uid('r1'), approve: true });
   const other = { ...APPROVER, code: 'L2', name: 'OTHER LEADER' };
-  await assert.rejects(() => _FNS.advDecide(d, other, { id: 'r1', approve: false, comment: 'no' }),
+  await assert.rejects(() => _FNS.advDecide(d, other, { id: uid('r1'), approve: false, comment: 'no' }),
     /tayari|already been decided/i);
   assert.equal(d._dump('staff_advances')[0].status, 'approved', 'the first decision stands');
   assert.equal(d._dump('staff_advances')[0].decided_by, 'NEEMA M');
@@ -1440,15 +1454,15 @@ test('the report filters on the application date and totals only what is approve
     /* THE ROW THAT GOES MISSING otherwise: asked for in July, FOR a date in August. HR pays
        against the period the advance is for, so these two dates fall either side of a month
        end and filtering on the wrong one drops the row out of the payment run. */
-    anAdvance({ id: 'edge', at: '2026-07-30T08:00:00Z', apply: '2026-08-03',
+    anAdvance({ id: uid('edge'), at: '2026-07-30T08:00:00Z', apply: '2026-08-03',
       status: 'approved', approved: 50000 }),
-    anAdvance({ id: 'in', apply: '2026-08-15', status: 'approved', approved: 100000 }),
-    anAdvance({ id: 'declined', apply: '2026-08-16', status: 'declined', comment: 'no' }),
-    anAdvance({ id: 'waiting', apply: '2026-08-17', status: 'pending', amount: 150000 }),
-    anAdvance({ id: 'next', apply: '2026-09-02', status: 'approved', approved: 200000 }),
+    anAdvance({ id: uid('in'), apply: '2026-08-15', status: 'approved', approved: 100000 }),
+    anAdvance({ id: uid('declined'), apply: '2026-08-16', status: 'declined', comment: 'no' }),
+    anAdvance({ id: uid('waiting'), apply: '2026-08-17', status: 'pending', amount: 150000 }),
+    anAdvance({ id: uid('next'), apply: '2026-09-02', status: 'approved', approved: 200000 }),
   ]);
   const aug = await _FNS.advReport(d, HRUSER, { from: '2026-08-01', to: '2026-08-31' });
-  assert.deepEqual(aug.rows.map(r => r.id).sort(), ['declined', 'edge', 'in', 'waiting'],
+  assert.deepEqual(aug.rows.map(r => r.id).sort(), ['declined', 'edge', 'in', 'waiting'].map(uid).sort(),
     'the July-dated ask FOR August belongs in August; September does not');
   assert.equal(aug.totals.count, 4);
   assert.equal(aug.totals.approved, 150000,
@@ -1457,7 +1471,7 @@ test('the report filters on the application date and totals only what is approve
 
   const onlyApproved = await _FNS.advReport(d, HRUSER,
     { from: '2026-08-01', to: '2026-08-31', status: 'approved' });
-  assert.deepEqual(onlyApproved.rows.map(r => r.id).sort(), ['edge', 'in']);
+  assert.deepEqual(onlyApproved.rows.map(r => r.id).sort(), ['edge', 'in'].map(uid).sort());
   assert.equal(onlyApproved.totals.approved, 150000, 'the total holds when the view narrows');
 
   // The report carries the bank details, because it IS the payment instruction.
@@ -1494,13 +1508,14 @@ test('every advance pane says run the migration rather than showing an empty tab
 });
 
 test('a view-only code may read the advance panes but never move money', async () => {
-  const d = advDb([anAdvance({ id: 'r1', code: 'V' })]);
-  const ro = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: [], readOnly: true };
+  const d = advDb([anAdvance({ id: uid('r1'), code: 'V' })]);
+  const ro = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: [],
+    readOnly: true, leader: false };
   // AUDITOR sees every pane, as everywhere else in the system...
   assert.equal((await _FNS.advReport(d, ro, {})).rows.length, 1);
   assert.equal((await _FNS.advQueue(d, ro, {})).pending, 1);
   // ...and is stopped at the write, not at the door.
-  await assert.rejects(() => _FNS.advDecide(d, ro, { id: 'r1', approve: true }),
+  await assert.rejects(() => _FNS.advDecide(d, ro, { id: uid('r1'), approve: true }),
     e => e.status === 403);
   await assert.rejects(() => _FNS.advRequest(d, ro,
     { amount: 50000, applyDate: '2026-08-20', bank: 'NMB', account: '1' }), e => e.status === 403);
@@ -1518,4 +1533,296 @@ test('both ends of an advance are audited, and neither carries the money into th
   for (const leak of ['200000', '100000', '0150123456700', 'CRDB', 'private']) {
     assert.ok(!s.includes(leak), 'the audit log must not carry ' + leak);
   }
+});
+
+/* =========================================================================================
+   WHAT THE LIVE AUDIT FOUND, kept found.
+
+   The advance feature shipped, the owner ran the migration, and an audit against real
+   Postgres/PostgREST semantics turned up defects the 216-test suite could not see, because
+   the suite runs on an in-memory fake. Each one below is a test for a thing that WAS broken
+   in production, not a thing that might be.
+   ========================================================================================= */
+
+test('the access code never leaves the server on an advance row', async () => {
+  /* staff_code is not an employee number in this system -- it IS the credential the person
+     signs in with, the whole of it. It was on every row of the approval queue, so any approver
+     could read a working login for every colleague who had ever asked for an advance.
+     The screen only ever needed one bit of it: is this row mine. */
+  const d = advDb([
+    anAdvance({ id: uid('a'), code: 'A1', name: 'JUMA G' }),
+    anAdvance({ id: uid('b'), code: 'L1', name: 'NEEMA M' }),
+  ]);
+  for (const [fn, user] of [['advQueue', APPROVER], ['advReport', HRUSER], ['advMine', ASKER]]) {
+    const r = await _FNS[fn](d, user, {});
+    for (const row of r.rows) {
+      assert.ok(!('staffCode' in row), fn + ' must not put an access code on the wire');
+      assert.equal(typeof row.mine, 'boolean',
+        fn + ' must answer "is this mine" instead of shipping the code to be compared');
+    }
+    const blob = JSON.stringify(r);
+    for (const code of ['"A1"', '"L1"', '"H1"']) {
+      assert.ok(!blob.includes(code), fn + ' leaked the access code ' + code + ' in its response');
+    }
+  }
+  // And the boolean is actually right, or the drawer's own-request note is meaningless.
+  const q = await _FNS.advQueue(d, { ...APPROVER, code: 'L1' }, {});
+  assert.deepEqual(q.rows.map(r => r.mine).sort(), [false, true]);
+});
+
+test('the approval queue is not shown where the money goes', async () => {
+  /* Deciding an advance needs to know who asked and for how much. It does not need the bank
+     details -- that is HR's job, behind the advrep nav, and the panes were split three ways
+     precisely so holding one power does not hand over the others. */
+  const d = advDb([anAdvance({ id: uid('a') })]);
+  const q = await _FNS.advQueue(d, APPROVER, {});
+  assert.equal(q.rows[0].bank, '', 'the approver has no business with the bank name');
+  assert.equal(q.rows[0].account, '', 'nor with the account number');
+
+  // HR still gets them, because the report IS the payment instruction.
+  const rep = await _FNS.advReport(d, HRUSER, {});
+  assert.equal(rep.rows[0].bank, 'CRDB');
+  assert.ok(rep.rows[0].account);
+});
+
+test('a malformed request id is a plain refusal, not a database error', async () => {
+  /* id is a uuid column, so PostgREST answers a malformed filter with "invalid input syntax
+     for type uuid" -- which tableMissing does not match, so it escaped as a 500 carrying a raw
+     database message instead of the 400 the code intended two lines later. */
+  const d = advDb([anAdvance({ id: uid('a') })]);
+  for (const bad of ['', '   ', 'r1', 'not-a-uuid', '1; drop table staff_advances', '../../etc']) {
+    await assert.rejects(() => _FNS.advDecide(d, APPROVER, { id: bad, approve: true }),
+      e => /halijachaguliwa|No request chosen/i.test(e.message),
+      JSON.stringify(bad) + ' must be refused before it reaches Postgres');
+  }
+  // A well-formed id that simply is not there still gets its own, different answer.
+  await assert.rejects(() => _FNS.advDecide(d, APPROVER, { id: uid('nope'), approve: true }),
+    /halipo|no longer exists/i);
+});
+
+test('a date that looks like a date but is not one is refused before Postgres sees it', async () => {
+  /* The regex only says it has the SHAPE of a date. 2026-02-30 and 2026-13-01 both pass it and
+     Postgres then refuses the insert with a range error that reaches the officer as a 500. */
+  const d = advDb([]);
+  const ask = applyDate => _FNS.advRequest(d, ASKER,
+    { amount: 50000, applyDate, bank: 'NMB', account: '1' });
+  for (const bad of ['2026-02-30', '2026-13-01', '2026-00-10', '2026-04-31', '2026-01-32']) {
+    await assert.rejects(() => ask(bad), /tarehe|date/i, bad + ' is not a real day');
+  }
+  // Real days, including the leap one, still go through.
+  for (const good of ['2026-02-28', '2024-02-29', '2026-12-31', '2026-01-01']) {
+    await ask(good);
+  }
+  assert.equal(d._dump('staff_advances').length, 4, 'every valid date was accepted');
+});
+
+test('the report tiles count the period, not whatever the status filter is showing', async () => {
+  /* The tiles ARE the status control, so computing them over the status-filtered rows made
+     them move when they were clicked: ticking "Za kulipa" made the tile beside it report the
+     approved count under the words "in this period". The period had not changed. */
+  const d = advDb([
+    anAdvance({ id: uid('a'), apply: '2026-08-05', status: 'approved', approved: 100000 }),
+    anAdvance({ id: uid('b'), apply: '2026-08-06', status: 'declined', comment: 'no' }),
+    anAdvance({ id: uid('c'), apply: '2026-08-07', status: 'pending' }),
+    anAdvance({ id: uid('d'), apply: '2026-09-01', status: 'approved', approved: 50000 }),
+  ]);
+  const period = { from: '2026-08-01', to: '2026-08-31' };
+  const all = await _FNS.advReport(d, HRUSER, period);
+  assert.equal(all.totals.count, 3);
+  assert.equal(all.totals.approved, 100000);
+
+  for (const status of ['approved', 'declined', 'pending']) {
+    const view = await _FNS.advReport(d, HRUSER, { ...period, status });
+    assert.equal(view.totals.count, 3, `the ${status} lens must not change the period count`);
+    assert.equal(view.totals.approved, 100000,
+      `nor the figure the bank is paying (${status} lens)`);
+  }
+  // Only the table below responds to the lens.
+  assert.equal((await _FNS.advReport(d, HRUSER, { ...period, status: 'approved' })).rows.length, 1);
+});
+
+test('the dispatch table answers to its own functions and nothing inherited', async () => {
+  /* FNS is an object literal, so it inherits from Object.prototype: FNS['constructor'],
+     FNS['toString'] and friends are all truthy and were CALLED with (supabase, user, args) --
+     past requireNav, past requireWrite, past the audit log. `constructor` evaluated
+     Object(supabase) and handed back the database client; it failed to reach the caller only
+     because that object holds a circular reference and JSON.stringify threw. */
+  for (const inherited of ['constructor', 'toString', 'valueOf', 'hasOwnProperty',
+    'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString']) {
+    assert.ok(!Object.prototype.hasOwnProperty.call(_FNS, inherited),
+      inherited + ' is inherited, so the dispatcher must not resolve it');
+  }
+  const src = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  const dispatch = src.slice(src.indexOf('export default withApi'));
+  assert.match(dispatch, /Object\.prototype\.hasOwnProperty\.call\(FNS, fn\)/,
+    'the dispatcher must resolve OWN properties only');
+  assert.match(dispatch, /typeof h !== 'function'/,
+    'and must insist on a function, so a non-callable own property is a 400 too');
+});
+
+test('both advance writes are audited with which request they were about', async () => {
+  /* The entries recorded WHO and WHAT but not WHICH: "NEEMA M -- advDecide -- 14:03" with a
+     null subject cannot be tied to a payment, which is the question an audit log about money
+     exists to answer. */
+  const { subjectOf, AUDITED } = await import('../api/_lib/audit.js');
+  assert.ok(AUDITED.has('advRequest') && AUDITED.has('advDecide'));
+  const id = uid('r1');
+  const s = subjectOf({ id, approve: true, approvedAmount: 100000, comment: 'half' }) || '';
+  assert.ok(s.includes('id=' + id), 'the decision must name the request it decided');
+  // And still nothing that turns the log into a second copy of the payroll.
+  for (const leak of ['100000', 'half', 'CRDB', '0150123456700']) {
+    assert.ok(!s.includes(leak), 'the audit log must not carry ' + leak);
+  }
+});
+
+/* =========================================================================================
+   THE APPROVAL PANE IS A PERSON *AND* A DEPARTMENT.
+
+     "The ones i grant approval role can only see data of the same role to keep confidentiality
+      of departments ... all access codes should have a button to switch that that person is a
+      leader in ther role so those with that switch on can extend to approval nav"
+
+     "NB: ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP"
+
+   Two rules that have to hold together, and neither is expressible as a role grant alone:
+
+     1. WHO may open the pane -- the advappr nav ticked on the role AND the Kiongozi switch
+        ticked on the individual access code. Granting the nav to CREDIT must not hand the
+        approval pane to every credit officer; it is meant for the one who leads them.
+     2. WHAT they see once inside -- only advances asked for by people of their OWN role.
+        The amounts are the confidential part, and a credit leader has no business reading
+        what the store or IT are borrowing.
+
+   ADMIN is exempt from both, everywhere, by the owner's standing rule. So is a read-only
+   AUDITOR code: it is supervision, it sees everything and requireWrite stops it changing
+   anything.
+   ========================================================================================= */
+const asLeader = (role, over) => ({ code: 'LEAD-' + role, name: role + ' LEADER', role,
+  teams: null, tabs: ['advappr'], readOnly: false, leader: true, ...over });
+
+test('the approval nav needs the Kiongozi switch as well as the grant', async () => {
+  const navs = u => _FNS.boot ? null : null;   // navsFor is exercised through requireNav below
+  const d = advDb([anAdvance({ id: uid('a') })]);
+
+  // Nav ticked, switch off -> the pane is not theirs, and the server says 403 rather than
+  // quietly serving an empty queue.
+  const notLeader = { ...APPROVER, leader: false };
+  await assert.rejects(() => _FNS.advQueue(d, notLeader, {}), e => e.status === 403,
+    'the nav alone must not open the approval pane');
+  await assert.rejects(() => _FNS.advDecide(d, notLeader, { id: uid('a'), approve: true }),
+    e => e.status === 403);
+
+  // Nav ticked, switch on -> in.
+  assert.equal((await _FNS.advQueue(d, APPROVER, {})).rows.length, 1);
+
+  // Switch on but the nav never granted -> still out. Both are required, in both directions.
+  await assert.rejects(() => _FNS.advQueue(d, { ...ASKER, leader: true }, {}),
+    e => e.status === 403, 'the switch alone must not conjure the pane either');
+});
+
+test('an approver sees only their own department, and cannot decide outside it', async () => {
+  const d = advDb([
+    { ...anAdvance({ id: uid('credit1'), code: 'C1', name: 'CREDIT PERSON' }), staff_role: 'CREDIT' },
+    { ...anAdvance({ id: uid('credit2'), code: 'C2', name: 'ANOTHER CREDIT' }), staff_role: 'CREDIT' },
+    { ...anAdvance({ id: uid('store1'), code: 'S1', name: 'STORE PERSON' }), staff_role: 'STORE' },
+  ]);
+  const creditLead = asLeader('CREDIT');
+
+  const q = await _FNS.advQueue(d, creditLead, {});
+  assert.deepEqual(q.rows.map(r => r.id).sort(), [uid('credit1'), uid('credit2')].sort(),
+    'a credit leader sees credit advances and nothing else');
+  assert.equal(q.pending, 2, 'the pending count is their department, not the company');
+  assert.ok(!JSON.stringify(q).includes('STORE PERSON'),
+    'no trace of another department may reach the response');
+
+  /* THE FILTER IS A VIEW; THE WRITE NEEDS ITS OWN GUARD. Anybody who can read an id can post
+     it, so the boundary is enforced again on the decision -- and answered as "no such request"
+     rather than "that belongs to STORE", which would confirm both that it exists and which
+     department it came from. */
+  await assert.rejects(() => _FNS.advDecide(d, creditLead, { id: uid('store1'), approve: true }),
+    /halipo|no longer exists/i);
+  assert.equal(d._dump('staff_advances').find(r => r.id === uid('store1')).status, 'pending',
+    'and nothing was written to the other department\'s row');
+
+  // Their own department decides normally.
+  await _FNS.advDecide(d, creditLead, { id: uid('credit1'), approve: true });
+  assert.equal(d._dump('staff_advances').find(r => r.id === uid('credit1')).status, 'approved');
+});
+
+test('ADMIN is full access everywhere, and so is read-only supervision', async () => {
+  const d = advDb([
+    { ...anAdvance({ id: uid('credit1'), code: 'C1' }), staff_role: 'CREDIT' },
+    { ...anAdvance({ id: uid('store1'), code: 'S1' }), staff_role: 'STORE' },
+    { ...anAdvance({ id: uid('it1'), code: 'I1' }), staff_role: 'IT' },
+  ]);
+  /* The owner's standing rule. ADMIN carries no Kiongozi switch and belongs to no department,
+     and must still see and decide everything -- otherwise the person who administers the
+     system is the one person locked out of it. */
+  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: [], readOnly: false,
+    leader: false };
+  assert.equal((await _FNS.advQueue(d, admin, {})).rows.length, 3,
+    'admin sees every department regardless of the leader switch');
+  await _FNS.advDecide(d, admin, { id: uid('store1'), approve: true });
+  assert.equal(d._dump('staff_advances').find(r => r.id === uid('store1')).status, 'approved');
+
+  // Read-only supervision sees all of it and can change none of it.
+  const ro = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: [],
+    readOnly: true, leader: false };
+  assert.equal((await _FNS.advQueue(d, ro, {})).rows.length, 3);
+  await assert.rejects(() => _FNS.advDecide(d, ro, { id: uid('it1'), approve: true }),
+    e => e.status === 403);
+});
+
+test('the report stays company-wide: that is what HR is for', async () => {
+  /* "the advance report nav compose all the company" -- the department boundary is on the
+     APPROVAL pane only. HR files and pays for everybody, so scoping this one would break the
+     bank run it exists to produce. */
+  const d = advDb([
+    { ...anAdvance({ id: uid('credit1'), code: 'C1' }), staff_role: 'CREDIT' },
+    { ...anAdvance({ id: uid('store1'), code: 'S1' }), staff_role: 'STORE' },
+  ]);
+  const rep = await _FNS.advReport(d, HRUSER, {});
+  assert.equal(rep.rows.length, 2, 'HR sees every department');
+  assert.deepEqual([...new Set(rep.rows.map(r => r.staffRole))].sort(), ['CREDIT', 'STORE']);
+  // And HR's own leader switch is irrelevant to it.
+  assert.equal((await _FNS.advReport(d, { ...HRUSER, leader: true }, {})).rows.length, 2);
+});
+
+test('before the leader migration the pane says so instead of showing an empty queue', async () => {
+  /* leader === null means authCode could not find the column. An empty queue in that state
+     would read as "nobody has asked for anything", which is the one conclusion a pane about
+     money must never invite by accident. */
+  const d = advDb([anAdvance({ id: uid('a') })]);
+  const unknown = { ...APPROVER, leader: null };
+  const q = await _FNS.advQueue(d, unknown, {});
+  assert.equal(q.notReady, true);
+  assert.deepEqual(q.rows, []);
+  assert.match(q.note, /RUN-ME-2026-08-31-advance-leader\.sql/,
+    'and it names the exact file to run');
+  await assert.rejects(() => _FNS.advDecide(d, unknown, { id: uid('a'), approve: true }),
+    /RUN-ME-2026-08-31-advance-leader\.sql/);
+
+  // Admin is unaffected by the missing column, as by everything else.
+  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: [], leader: null };
+  assert.equal((await _FNS.advQueue(d, admin, {})).rows.length, 1);
+});
+
+test('saving an access code carries the Kiongozi switch, and never clears it by accident', async () => {
+  const d = fakeDb({ access_codes: [], roles: [], settings: [] });
+  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
+  const base = { code: 'C9', name: 'CREDIT LEADER', role: 'CREDIT', allTeams: true, tabs: ['advappr'] };
+
+  await _FNS.saveAccessCode(d, admin, { ...base, leader: true });
+  assert.equal(d._dump('access_codes')[0].is_leader, true);
+
+  await _FNS.saveAccessCode(d, admin, { ...base, leader: false });
+  assert.equal(d._dump('access_codes')[0].is_leader, false, 'and it can be taken away again');
+
+  /* AN EDIT THAT SAYS NOTHING ABOUT LEADERSHIP MUST NOT REVOKE IT. An older screen -- or any
+     save of a name or a team list -- would otherwise quietly demote somebody. */
+  await _FNS.saveAccessCode(d, admin, { ...base, leader: true });
+  await _FNS.saveAccessCode(d, admin, { ...base, name: 'RENAMED' });
+  const row = d._dump('access_codes')[0];
+  assert.equal(row.name, 'RENAMED');
+  assert.equal(row.is_leader, true, 'an unrelated edit must leave the switch alone');
 });

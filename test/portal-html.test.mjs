@@ -759,8 +759,17 @@ test('the advance report defaults to the current month, and says so in the filte
   assert.equal(r.to, mm + '-' + p(new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()),
     'the range must end on the last day of this month, whatever length it is');
 
-  assert.match(src, /var ADVR=\(function\(\)\{ var r=monthRange_\(\);/,
-    'the report state must be seeded from monthRange_, or the pane still opens unbounded');
+  /* RESOLVED PER DRAW, NOT AT SCRIPT LOAD. Seeding ADVR at load froze the range for the life
+     of the tab, and these tabs stay open: somebody who left the portal open on the 31st and came
+     back on the 1st was shown last month's rows labelled as this month, on the pane the payment
+     run is built from. */
+  assert.match(src, /if\(!ADVR\.from&&!ADVR\.to&&!ADVR\.explicit\)\{ var mr=monthRange_\(\);/,
+    'drawAdvRep must resolve the month on every draw, or a long-lived tab shows a stale month');
+  assert.match(src, /^var ADVR=\{from:'',to:'',status:''\};/m,
+    'the module-level default must stay blank -- blank is the marker that means "fill me in"');
+  assert.match(src, /explicit:true/,
+    'an explicit date choice must be distinguishable from "not filled in yet", or the redraw '
+    + 'helpfully puts this month back over the user\'s own selection');
   assert.match(src, /id="avrAll"/,
     'there must still be a deliberate way to ask for all dates -- the default is a default, '
     + 'not a cage');

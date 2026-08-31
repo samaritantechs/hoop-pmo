@@ -158,11 +158,32 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    until somebody ticks a new box. ADMIN and AUDITOR see every pane, as everywhere. */
 const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
+/* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
+   and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
+   it sees the whole system, and requireWrite stops it changing any of it. */
+const advSeesEveryRole = user => isAdminRole(user) || isReadOnly(user);
+
+/* THE APPROVAL PANE NEEDS THE NAV *AND* THE PERSON.
+   ---------------------------------------------------------------------------------------------
+     "all access codes should have a button to switch that that person is a leader in ther role
+      so those with that switch on can extend to approval nav"
+
+   Every other pane in this system is granted by role alone, and that is right -- but it does not
+   work here. Ticking advappr on CREDIT would hand the approval pane to every credit officer,
+   when what the owner means is the ONE person who leads them. "Leads their department" is a fact
+   about a person, not about a role, so it is a switch on the access code, and the pane opens
+   only when both are true.
+
+   `leader === null` means the migration has not run yet. The nav stays visible in that state on
+   purpose: taking it away would be a pane that silently vanished, whereas advQueue can open and
+   say exactly which SQL file is missing. It shows no rows either way -- see advQueue. */
 function navsFor(user) {
-  if (isAdminRole(user) || isReadOnly(user)) return NAV_TABS.slice();
+  if (advSeesEveryRole(user)) return NAV_TABS.slice();
   const t = (user.tabs || []).map(x => String(x).toLowerCase());
   if (t.includes('sales')) t.push('fraud', 'scorecards', 'stock', 'movement');
-  const chosen = NAV_TABS.filter(k => t.includes(k));
+  let chosen = NAV_TABS.filter(k => t.includes(k));
+  // The nav grant is necessary but not sufficient for the approval pane: see the note above.
+  if (user && user.leader === false) chosen = chosen.filter(k => k !== 'advappr');
   // 'dashboard' and 'settings' were the OLD vocabulary too -- a role carrying only
   // those was saved before panes were choosable and must keep the old defaults, or
   // yesterday's codes go dark today. Any OTHER nav key means the owner chose deliberately.
@@ -181,9 +202,26 @@ function navsFor(user) {
 const ADV_AMOUNTS = [50000, 100000, 150000, 200000];
 const ADV_COLS = 'id, requested_at, staff_code, staff_name, staff_role, apply_date, amount, '
   + 'status, approved_amount, comment, decided_by, decided_at, bank_name, account_no';
+/* THE APPROVER'S QUEUE ASKS FOR LESS, because it is answering a smaller question.
+   ---------------------------------------------------------------------------------------------
+   Deciding an advance needs to know who asked, for how much, and against which date. It does
+   not need to know where the money will be sent -- that is HR's job, behind the advrep nav, and
+   the panes were split three ways precisely so that holding one power does not hand over the
+   others. Selecting the bank columns for a pane that never displays them made advappr quietly
+   include a power nobody granted it: every approver could read every colleague's bank name and
+   full account number straight off the API response.
+
+   Narrowed at the SELECT rather than dropped on the way out, so the details never leave
+   Postgres for a request that has no business seeing them. */
+const ADV_QUEUE_COLS = 'id, requested_at, staff_code, staff_name, staff_role, apply_date, '
+  + 'amount, status, approved_amount, comment, decided_by, decided_at';
 const ADV_NOT_READY = 'Jedwali la advance halijatengenezwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-08-29-salary-advance.sql kwenye Supabase. '
   + '/ The salary advance table has not been created yet — run that migration first.';
+const ADV_LEADER_NOT_READY = 'Kibali cha kiongozi hakijawekwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-08-31-advance-leader.sql kwenye Supabase, kisha weka alama ya '
+  + 'Kiongozi kwenye misimbo inayoongoza idara. / The leader switch does not exist yet — run '
+  + 'that migration, then tick Kiongozi on the codes that lead a department.';
 /* ONE row shape, built once, so the requester's pane, the approver's queue and HR's report
    cannot drift into three slightly different opinions about the same request.
 
@@ -191,12 +229,19 @@ const ADV_NOT_READY = 'Jedwali la advance halijatengenezwa bado. Endesha '
    by the browser and as UTC by this server, which is three hours of disagreement in Dar es
    Salaam on a payment record. apply_date stays a plain YYYY-MM-DD -- it is a calendar day the
    requester chose, not a moment, and giving it a time zone would be inventing precision. */
-const advRow = r => ({
+const advRow = (r, me) => ({
   id: String(r.id),
   at: r.requested_at ? Date.parse(r.requested_at) : null,
   staffName: r.staff_name || '',
   staffRole: r.staff_role || '',
-  staffCode: r.staff_code || '',
+  /* THE ACCESS CODE NEVER GOES OUT ON THE WIRE. staff_code is not an employee number in this
+     system -- it IS the credential the person signs in with, the whole of it, and there is
+     nothing else to know. Putting it on every row of the approval queue handed each approver a
+     working login for every colleague who had ever asked for an advance.
+
+     The screen only ever needed one bit of it -- "is this row mine" -- so the server answers
+     that question here and sends the answer instead of the secret. */
+  mine: !!(me && r.staff_code && String(r.staff_code) === String(me)),
   applyDate: r.apply_date ? String(r.apply_date).slice(0, 10) : '',
   amount: r.amount == null ? null : Number(r.amount),
   status: r.status || 'pending',
@@ -2020,7 +2065,21 @@ const FNS = {
        kept: requested_at is stamped by the database, this is the applicant's own calendar
        choice, and the report shows the two side by side. */
     const applyDate = String(a.applyDate || '').trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(applyDate)) {
+    /* SHAPE AND THEN CALENDAR. The regex only says it looks like a date: 2026-02-30 and
+       2026-13-01 both pass it, and Postgres then refuses the insert with a range error that
+       reaches the officer as a 500 and a raw database message. Round-tripping through Date is
+       what separates "looks like a date" from "is one" -- an out-of-range field silently rolls
+       over (Feb 30th becomes Mar 2nd), so a value that does not come back identical was never
+       a real day. The browser's <input type="date"> cannot produce one of these, but the
+       server is not entitled to assume its caller is a browser. */
+    const asDay = new Date(applyDate + 'T00:00:00Z');
+    /* isNaN FIRST. A month of 13 gives an Invalid Date, and calling toISOString on one THROWS
+       a RangeError -- which would have escaped as the same 500 this check exists to prevent.
+       Only once it is a real Date does the round-trip mean anything: an out-of-range day
+       silently rolls over (Feb 30th becomes Mar 2nd), so a value that does not come back
+       identical was never a real day. */
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(applyDate) || isNaN(asDay.getTime())
+        || asDay.toISOString().slice(0, 10) !== applyDate) {
       bad('Weka tarehe ya maombi. / Pick an application date.');
     }
     const bank = String(a.bank || '').trim();
@@ -2066,40 +2125,66 @@ const FNS = {
       return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS };
     }
     return { ok: true, amounts: ADV_AMOUNTS,
-      rows: rows.map(advRow).sort((x, y) => (y.at || 0) - (x.at || 0)) };
+      rows: rows.map(r => advRow(r, user.code)).sort((x, y) => (y.at || 0) - (x.at || 0)) };
   },
 
   /** THE APPROVER'S QUEUE. Pending first because that is the whole job; recently decided
       below it so somebody can see what they just did and catch a slip immediately. */
   async advQueue(db, user, args) {
     requireNav(user, 'advappr');
+    /* THE MIGRATION IS NOT OPTIONAL FOR THIS PANE. Until is_leader exists the server cannot
+       tell a leader from anybody else, and the honest answer to "whose advances may I see" is
+       "I do not know yet" -- which must not be served as an empty queue, because an empty queue
+       reads as "nobody has asked for anything". */
+    if (user && user.leader === null && !advSeesEveryRole(user)) {
+      return { ok: true, rows: [], pending: 0, amounts: ADV_AMOUNTS, notReady: true,
+        note: ADV_LEADER_NOT_READY };
+    }
     const a = args || {};
     let rows;
     try {
-      rows = await fetchAll(() => db.from('staff_advances').select(ADV_COLS));
+      rows = await fetchAll(() => db.from('staff_advances').select(ADV_QUEUE_COLS));
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS, pending: 0 };
     }
-    const all = rows.map(advRow);
+    /* CONFIDENTIALITY BY DEPARTMENT. A credit leader approves credit advances and has no
+       business reading what the store or IT are borrowing -- the amounts ARE the confidential
+       part. Scoped on the role STAMPED on the request, not on a live lookup of the requester,
+       so a person who changes department later does not retroactively move their old asks into
+       somebody else's queue. Admin and read-only supervision see every role. */
+    const mine = advSeesEveryRole(user) ? null : K(user.role);
+    if (mine !== null) rows = rows.filter(r => K(r.staff_role) === mine);
+    const all = rows.map(r => advRow(r, user.code));
     const want = String(a.state || '').trim();
     const shown = want === 'decided' ? all.filter(r => r.status !== 'pending')
       : want === 'pending' ? all.filter(r => r.status === 'pending') : all;
     return { ok: true, amounts: ADV_AMOUNTS,
+      // What the pane tells the approver about why their list is short.
+      scope: mine === null ? 'kampuni nzima / the whole company' : String(user.role || ''),
       pending: all.filter(r => r.status === 'pending').length,
       // Pending first, then newest -- the queue is a worklist, not a diary.
       rows: shown.sort((x, y) => (x.status === 'pending' ? 0 : 1) - (y.status === 'pending' ? 0 : 1)
-        || (y.at || 0) - (x.at || 0)),
-      me: user.code || '' };
+        || (y.at || 0) - (x.at || 0)) };
   },
 
   /** APPROVE (possibly for less) OR DECLINE, with a comment either way. */
   async advDecide(db, user, args) {
     requireNav(user, 'advappr');
     requireWrite(user);
+    /* The queue's department filter is a VIEW, and a view is not a control. Anybody who can
+       read an id can post it here, so the same boundary is enforced again on the write --
+       checked below, once the row has been read and its stamped role is known. */
+    if (user && user.leader === null && !advSeesEveryRole(user)) bad(ADV_LEADER_NOT_READY);
     const a = args || {};
+    /* CHECKED AS A UUID, not merely as non-empty. `id` goes straight into .eq('id', id) against
+       a uuid column, and Postgres answers a malformed one with "invalid input syntax for type
+       uuid" -- which tableMissing does not match, so it escapes as a 500 carrying a raw database
+       message instead of the plain 400 the next two lines were written to give. */
     const id = String(a.id || '').trim();
-    if (!id) bad('Ombi halijachaguliwa. / No request chosen.');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      bad('Ombi halijachaguliwa. / No request chosen.');
+    }
     const approve = a.approve === true;
     const comment = String(a.comment || '').trim();
     /* A REFUSAL MUST SAY WHY. An approval need not -- the money is the answer -- but "no" with
@@ -2118,6 +2203,13 @@ const FNS = {
     }
     const dev = rows.find(r => String(r.id) === id);
     if (!dev) bad('Ombi halipo. / That request no longer exists.');
+    /* THE DEPARTMENT BOUNDARY, ENFORCED ON THE WRITE. Answered the same way as a missing row,
+       and deliberately so: telling somebody "that belongs to STORE" would confirm the request
+       exists and name the department it came from, which is the confidentiality this was asked
+       for in the first place. Compared on the role stamped on the request. */
+    if (!advSeesEveryRole(user) && K(dev.staff_role) !== K(user.role)) {
+      bad('Ombi halipo. / That request no longer exists.');
+    }
     if (String(dev.status) !== 'pending') {
       bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     }
@@ -2192,17 +2284,25 @@ const FNS = {
     /* FILTERED ON THE APPLICATION DATE, not on when the row was created. HR files and pays
        against the period the advance is FOR, and those two dates can fall either side of a
        month end -- which is exactly the row that goes missing from a payment run otherwise. */
-    let out = rows.map(advRow)
+    /* THE PERIOD IS THE DATE RANGE. THE STATUS IS A LENS ON IT.
+       Both filters used to be applied before the totals were counted, so the tiles moved every
+       time somebody narrowed the view -- and since the tiles ARE the status control, ticking
+       "Za kulipa" made the tile beside it report the approved count under the words "kwenye
+       kipindi hiki" (in this period). The period had not changed; only what was on screen had.
+       So the totals are counted over the DATE-filtered set and stay put, and only the table
+       below responds to the status lens. */
+    const inPeriod = rows.map(r => advRow(r, user.code))
       .filter(r => !from || (r.applyDate && r.applyDate >= from))
-      .filter(r => !to || (r.applyDate && r.applyDate <= to))
+      .filter(r => !to || (r.applyDate && r.applyDate <= to));
+    const out = inPeriod
       .filter(r => !['pending', 'approved', 'declined'].includes(want) || r.status === want)
       .sort((x, y) => (y.at || 0) - (x.at || 0));
     return { ok: true, rows: out,
       totals: {
-        count: out.length,
+        count: inPeriod.length,
         // What the bank run actually comes to. Declined and pending rows contribute nothing,
         // which is the only reading of this number that is safe to hand a cashier.
-        approved: out.reduce((s, r) => s + (r.status === 'approved' ? (r.approved || 0) : 0), 0),
+        approved: inPeriod.reduce((s, r) => s + (r.status === 'approved' ? (r.approved || 0) : 0), 0),
       } };
   },
 
@@ -2426,7 +2526,13 @@ const FNS = {
   async accessCodes(db, user) {
     requireSettings(user);
     const [rows, roleRows, hiddenRow] = await Promise.all([
-      fetchAll(() => db.from('access_codes').select('code, name, role, teams, tabs')),
+      fetchAll(() => db.from('access_codes').select('code, name, role, teams, tabs, is_leader'))
+        /* The roles editor must still open on a database that has not run the leader migration:
+           PostgREST refuses the whole select for one unknown column, and a pane that goes dark
+           is how somebody loses the ability to fix the very thing that is missing. */
+        .catch(e => (/is_leader/i.test(String(e && e.message))
+          ? fetchAll(() => db.from('access_codes').select('code, name, role, teams, tabs'))
+          : Promise.reject(e))),
       fetchAll(() => db.from('roles').select('role, tabs')),
       db.from('settings').select('value').eq('key', 'ROLES_HIDDEN').maybeSingle(),
     ]);
@@ -2449,9 +2555,13 @@ const FNS = {
       navTabs: NAV_TABS,
       roles: [...seen.values()].map(r => ({ ...r, inUse: useCount[r.role] || 0 }))
         .sort((a, b) => a.role < b.role ? -1 : 1),
+      /* null, not false, when the column is absent -- so the editor can show the switch as
+         unavailable-until-migrated rather than as "everybody is off". */
+      leaderKnown: rows.some(r => 'is_leader' in r) || !rows.length,
       codes: rows.map(r => ({
         code: mask ? '••••••' : r.code, name: r.name, role: r.role,
-        teams: r.teams || null, tabs: r.tabs || [] })) };
+        teams: r.teams || null, tabs: r.tabs || [],
+        leader: 'is_leader' in r ? !!r.is_leader : null })) };
   },
 
   /** A role leaves only when NOBODY holds it -- reassign the codes first. A deleted
@@ -2513,7 +2623,17 @@ const FNS = {
     const row = { code, name: String(a.name).trim(), role: K(a.role),
       teams: wantsAll ? null : list,
       tabs: Array.isArray(a.tabs) ? a.tabs : [] };
-    const { error } = await db.from('access_codes').upsert(row, { onConflict: 'code' });
+    /* KIONGOZI. Only written when the caller actually said something about it, so an older
+       screen that does not know about the switch cannot silently clear somebody's leadership
+       by saving an unrelated edit to their name or teams. */
+    if (a.leader !== undefined) row.is_leader = a.leader === true;
+    let { error } = await db.from('access_codes').upsert(row, { onConflict: 'code' });
+    if (error && /is_leader/i.test(String(error.message))) {
+      // The migration has not run. Save everything else rather than refusing the whole edit.
+      delete row.is_leader;
+      ({ error } = await db.from('access_codes').upsert(row, { onConflict: 'code' }));
+      if (!error) return { ok: true, code, leaderNotReady: true };
+    }
     if (error) throw new Error(error.message);
     return { ok: true, code };
   },
@@ -2582,7 +2702,14 @@ export default withApi(async (req) => {
   if (req.method !== 'POST') { const e = new Error('Method not allowed'); e.status = 405; throw e; }
   const { code, fn, args } = req.body || {};
   const user = await gatedUser(code);
-  const h = FNS[fn];
-  if (!h) { const e = new Error('Unknown portal fn: ' + fn); e.status = 400; throw e; }
+  /* OWN PROPERTIES ONLY. FNS is an object literal, so it inherits from Object.prototype, and
+     `FNS['constructor']`, `FNS['toString']`, `FNS['valueOf']` and their friends are all truthy.
+     Every one of them sailed past this guard's 400 and got CALLED with (supabase, user, args) --
+     which means past requireNav, past requireWrite, and past the audit log, the three things
+     every real handler is wrapped in. `constructor` evaluated Object(supabase) and returned the
+     database client itself; it only failed to reach the caller because that object happens to
+     hold a circular reference and JSON.stringify threw. A 500 by luck is not a boundary. */
+  const h = Object.prototype.hasOwnProperty.call(FNS, fn) ? FNS[fn] : null;
+  if (typeof h !== 'function') { const e = new Error('Unknown portal fn: ' + fn); e.status = 400; throw e; }
   return audited(supabase, user, fn, args, () => h(supabase, user, args));
 });
