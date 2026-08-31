@@ -1,5 +1,10 @@
 import { supabase, runQuery, friendlyDbError } from './supabase.js';
 import { requireSystemOpen } from './system-gate.js';
+/* EAT, never the server's clock. Vercel runs in UTC and Dar es Salaam is three hours ahead, so
+   a suspension compared against `new Date()` would begin at 21:00 the night before and end at
+   21:00 the night before that -- locking somebody out of an evening they were meant to work and
+   letting them back in for the first three hours of a day they are meant to be off. */
+import { todayKey } from './time.js';
 
 /** Same shape and job as auth_() in Code.gs: resolve an access code to
     {code, name, role, teams, tabs}. Throws on an invalid code -- callers don't need to
@@ -16,26 +21,49 @@ import { requireSystemOpen } from './system-gate.js';
    be told their access code is invalid until somebody ran a migration. That is the worst failure
    this file is capable of, so the narrower list is kept and used the instant the wider one is
    refused for mentioning the column. */
-const CODE_COLS = 'code, name, role, teams, tabs, is_leader';
-const CODE_COLS_PRE_LEADER = 'code, name, role, teams, tabs';
-const missingLeader = err =>
-  /is_leader/i.test(String((err && (err.message || err.details || err.code)) || ''));
+/* IT IS A CASCADE NOW, because there are two of these columns and there will be a third one
+   day. Widest first; each rung drops the newest column and is used the instant the one above it
+   is refused for naming a column this database has not been given yet. The rule that matters is
+   unchanged and is the reason this shape exists at all: a select that names an unknown column
+   fails ENTIRELY, and the select in question is the sign-in.
+
+   The INDEX of the rung that worked is what the caller reads afterwards, so "we did not ask"
+   stays distinguishable from "we asked and the answer was no" -- see leader/suspended below,
+   both of which are three-state for that reason. */
+const CODE_COL_TIERS = [
+  'code, name, role, teams, tabs, is_leader, suspend_from, suspend_to',
+  'code, name, role, teams, tabs, is_leader',
+  'code, name, role, teams, tabs',
+];
+const TIER_ALL = 0, TIER_NO_SUSPEND = 1;
+const missingCol = err =>
+  /is_leader|suspend_from|suspend_to/i.test(String((err && (err.message || err.details || err.code)) || ''));
+
+/** Runs `ask(cols)` down the cascade until one is not refused for an unknown column.
+    Returns { data, error, tier } -- tier being the rung that actually answered. */
+async function downTheTiers(ask, from = 0) {
+  let out = { data: null, error: null, tier: from };
+  for (let tier = from; tier < CODE_COL_TIERS.length; tier++) {
+    const { data, error } = await ask(CODE_COL_TIERS[tier]);
+    out = { data, error, tier };
+    if (!error || !missingCol(error)) return out;
+  }
+  return out;
+}
 
 export async function authCode(code, db = supabase) {
   if (!code) throw new AuthError('Access code required.');
   // Sign-in is the one request EVERYTHING else waits behind, so it is the one that most needs
   // to survive a momentary blip rather than turn the whole company away at the door.
-  let { data: exact, error } = await runQuery(() =>
-    db.from('access_codes').select(CODE_COLS).eq('code', code).maybeSingle());
-  /* leaderKnown=false means "this database has not been told about leaders yet", which is a
-     different fact from "this person is not a leader" -- and the approval pane says which,
-     rather than showing an empty queue that would read as "nobody has asked for anything". */
-  let leaderKnown = true;
-  if (error && missingLeader(error)) {
-    leaderKnown = false;
-    ({ data: exact, error } = await runQuery(() =>
-      db.from('access_codes').select(CODE_COLS_PRE_LEADER).eq('code', code).maybeSingle()));
-  }
+  /* tier tells us what this database HAS been told about. leaderKnown=false means "not told
+     about leaders yet", which is a different fact from "this person is not a leader" -- and the
+     approval pane says which, rather than showing an empty queue that would read as "nobody has
+     asked for anything". suspendKnown carries the same distinction for the absence window. */
+  const first = await downTheTiers(cols => runQuery(() =>
+    db.from('access_codes').select(cols).eq('code', code).maybeSingle()));
+  let { data: exact, error } = first;
+  const leaderKnown = first.tier <= TIER_NO_SUSPEND;
+  const suspendKnown = first.tier === TIER_ALL;
   if (error) throw new AuthError(friendlyDbError(error));
   /* CASE IS NOT PART OF THE SECRET.
      The sign-in box used to carry autocapitalize="characters", so on a phone the code was
@@ -48,9 +76,32 @@ export async function authCode(code, db = supabase) {
      This is only a second look for the same code typed in a different case. `code` is escaped
      for LIKE first: `%` and `_` are wildcards there, and a code containing one would otherwise
      match more rows than itself. */
-  const found = await caseInsensitiveCode(code, db, leaderKnown);
+  const found = await caseInsensitiveCode(code, db, first.tier);
   const data = exact || found.row;
   if (!data) throw new AuthError('Invalid access code.');
+  const knowSuspend = suspendKnown && found.suspendKnown;
+  /* AWAY TODAY, AND THEREFORE NOT AT THE DOOR EITHER.
+     -------------------------------------------------------------------------------------
+       "I need a feature to suspend a user at (Access codes - mfumo (portal)) so that they
+        don't appear anywhere unless reactivated"
+
+     "Anywhere" has to include the sign-in, or the person is still very much here. The refusal
+     names the window rather than saying "invalid access code": somebody whose code is correct
+     and is simply on leave should not spend the morning convinced they have forgotten it, and
+     it is the one message here that cannot help an attacker -- you have to hold a valid code
+     to ever see it.
+
+     ADMIN IS NEVER SHUT OUT. It is the standing rule everywhere in this system, and here it is
+     also the lockout guard: a window set on the last admin -- by a slip of the date picker, or
+     by an admin suspending themselves -- would leave nobody able to lift it. Every other role
+     is subject to this.
+
+     AND IF THE COLUMNS ARE NOT THERE, NOBODY IS SUSPENDED. Three states, not two: the
+     un-migrated database cannot say "yes", so it says nothing and the door works exactly as it
+     did before the migration. A missing column must never be able to lock the company out. */
+  if (knowSuspend && !isAdminRole({ role: data.role }) && suspendedOn(data, todayKey())) {
+    throw new AuthError(suspendMessage(data));
+  }
   return {
     code: data.code,
     name: data.name,
@@ -59,22 +110,71 @@ export async function authCode(code, db = supabase) {
     tabs: data.tabs || [],
     /* Three states, not two: true, false, and null for "the column is not there yet". */
     leader: (leaderKnown && found.leaderKnown) ? !!data.is_leader : null,
+    // Same three states. Only ever false here -- a suspended code never gets this far.
+    suspended: knowSuspend ? false : null,
   };
+}
+
+/* WHEN A WINDOW IS OPEN, in one place so nothing can hold a second opinion about it.
+   =============================================================================================
+     "so suspension is recorded by date picker start and end date"
+
+   BOTH ENDS INCLUSIVE. A window of the 3rd to the 5th is three days off, which is what anybody
+   filling in two date boxes means by it -- reading the end exclusively would put somebody back
+   at work a day early, silently, with nothing anywhere to show the arithmetic was the cause.
+
+   AN OPEN END IS INDEFINITE. "From Monday, until further notice" is a real thing to want and
+   the natural way to express it is to leave the second box empty.
+
+   AN OPEN START IS NOT. A `to` with no `from` would mean "suspended since the beginning of
+   time", which nobody ever means by filling in one box, so it is read as no window at all --
+   the safe direction, since the failure is somebody staying at work rather than an entire
+   department being locked out by a half-filled form.
+
+   COMPARED AS TEXT, ON PURPOSE. These are ISO dates, so string order IS date order, and the
+   comparison never touches a Date object -- which is exactly where a UTC server three hours
+   behind Dar es Salaam would put somebody back to work at 21:00 the night before. `day` comes
+   from todayKey(), which is EAT. */
+/* WHO IS ADMIN, in one place. It lived as a private const in portal.js, and the moment a
+   second file needed the same question -- the door, refusing a suspended code -- keeping it
+   there would have meant two copies of the most consequential rule in this system. Two copies
+   is how the UI and the gate once came to read different rules in Hope. */
+export const isAdminRole = user =>
+  String((user && user.role) || '').trim().toUpperCase() === 'ADMIN';
+
+export function suspendedOn(row, day) {
+  const from = String((row && row.suspend_from) || '').slice(0, 10);
+  const to = String((row && row.suspend_to) || '').slice(0, 10);
+  const d = String(day || '').slice(0, 10);
+  if (!from || !d) return false;
+  if (d < from) return false;
+  return !to || d <= to;
+}
+
+/** The refusal, naming the window. Only ever seen by somebody holding a valid code. */
+export function suspendMessage(row) {
+  const to = String((row && row.suspend_to) || '').slice(0, 10);
+  return 'Umesimamishwa kwa muda' + (to ? ' hadi ' + to : '')
+    + '. Wasiliana na msimamizi. / Your access is suspended'
+    + (to ? ' until ' + to : ' until further notice') + ' — speak to your supervisor.';
 }
 
 /** The same code, matched without regard to case. Returns a row only when EXACTLY ONE code
     matches: two codes differing only in case are a real (if unlikely) possibility, and guessing
     between them would hand somebody another person's teams. Better to refuse and be told the
     code is invalid than to sign the wrong person in. */
-async function caseInsensitiveCode(code, db, leaderKnown = true) {
+async function caseInsensitiveCode(code, db, startTier = 0) {
   const pattern = String(code).replace(/([\\%_])/g, '\\$1');
-  const ask = cols => runQuery(() =>
-    db.from('access_codes').select(cols).ilike('code', pattern).limit(2));
-  let { data, error } = await ask(leaderKnown ? CODE_COLS : CODE_COLS_PRE_LEADER);
-  let known = leaderKnown;
-  if (error && missingLeader(error)) { known = false; ({ data, error } = await ask(CODE_COLS_PRE_LEADER)); }
+  // Starts at the rung the exact-match query already proved this database can answer, so the
+  // refusals are not paid for twice on every single sign-in.
+  const { data, error, tier } = await downTheTiers(cols => runQuery(() =>
+    db.from('access_codes').select(cols).ilike('code', pattern).limit(2)), startTier);
   if (error) throw new AuthError(friendlyDbError(error));
-  return { row: (data && data.length === 1) ? data[0] : null, leaderKnown: known };
+  return {
+    row: (data && data.length === 1) ? data[0] : null,
+    leaderKnown: tier <= TIER_NO_SUSPEND,
+    suspendKnown: tier === TIER_ALL,
+  };
 }
 
 /** Same as teamAllowed_() -- null teams (ALL access) always passes. */

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { supabase, fetchAll } from './_lib/supabase.js';
-import { withApi, gatedUser, isReadOnly } from './_lib/auth.js';
+import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey } from './_lib/time.js';
 import { nudge } from './_lib/push.js';
@@ -116,7 +116,6 @@ function requireWrite(user) {
 /* ADMIN sees all -- the same rule auth.js's resolveTabs and can() apply, repeated here so
    the portal's own gates can never drift from the enforcement (the owner's word, and the
    bug Hope once had when UI and gate read different rules). */
-const isAdminRole = user => String((user && user.role) || '').trim().toUpperCase() === 'ADMIN';
 function requireSettings(user) {
   if (isAdminRole(user)) return;
   if (!(user.tabs || []).includes('settings')) {
@@ -222,6 +221,22 @@ const ADV_LEADER_NOT_READY = 'Kibali cha kiongozi hakijawekwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-08-31-advance-leader.sql kwenye Supabase, kisha weka alama ya '
   + 'Kiongozi kwenye misimbo inayoongoza idara. / The leader switch does not exist yet — run '
   + 'that migration, then tick Kiongozi on the codes that lead a department.';
+const SUSPEND_NOT_READY = 'Kusimamisha mtu hakujawekwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-08-31-access-suspend.sql kwenye Supabase, kisha rudi hapa. '
+  + '/ The suspension window does not exist yet -- run that migration, then come back.';
+
+/* The role a code holds, for the one question accessCodeSuspend has to ask before it writes:
+   is this an ADMIN. Read on its own rather than trusted from the caller, because the caller is
+   a browser and "which role is this code" is exactly the fact a suspension must not take on
+   trust. A row that cannot be read answers {} -- and an unknown role is not ADMIN, so the guard
+   fails towards refusing the write rather than towards allowing it. */
+async function roleOfCode(db, code) {
+  try {
+    const rows = await fetchAll(() => db.from('access_codes').select('code, role').eq('code', code));
+    return rows[0] || {};
+  } catch (e) { return {}; }
+}
+
 /* ONE row shape, built once, so the requester's pane, the approver's queue and HR's report
    cannot drift into three slightly different opinions about the same request.
 
@@ -2697,13 +2712,26 @@ const FNS = {
   async accessCodes(db, user) {
     requireSettings(user);
     const [rows, roleRows, hiddenRow] = await Promise.all([
-      fetchAll(() => db.from('access_codes').select('code, name, role, teams, tabs, is_leader'))
-        /* The roles editor must still open on a database that has not run the leader migration:
-           PostgREST refuses the whole select for one unknown column, and a pane that goes dark
-           is how somebody loses the ability to fix the very thing that is missing. */
-        .catch(e => (/is_leader/i.test(String(e && e.message))
-          ? fetchAll(() => db.from('access_codes').select('code, name, role, teams, tabs'))
-          : Promise.reject(e))),
+      /* A CASCADE, for the same reason authCode has one: PostgREST refuses the whole select
+         for one unknown column, and a pane that goes dark is how somebody loses the ability to
+         fix the very thing that is missing. Widest first, each rung dropping the newest
+         column. */
+      (async () => {
+        const tiers = [
+          'code, name, role, teams, tabs, is_leader, suspend_from, suspend_to',
+          'code, name, role, teams, tabs, is_leader',
+          'code, name, role, teams, tabs',
+        ];
+        let last;
+        for (const cols of tiers) {
+          try { return await fetchAll(() => db.from('access_codes').select(cols)); }
+          catch (e) {
+            last = e;
+            if (!/is_leader|suspend_from|suspend_to/i.test(String(e && e.message))) throw e;
+          }
+        }
+        throw last;
+      })(),
       fetchAll(() => db.from('roles').select('role, tabs')),
       db.from('settings').select('value').eq('key', 'ROLES_HIDDEN').maybeSingle(),
     ]);
@@ -2729,10 +2757,22 @@ const FNS = {
       /* null, not false, when the column is absent -- so the editor can show the switch as
          unavailable-until-migrated rather than as "everybody is off". */
       leaderKnown: rows.some(r => 'is_leader' in r) || !rows.length,
+      suspendKnown: rows.some(r => 'suspend_from' in r) || !rows.length,
+      /* The day the window is judged against, sent rather than worked out on the client: the
+         browser's clock belongs to whoever is holding it, and this is the same EAT day the
+         server uses to refuse a sign-in. A row marked "away" on this screen and let in at the
+         door would be the pane and the gate disagreeing about the same person. */
+      today: todayKey(),
       codes: rows.map(r => ({
         code: mask ? '••••••' : r.code, name: r.name, role: r.role,
         teams: r.teams || null, tabs: r.tabs || [],
-        leader: 'is_leader' in r ? !!r.is_leader : null })) };
+        leader: 'is_leader' in r ? !!r.is_leader : null,
+        /* A SUSPENDED ROW STAYS ON THIS SCREEN, marked rather than hidden. Filtering it out
+           would remove the one pane where the window can be lifted -- the same trap as a
+           deleted role that quietly resurrects itself. */
+        suspendFrom: 'suspend_from' in r ? (r.suspend_from || null) : null,
+        suspendTo: 'suspend_to' in r ? (r.suspend_to || null) : null,
+        suspended: 'suspend_from' in r ? suspendedOn(r, todayKey()) : null })) };
   },
 
   /** A role leaves only when NOBODY holds it -- reassign the codes first. A deleted
@@ -2921,6 +2961,70 @@ const FNS = {
     }
     if (!data || !data.length) throw new Error('Unknown code: ' + code);
     return { ok: true, code, leader };
+  },
+
+  /* AWAY TODAY -- an absence recorded as a window, not a switch.
+     =====================================================================================
+       "I need a feature to suspend a user at (Access codes - mfumo (portal)) so that they
+        don't appear anywhere unless reactivated, e.g one credit aint there today so if I
+        suspend him the customer distribution of today is auto to the available ones"
+       "so suspension is recorded by date picker start and end date"
+
+     Two dates and nothing else. A switch has to be turned back on by somebody remembering
+     to; an absence has an end that is already known on the day it is entered, so recording
+     the end means the person comes back by themselves on the right morning. There is no
+     scheduler in this system and this needs none -- the window is read against today's date
+     in EAT, wherever it is asked about.
+
+     TWO COLUMNS AND NO OTHERS, exactly like accessCodeLeader beside it. Routing this through
+     saveAccessCode would rewrite the whole row -- role, teams, tabs -- to change a date, and
+     a save that quietly restates fields nobody touched is how a person's navs get reverted
+     by somebody setting their leave. */
+  async accessCodeSuspend(db, user, args) {
+    requireWrite(user); requireSettings(user);
+    const code = String((args && args.code) || '').trim();
+    if (!code) throw new Error('code is required.');
+    const clean = v => {
+      const s = String(v == null ? '' : v).trim().slice(0, 10);
+      if (!s) return null;
+      // A calendar-valid ISO day or nothing. The picker sends this shape; a hand-built call
+      // must not be able to put "31 Feb" or free text into a date column.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) bad('Tarehe si sahihi. / That date is not valid.');
+      const d = new Date(s + 'T00:00:00Z');
+      if (isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
+        bad('Tarehe si sahihi. / That date is not valid.');
+      }
+      return s;
+    };
+    const from = clean(args && args.from);
+    const to = clean(args && args.to);
+    /* A window that ends before it begins is a typo every time, and it would read as "not
+       suspended at all" -- the most confusing possible answer, because the pane would show
+       two dates filled in beside somebody who is plainly still working. */
+    if (from && to && to < from) {
+      bad('Tarehe ya mwisho iko kabla ya ya kuanza. / The end date is before the start date.');
+    }
+    /* A `to` with no `from` is not a window and must not be stored as half of one -- see the
+       migration. Refused rather than silently dropped, because the operator filled in a box
+       and is entitled to know it did nothing. */
+    if (to && !from) {
+      bad('Weka tarehe ya kuanza pia. / A start date is needed as well as an end date.');
+    }
+    /* THE LOCKOUT GUARD. Admin is never subject to a window at sign-in, so storing one would
+       be a date sitting on a screen doing nothing -- and a person reading it would believe
+       that admin was away. Refused where the mistake is made instead. */
+    if (from && isAdminRole(await roleOfCode(db, code))) {
+      bad('Msimbo wa ADMIN hauwezi kusimamishwa — ndiyo njia ya kurudisha wengine. '
+        + '/ An ADMIN code cannot be suspended: it is the way back for everybody else.');
+    }
+    const { data, error } = await db.from('access_codes')
+      .update({ suspend_from: from, suspend_to: to }).eq('code', code).select('code');
+    if (error) {
+      if (/suspend_from|suspend_to/i.test(String(error.message))) bad(SUSPEND_NOT_READY);
+      throw new Error(error.message);
+    }
+    if (!data || !data.length) throw new Error('Unknown code: ' + code);
+    return { ok: true, code, from, to };
   },
 
   async deleteAccessCode(db, user, args) {

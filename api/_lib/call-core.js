@@ -1,5 +1,5 @@
 import { fetchAll } from './supabase.js';
-import { teamAllowed } from './auth.js';
+import { teamAllowed, suspendedOn, isAdminRole } from './auth.js';
 import { TZ_OFFSET_MS, todayKey, addDaysKey, weekMondayKey } from './time.js';
 import { isSystemOpen } from './system-gate.js';
 
@@ -313,13 +313,62 @@ const isAgent = cu => K(cu && cu.role) === 'AGENT';
 /** The deal's roster WITH NAMES -- same single read; names ride along so every list row
     can say which credit person is chasing that customer (the third chip on the card).
     Exported: the portal's Wateja shows the same dealt names -- one deal, two screens. */
-export async function rosterFull(db) {
+export async function rosterFull(db, day = todayKey()) {
   const rows = await fetchAll(() => db.from('call_users').select('user_id, name, role, active'));
-  const on = rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role)))
+  const away = await suspendedNamesOn(db, day);
+  const on = rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role))
+      && !away.has(nameKey(r.name)))
     .sort((a, b) => (String(a.user_id) < String(b.user_id) ? -1 : 1));
   const names = {};
   for (const r of on) names[String(r.user_id)] = r.name || '';
   return { ids: on.map(r => String(r.user_id)), names };
+}
+
+/* WHO IS AWAY, ON A GIVEN DAY.
+   =========================================================================================
+     "one credit aint there today so if I suspend him the customer distribution of today is
+      auto to the available ones"
+
+   The deal is recomputed from the roster on every read and nothing is stored, so taking a
+   person OUT of the roster is the redistribution -- today's customers are dealt among the
+   officers who are present, with no orphans and no stored assignment to go stale.
+
+   MATCHED BY NAME, AND THAT IS THE HONEST WEAKNESS OF IT. The suspension is recorded on an
+   access code; the roster is call_users. Those are two tables describing the same humans with
+   no foreign key, no shared id and no rule connecting them -- an access code and an app
+   account genuinely do not know about each other. The name is the only thing they share, so
+   the name is what this matches on, token-sorted and case-folded by nameKey so that "Juma
+   Ally" and "ALLY JUMA" are one person.
+
+   Which is why the Access codes pane says, per row, whether an app account was actually
+   matched. A silent no-match is the worst outcome available here: the office sets a window,
+   sees it recorded, and watches the absent officer go on being dealt customers all morning.
+   Better to say "no matching app account" on the one screen where that can be corrected.
+
+   PER DAY, NOT PER TODAY. `day` is passed in so a PAST day is judged against the window as it
+   applied then. recoveryWeek re-deals the last seven days on every read, and judging them all
+   against today would silently rewrite last Tuesday's assignments the moment anybody is
+   suspended -- which is the opposite of what that pane promises.
+
+   BEST EFFORT: a database that has not run the migration has no window to read, so nobody is
+   away and the deal is exactly what it has always been. The credit round must never fail
+   because a feature about leave is half-installed. */
+export async function suspendedNamesOn(db, day = todayKey()) {
+  let rows = [];
+  try {
+    rows = await fetchAll(() => db.from('access_codes')
+      .select('name, role, suspend_from, suspend_to').not('suspend_from', 'is', null));
+  } catch (e) { return new Set(); }
+  const out = new Set();
+  for (const r of rows) {
+    // ADMIN is never away -- and it is the DOOR's own test, imported rather than restated, so
+    // the roster and the sign-in cannot end up holding two opinions about who is working today.
+    if (isAdminRole(r)) continue;
+    if (!suspendedOn(r, day)) continue;
+    const k = nameKey(r.name);
+    if (k) out.add(k);
+  }
+  return out;
 }
 async function activeRoster(db) { return (await rosterFull(db)).ids; }
 /* THE WINDOW IS 45 DAYS PLUS TWO OF GRACE. The owner (2026-08-17): "i have 49 and they
