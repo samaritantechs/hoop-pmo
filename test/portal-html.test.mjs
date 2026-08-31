@@ -1006,3 +1006,29 @@ test('the silent tile and the list it opens are the same arithmetic', () => {
   assert.match(api, /stale: !seen \|\| \(now - seen\) > HOURS,/,
     'and the row flag keeps its own, broader meaning -- it is what colours the clock');
 });
+
+/* "Copy the commands", plural, was a trap: cmd runs a pasted block line by line against
+   whatever single handset is plugged in. Line one enrols it, lines two onward are refused as
+   ALREADY ENROLLED under a different token, and the phone in your hand ends up holding the
+   FIRST row's identity -- whichever phone it actually is. The exact swap the batch design
+   exists to make impossible, reachable by pressing the biggest button on the screen. */
+test('no button ever offers every phone\'s token as one pasteable block', () => {
+  const src = read('portal.html');
+  const fn = src.slice(src.indexOf('function devProvision('),
+                       src.indexOf('function devProvision(') + 9000);
+
+  // The shared box and its button exist for ONE phone only, where one line is the whole job.
+  assert.match(fn, /\+\(one\s*\n?\s*\? '<textarea id="dvAdb"/,
+    'the joined-commands box must be single-phone only');
+  assert.ok(!/one\?5:Math\.min\(14/.test(fn),
+    'the multi-phone sizing of that box is gone with it');
+
+  /* The multi-phone routes that remain are both safe: one command per phone, or one hub
+     command that carries a batch and no token at all. */
+  assert.match(fn, /data-dvcopy="'\+i\+'"/, 'per-phone copy buttons remain');
+  assert.match(fn, /id="dvHubCopy"/, 'and the hub command remains');
+
+  // cmd, not PowerShell: Windows Terminal defaults to PowerShell and this syntax dies there.
+  assert.match(fn, /Fungua <b>cmd<\/b>/, 'the shell must be named, or the paste fails on parse');
+  assert.match(fn, /not PowerShell/i);
+});
