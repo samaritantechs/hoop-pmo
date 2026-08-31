@@ -1115,6 +1115,14 @@ function applyFlt_(table){
     var i=[].slice.call(th.parentNode.children).indexOf(th);
     s.classList.toggle('on',!!f[i]);
   });
+  /* THE COUNT BESIDE FUNGA HAS TO SURVIVE A FUNNEL.
+     -------------------------------------------------------------------------------------
+     Ticks are deliberately scoped to VISIBLE rows -- you act on what you see -- so hiding a
+     ticked row silently drops it from what Funga will touch. The tick handlers resync the
+     count, but the funnel is not a tick handler, so "Zilizochaguliwa: 35" could sit beside a
+     button about to act on nine. A wrong number next to an order that takes a customer's
+     phone dark is the one number in this pane that must never be stale. */
+  if(table.querySelector('.dvck') && typeof devSyncTicks_==='function') devSyncTicks_();
 }
 function openFlt_(sp){
   var th=sp.closest('th'), table=th.closest('table');
@@ -1189,7 +1197,6 @@ document.addEventListener('click', function(e){
   var dir = th.getAttribute('data-sd') === 'a' ? -1 : 1;
   ths.forEach(function(x){ x.removeAttribute('data-sd'); });
   th.setAttribute('data-sd', dir === 1 ? 'a' : 'd');
-  function txt(tr){ var td = tr.children[idx]; return td ? td.textContent.trim() : ''; }
   function numv(s){
     var t = s.replace(/[,%%\s]/g, '');
     var n = Number(t);
@@ -1197,16 +1204,30 @@ document.addEventListener('click', function(e){
     if (/^[0-9]/.test(t)) { n = parseFloat(t); if (isFinite(n)) return n; }
     return null;
   }
-  rows.sort(function(a, b){
-    var x = txt(a), y = txt(b);
-    var nx = numv(x), ny = numv(y);
-    if (nx !== null || ny !== null){
-      var cx = nx === null ? -Infinity : nx, cy = ny === null ? -Infinity : ny;
+  /* SORT ON THE VALUE THE COLUMN IS ABOUT, NOT ON THE CELL'S RAW TEXT.
+     ---------------------------------------------------------------------------------------
+     Several columns carry a small grey subline under the value -- the age under a clock, who
+     gave an order under the order. textContent runs the two together with no separator, so
+     "Iliongea lini" sorted the string "14:3236h": numv reads a leading 14 and the rest of the
+     column is decided by string order on a number nobody wrote. cellVal_ drops the .mut
+     subline, which is already exactly what the funnel on the same header does -- so the
+     values you sort by and the values you filter by are now the same list, instead of two.
+
+     Keys are computed ONCE per row rather than inside the comparator, which also stops the
+     old code from re-reading the DOM twice for every comparison. */
+  var keyed = rows.map(function(tr){
+    var td = tr.children[idx];
+    var s = td ? cellVal_(td) : '';
+    return { tr: tr, s: s, n: numv(s) };
+  });
+  keyed.sort(function(a, b){
+    if (a.n !== null || b.n !== null){
+      var cx = a.n === null ? -Infinity : a.n, cy = b.n === null ? -Infinity : b.n;
       if (cx !== cy) return (cx - cy) * dir;
     }
-    return (x < y ? -1 : x > y ? 1 : 0) * dir;
+    return (a.s < b.s ? -1 : a.s > b.s ? 1 : 0) * dir;
   });
-  rows.forEach(function(r){ tbody.appendChild(r); });
+  keyed.forEach(function(k){ tbody.appendChild(k.tr); });
 });
 
 /* THE EVERYTHING BOX in the header: an IMEI, a name or a number finds customers
@@ -2610,6 +2631,10 @@ function drawRecoveryTrend(){
    that only exists once a row is drawn. Never both at once: they are two different questions
    and answering both leaves a screen nobody can read the count off. */
 var DEV={filter:'',flag:''};
+/** True when the server had more rows than it sent. `total` counts the whole register;
+    `rows` is what fits the wire. Kept as one function so the notice and any future caller
+    cannot end up with two different ideas of "there is more". */
+function devMore_(d){ return (d && d.total != null && d.total > ((d.rows||[]).length)); }
 function drawDevices(m){
   m.innerHTML='<div class="card"><h2>Devices</h2><div class="sk"></div></div>';
   srv('deviceList',{state:DEV.filter}).then(function(d){
@@ -2639,7 +2664,8 @@ function drawDevices(m){
       +'</div>';
     var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
       +chips.map(function(x){ return '<button class="btn sm'+(chipOn(x[0])?'':' ghost')+'" data-dvf="'+x[0]+'">'+x[1]+'</button>'; }).join('')
-      +'<span style="flex:1"></span><button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button></div>';
+      +'<span style="flex:1"></span>'
+      +(BOOT.readOnly?'':'<button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button>')+'</div>';
     /* neverSeen and stale ride on the row, so this fence is the same fact the tile counted
        -- never a second definition of "silent" that could drift from the one in the tile. */
     /* THE FENCE MUST BE THE TILE'S OWN ARITHMETIC, not something near it.
@@ -2692,16 +2718,40 @@ function drawDevices(m){
                 +(r.orderBy?' · '+esc(r.orderBy):'')+'</div>':'')
             +'</td>'
             +'<td>'+esc(r.reported||'—')+devWhere(r)+'</td><td>'+seen+'</td>'
-            +'<td class="r noxl"><button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> '
-            +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button> '
-            +'<button class="btn sm danger" data-dvd="'+esc(r.imei)+'" title="Ondoa kwenye register / Remove from the register">Futa</button></td></tr>';
+            /* Historia is a read and stays for everyone. Token DISCLOSES A CREDENTIAL and
+               Futa erases a row -- the server treats both as writes, so a view-only code is
+               not offered either. */
+            +'<td class="r noxl">'
+            +(BOOT.readOnly?'':'<button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> ')
+            +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button>'
+            +(BOOT.readOnly?'':' <button class="btn sm danger" data-dvd="'+esc(r.imei)+'" title="Ondoa kwenye register / Remove from the register">Futa</button>')
+            +'</td></tr>';
         }).join('')+'</tbody></table></div>'
+        /* THE TABLE STOPS AT 500 AND THE TILES DO NOT.
+           -----------------------------------------------------------------------------
+           deviceList sends the newest 500 rows and the count of ALL of them. The pane used
+           to read `rows` and ignore `total`, so a fleet of 640 showed five tiles adding up
+           to 640 above a table holding 500 -- with nothing on screen to say which number
+           was wrong. In front of a room, arithmetic that does not add up is the question
+           you get asked, and "the table is truncated" is only a good answer if the screen
+           said so first. */
+        +(devMore_(d)
+          ? '<div class="note" style="margin-top:8px">Jedwali linaonyesha '+money((d.rows||[]).length)
+            +' kati ya '+money(d.total)+'. Tumia vichujio hapo juu kupunguza. '
+            +'/ Showing '+money((d.rows||[]).length)+' of '+money(d.total)
+            +' — the tiles count them all; narrow with the filters above.</div>'
+          : '')
         +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">'
         +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
-        +'<button class="btn sm danger" data-dvs="locked">Funga / Lock</button>'
-        +'<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
-        +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'
-        +'<button class="btn sm ghost" data-dvs="lost">Imepotea / Write off</button></div>'
+        /* A view-only code cannot change a device, and every one of these buttons answered
+           that with a 403 the operator had to press to discover. Permission is decided in
+           one place on the server; this only stops offering what it will refuse. */
+        +(BOOT.readOnly ? '<span class="mut" style="font-size:11px">View-only — huwezi kubadilisha hali. / no state changes from this code.</span>'
+          : '<button class="btn sm danger" data-dvs="locked">Funga / Lock</button>'
+          +'<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
+          +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'
+          +'<button class="btn sm ghost" data-dvs="lost">Imepotea / Write off</button>')
+        +'</div>'
       : (d.notReady
         /* NOT THE SAME THING as an empty register, and it must not read like one: nobody
            would ever guess from "no devices yet" that the answer is to run a SQL file. */
@@ -2717,7 +2767,7 @@ function drawDevices(m){
       +tiles+bar+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
     wireTiles(m);
     $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
-    $('#dvEnrol').onclick=function(){ devEnrolForm(m); };
+    var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
     $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
     $all('[data-dvh]').forEach(function(b){ b.onclick=function(){ devHistory(b.getAttribute('data-dvh')); }; });
     $all('[data-dvt]').forEach(function(b){ b.onclick=function(){ devToken(b.getAttribute('data-dvt')); }; });
@@ -2775,6 +2825,18 @@ function devSetState(m, state){
     reason=prompt((state==='locked'?'Sababu ya kufunga':'Sababu')+' / Reason (required):')||'';
     if(!reason.trim()){ toast('Sababu inahitajika. / A reason is required.', true); return; }
   }
+  /* ACHIA IS THE ONE-WAY DOOR AND IT ASKED NOTHING.
+     ---------------------------------------------------------------------------------------
+     Funga and Imepotea both stop to demand a reason, so both take a deliberate second step.
+     Achia -- which tells the handset to unharden, drop Device Owner and stop calling home --
+     fired on the first click, on however many phones happened to be ticked. Getting it back
+     is a cable and a person holding the phone, per handset. The count is in the sentence
+     because that is the number the operator is actually deciding about. */
+  if(state==='released' && !confirm('Achia simu '+imeis.length+'?\n\n'
+    +'Simu itaacha kuwa chini ya udhibiti — itaachana na Device Owner na itaacha kupiga '
+    +'ripoti. Kuirudisha kunahitaji kebo na simu mkononi.\n\n'
+    +'Releases '+imeis.length+' handset(s) for good: each one drops Device Owner and stops '
+    +'reporting. Bringing one back is a cable job, per phone.')) return;
   devSend_(m, imeis, state, reason.trim(), false);
 }
 /* THE ORDER, AND THE ONE REFUSAL THAT IS WORTH ARGUING WITH.
@@ -2794,14 +2856,24 @@ function devSetState(m, state){
    Only the phones the server named are retried. Ticking twenty and having one unreachable
    must not turn a confirmation about that one into a second lock order for the other
    nineteen -- they were locked the first time. */
+/** The four bulk buttons, on or off together. A lock order is a POST that appends history and
+    wakes handsets, so a double-click -- or an impatient second press while the first request
+    is still in the air -- sends it twice: two rows in Historia for one decision, and a second
+    toast reading "Zimebadilishwa: 0" because the first one already did the work. The request
+    is what takes time, so the buttons go dead for exactly as long as it is running. */
+function devBusy_(on){
+  $all('[data-dvs]').forEach(function(b){ b.disabled=!!on; });
+}
 function devSend_(m, imeis, state, reason, force){
+  devBusy_(true);
   srv('deviceSetState',{imeis:imeis,state:state,reason:reason,force:force===true}).then(function(r){
     toast('Zimebadilishwa: '+money(r.changed)
       +(r.notEnrolled?' · '+money(r.notEnrolled)+' hazijasajiliwa':'')
       +(r.alreadyThere?' · '+money(r.alreadyThere)+' zilikuwa hivyo':'')
       +(r.woken?' · '+money(r.woken)+' zimeamshwa':''));
-    drawDevices(m);
+    drawDevices(m);        // repaints the bar, so the buttons come back enabled with it
   }).catch(function(e){
+    devBusy_(false);
     var stuck=(e&&e.imeis)||[];
     if(!stuck.length||force){ toast(safeErr(e), true); return; }
     if(!confirm('Simu iliyoachiwa haisikii tena.\n\n'+stuck.join('\n')+'\n\n'
@@ -3070,8 +3142,23 @@ function devProvision(m, r){
         +'<textarea id="dvTok" rows="'+Math.min(12,Math.max(3,p.length))+'" readonly '
         +'style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'+esc(lines)+'</textarea>'
         +'<button class="btn w ghost" id="dvTokCopy">Nakili orodha / Copy the list</button>')
-    +'<div class="sub" style="margin-top:12px">Ya mwisho ndiyo muhimu: <b>result=1</b> na neno '
-    +'<b>ENROLLED</b>. / The line that matters is the last one: <b>result=1 … ENROLLED</b>.</div>'
+    /* WHAT TO READ OFF THE SCREEN -- and it is NOT the same sentence for both commands.
+       "The last line" is right for one phone, whose command ends in one broadcast. The hub
+       command runs the same broadcast once PER HANDSET, so it prints a result line for each
+       of them and the last one describes the last phone only. Told to read the last line, an
+       operator with nine phones on a hub reads one and calls the bench finished -- and the
+       eight that answered result=4 are the ones that will be discovered missing later. */
+    +'<div class="sub" style="margin-top:12px">'
+    +(one
+      ? 'Ya mwisho ndiyo muhimu: <b>result=1</b> na neno <b>ENROLLED</b>. '
+        +'/ The line that matters is the last one: <b>result=1 … ENROLLED</b>.'
+      : 'Kila simu inatoa mstari wake. Hesabu: unatakiwa uone <b>result=1 … ENROLLED</b> '
+        +'<b>mara '+money(p.length)+'</b> — moja kwa kila simu, siyo ya mwisho tu. Ukiona '
+        +'chache, linganisha na register kabla ya kuondoa simu kwenye hub. '
+        +'/ Every handset prints its own line: count <b>'+money(p.length)+'</b> of '
+        +'<b>result=1 … ENROLLED</b>, one per phone — not just the last. Fewer than that means '
+        +'some phone did not enrol; check the register before you unplug the hub.')
+    +'</div>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
   if($('#dvAdbCopy')) $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
   if($('#dvHubCopy')) $('#dvHubCopy').onclick=function(){ devCopyBox('dvHub'); };
@@ -3146,13 +3233,25 @@ function devHistory(imei){
       +((d.events||[]).length
         ? '<div class="scroll"><table><thead><tr><th>Lini</th><th>Tukio</th><th>Kutoka → kwenda</th><th>Sababu</th><th>Nani</th></tr></thead><tbody>'
           +d.events.map(function(e){
-            return '<tr><td style="font-size:11px">'+esc(String(e.at||'').replace('T',' ').slice(0,16))+'</td>'
+            /* clock(), like every other time on this screen -- fed the number the server
+               now sends. The old code printed the raw UTC text, three hours behind the
+               register row directly above it. */
+            return '<tr><td style="font-size:11px">'+esc(clock(e.atMs)||String(e.at||'').replace('T',' ').slice(0,16))+'</td>'
               +'<td>'+esc(e.event)+'</td><td>'+esc(e.from_state||'—')+' → '+esc(e.to_state||'—')+'</td>'
               +'<td>'+esc(e.reason||'—')+'</td><td>'+esc(e.actor||'—')+'</td></tr>';
           }).join('')+'</tbody></table></div>'
         : '<div class="mut">Hakuna historia.</div>')
+      +((d.total||0)>(d.events||[]).length
+        ? '<div class="mut" style="font-size:11px;margin-top:4px">Matukio '+money((d.events||[]).length)
+          +' kati ya '+money(d.total)+' — ya karibuni zaidi. / newest '+money((d.events||[]).length)
+          +' of '+money(d.total)+' events.</div>'
+        : '')
       +'<button class="btn sm ghost" id="dvHistClose" style="margin-top:8px">Funga</button></div>';
     var x=$('#dvHistClose'); if(x) x.onclick=function(){ h.innerHTML=''; };
+    /* HISTORIA LIVES UNDER THE WHOLE TABLE, and on a register of a few hundred rows that is
+       far below the button you just pressed -- so it opened off-screen and read as a button
+       that does nothing. Pressing it now takes you to what it opened. */
+    if(h.scrollIntoView) h.scrollIntoView({block:'nearest'});
   }).catch(function(e){ h.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
 }
 

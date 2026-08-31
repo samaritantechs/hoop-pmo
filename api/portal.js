@@ -1912,9 +1912,22 @@ const FNS = {
         'imei, item, holder, state, state_reason, state_by, state_at, reported, last_seen, '
         + 'app_version, battery, android, sold_ref, customer, released_at, reported_imei, '
         + 'enrolled_at, enrolled_by, enrol_batch, updated_at').eq('imei', imei)),
-      fetchAll(() => db.from('device_events').select('*').eq('imei', imei).order('at', { ascending: false }).limit(100)),
+      fetchAll(() => db.from('device_events').select('*').eq('imei', imei).order('at', { ascending: false })),
     ]);
-    return { ok: true, imei, device: devRows[0] || null, events };
+    /* THE CLOCK IN THIS PANEL MUST BE THE CLOCK IN THE ROW ABOVE IT.
+       -------------------------------------------------------------------------------------
+       `at` is a timestamptz and PostgREST hands it over as text in UTC. This panel used to
+       print that text with the T knocked out, so every history line read three hours behind
+       Dar es Salaam -- while the register row directly above it renders last_seen through
+       clock(), which is fed epoch milliseconds and is therefore local. Two clocks, one
+       screen, three hours apart, on the one panel you open to prove WHEN an order was given
+       and when the handset confirmed it.
+
+       So the number goes out instead of the text, exactly as seenAt and orderAt already do.
+       `at` is left on the row untouched: it is what the audit-minded reader would quote, and
+       removing a field to fix a rendering bug breaks callers to save nothing. */
+    const out = events.slice(0, 100).map(e => ({ ...e, atMs: e.at ? Date.parse(e.at) : null }));
+    return { ok: true, imei, device: devRows[0] || null, events: out, total: events.length };
   },
 
   /* THE TOKEN, HANDED BACK -- for one phone, on purpose, when it is re-flashed and has to

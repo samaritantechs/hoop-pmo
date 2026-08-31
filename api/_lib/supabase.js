@@ -238,6 +238,14 @@ const PAGE_KEY = {
   followup_status: 'ref',
   call_users: 'user_id',
   call_agents: 'user_id',
+  /* devices is keyed by IMEI and has no `id` column at all, so the default below asked
+     PostgREST to order by a column that does not exist. The fallback above caught it and
+     re-read the table unordered, exactly as designed -- so nothing broke and nobody saw it.
+     What it cost was two round trips for every read of the register, one of them certain to
+     fail, on the busiest pane in the system and on every heartbeat that looks a handset up.
+     Naming the real key here makes the first attempt the only attempt, and gives the paged
+     read the stable tiebreaker this whole mechanism exists to provide. */
+  devices: 'imei',
 };
 
 /** The table a built query points at, read off the URL PostgREST is about to be asked for.

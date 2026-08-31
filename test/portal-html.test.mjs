@@ -1032,3 +1032,78 @@ test('no button ever offers every phone\'s token as one pasteable block', () => 
   assert.match(fn, /Fungua <b>cmd<\/b>/, 'the shell must be named, or the paste fails on parse');
   assert.match(fn, /not PowerShell/i);
 });
+
+/* =========================================================================================
+   THE DEVICES PANE, RE-READ BEFORE THE PRESENTATION.
+   Four things the screen said with confidence and got wrong. Each is asserted against the
+   MARKUP or the CALL, never against a word that could equally appear in a comment near it --
+   a regex that matches its own explanation is a test that passes after the fix is reverted.
+   ========================================================================================= */
+
+test('portal.html: the selection count survives a column funnel', () => {
+  /* Ticks are scoped to visible rows on purpose -- you act on what you see -- so a funnel that
+     hides a ticked row silently drops it from what Funga will touch. The tick handlers resync
+     the count; the funnel is not a tick handler. "Zilizochaguliwa: 35" beside a button about
+     to darken nine customers' phones is the one stale number this pane cannot afford. */
+  const src = read('portal.html');
+  const fn = src.slice(src.indexOf('function applyFlt_'), src.indexOf('function openFlt_'));
+  assert.match(fn, /devSyncTicks_\(\)/,
+    'applyFlt_ must resync the device tick count after it changes what is visible');
+});
+
+test('portal.html: the bulk device buttons go dead while the order is in the air', () => {
+  const src = read('portal.html');
+  const fn = src.slice(src.indexOf('function devSend_'), src.indexOf('function devDelete'));
+  assert.match(fn, /devBusy_\(true\)/, 'disabled before the request goes out');
+  assert.match(fn, /devBusy_\(false\)/, 'and released again on the failure path');
+  const busy = src.slice(src.indexOf('function devBusy_'), src.indexOf('function devSend_'));
+  assert.match(busy, /\[data-dvs\]/, 'it is the four bulk buttons that are held');
+});
+
+test('portal.html: Achia asks before it releases a handset for good', () => {
+  /* Funga and Imepotea both stop to demand a reason. Achia -- which tells the phone to drop
+     Device Owner and stop calling home, undoable only with a cable and the handset in hand --
+     fired on the first click, on however many rows happened to be ticked. */
+  const src = read('portal.html');
+  const fn = src.slice(src.indexOf('function devSetState'), src.indexOf('/* THE ORDER, AND THE ONE'));
+  assert.match(fn, /state===['"]released['"]\s*&&\s*!confirm\(/,
+    'releasing takes a deliberate yes, like the other two one-way orders');
+});
+
+test('portal.html: a view-only code is not offered buttons the server will refuse', () => {
+  /* deviceSetState, deviceEnrol, deviceToken and deviceDelete are all writes. A read-only code
+     got every one of those buttons and discovered the 403 by pressing it. */
+  const src = read('portal.html');
+  const pane = src.slice(src.indexOf('function drawDevices'), src.indexOf('function devVisibleTicks_'));
+  for (const marker of ['data-dvs="locked"', 'data-dvt=', 'data-dvd=', 'id="dvEnrol"']) {
+    const at = pane.indexOf(marker);
+    assert.ok(at > 0, marker + ' is drawn by this pane');
+    assert.ok(/BOOT\.readOnly/.test(pane.slice(Math.max(0, at - 700), at)),
+      marker + ' must be gated on BOOT.readOnly');
+  }
+  assert.match(pane, /data-dvh="/, 'Historia is a read and stays for everyone');
+});
+
+test('portal.html: a truncated register says so, instead of letting the tiles disagree', () => {
+  /* deviceList sends the newest 500 rows and the count of ALL of them. The pane read `rows`
+     and ignored `total`, so a fleet of 640 showed tiles adding to 640 above a table holding
+     500, with nothing on screen to say which number was the truncated one. */
+  const src = read('portal.html');
+  assert.match(src, /function devMore_\(d\)\{[^]*?d\.total\s*>[^]*?rows\|\|\[\]\)\.length/,
+    'the notice is decided by comparing what was sent with what there was');
+  const pane = src.slice(src.indexOf('function drawDevices'), src.indexOf('function devVisibleTicks_'));
+  assert.match(pane, /devMore_\(d\)/, 'and the pane actually asks');
+});
+
+test('portal.html: sorting reads the value, not the value with its subline stuck to it', () => {
+  /* "Iliongea lini" is a clock with a grey age under it, so textContent ran them together as
+     "14:3236h" and the column sorted on a leading 14. cellVal_ drops the .mut subline, which
+     is already exactly what the funnel on that same header does -- so sort and filter now
+     agree on what the column's values are. */
+  const src = read('portal.html');
+  const at = src.indexOf('EVERY TABLE SORTS ITSELF');
+  const fn = src.slice(at, src.indexOf('THE EVERYTHING BOX', at));
+  assert.match(fn, /cellVal_\(td\)/, 'the sort key is the column value, sublines removed');
+  assert.ok(!/td\.textContent\.trim\(\)/.test(fn),
+    'and never the raw cell text that welded the two together');
+});
