@@ -1826,3 +1826,85 @@ test('saving an access code carries the Kiongozi switch, and never clears it by 
   assert.equal(row.name, 'RENAMED');
   assert.equal(row.is_leader, true, 'an unrelated edit must leave the switch alone');
 });
+
+/* "the leader button i need it visible as a column before the hariri and futa ones" --
+   one click in the row, and deliberately NOT routed through saveAccessCode. */
+test('the Kiongozi toggle changes one column and can lose nothing else', async () => {
+  const d = fakeDb({ access_codes: [
+    { code: 'C9', name: 'CREDIT LEADER', role: 'CREDIT', teams: ['DAR', 'MWANZA'],
+      tabs: ['advappr', 'customers'], is_leader: false },
+  ] });
+  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
+
+  const on = await _FNS.accessCodeLeader(d, admin, { code: 'C9', leader: true });
+  assert.equal(on.leader, true);
+  let row = d._dump('access_codes')[0];
+  assert.equal(row.is_leader, true);
+  /* THE WHOLE POINT OF ITS OWN FUNCTION. A toggle in a table row has no name, teams or tabs to
+     hand -- routing it through saveAccessCode would mean rebuilding them from data attributes
+     on a button, and the day that comes back wrong somebody loses their access by pressing a
+     switch about something else. */
+  assert.deepEqual(row.teams, ['DAR', 'MWANZA'], 'teams must be untouched');
+  assert.deepEqual(row.tabs, ['advappr', 'customers'], 'tabs must be untouched');
+  assert.equal(row.name, 'CREDIT LEADER');
+  assert.equal(row.role, 'CREDIT');
+
+  await _FNS.accessCodeLeader(d, admin, { code: 'C9', leader: false });
+  assert.equal(d._dump('access_codes')[0].is_leader, false, 'and it flips back');
+
+  // Only somebody who may edit access codes at all may flip it.
+  const officer = { code: 'A1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: ['advreq'], readOnly: false };
+  await assert.rejects(() => _FNS.accessCodeLeader(d, officer, { code: 'C9', leader: true }),
+    e => e.status === 403);
+  const ro = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['settings'], readOnly: true };
+  await assert.rejects(() => _FNS.accessCodeLeader(d, ro, { code: 'C9', leader: true }),
+    e => e.status === 403, 'read-only supervision changes nothing, here as everywhere');
+
+  await assert.rejects(() => _FNS.accessCodeLeader(d, admin, { code: 'NOPE', leader: true }),
+    /Unknown code/);
+
+  // Flipping somebody's leadership is a permission change, so it is logged like one.
+  const { AUDITED, subjectOf } = await import('../api/_lib/audit.js');
+  assert.ok(AUDITED.has('accessCodeLeader'));
+  assert.match(subjectOf({ code: 'C9', leader: true }) || '', /code=C9/,
+    'the entry must name whose switch was flipped');
+});
+
+test('the toggle names the migration rather than leaking a database error', async () => {
+  const d = {
+    from() {
+      return { update() { return this; }, eq() { return this; },
+        select() { return Promise.resolve({ data: null,
+          error: { code: '42703', message: 'column "is_leader" of relation "access_codes" does not exist' } }); } };
+    },
+    _dump: () => [],
+  };
+  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
+  await assert.rejects(() => _FNS.accessCodeLeader(d, admin, { code: 'C9', leader: true }),
+    /RUN-ME-2026-08-31-advance-leader\.sql/,
+    'a missing column must name the file to run, not surface raw Postgres');
+});
+
+test('the audit write is waited for, and still cannot break the save it accompanies', async () => {
+  /* Fire-and-forget is a hole on Vercel: a serverless function can be frozen the moment it
+     returns, so an insert nobody waited for may never leave the process -- and the entries most
+     likely to be lost are the ones on the slowest requests, which are not a random sample. */
+  const { auditWrite, audited } = await import('../api/_lib/audit.js');
+  let settled = false;
+  const slow = { from: () => ({ insert: () => new Promise(r => setTimeout(() => { settled = true; r({}); }, 5)) }) };
+  await audited(slow, { code: 'X' }, 'saveTeam', { team: 'DAR' }, async () => 'done');
+  assert.equal(settled, true, 'the log write must have completed before the call returned');
+
+  // ...and rule 3 still holds: nothing it can do may reach the caller.
+  const exploding = { from: () => { throw new Error('no such table'); } };
+  assert.equal(await audited(exploding, { code: 'X' }, 'saveTeam', {}, async () => 'ok'), 'ok');
+  const rejecting = { from: () => ({ insert: () => Promise.reject(new Error('permission denied')) }) };
+  assert.equal(await audited(rejecting, { code: 'X' }, 'saveTeam', {}, async () => 'ok'), 'ok');
+  await assert.doesNotReject(() => auditWrite(exploding, {}));
+  await assert.doesNotReject(() => auditWrite(rejecting, {}));
+
+  // A handler's own error still passes through unchanged, after being logged.
+  await assert.rejects(
+    () => audited(rejecting, { code: 'X' }, 'saveTeam', {}, async () => { throw new Error('the real one'); }),
+    /the real one/);
+});
