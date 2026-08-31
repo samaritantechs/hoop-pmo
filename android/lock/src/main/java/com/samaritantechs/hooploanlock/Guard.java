@@ -17,7 +17,20 @@ import android.os.Looper;
 class Guard {
 
     static void lock(Context c) {
+        boolean was = Prefs.of(c).getBoolean(Prefs.LOCKED, false);
         Prefs.put(c, Prefs.LOCKED, true);
+        /* A LOCK ORDER ALWAYS CLOSES AN OPEN WINDOW. The boot window exists so a handset can
+           be REACHED, and the office reaching it to say "lock" is that purpose served, not
+           interrupted. Leaving it open here would be the loophole itself: take a window, wait
+           for the beat to land, and keep the phone for the rest of the five minutes anyway. */
+        Prefs.put(c, Prefs.GRACE_UNTIL, 0L);
+        /* AND A NEW LOCK BEGINS A NEW EPISODE. The rate limit exists to stop a power cycle
+           minting a fresh window, not to punish a customer whose phone is locked again next
+           month -- so the stamp is cleared when the state actually CHANGES to locked, and only
+           then. Re-locking a phone that is already locked (a changed reason, a repeated order,
+           a beat restating the obvious) is not a new episode and must not hand back a window
+           that has already been spent. */
+        if (!was) Prefs.put(c, Prefs.GRACE_LAST, 0L);
         show(c);
         /* AND REPAINT A SCREEN THAT IS ALREADY UP.
            -------------------------------------------------------------------------------
@@ -121,9 +134,113 @@ class Guard {
         try { c.startActivity(i); } catch (Exception ignored) { }
     }
 
-    /** Called on boot and after our own package is replaced: restore whatever we were doing. */
-    static void restore(Context c) {
+    /** Called on boot and after our own package is replaced: restore whatever we were doing.
+        `realBoot` separates the two -- see restore()'s note on why an app update gets no
+        window. */
+    static void restore(Context c, boolean realBoot) {
         if (Prefs.of(c).getBoolean(Prefs.RETIRED, false)) return;
-        if (Prefs.of(c).getBoolean(Prefs.LOCKED, false)) show(c);
+        if (!Prefs.of(c).getBoolean(Prefs.LOCKED, false)) return;
+        /* THE WINDOW IS ONLY EVER OPENED HERE, on a real power cycle of a locked phone. That
+           is fence 1: there is no other caller, so a locked handset sitting awake in somebody's
+           hand has no path to one.
+
+           AN APP UPDATE IS NOT A BOOT. BootReceiver also fires on MY_PACKAGE_REPLACED, and
+           SelfUpdate installs on our schedule rather than the customer's -- so counting that
+           as a power cycle would spend a customer's one daily window on an event they neither
+           asked for nor noticed, and would leave them locked out when they genuinely rebooted
+           an hour later. */
+        if (realBoot && mayOpenWindow(c)) { openWindow(c); return; }
+        show(c);
+    }
+
+    /* Fence 2, and the one the ask is really about: "dont leave any loophole of unlocking a
+       phone thats already locked and awake and got the grace period already."
+
+       Switching a phone off and on again is the first thing anybody tries. GRACE_LAST is
+       stamped the moment a window OPENS and lives in SharedPreferences, so it is still there
+       on the next boot -- and the second power cycle inside the period finds it and locks
+       immediately. Rebooting in a loop buys nothing at all.
+
+       It is a rate limit rather than a one-shot on purpose. A customer who has PAID, whose
+       phone is locked, and who is somewhere with no wifi in reach spends their window and
+       gets nowhere; if that were the only one they ever got, the handset would be bricked by
+       the very mechanism meant to save it. One window per period is enough to be a way out
+       and far too little to be a way of using the phone. */
+    private static boolean mayOpenWindow(Context c) {
+        int minutes = Prefs.of(c).getInt(Prefs.BOOT_GRACE_MINUTES, 0);
+        if (minutes <= 0) return false;                  // switched off for this fleet
+        int everyHours = Prefs.of(c).getInt(Prefs.BOOT_GRACE_EVERY_HOURS, 24);
+        long last = Prefs.of(c).getLong(Prefs.GRACE_LAST, 0);
+        if (last <= 0) return true;                      // none spent since this lock began
+        long since = System.currentTimeMillis() - last;
+        /* A CLOCK THAT WENT BACKWARDS IS NOT AN INVITATION. The phone's own clock is settable
+           by whoever holds it, and on a locked handset that is the customer. Winding it back
+           makes `since` negative, which must read as "not yet", never as "long enough" --
+           otherwise the rate limit is defeated by changing the date, which is easier than
+           rebooting. */
+        if (since < 0) return false;
+        return since >= everyHours * 3600000L;
+    }
+
+    private static void openWindow(Context c) {
+        int minutes = Prefs.of(c).getInt(Prefs.BOOT_GRACE_MINUTES, 0);
+        long now = System.currentTimeMillis();
+        /* STAMPED BEFORE IT IS USED. If the process dies during the window -- which on a
+           phone booting up is entirely ordinary -- the window is already counted as spent,
+           so the reboot that follows cannot claim another. Optimistic accounting in the
+           customer's favour would be the loophole. */
+        Prefs.put(c, Prefs.GRACE_LAST, now);
+        Prefs.put(c, Prefs.GRACE_UNTIL, now + minutes * 60000L);
+        /* Say what is happening, in the one moment somebody is certainly looking at the
+           screen. A phone that silently works and then locks itself five minutes later reads
+           as a fault; a phone that says "you have five minutes to turn wifi on" reads as an
+           instruction, and it is the instruction that gets the handset back online. A toast
+           needs no permission and no notification channel, so there is nothing here that can
+           fail on one Android version and not another. */
+        try {
+            android.widget.Toast.makeText(c,
+                "Dakika " + minutes + ": washa WiFi au data ili simu isikie ujumbe wa ofisi."
+                + "\n" + minutes + " minutes: turn on WiFi or data so this phone can hear the office.",
+                android.widget.Toast.LENGTH_LONG).show();
+        } catch (Exception ignored) { }
+        /* The in-process timer for the ordinary case, plus enforce() being called from every
+           beat and every job run for the case where this process does not survive. Belt and
+           braces on purpose: a window that fails to CLOSE is a phone that is not locked. */
+        final Context app = c.getApplicationContext();
+        new Handler(Looper.getMainLooper()).postDelayed(() -> enforce(app), minutes * 60000L);
+    }
+
+    /* THE WINDOW HAS TO CLOSE EVEN IF NOTHING REMEMBERS TO CLOSE IT. Called from the boot
+       receiver, from every beat and from every job run, so a killed process, a missed timer
+       or a phone that simply sat there all resolve the same way: the moment anything in this
+       app runs again and the window has run out, the screen comes back.
+
+       Deliberately does NOT re-open a window or touch GRACE_LAST. This only ever locks. */
+    static void enforce(Context c) {
+        if (Prefs.of(c).getBoolean(Prefs.RETIRED, false)) return;
+        if (!Prefs.of(c).getBoolean(Prefs.LOCKED, false)) return;
+        long until = Prefs.of(c).getLong(Prefs.GRACE_UNTIL, 0);
+        long now = System.currentTimeMillis();
+        // Still inside it -- and a clock wound forward closes the window early, which is the
+        // safe direction and the only one worth allowing.
+        if (until > 0 && now < until) return;
+        if (until > 0) Prefs.put(c, Prefs.GRACE_UNTIL, 0L);
+        show(c);
+    }
+
+    /** True while a boot window is open. The beat asks, so it can come back quickly enough to
+        be useful during the one window where reaching the server is the entire point. */
+    static boolean inWindow(Context c) {
+        long until = Prefs.of(c).getLong(Prefs.GRACE_UNTIL, 0);
+        return until > 0 && System.currentTimeMillis() < until;
+    }
+
+    /* Fence 3: the window ends the moment the handset reaches us, because at that moment it
+       has served its whole purpose -- the office can see this phone and this phone can hear
+       the office. Called from Beat on ANY successful answer, before the answer is acted on,
+       so what follows is an ordinary lock or an ordinary unlock with no window left under it.
+       There is therefore nothing to be gained by staying offline through the window. */
+    static void windowServed(Context c) {
+        Prefs.put(c, Prefs.GRACE_UNTIL, 0L);
     }
 }

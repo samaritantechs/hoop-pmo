@@ -51,6 +51,12 @@ export const AUDITED = new Set([
      request their department has filed. That is a permission change, so it is logged like
      one -- and `code` is in KEEP below, so the entry names whose switch was flipped. */
   'accessCodeLeader',
+  /* Suspending somebody stops them signing in AND takes them out of the credit round, so the
+     customers they would have been dealt go to other people. That is a change to who may work
+     and to who is carrying whose book, which is exactly what this log exists for. `code` is in
+     KEEP below, so the entry names whose window was set; the dates themselves are not kept and
+     need not be -- the row in access_codes is always the current answer. */
+  'accessCodeSuspend',
   'saveCallAgent', 'removeCallUser', 'saveOfficerAccount', 'deleteOfficerAccount',
   // settings & the system switch
   'settingSet', 'settingDelete', 'systemOpenSet', 'commissionSave', 'announceSave',

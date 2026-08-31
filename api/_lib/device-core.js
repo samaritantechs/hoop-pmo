@@ -166,6 +166,56 @@ async function graceFor(db, dev) {
   return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : DEFAULT_GRACE_HOURS;
 }
 
+/* THE WINDOW A LOCKED PHONE GETS WHEN IT IS SWITCHED ON AGAIN.
+   =========================================================================================
+     "if a locked phone is restarted give grace period of 5 minutes so that one can connect
+      data or wifi -- dont leave any loophole of unlocking a phone thats already locked and
+      awake and got the grace period already"
+
+   A locked handset draws a pinned screen the moment it boots, and that screen is the reason a
+   phone can be stuck for good: a customer who has PAID cannot reach Settings to turn wifi on,
+   so the handset cannot call home, so it never hears it has been released. The office freed it
+   hours ago and the phone will never find out. Until now the only way back was a cable.
+
+   So a reboot buys a few minutes of ordinary use -- long enough to pull the shade down and
+   turn the radio on, and no longer.
+
+   THREE FENCES, because a window like this is exactly where a loophole would live.
+
+     1. ONLY EVER AT BOOT. Never from a beat, never from an unlock that failed, never while
+        the phone is awake. A locked handset in somebody's hand cannot talk itself into a
+        window; the only way to ask for one is to power-cycle, and that is fence 2's problem.
+     2. RATE-LIMITED, AND THE CLOCK SURVIVES THE REBOOT THAT WOULD RESET IT. Switching the
+        phone off and on again is the first thing anybody tries, and it buys nothing: the
+        second boot finds the stamp left by the first and locks immediately. This is the fence
+        the ask is really about.
+     3. IT ENDS THE INSTANT THE PHONE REACHES US, because at that moment it has served its
+        entire purpose -- we can see the handset and it can hear us. If the register still
+        says lock, it locks; if the loan was cleared, it unlocks. The window is spent, never
+        waited out, so there is nothing to be gained by staying offline through it.
+
+   BOTH NUMBERS LIVE HERE RATHER THAN IN THE APK, like the beat pace and the offline grace
+   above: how long a customer needs to find the wifi toggle is a business judgement that must
+   never need a release to revisit, and must reach handsets already in pockets. */
+const DEFAULT_BOOT_GRACE_MINUTES = 5;
+const DEFAULT_BOOT_GRACE_EVERY_HOURS = 24;
+async function bootGraceFor(db) {
+  const rows = await fetchAll(() => db.from('settings').select('key, value')
+    .in('key', ['DEVICE_BOOT_GRACE_MINUTES', 'DEVICE_BOOT_GRACE_EVERY_HOURS']));
+  const pick = (key, dflt) => {
+    const hit = rows.find(r => S(r.key) === key);
+    const raw = hit ? Number(S(hit.value)) : NaN;
+    /* ZERO IS A REAL ANSWER and means "no window at all". Turning this off for a fleet is a
+       decision the office must be able to make, so it cannot fall through to the default the
+       way a blank or a typo does. Negative is a typo and is treated as one. */
+    return Number.isFinite(raw) && raw >= 0 ? Math.round(raw) : dflt;
+  };
+  return {
+    minutes: pick('DEVICE_BOOT_GRACE_MINUTES', DEFAULT_BOOT_GRACE_MINUTES),
+    everyHours: pick('DEVICE_BOOT_GRACE_EVERY_HOURS', DEFAULT_BOOT_GRACE_EVERY_HOURS),
+  };
+}
+
 /* THE TOKEN IS THE IDENTITY, and the handset's claim about itself is not.
 
    An earlier cut of this asked the phone for its IMEI and matched the pair. That put the
@@ -293,6 +343,10 @@ async function beat(db, [payload], nowMs) {
   const words = retire ? { brand: null, message: null, helpPhone: null, fallbackReason: '' }
                        : await lockWords(db);
   const grace = await graceFor(db, dev);
+  /* A retiring handset gets no boot window, and needs none: it is about to unharden and stop
+     calling home, so there is no lock screen for a window to be a window INTO. Sending one
+     would only leave a stale number in a former customer's storage. */
+  const boot = retire ? { minutes: 0, everyHours: 0 } : await bootGraceFor(db);
   /* HAS THIS PHONE DONE WHAT IT WAS TOLD? Compare the order against what the handset just
      said it is doing -- `reported` from this very beat when it spoke, the stored value when
      it did not. A phone that has never reported at all counts as unlocked, which is true:
@@ -317,6 +371,12 @@ async function beat(db, [payload], nowMs) {
     // -1 rather than null: the handset parses this into an int, and "never" has to survive
     // that trip as a value it can act on rather than as a missing field it has to guess at.
     graceHours: grace == null ? -1 : grace,
+    /* THE BOOT WINDOW, in the same shape as graceHours above: plain integers the handset can
+       parse and act on rather than fields it has to guess at. Stored on the phone so a
+       handset that boots with no network still knows the rule it was last told -- which is
+       the whole case this exists for. */
+    bootGraceMinutes: boot.minutes,
+    bootGraceEveryHours: boot.everyHours,
     // So a released phone can stop calling home for good rather than beating forever.
     retire,
     /* WHEN TO COME BACK -- decided here, because only the server knows whether an order is

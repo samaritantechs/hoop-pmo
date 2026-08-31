@@ -360,3 +360,57 @@ what the server would send, and those extra rows are by definition not in hand.
 last read. So the chip bar now carries **`Ilisomwa 14:32`** and a **↻** button. A screen that is
 slightly behind and says so is honest; one that is slightly behind and looks live is the exact
 failure this pane has been fixed for twice.
+
+---
+
+## 10. Away today — suspending a person for a date range
+
+> "I need a feature to suspend a user at (Access codes — mfumo (portal)) so that they don't
+> appear anywhere unless reactivated, e.g one credit aint there today so if I suspend him the
+> customer distribution of today is auto to the available ones"
+> "so suspension is recorded by date picker start and end date"
+
+**Run `db/migrations/RUN-ME-2026-08-31-access-suspend.sql`.**
+
+A new **Yupo?** column in Access codes, between Kiongozi and Hariri. Click it, set two dates,
+and that person is away for those days.
+
+**A window, not a switch.** A switch has to be turned back on by somebody remembering to; an
+absence has an end that is already known on the day it is entered. Recording the end means the
+person comes back *by themselves* on the right morning — which is the difference between a
+feature that gets used and one that quietly leaves half the company switched off. There is no
+scheduler anywhere in this system and this needs none: the window is read against today's date
+in EAT, wherever it is asked about.
+
+Both ends count. The 3rd to the 5th is three days off. Leave the end empty for "until further
+notice"; an end with no start is not a window at all and is refused rather than half-stored.
+
+### What it reaches
+
+- **Sign-in.** Refused, and told *which window* — somebody on leave should not spend the
+  morning convinced they have forgotten their code. It is the one message here that cannot help
+  an attacker, since you must hold a valid code to ever see it.
+- **The credit round.** The deal is recomputed from the roster on every read and nothing is
+  stored, so taking somebody out of the roster **is** the redistribution: today's customers are
+  dealt among the officers who are present, with no orphans and no assignment to migrate. The
+  test runs 60 customers over 4 officers, suspends one, and asserts all 60 are still dealt and
+  the three who remain carry equal shares.
+
+**ADMIN is never suspended.** It is the standing rule everywhere in this system, and here it is
+also the lockout guard: a window set on the last admin — by a slip of the date picker, or by an
+admin suspending themselves — would leave nobody able to lift it. The pane refuses to set one.
+
+### Two things to know
+
+**The link between an access code and an app account is the NAME.** Suspension is recorded on
+`access_codes`; the credit roster is `call_users`. Those two tables describe the same people
+with no foreign key and no shared id — they genuinely do not know about each other. The name is
+all they share, so that is what is matched, token-sorted and case-folded (so "Juma Ally" and
+"ALLY JUMA" are one person). If the two spellings differ, the suspension will stop the sign-in
+and **not** change the distribution.
+
+**The credits board still re-deals past days with today's roster.** That was already true before
+this — `recoveryWeek` recomputes the last seven days on every read — but suspension makes it
+visible: suspend somebody at 11am and last week's per-officer numbers shift. `suspendedNamesOn`
+already takes a day so it can be judged correctly per-day; wiring the weekly board to use it is
+the follow-up.

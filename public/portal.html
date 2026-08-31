@@ -3253,6 +3253,19 @@ function devToken(imei){
        inside the command already, so showing it on its own was never a second thing to know,
        only a second thing to choose between. */
     drawer('<h3>Simu · '+esc(imei)+'</h3>'
+      /* A TOKEN THAT OUTLIVED ITS ROW. Futa erases the register entry, never the credential --
+         the handset walks away still carrying it, still Device Owner, so it can be neither
+         released nor factory reset without this string. That is exactly when somebody looks it
+         up, and until now this drawer could not answer: it read the devices table only, and
+         the row was gone. It says which kind of answer this is, because re-running the command
+         on a phone the register no longer lists also puts it back on the register. */
+      +(r.retired
+        ? '<div class="note">Simu hii ilifutwa kwenye register'
+          +(r.retiredAt?' ('+esc(clock(r.retiredAt))+(r.retiredBy?' · '+esc(r.retiredBy):'')+')':'')
+          +', lakini token yake tunaikumbuka — ndiyo hii. Amri hii itairudisha kwenye register. '
+          +'/ This handset was deleted from the register; its token was remembered and is the one '
+          +'below. Running the command puts it back on the register as well.</div>'
+        : '')
       +'<div class="sub"><b>Bandika kwenye cmd, bonyeza enter. Ndiyo yote.</b> '
       +'/ Paste into the black cmd window, press enter. That is all. '
       +'Pakua APK kwanza kutoka <a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a> '
@@ -4351,7 +4364,7 @@ function drawCodes(m){
   Promise.all([srv('accessCodes'),srv('officers')]).then(function(res){
     var d=res[0], off=res[1];
     m.innerHTML='<div class="card"><h2>Access codes — mfumo (portal)</h2>'
-      +'<div class="scroll"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Timu</th><th>Tabs</th><th>Kiongozi</th><th class="noxl"></th></tr></thead><tbody>'
+      +'<div class="scroll"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Timu</th><th>Tabs</th><th>Kiongozi</th><th>Yupo?</th><th class="noxl"></th></tr></thead><tbody>'
       +(d.codes||[]).map(function(c){
         return '<tr><td class="code">'+esc(c.code)+'</td><td>'+esc(c.name)+'</td><td>'+esc(c.role)+'</td>'
           +'<td>'+esc(c.teams?c.teams.join(', '):'ZOTE')+'</td><td class="mut">'+esc((c.tabs||[]).join(', '))+'</td>'
@@ -4366,6 +4379,27 @@ function drawCodes(m){
             ? '<span class="mut" title="Endesha migration ya kiongozi">—</span>'
             : '<button class="btn sm'+(c.leader?'':' ghost')+'" data-lead="'+esc(c.code)+'"'
               +' data-on="'+(c.leader?1:0)+'">'+(c.leader?'Kiongozi':'Si kiongozi')+'</button>')+'</td>'
+          /* YUPO? -- present, or away, and until when.
+               "I need a feature to suspend a user at (Access codes - mfumo (portal)) so that
+                they don't appear anywhere unless reactivated"
+               "so suspension is recorded by date picker start and end date"
+
+             THE ROW STAYS AND IS MARKED, never hidden. Filtering an absent person out of this
+             table would remove the one screen where the window can be lifted -- the same trap
+             a deleted role would fall into if it could resurrect itself.
+
+             Two dates do not fit in a row button the way the Kiongozi tick does, so this cell
+             is a STATE plus a way in. It opens its own small editor rather than the Hariri
+             form: that form rewrites role, teams and tabs, and setting somebody's leave must
+             never be able to revert their navs as a side effect. */
+          +'<td>'+(c.suspended===null
+            ? '<span class="mut" title="Endesha migration ya kusimamisha">-</span>'
+            : '<button class="btn sm'+(c.suspended?' danger':' ghost')+'" data-susp="'+esc(c.code)
+              +'" data-from="'+esc(c.suspendFrom||'')+'" data-to="'+esc(c.suspendTo||'')+'">'
+              +(c.suspended
+                ? 'Hayupo'+(c.suspendTo?' hadi '+esc(c.suspendTo):'')
+                : (c.suspendFrom?'Yupo · '+esc(c.suspendFrom)+(c.suspendTo?'→'+esc(c.suspendTo):''):'Yupo'))
+              +'</button>')+'</td>'
           +'<td class="r noxl"><button class="btn sm ghost" data-ed="'+esc(c.code)+'" data-name="'+esc(c.name)+'" data-role="'+esc(c.role)+'" data-lead2="'+(c.leader?1:0)+'" data-teams="'+esc(c.teams&&c.teams.length?c.teams.join(','):'ALL')+'">Hariri</button> '
           +'<button class="btn sm ghost" data-del="'+esc(c.code)+'">Futa</button></td></tr>';
       }).join('')+'</tbody></table></div>'
@@ -4550,6 +4584,43 @@ function drawCodes(m){
           toast(on?'Ameondolewa / leader removed':'Amewekwa kiongozi / leader set');
           drawCodes(m);
         }).catch(function(e){ b.disabled=false; toast(safeErr(e),true); });
+      };
+    });
+    /* YUPO? -- two date pickers, in an editor of their own.
+       "so suspension is recorded by date picker start and end date"
+
+       Its own editor rather than the Hariri form, because that form rewrites role, teams and
+       tabs: recording a person's leave must never be able to revert their navs on the way
+       past. "Bring back now" is a first-class button rather than an empty-the-boxes trick --
+       somebody returning early is the commonest thing that will ever happen on this screen,
+       and it should not require knowing that clearing two fields means anything. */
+    $all('[data-susp]',m).forEach(function(b){
+      b.onclick=function(){
+        var code=b.getAttribute('data-susp');
+        var from=b.getAttribute('data-from')||'', to=b.getAttribute('data-to')||'';
+        drawer('<h3>Yupo? \u00b7 '+esc(code)+'</h3>'
+          +'<div class="sub">Siku zote mbili zinahesabika. Ukiacha ya mwisho tupu, ni hadi '
+          +'utakapomrudisha. / Both dates count as days off; leave the end empty for "until '
+          +'further notice".<br><br>Akiwa hayupo <b>hawezi kuingia</b>, na wateja wa leo '
+          +'wanagawanywa kwa waliopo. / While away they cannot sign in, and today\'s customers '
+          +'are dealt among the officers who are present.</div>'
+          +'<div class="fld"><label>Kuanza / from</label>'
+          +'<input class="inp" type="date" id="spFrom" value="'+esc(from)+'"></div>'
+          +'<div class="fld"><label>Hadi / to</label>'
+          +'<input class="inp" type="date" id="spTo" value="'+esc(to)+'"></div>'
+          +'<button class="btn w" id="spGo">Hifadhi / Save</button>'
+          +(from?'<button class="btn w ghost" id="spClear" style="margin-top:6px">'
+            +'Mrudishe sasa / Bring back now</button>':''));
+        var send=function(f,t){
+          var g=$('#spGo'); if(g) g.disabled=true;
+          srv('accessCodeSuspend',{code:code,from:f,to:t}).then(function(){
+            closeDrawer();
+            toast(f?'Amesimamishwa / suspension saved':'Amerudi kazini / back at work');
+            drawCodes(m);
+          }).catch(function(e){ if(g) g.disabled=false; toast(safeErr(e),true); });
+        };
+        $('#spGo').onclick=function(){ send($('#spFrom').value||'', $('#spTo').value||''); };
+        if($('#spClear')) $('#spClear').onclick=function(){ send('',''); };
       };
     });
   }).catch(function(e){ paneFailed(m,e); });

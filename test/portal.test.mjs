@@ -1998,3 +1998,145 @@ test('the new passcode never reaches the audit log', async () => {
   assert.equal(s, null, 'nothing about the new code may be recorded');
   assert.ok(!String(s).includes('SUPERSECRET9'));
 });
+
+/* =========================================================================================
+   AWAY TODAY.
+
+     "I need a feature to suspend a user at (Access codes — mfumo (portal)) so that they don't
+      appear anywhere unless reactivated, e.g one credit aint there today so if I suspend him
+      the customer distribution of today is auto to the available ones"
+     "so suspension is recorded by date picker start and end date"
+   ========================================================================================= */
+import { authCode, suspendedOn } from '../api/_lib/auth.js';
+import { rosterFull, dealMap } from '../api/_lib/call-core.js';
+
+test('a window is inclusive at both ends, and half a window is no window', () => {
+  const w = (from, to) => ({ suspend_from: from, suspend_to: to });
+  assert.equal(suspendedOn(w('2026-09-03', '2026-09-05'), '2026-09-02'), false, 'the day before');
+  assert.equal(suspendedOn(w('2026-09-03', '2026-09-05'), '2026-09-03'), true, 'the first day counts');
+  assert.equal(suspendedOn(w('2026-09-03', '2026-09-05'), '2026-09-04'), true);
+  assert.equal(suspendedOn(w('2026-09-03', '2026-09-05'), '2026-09-05'), true,
+    'and so does the last -- 3rd to 5th is three days off, which is what two date boxes mean');
+  assert.equal(suspendedOn(w('2026-09-03', '2026-09-05'), '2026-09-06'), false, 'back on the 6th');
+
+  assert.equal(suspendedOn(w('2026-09-03', null), '2027-01-01'), true,
+    'an open end is "until further notice"');
+  /* An open START is not the mirror image: a `to` with no `from` would read as "suspended
+     since the beginning of time", which nobody means by filling in one box. The safe
+     direction is one person still at work, never a department locked out by half a form. */
+  assert.equal(suspendedOn(w(null, '2026-09-05'), '2026-09-04'), false);
+  assert.equal(suspendedOn({}, '2026-09-04'), false);
+});
+
+test('a suspended code cannot sign in, and ADMIN never can be suspended', async () => {
+  const day = todayKey();
+  const d = fakeDb({ access_codes: [
+    { code: 'AWAY', name: 'Juma Ally', role: 'CREDIT', teams: null, tabs: [],
+      is_leader: false, suspend_from: day, suspend_to: day },
+    { code: 'HERE', name: 'Neema M', role: 'CREDIT', teams: null, tabs: [],
+      is_leader: false, suspend_from: null, suspend_to: null },
+    /* The lockout guard. A window on the last admin -- a slip of the date picker, or an admin
+       suspending themselves -- would otherwise leave nobody able to lift it. */
+    { code: 'BOSS', name: 'Peter', role: 'ADMIN', teams: null, tabs: [],
+      is_leader: true, suspend_from: day, suspend_to: day },
+  ] });
+
+  await assert.rejects(() => authCode('AWAY', d), e => {
+    assert.match(String(e.message), /simamishwa|suspended/i,
+      'named as a window, not as "invalid access code" -- somebody on leave should not spend '
+      + 'the morning sure they have forgotten their code');
+    return true;
+  });
+  assert.equal((await authCode('HERE', d)).name, 'Neema M');
+  assert.equal((await authCode('BOSS', d)).name, 'Peter', 'ADMIN is never shut out');
+});
+
+test('sign-in survives a database that has never heard of suspension', async () => {
+  /* THE WORST FAILURE THIS FILE IS CAPABLE OF. PostgREST refuses a WHOLE select for one
+     unknown column, so naming suspend_from without a fallback would not darken a pane -- it
+     would fail THE SIGN-IN QUERY and tell every person in the company their code is invalid
+     until somebody ran a migration, including the people who could run it. */
+  const pre = fakeDb({ access_codes: [
+    { code: 'OLD', name: 'Asha', role: 'CREDIT', teams: null, tabs: [] },
+  ] });
+  const real = pre.from.bind(pre);
+  pre.from = name => {
+    const q = real(name);
+    if (name !== 'access_codes') return q;
+    const guard = cols => {
+      if (/suspend_from|suspend_to/.test(cols)) {
+        const bad = { message: 'column access_codes.suspend_from does not exist' };
+        const dead = { eq: () => dead, ilike: () => dead, limit: () => dead,
+          maybeSingle: async () => ({ data: null, error: bad }),
+          then: (res) => res({ data: null, error: bad }) };
+        return dead;
+      }
+      if (/is_leader/.test(cols)) {
+        const bad = { message: 'column access_codes.is_leader does not exist' };
+        const dead = { eq: () => dead, ilike: () => dead, limit: () => dead,
+          maybeSingle: async () => ({ data: null, error: bad }),
+          then: (res) => res({ data: null, error: bad }) };
+        return dead;
+      }
+      return q.select(cols);
+    };
+    return { ...q, select: guard };
+  };
+  const u = await authCode('OLD', pre);
+  assert.equal(u.name, 'Asha', 'the door still opens');
+  assert.equal(u.suspended, null, 'three states: not false, but "we were not able to ask"');
+  assert.equal(u.leader, null);
+});
+
+test('suspending a credit officer deals today\'s customers among the ones who are present', async () => {
+  /* The ask, end to end. Nothing stores an assignment -- the deal is recomputed from the
+     roster on every read -- so taking somebody OUT of the roster IS the redistribution. */
+  const day = todayKey();
+  const users = ['Ally One', 'Baraka Two', 'Chausiku Three', 'Daudi Four'].map((n, i) => ({
+    user_id: 'U' + i, name: n, role: 'CREDIT', active: true }));
+  const codes = users.map((u, i) => ({
+    code: 'C' + i, name: u.name, role: 'CREDIT', teams: null, tabs: [],
+    is_leader: false, suspend_from: null, suspend_to: null }));
+  const rows = Array.from({ length: 60 }, (_, i) => ({
+    imei: String(100000000000000 + i), deck_date: day, disbursed_date: day, locked7: false, locked4: false }));
+
+  const before = fakeDb({ call_users: users, access_codes: codes });
+  const rosterBefore = await rosterFull(before, day);
+  assert.equal(rosterBefore.ids.length, 4);
+  const dealBefore = dealMap(rows, rosterBefore.ids, day);
+  assert.equal(Object.keys(dealBefore).length, 60, 'everybody is dealt to somebody');
+
+  // Chausiku is not in today.
+  const codesAway = codes.map(c => (c.name === 'Chausiku Three'
+    ? { ...c, suspend_from: day, suspend_to: day } : c));
+  const after = fakeDb({ call_users: users, access_codes: codesAway });
+  const rosterAfter = await rosterFull(after, day);
+  assert.deepEqual(rosterAfter.ids, ['U0', 'U1', 'U3'], 'she is off the roster for today only');
+
+  const dealAfter = dealMap(rows, rosterAfter.ids, day);
+  assert.equal(Object.keys(dealAfter).length, 60, 'and NOBODY is orphaned');
+  assert.ok(!Object.values(dealAfter).includes('U2'), 'nothing is still dealt to her');
+  // Evenly, which is what "auto to the available ones" has to mean for it to be fair.
+  const per = {};
+  Object.values(dealAfter).forEach(u => { per[u] = (per[u] || 0) + 1; });
+  const counts = Object.values(per).sort();
+  assert.ok(counts[counts.length - 1] - counts[0] <= 1,
+    'the three who are present carry equal shares, give or take one');
+
+  // And tomorrow she is back, with no action from anybody.
+  const back = await rosterFull(after, '2099-01-01');
+  assert.equal(back.ids.length, 4, 'the window ends by itself -- that is why it is a window');
+});
+
+test('the roster ignores suspension entirely when the migration has not been run', async () => {
+  /* The credit round must never fail because a feature about leave is half-installed. */
+  const day = todayKey();
+  const d = fakeDb({ call_users: [{ user_id: 'U0', name: 'Ally', role: 'CREDIT', active: true }] });
+  const real = d.from.bind(d);
+  d.from = name => {
+    if (name !== 'access_codes') return real(name);
+    throw new Error('relation "access_codes" does not exist');
+  };
+  const r = await rosterFull(d, day);
+  assert.deepEqual(r.ids, ['U0'], 'the deal is exactly what it has always been');
+});

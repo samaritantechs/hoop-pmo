@@ -850,16 +850,17 @@ test('the Kiongozi switch sits in the row, immediately before Hariri and Futa', 
   const head = /<tr><th>Code<\/th>[\s\S]{0,400}?<\/tr>/.exec(src);
   assert.ok(head, 'the access-codes header row has changed shape');
   const cols = [...head[0].matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map(m => m[1]);
-  assert.deepEqual(cols, ['Code', 'Jina', 'Role', 'Timu', 'Tabs', 'Kiongozi', ''],
-    'Kiongozi must be the last named column, just before the actions cell');
+  assert.deepEqual(cols, ['Code', 'Jina', 'Role', 'Timu', 'Tabs', 'Kiongozi', 'Yupo?', ''],
+    'Kiongozi and Yupo? are the named columns, both before the actions cell');
 
   const row = src.slice(src.indexOf("<tr><td class=\"code\">"));
   const lead = row.indexOf('data-lead="');
+  const susp = row.indexOf('data-susp="');
   const edit = row.indexOf('data-ed="');
   const del = row.indexOf('data-del="');
-  assert.ok(lead > 0 && edit > 0 && del > 0, 'all three row controls must be present');
-  assert.ok(lead < edit && edit < del,
-    'the Kiongozi button must come before Hariri, which comes before Futa');
+  assert.ok(lead > 0 && susp > 0 && edit > 0 && del > 0, 'all four row controls must be present');
+  assert.ok(lead < susp && susp < edit && edit < del,
+    'Kiongozi, then Yupo?, both still before Hariri and Futa');
 
   // It is a switch, not a label: the face shows the state and one click flips it.
   assert.match(src, /srv\('accessCodeLeader',\{code:code,leader:!on\}\)/,

@@ -1010,3 +1010,206 @@ test('enrolling a LOCKED phone again does not unlock it', async () => {
     'and the reason it was locked survives');
   assert.equal(rows.find(x => x.imei === 'X1').state, 'lost');
 });
+
+/* =========================================================================================
+   THE TOKEN MEMORY, ACTUALLY EXERCISED.
+
+     "Means we never lose record of an imei token even if futa"
+
+   True, and it now has a round-trip test rather than a grep of the source. Two holes were
+   found under it while checking that claim, and both are closed here.
+   ========================================================================================= */
+
+test('futa remembers the token, and re-enrolling that IMEI hands the same one back', async () => {
+  const d = fleet([{ imei: 'F1', state: 'enrolled', enrol_token: 'keep-me' }]);
+  d._dump('device_events').push({ id: 'e1', imei: 'F1', event: 'enrolled', at: '2026-08-01T00:00:00Z' });
+
+  await _FNS.deviceDelete(d, ADMIN, { imei: 'F1' });
+  assert.equal(d._dump('devices').length, 0, 'the row is gone');
+  assert.equal(d._dump('device_events').length, 0, 'and its history with it');
+  assert.equal(d._dump('device_tokens')[0].enrol_token, 'keep-me', 'but never the identity');
+
+  const back = await _FNS.deviceEnrol(d, ADMIN, { imeis: 'F1' });
+  assert.equal(back.provision[0].token, 'keep-me',
+    'the handset is still carrying this string, so the register must hand back the same one');
+  assert.equal(back.provision[0].fresh, false, 'and it is not a new phone');
+});
+
+test('a futa that cannot remember the token does not happen', async () => {
+  /* The write was `await db.from(...).upsert(...)` with the result discarded, inside a
+     try/catch. The Supabase client does not throw on a database error unless .throwOnError()
+     is called -- which this codebase never does -- it RESOLVES with { error }. So the catch
+     could only fire on a network throw, and every database error passed silently into the
+     delete: row gone, memory never written, and a handset left carrying a credential the
+     register can no longer name. It cannot beat, cannot be released, and refuses a factory
+     reset because it is still Device Owner. That phone is scrap and nothing would have said so. */
+  const d = fleet([{ imei: 'F2', state: 'enrolled', enrol_token: 'precious' }]);
+  const real = d.from.bind(d);
+  d.from = name => (name !== 'device_tokens' ? real(name) : {
+    upsert: async () => ({ data: null, error: { message: 'timeout', code: '57014' } }),
+  });
+
+  await assert.rejects(() => _FNS.deviceDelete(d, ADMIN, { imei: 'F2' }),
+    e => e.status === 503 && /token|remember/i.test(e.message));
+
+  d.from = real;
+  assert.equal(d._dump('devices').length, 1, 'nothing was deleted');
+  assert.equal(d._dump('devices')[0].enrol_token, 'precious');
+});
+
+test('a deployment without the memory table can still delete', async () => {
+  /* The deliberate tolerance, and the only one: "a delete that WORKS without remembering is
+     far better than a delete that fails." Narrowing the catch must not take this with it. */
+  const d = fleet([{ imei: 'F3', state: 'enrolled', enrol_token: 't3' }]);
+  const real = d.from.bind(d);
+  d.from = name => (name !== 'device_tokens' ? real(name) : {
+    upsert: async () => ({ data: null, error: { message: 'relation "device_tokens" does not exist', code: '42P01' } }),
+  });
+  await _FNS.deviceDelete(d, ADMIN, { imei: 'F3' });
+  d.from = real;
+  assert.equal(d._dump('devices').length, 0, 'the register keeps working');
+});
+
+test('the Token button can still answer for a handset that was deleted', async () => {
+  /* The case that needs it most: the phone is still Device Owner and still carrying its
+     token, so it can be neither released nor factory reset without that string -- and
+     docs/DEVICE-LOCKING.md sends the operator to this button to fetch it. deviceToken read
+     the devices table only, so once the row was gone the memory was write-only and the
+     recovery it exists for could not be done through any screen. */
+  const d = fleet([{ imei: 'F4', state: 'enrolled', enrol_token: 'still-on-the-phone' }]);
+  await _FNS.deviceDelete(d, ADMIN, { imei: 'F4' });
+
+  const t = await _FNS.deviceToken(d, ADMIN, { imei: 'F4' });
+  assert.equal(t.token, 'still-on-the-phone');
+  assert.equal(t.retired, true, 'and the drawer is told this is a phone the register dropped');
+  assert.ok(t.retiredBy, 'with who dropped it');
+
+  // An IMEI nobody has ever heard of is still refused, exactly as before.
+  await assert.rejects(() => _FNS.deviceToken(d, ADMIN, { imei: 'NEVER' }),
+    e => /hakijasajiliwa|not on the registry/i.test(e.message));
+});
+
+/* =========================================================================================
+   THE BOOT WINDOW.
+
+     "then if a locked phone is restarted give grace period of 5 minutes so that one can
+      connect data or wifi -- dont leave any loophole of unlocking a phone thats already
+      locked and awake and got the grace period already"
+
+   A locked handset draws a pinned screen the moment it boots, and that screen is why a phone
+   can be stuck for good: a customer who has PAID cannot reach Settings to turn wifi on, so the
+   handset cannot call home, so it never hears it was released.
+
+   The server half is tested here. The three fences live in the APK and are asserted against
+   its source below, the same way the enrol receiver's ordering already is.
+   ========================================================================================= */
+
+test('the beat carries the boot window, and its two numbers come from settings', async () => {
+  const sold = [{ imei: 'B1', state: 'locked', enrol_token: 'tb', customer: 'Asha',
+    state_reason: 'arrears', last_seen: new Date(NOW).toISOString() }];
+
+  const dflt = await deviceApi(fleet(sold), 'dev_beat', [{ token: 'tb', locked: true }], NOW);
+  assert.equal(dflt.bootGraceMinutes, 5, 'five minutes unless the office says otherwise');
+  assert.equal(dflt.bootGraceEveryHours, 24);
+
+  const tuned = await deviceApi(fleet(sold, [
+    { key: 'DEVICE_BOOT_GRACE_MINUTES', value: '3' },
+    { key: 'DEVICE_BOOT_GRACE_EVERY_HOURS', value: '12' },
+  ]), 'dev_beat', [{ token: 'tb', locked: true }], NOW);
+  assert.equal(tuned.bootGraceMinutes, 3, 'the number lives on the server, not in the APK');
+  assert.equal(tuned.bootGraceEveryHours, 12);
+});
+
+test('zero minutes switches the window off, and a typo does not', async () => {
+  /* Turning this off for a fleet is a decision the office must be able to make, so 0 cannot
+     fall through to the default the way a blank or a misplaced letter does. */
+  const sold = [{ imei: 'B2', state: 'locked', enrol_token: 'tb2', customer: 'Juma' }];
+  const off = await deviceApi(fleet(sold, [{ key: 'DEVICE_BOOT_GRACE_MINUTES', value: '0' }]),
+    'dev_beat', [{ token: 'tb2', locked: true }], NOW);
+  assert.equal(off.bootGraceMinutes, 0, 'nought means nought');
+
+  const typo = await deviceApi(fleet(sold, [{ key: 'DEVICE_BOOT_GRACE_MINUTES', value: 'tano' }]),
+    'dev_beat', [{ token: 'tb2', locked: true }], NOW);
+  assert.equal(typo.bootGraceMinutes, 5, 'a typo falls back rather than disarming the window');
+
+  const neg = await deviceApi(fleet(sold, [{ key: 'DEVICE_BOOT_GRACE_MINUTES', value: '-5' }]),
+    'dev_beat', [{ token: 'tb2', locked: true }], NOW);
+  assert.equal(neg.bootGraceMinutes, 5, 'and so does a negative');
+});
+
+test('a retiring phone is offered no window, because it has no lock screen to open', async () => {
+  const d = fleet([{ imei: 'B3', state: 'released', enrol_token: 'tb3', customer: 'Neema',
+    released_at: new Date(NOW - 1000).toISOString() }]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tb3', locked: false }], NOW);
+  assert.equal(r.retire, true);
+  assert.equal(r.bootGraceMinutes, 0,
+    'it is about to unharden and stop calling home; a window would only leave a stale number '
+    + 'in a former customer\'s storage');
+});
+
+test('the boot window has all three of its fences, in the APK', () => {
+  const src = f => fs.readFileSync(
+    new URL('../android/lock/src/main/java/com/samaritantechs/hooploanlock/' + f, import.meta.url), 'utf8');
+  const guard = src('Guard.java');
+
+  /* FENCE 1 -- only ever opened at boot. If any other caller could open a window, a locked
+     handset sitting awake in somebody's hand would have a path to one. */
+  const openers = (guard.match(/openWindow\(/g) || []).length;
+  assert.equal(openers, 2, 'exactly one call site and one declaration -- nothing else opens a window');
+  const restore = guard.slice(guard.indexOf('static void restore('), guard.indexOf('mayOpenWindow(Context'));
+  assert.match(restore, /realBoot && mayOpenWindow\(c\)/,
+    'and it is gated on a real power cycle, not on MY_PACKAGE_REPLACED');
+  assert.match(src('BootReceiver.java'), /ACTION_BOOT_COMPLETED\.equals\(action\)/,
+    'which the receiver decides from the intent it actually got');
+
+  /* FENCE 2 -- the rate limit, and the stamp that survives the reboot meant to reset it. */
+  const may = guard.slice(guard.indexOf('private static boolean mayOpenWindow'),
+                          guard.indexOf('private static void openWindow'));
+  assert.match(may, /GRACE_LAST/, 'the limit is read from a stored stamp');
+  assert.match(may, /since >= everyHours \* 3600000L/);
+  assert.match(may, /if \(since < 0\) return false/,
+    'and a clock wound backwards reads as "not yet", never as "long enough" -- on a locked '
+    + 'phone the customer holds the clock');
+  const open = guard.slice(guard.indexOf('private static void openWindow'), guard.indexOf('static void enforce('));
+  const stampAt = open.indexOf('GRACE_LAST');
+  const untilAt = open.indexOf('GRACE_UNTIL');
+  assert.ok(stampAt > 0 && untilAt > stampAt,
+    'the window is stamped as spent BEFORE it is opened, so a process killed mid-window '
+    + 'cannot claim another on the reboot that follows');
+
+  /* FENCE 3 -- reaching the server IS the purpose served, so the window ends there. */
+  const beat = src('Beat.java');
+  const served = beat.indexOf('Guard.windowServed(c)');
+  assert.ok(served > 0, 'the beat closes the window');
+  assert.ok(served < beat.indexOf('if ("lock".equals(command))'),
+    'before it acts on the answer, so what follows is an ordinary lock with nothing under it');
+  assert.match(guard, /static void windowServed\(Context c\)\s*\{\s*Prefs\.put\(c, Prefs\.GRACE_UNTIL, 0L\);/);
+
+  // And a lock order always closes an open window -- otherwise the window outlives its purpose.
+  const lock = guard.slice(guard.indexOf('static void lock(Context c)'), guard.indexOf('ACTION_RELEASE'));
+  assert.match(lock, /Prefs\.put\(c, Prefs\.GRACE_UNTIL, 0L\)/);
+  assert.match(lock, /if \(!was\) Prefs\.put\(c, Prefs\.GRACE_LAST, 0L\)/,
+    'and only a NEW lock begins an episode that deserves its own window');
+});
+
+test('the offline self-lock stands down while a boot window is open', () => {
+  /* Without this the window is dead on arrival for the phones that need it most. It opens at
+     boot, the first beat fails because having no network is the whole reason it opened, and
+     that failure reaches enforceGrace -- which would self-lock the handset that has been
+     silent longest, which is exactly the paid-up customer who cannot be told they were
+     released. Deferred by five minutes, never skipped: Guard.enforce still locks. */
+  const beat = fs.readFileSync(new URL(
+    '../android/lock/src/main/java/com/samaritantechs/hooploanlock/Beat.java', import.meta.url), 'utf8');
+  const fn = beat.slice(beat.indexOf('static void enforceGrace(Context c)'), beat.indexOf('private static int battery'));
+  assert.match(fn, /if \(Guard\.inWindow\(c\)\) return;/);
+  assert.ok(fn.indexOf('Guard.inWindow') < fn.indexOf('Guard.lock(c)'),
+    'and it stands down before it can reach the self-lock');
+});
+
+test('the boot-window build actually reaches handsets in the field', () => {
+  /* SelfUpdate skips any build whose versionCode is not HIGHER than the installed one, so a
+     change shipped without raising it reaches nobody. CI has caught this before. */
+  const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
+  assert.ok(v.versionCode >= 13, 'raised for the boot window');
+  assert.match(String(v.versionName), /^\d+\.\d+/);
+});

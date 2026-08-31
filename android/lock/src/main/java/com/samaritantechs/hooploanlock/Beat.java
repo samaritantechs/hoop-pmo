@@ -136,6 +136,21 @@ class Beat {
         if (next > 0) Prefs.put(c, Prefs.NEXT_BEAT, (long) next);
         Prefs.put(c, Prefs.LAST_OK, System.currentTimeMillis());
         Prefs.put(c, Prefs.GRACE_HOURS, String.valueOf(r.optInt("graceHours", -1)));
+        /* THE BOOT WINDOW'S TWO NUMBERS, kept so a handset that boots with NO network still
+           knows the rule it was last told -- which is precisely the case the window exists
+           for. An older deployment sends neither; the defaults here match device-core.js so a
+           server that has not been updated yet behaves as it always did rather than handing
+           out windows nobody configured. */
+        Prefs.of(c).edit()
+            .putInt(Prefs.BOOT_GRACE_MINUTES, r.optInt("bootGraceMinutes", 0))
+            .putInt(Prefs.BOOT_GRACE_EVERY_HOURS, r.optInt("bootGraceEveryHours", 24))
+            .apply();
+        /* AND THE WINDOW IS SPENT THE MOMENT WE GET THROUGH. Fence 3: reaching the server is
+           the entire purpose of the window, so arriving here IS that purpose served. Closed
+           before the answer below is acted on, so what follows is an ordinary lock or an
+           ordinary unlock with nothing left underneath it -- and so there is nothing to be
+           gained by staying offline through the five minutes. */
+        Guard.windowServed(c);
         String msg = r.optString("message", "");
         if (msg != null && !msg.isEmpty()) Prefs.put(c, Prefs.MESSAGE, msg);
         String help = r.optString("helpPhone", "");
@@ -280,6 +295,21 @@ class Beat {
      */
     static void enforceGrace(Context c) {
         if (Prefs.of(c).getBoolean(Prefs.RETIRED, false)) return;
+        /* NOT WHILE A BOOT WINDOW IS OPEN, and this one is not a nicety -- without it the
+           window would be dead on arrival for the phones that need it most.
+           -------------------------------------------------------------------------------
+           The window opens at boot and the first beat after it fails, because having no
+           network is the entire reason a window was opened. That failure lands here. And the
+           handset that has been silent long enough to have exceeded graceHours -- the paid-up
+           customer whose phone has been dark for a week and cannot be told it was released --
+           is precisely the one this would self-lock a second after the window opened, taking
+           the window down with it.
+
+           Nothing is lost by waiting: Guard.enforce() closes the window on the timer, on the
+           next beat and on the next job run, and if the phone still has not reached us by
+           then it locks exactly as it would have. The self-lock is deferred by five minutes,
+           never skipped. */
+        if (Guard.inWindow(c)) return;
         int graceHours;
         try { graceHours = Integer.parseInt(Prefs.str(c, Prefs.GRACE_HOURS, "-1")); }
         catch (Exception e) { graceHours = -1; }

@@ -1,6 +1,6 @@
 {
-  "versionCode": 12,
-  "versionName": "1.10.1",
-  "notes": "Simu nyingi kwa amri MOJA, na ruhusa ya kusoma IMEI ambayo ilikuwa haipo. / Many phones from ONE command -- plus the IMEI permission that was missing, without which no handset could name itself.",
+  "versionCode": 13,
+  "versionName": "1.11.0",
+  "notes": "Simu iliyofungwa ikizimwa na kuwashwa inapata dakika chache za kuwasha WiFi/data, mara moja tu kwa kipindi. / A locked phone that is switched on again gets a few minutes to turn WiFi or data on -- once per period, and rebooting again buys nothing.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
