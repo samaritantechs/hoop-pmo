@@ -897,7 +897,7 @@ test('the sign-in screen can change a code, and cannot leave it authenticated as
 test('bulk enrolment gives one button per phone, each carrying that phone\'s own token', () => {
   const src = read('portal.html');
   const fn = src.slice(src.indexOf('function devProvision('),
-                       src.indexOf('function devProvision(') + 5200);
+                       src.indexOf('function devProvision(') + 9000);
 
   assert.match(fn, /data-dvcopy="'\+i\+'"/, 'every phone needs its own copy button');
   assert.match(fn, /esc\(x\.imei\)/, 'and the row must name the handset it belongs to');
@@ -914,11 +914,33 @@ test('bulk enrolment gives one button per phone, each carrying that phone\'s own
     'no placeholder may ever reach a runnable line -- that mistake cost a handset once');
   assert.match(handler, /opacity='\.45'/, 'a copied row must show it is done');
 
-  /* AND THE ONE-COMMAND-FOR-ALL SHAPE MUST NOT COME BACK. The server does not check a
-     handset's reported IMEI against the token's row (see api/_lib/device-core.js), so nothing
-     downstream catches a phone given the wrong phone's token -- the pairing has to be made by
-     a person, one handset at a time. */
-  assert.ok(!/for %I in|adb wait-for-device|pause >nul/i.test(src),
-    'no batch runner that enrols several phones in one paste: order alone would decide which '
-    + 'handset got which identity, and nothing would catch a swap');
+  /* THE INVARIANT IS NOT "NO LOOP" -- IT IS "NO TOKEN IN A LOOP".
+     Install and set-device-owner are identical on every handset, so devHubLine deliberately
+     runs those across every phone on the hub. What must never be looped is the ENROL
+     broadcast: it carries a token minted for ONE IMEI, and the server does not check a
+     handset's reported IMEI against the token's row (api/_lib/device-core.js says why), so
+     nothing downstream would catch a phone that received another phone's identity. Plug-in
+     order would silently decide it, and the way back is a factory reset. */
+  /* Asserted on what the function PRODUCES, not on its source: the command is built by
+     concatenation, so the shape that matters only exists once it has been run. */
+  const hub = lift(src, 'devHubLine',
+    'var DEVCMP="com.samaritantechs.hooploanlock/.LockAdmin";'
+    + 'var DEVPKG="com.samaritantechs.hooploanlock";'
+    + 'var location={origin:"https://hoop-pmo.vercel.app"};')();
+  assert.match(hub, /adb devices/, 'the hub command works from the connected-device list');
+  assert.match(hub, /install -r/, 'it installs...');
+  assert.match(hub, /set-device-owner/, '...and takes ownership, both identical on every phone');
+  assert.match(hub, /"%b"=="device"/,
+    'a handset still unauthorized or offline must be skipped, not half-provisioned');
+  assert.ok(!/ && /.test(hub),
+    'the steps join with a single & -- "already set" is the normal answer for a handset being '
+    + 'redone, and && would treat that as a reason to stop');
+  assert.ok(!/%%/.test(hub),
+    'written to be PASTED into cmd, so single % -- %% is .bat syntax and would not expand');
+  assert.ok(!/PASTE|<TOKEN>|<SERIAL>/.test(hub),
+    'no placeholder may reach a runnable line');
+
+  // And no OTHER loop anywhere may wrap the enrol broadcast.
+  assert.ok(!/for \s*\/f[^\n]*ENROL|for %\w[^\n]*-e token/i.test(src),
+    'nothing may enrol several phones in one paste');
 });

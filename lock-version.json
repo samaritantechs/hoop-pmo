@@ -1,6 +1,6 @@
 {
-  "versionCode": 10,
-  "versionName": "1.9.0",
-  "notes": "Simu inatuma ilipo mara ya mwisho, ili stock isiyojulikana iwe mahali pa kwenda. / The handset reports where it last synced, so unaccounted stock is a place to go rather than a name on a list.",
+  "versionCode": 11,
+  "versionName": "1.10.0",
+  "notes": "Simu nyingi kwa amri MOJA: kila simu inasoma IMEI yake na kuchukua token yake yenyewe, hivyo mpangilio wa kuchomeka hauna maana. / Many phones from ONE command: each handset reads its own IMEI and claims its own token, so the order they were plugged in cannot matter.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

@@ -2872,6 +2872,39 @@ function devOneLiner(token){
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
     + ' -e server ' + location.origin + ' -e token ' + token + ')';
 }
+/* THE HUB COMMAND: install and take ownership of EVERY phone on the cable at once.
+   ===========================================================================================
+     "should intall app and sign all usb connected devices on computer am wanting to use a hub"
+
+   These two steps are IDENTICAL for every handset -- the same APK, the same Device Owner
+   component -- so there is nothing to get wrong by running them on all of them together, and
+   they are the slow half of a bench session: an APK install is twenty or thirty seconds of
+   staring at a cable.
+
+   The enrol broadcast is NOT here, and that is the whole point of splitting them. It carries a
+   token minted for ONE IMEI, and once several phones are on the hub `adb shell` needs -s to
+   know which one it is talking to. Handing tokens out across a hub means plug-in order decides
+   which handset gets which identity, and nothing downstream would catch a swap -- the register
+   would file that phone's beats under another phone's IMEI, quietly, with a factory reset as
+   the way back. So the identity step stays one phone at a time, deliberately.
+
+   CMD NOTES, all of them learned the hard way:
+     - `for /f` in an interactive window uses %a; a .bat file would need %%a. This is written to
+       be PASTED, so single %.
+     - `skip=1` drops "List of devices attached". Blank lines for-f skips by itself.
+     - tokens=1,2 gives serial and state, and the state is checked: a phone still showing
+       `unauthorized` (the RSA prompt not yet accepted on its screen) or `offline` must be left
+       alone rather than half-provisioned.
+     - `&` and not `&&` between the two steps: "already set" is the normal answer for a handset
+       being redone, and && would treat that as a reason to stop. */
+function devHubLine(batch){
+  return 'for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
+    + 'adb -s %a install -r "%USERPROFILE%\\Downloads\\HOOPLOAN-Lock.apk"'
+    + ' & adb -s %a shell dpm set-device-owner ' + DEVCMP
+    + ' & adb -s %a shell am broadcast --include-stopped-packages'
+    + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
+    + ' -e server ' + location.origin + ' -e batch ' + batch + ')';
+}
 function devCopyBox(id){
   var t=$('#'+id); if(!t) return; t.select();
   try{ document.execCommand('copy'); toast('Imenakiliwa / copied'); }
@@ -2913,6 +2946,34 @@ function devProvision(m, r){
     +'Pakua APK kwanza kutoka <a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a>. '
     +'Simu lazima iwe mpya au imefutwa (bila akaunti yoyote). '
     +'/ The handset must have no accounts on it — box-fresh or factory reset.</div>'
+    /* STEP ONE, AND ONLY FOR A BENCH WITH MORE THAN ONE PHONE ON IT. Install and take
+       ownership are identical on every handset, so they go out to all of them at once and the
+       slow part of the session -- an APK install per phone -- stops being serial. */
+    +(one?'' :
+      '<div class="card" style="margin:12px 0;padding:12px">'
+      +'<b style="font-size:13px">Simu zote kwa amri MOJA / Every phone, one command</b>'
+      +'<div class="sub" style="margin:4px 0 8px">Unganisha simu zote kwenye hub, kubali RSA '
+      +'kwenye kila skrini, kisha bandika hii <b>mara moja</b>. Kila simu inajitambulisha kwa '
+      +'IMEI yake na kuchukua token yake yenyewe — mpangilio wa kuchomeka hauna maana. '
+      +'/ Plug them all into the hub, accept the RSA prompt on each screen, then paste this '
+      +'<b>once</b>. Each handset identifies itself by its own IMEI and collects its own token — '
+      +'the order you plugged them in cannot matter.</div>'
+      +(r.batchReady===false
+        ? '<div class="note bad">Endesha <b>db/migrations/RUN-ME-2026-08-31-enrol-batch.sql</b> '
+          +'kwanza. Bila hiyo tumia amri ya simu moja moja hapa chini. / Run that migration '
+          +'first; until then use the one-per-phone commands below.</div>'
+        : '<textarea id="dvHub" rows="4" readonly style="width:100%;font-family:ui-monospace,'
+          +'monospace;font-size:10.5px">'+esc(devHubLine(r.batch))+'</textarea>'
+          +'<button class="btn w" id="dvHubCopy">Nakili amri ya hub / Copy the one command</button>')
+      +'<div class="mut" style="font-size:11px;margin-top:8px">Simu iliyo <b>unauthorized</b> '
+      +'inarukwa — kubali kwenye skrini yake kisha rudia. Simu ambayo IMEI yake haipo kwenye '
+      +'orodha uliyobandika <b>haitapewa token yoyote</b> na itaonekana haipo kwenye register. '
+      +'/ A handset showing <b>unauthorized</b> is skipped — accept on its screen and run it '
+      +'again. One whose IMEI is not in the list you pasted gets <b>no token at all</b> and '
+      +'shows as missing on the register: it can never be handed another phone\'s identity.</div>'
+      +'</div>'
+      +'<div class="sub" style="margin:10px 0">Au moja moja, kwa simu iliyokosa hapo juu. '
+      +'/ Or one at a time, for any handset the batch missed.</div>')
     +'<textarea id="dvAdb" rows="'+(one?5:Math.min(14,Math.max(4,p.length*2)))+'" readonly '
     +'style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'+esc(cmds)+'</textarea>'
     +'<button class="btn w" id="dvAdbCopy">Nakili amri / Copy the command'+(one?'':'s')+'</button>'
@@ -2962,6 +3023,7 @@ function devProvision(m, r){
     +'<b>ENROLLED</b>. / The line that matters is the last one: <b>result=1 … ENROLLED</b>.</div>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
   $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
+  if($('#dvHubCopy')) $('#dvHubCopy').onclick=function(){ devCopyBox('dvHub'); };
   /* Copies THAT phone's finished command -- built from the same devOneLiner as the block
      above, so the two can never disagree -- and marks the row done. */
   $all('[data-dvcopy]').forEach(function(b){

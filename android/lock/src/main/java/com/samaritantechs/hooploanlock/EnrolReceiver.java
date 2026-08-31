@@ -3,6 +3,17 @@ package com.samaritantechs.hooploanlock;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
+import android.telephony.TelephonyManager;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 /**
  * The second way a phone can be handed its identity: over adb, at a station with a laptop.
@@ -78,6 +89,73 @@ public class EnrolReceiver extends BroadcastReceiver {
         try { setResultCode(code); setResultData(why); } catch (Exception ignored) { }
     }
 
+    /**
+     * Ask the office which token belongs to THIS handset, given a batch every phone shares.
+     *
+     * Returns the token, or null for every kind of failure there is -- no IMEI readable, not in
+     * the batch, batch expired, office unreachable. The caller writes nothing on a null, which
+     * is the property that matters: a handset that cannot prove which phone it is must end up
+     * with no identity rather than with somebody else's.
+     */
+    private static String claim(Context c, String batch) {
+        HttpURLConnection conn = null;
+        try {
+            JSONArray imeis = new JSONArray();
+            String one = Imei.read(c);
+            if (one != null) imeis.put(one);
+            // The second slot, where there is one. getImei(int) exists from API 26; below that
+            // there is only the single getDeviceId() that Imei.read already returned.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                TelephonyManager tm = (TelephonyManager) c.getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm != null) {
+                    for (int slot = 0; slot < 2; slot++) {
+                        try {
+                            String v = tm.getImei(slot);
+                            if (v != null && !v.trim().isEmpty() && !contains(imeis, v.trim())) {
+                                imeis.put(v.trim());
+                            }
+                        } catch (Throwable ignored) { /* no such slot, or a vendor build */ }
+                    }
+                }
+            }
+            if (imeis.length() == 0) return null;      // cannot say which phone this is
+
+            JSONObject payload = new JSONObject();
+            payload.put("batch", batch);
+            payload.put("imeis", imeis);
+            JSONObject body = new JSONObject();
+            body.put("fn", "dev_claim");
+            body.put("args", new JSONArray().put(payload));
+
+            conn = (HttpURLConnection) new URL(Prefs.server(c) + "/api/device").openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setConnectTimeout(12000);
+            conn.setReadTimeout(12000);
+            conn.setDoOutput(true);
+            OutputStream os = conn.getOutputStream();
+            os.write(body.toString().getBytes("UTF-8"));
+            os.close();
+            if (conn.getResponseCode() != 200) return null;   // 403 = not in this batch
+            BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line);
+            r.close();
+            String t = new JSONObject(sb.toString()).optString("token", "");
+            return t.isEmpty() ? null : t;
+        } catch (Throwable ignored) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static boolean contains(JSONArray a, String v) {
+        for (int i = 0; i < a.length(); i++) if (v.equals(a.optString(i))) return true;
+        return false;
+    }
+
     @Override
     public void onReceive(Context context, Intent intent) {
         Context c = context.getApplicationContext();
@@ -93,18 +171,103 @@ public class EnrolReceiver extends BroadcastReceiver {
             return;
         }
 
+        /* THE SERVER, BEFORE ANYTHING THAT NEEDS IT. A batch claim is a network call, so on a
+           fresh handset the address has to be in place before it runs -- which is why this
+           moved above the token handling rather than staying below it. The once-only rule is
+           unchanged and is enforced by `fresh`: see the note in the class comment. */
+        String existing = Prefs.str(c, Prefs.TOKEN, "");
+        boolean fresh = existing == null || existing.isEmpty();
+        if (fresh) {
+            String server = intent.getStringExtra("server");
+            if (server != null && !server.trim().isEmpty()) Prefs.put(c, Prefs.SERVER, server.trim());
+        }
+
         String token = intent.getStringExtra("token");
+
+        /* ONE COMMAND FOR EVERY PHONE ON THE HUB.
+           ---------------------------------------------------------------------------------
+             "and thats my intention of pasting multiple imei and copyng signle cmd to run and
+              get many phones registered at once"
+
+           A token is minted for ONE IMEI, so a command carrying one can only ever be run
+           against one handset -- and looping it across a hub would let plug-in ORDER decide
+           which phone got which identity, with nothing downstream to catch a swap.
+
+           A BATCH is the same string for every phone in a bench session, which is what makes
+           it safe to broadcast to all of them at once. This handset then reads the IMEI off
+           itself and asks the office which token is ITS one. Nothing about the order it was
+           plugged in can change the answer.
+
+           Reading the IMEI is possible here precisely because the ownership check above has
+           already passed: from Android 10 only a device owner may ask. Both SIM slots are
+           offered, because a dual-SIM phone has two and which one the stock report wrote down
+           is a coin toss -- see Imei.java, which has said so since the beginning.
+
+           If the claim fails the handset stays UN-ENROLLED. It is never given a fallback
+           identity: being absent from the register is a problem somebody can see and fix,
+           whereas holding another phone's token is one nobody can. */
+        String batch = intent.getStringExtra("batch");
+        if ((token == null || token.trim().isEmpty()) && batch != null && !batch.trim().isEmpty()) {
+            /* OFF THE MAIN THREAD, because a claim is a network call and onReceive is not the
+               place for one. Nothing else in this app does blocking network on the main thread
+               -- Beat.now spawns a Thread for exactly this reason -- and a receiver that sits
+               waiting on a socket is a receiver Android is entitled to kill.
+
+               goAsync() is the API for this: onReceive returns at once, the work continues on a
+               thread, and `am broadcast` still waits for finish() and prints the result, so the
+               operator sees the same line in the same terminal either way. The result is set on
+               the PendingResult rather than through say(), which only works while onReceive is
+               still on the stack. */
+            final PendingResult pending = goAsync();
+            final String theBatch = batch.trim();
+            final String was = existing;
+            final boolean wasFresh = fresh;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    int code; String msg;
+                    try {
+                        String got = claim(c, theBatch);
+                        if (got == null) {
+                            code = 5;
+                            msg = "NOT IN THIS BATCH - this handset's IMEI is not one of the "
+                                + "IMEIs that batch was made for, or the office could not be "
+                                + "reached. NOTHING was written. Enrol it on its own with: "
+                                + "-e token <its token from the register>.";
+                        } else if (!wasFresh && !was.equals(got)) {
+                            /* The register handed back a token this phone does not hold. It
+                               keeps the one it has: a batch is a convenience, and no
+                               convenience may quietly re-identify a handset already in
+                               service. Same rule the -e current guard enforces below. */
+                            code = 2;
+                            msg = "ALREADY ENROLLED, under a different token. A batch will not "
+                                + "overwrite it. Use: -e token <the new one> -e current "
+                                + "<the token it holds now>";
+                        } else {
+                            code = 1;
+                            msg = adopt(c, got, was, wasFresh);
+                        }
+                    } catch (Throwable t) {
+                        code = 5;
+                        msg = "CLAIM FAILED - nothing was written. " + t;
+                    }
+                    try { pending.setResultCode(code); pending.setResultData(msg); }
+                    catch (Throwable ignored) { }
+                    pending.finish();
+                }
+            }).start();
+            return;
+        }
+
         if (token == null || token.trim().isEmpty()) {
-            say(4, "NO TOKEN - pass -e token <the token from the register>.");
+            say(4, "NO TOKEN - pass -e token <the token from the register>, "
+                 + "or -e batch <the batch> to let this handset claim its own.");
             return;
         }
         token = token.trim();
 
-        String existing = Prefs.str(c, Prefs.TOKEN, "");
-        boolean fresh = existing == null || existing.isEmpty();
-        boolean same = !fresh && existing.equals(token);
-
-        if (!fresh && !same) {
+        // Compared directly rather than through a `same` flag: that flag now lives in adopt(),
+        // which is the only place that needs to phrase the outcome.
+        if (!fresh && !existing.equals(token)) {
             // A DIFFERENT token: allowed, but only to somebody who can name the current one.
             String proof = intent.getStringExtra("current");
             if (proof == null || !existing.equals(proof.trim())) {
@@ -119,10 +282,20 @@ public class EnrolReceiver extends BroadcastReceiver {
            thing that could turn a leaked token into an unlock. So it is written at first
            enrolment and never again, and a re-enrol carrying -e server silently keeps the
            server it already has rather than failing over it. */
-        if (fresh) {
-            String server = intent.getStringExtra("server");
-            if (server != null && !server.trim().isEmpty()) Prefs.put(c, Prefs.SERVER, server.trim());
-        }
+        // (the server was written above, before the claim that needed it -- once only, on a
+        // handset that had no token yet)
+        say(1, adopt(c, token, existing, fresh));
+    }
+
+    /**
+     * Everything that happens once a token is in hand, shared by the two ways of getting one:
+     * handed it directly, or claimed against a batch. Returns the line to report back.
+     *
+     * It is defined AFTER onReceive on purpose -- the refusals must read before the re-arming
+     * in this file, and a test pins that ordering.
+     */
+    private static String adopt(Context c, String token, String existing, boolean fresh) {
+        boolean same = !fresh && existing.equals(token);
         Prefs.put(c, Prefs.TOKEN, token);
 
         /* AND THE PHONE IS BACK IN SERVICE, which is the whole point of saying so here.
@@ -152,9 +325,10 @@ public class EnrolReceiver extends BroadcastReceiver {
         LockAdmin.harden(c);
         Beat.now(c, true);          // appear on the register while the bench is still open
         BeatJob.schedule(c);
-        say(1, same
+
+        return same
             ? "ENROLLED - already held this token; re-armed and reporting in now."
             : fresh ? "ENROLLED - reporting in now; look for this phone on the register."
-                    : "RE-ENROLLED - now holds the new token, same server; reporting in now.");
+                    : "RE-ENROLLED - now holds the new token, same server; reporting in now.";
     }
 }
