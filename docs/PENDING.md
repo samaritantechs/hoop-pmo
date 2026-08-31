@@ -98,12 +98,26 @@ requested and can be lowered but never raised, and `approved_amount` is its own 
 report shows what was asked AND what was granted. Overwriting one with the other would destroy
 the record of a part-approval, which is exactly the gap somebody argues about at the counter.
 
-Two financial controls worth knowing about, both enforced on the server:
+**Holding both navs means holding both powers, own request included.** This shipped once with a
+self-approval refusal, and it was wrong for this system:
 
-- **Nobody decides their own request**, however many navs they hold. A leader who may approve
-  can also ask, so the two panes meet on one person by design; this is the line between them.
-- **Two approvers pressing at once**: the update is guarded on `status='pending'`, so the second
-  is told it was already decided rather than silently overwriting the first decision.
+> "role is navigation based so i didnt expect (This is your own request — another approver must
+> decide it) if someone has both navs can do both"
+
+The navs **are** the roles. Ticking both `advreq` and `advappr` on somebody is the owner saying,
+in the only way this system has of saying it, that this person may ask **and** may decide — so a
+refusal on top of that was the code overruling the grant it was handed, and it quietly made a
+tick mean less than it says. **The control is who you tick `advappr` on**, not a second opinion
+held by the code.
+
+What the code keeps instead is a **record**: `decided_by` is stamped on the row, so a
+self-decision reads as one on HR's report — the same person in the staff and decided-by columns —
+and `advDecide` is in `AUDITED` either way. The drawer says so at the moment of pressing, as a
+muted note that blocks nothing.
+
+One control that IS enforced on the server: **two approvers pressing at once**. The update is
+guarded on `status='pending'`, so the second is told it was already decided rather than silently
+overwriting the first decision.
 
 Identity is **stamped, never joined** — HOOP has no staff table, a person is the access code
 they signed in with, and a payment record that rewrote itself when a code was renamed or deleted

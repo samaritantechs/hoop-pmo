@@ -3064,18 +3064,25 @@ function advDecideDrawer(m, r, amounts, me){
   drawer('<h3>Ombi la '+esc(r.staffName||'—')+'</h3>'
     +'<div class="sub">'+esc(r.staffRole||'')+' · tarehe '+esc(r.applyDate||'—')
     +' · aliomba <b>'+money(r.amount||0)+'</b></div>'
+    /* YOUR OWN REQUEST IS SAID, NOT STOPPED.
+         "if someone has both navs can do both"
+       Holding both navs is the owner granting both powers, so the buttons work exactly as they
+       do on anybody else's request. This line is a note and nothing more -- muted, not a
+       warning, and it changes nothing about what the drawer will let you do. It is here only
+       because the row will read as self-decided on HR's report later, and the person pressing
+       the button should know that at the moment they press it rather than be surprised by it
+       afterwards. */
     +(mine
-      /* Shown, not hidden: a leader who cannot find the button assumes the screen is broken.
-         The server refuses this too -- this is the explanation, not the lock. */
-      ? '<div class="note bad">Hili ni ombi lako mwenyewe. Mtu mwingine mwenye idhini ndiye '
-        +'atakayeamua. / This is your own request — another approver must decide it.</div>'
-      : '<label class="lbl">Kiasi cha kuidhinisha / Amount to approve</label>'
-        +'<select id="avdAmt" class="inp">'+advAmountOptions(amounts,r.amount,r.amount)+'</select>'
-        +'<label class="lbl">Maoni / Comment</label>'
-        +'<textarea id="avdCmt" class="inp" rows="3" placeholder="Lazima ukikataa. / Required when declining."></textarea>'
-        +'<button class="btn w" id="avdOk" style="margin-top:10px">Idhinisha / Approve</button>'
-        +'<button class="btn w danger ghost" id="avdNo" style="margin-top:6px">Kataa / Decline</button>'));
-  if(mine) return;
+      ? '<div class="mut" style="font-size:11.5px;margin:6px 0 2px">Hili ni ombi lako mwenyewe; '
+        +'jina lako litaonekana pande zote mbili kwenye ripoti. / Your own request — you will '
+        +'appear as both requester and approver on the report.</div>'
+      : '')
+    +'<label class="lbl">Kiasi cha kuidhinisha / Amount to approve</label>'
+    +'<select id="avdAmt" class="inp">'+advAmountOptions(amounts,r.amount,r.amount)+'</select>'
+    +'<label class="lbl">Maoni / Comment</label>'
+    +'<textarea id="avdCmt" class="inp" rows="3" placeholder="Lazima ukikataa. / Required when declining."></textarea>'
+    +'<button class="btn w" id="avdOk" style="margin-top:10px">Idhinisha / Approve</button>'
+    +'<button class="btn w danger ghost" id="avdNo" style="margin-top:6px">Kataa / Decline</button>');
   var send=function(approve){
     var b=$('#avdOk'), n=$('#avdNo'); if(b) b.disabled=true; if(n) n.disabled=true;
     srv('advDecide',{ id:r.id, approve:approve,
