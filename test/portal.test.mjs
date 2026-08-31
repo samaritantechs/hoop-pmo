@@ -1908,3 +1908,93 @@ test('the audit write is waited for, and still cannot break the save it accompan
     () => audited(rejecting, { code: 'X' }, 'saveTeam', {}, async () => { throw new Error('the real one'); }),
     /the real one/);
 });
+
+/* =========================================================================================
+   CHANGING YOUR OWN PASSCODE, FROM THE SIGN-IN SCREEN.
+
+     "i want created users with these rolebased access codes .. can update their passcodes at
+      loginpage by iputing current one and double input new one to overwrite"
+
+   The current code IS the authentication -- there is no session to do this inside of, which is
+   the point. portalApi resolves it into `user` before the handler runs, so the handler can only
+   ever change the row it was authenticated as.
+   ========================================================================================= */
+const codesDb = rows => fakeDb({ access_codes: rows });
+const ME = { code: 'OLDCODE1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: ['advreq'], readOnly: false };
+
+test('a person changes their own code with the current one and the new one twice', async () => {
+  const d = codesDb([
+    { code: 'OLDCODE1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: ['advreq'] },
+    { code: 'SOMEBODYELSE', name: 'NEEMA M', role: 'RSM', teams: null, tabs: [] },
+  ]);
+  await _FNS.changeMyCode(d, ME, { next: 'NEWCODE12', again: 'NEWCODE12' });
+
+  const rows = d._dump('access_codes');
+  const mine = rows.find(r => r.name === 'JUMA G');
+  assert.equal(mine.code, 'NEWCODE12', 'the code is replaced');
+  assert.equal(mine.role, 'OFFICER', 'and nothing else about the person moves');
+  assert.deepEqual(mine.tabs, ['advreq']);
+  assert.equal(rows.find(r => r.name === 'NEEMA M').code, 'SOMEBODYELSE',
+    'and nobody else is touched');
+});
+
+test('the change refuses everything it should', async () => {
+  const fresh = () => codesDb([
+    { code: 'OLDCODE1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: [] },
+    { code: 'TAKENCODE', name: 'NEEMA M', role: 'RSM', teams: null, tabs: [] },
+  ]);
+  const no = async (args, rx, why) => {
+    const d = fresh();
+    await assert.rejects(() => _FNS.changeMyCode(d, ME, args), rx, why);
+    assert.equal(d._dump('access_codes').find(r => r.name === 'JUMA G').code, 'OLDCODE1',
+      'and the old code still works: ' + why);
+  };
+
+  await no({ next: 'NEWCODE12', again: 'NEWCODE13' }, /haifanani|do not match/i,
+    'the two new boxes must agree -- a typo here locks somebody out of a system they need, '
+    + 'and they cannot undo it themselves');
+  await no({ next: 'short12', again: 'short12' }, /herufi 8|at least 8/i, 'too short');
+  await no({ next: '', again: '' }, /Weka msimbo|Enter a new/i, 'empty');
+  await no({ next: 'has space1', again: 'has space1' }, /nafasi|spaces/i, 'spaces');
+  await no({ next: 'OLDCODE1', again: 'OLDCODE1' }, /ule ule|already have/i, 'unchanged');
+  await no({ next: 'TAKENCODE', again: 'TAKENCODE' }, /tayari unatumika|already in use/i,
+    'somebody else holds it');
+  /* CASE-INSENSITIVELY TAKEN IS STILL TAKEN. authCode falls back to a case-insensitive match,
+     so a pair differing only in case is a pair the door refuses to choose between -- and BOTH
+     people are then told their code is invalid. */
+  await no({ next: 'takencode', again: 'takencode' }, /tayari unatumika|already in use/i,
+    'the same code in another case is the same code to the sign-in query');
+});
+
+test('changing a code can only ever change the caller\'s own row', async () => {
+  /* The new code is the only thing taken from the arguments. Whose code changes comes from
+     `user`, which portalApi resolved from the code presented at the door. */
+  const d = codesDb([
+    { code: 'OLDCODE1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: [] },
+    { code: 'VICTIMCODE', name: 'SIPHO K', role: 'ADMIN', teams: null, tabs: ['settings'] },
+  ]);
+  // Every shape of "change somebody else's" the arguments could try to express.
+  await _FNS.changeMyCode(d, ME, { next: 'NEWCODE12', again: 'NEWCODE12',
+    code: 'VICTIMCODE', from: 'VICTIMCODE', target: 'VICTIMCODE' });
+  const rows = d._dump('access_codes');
+  assert.equal(rows.find(r => r.name === 'SIPHO K').code, 'VICTIMCODE',
+    'the admin row must be untouched whatever the arguments said');
+  assert.equal(rows.find(r => r.name === 'JUMA G').code, 'NEWCODE12');
+
+  // A view-only code proves who it is but may not write, here as everywhere.
+  const ro = { code: 'VIEWONLY1', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: [], readOnly: true };
+  await assert.rejects(() => _FNS.changeMyCode(codesDb([{ code: 'VIEWONLY1', name: 'Auditor', role: 'AUDITOR' }]),
+    ro, { next: 'NEWCODE12', again: 'NEWCODE12' }), e => e.status === 403);
+});
+
+test('the new passcode never reaches the audit log', async () => {
+  /* KEEP records anything called `code`, so the arguments are named `next` and `again` on
+     purpose -- an audit row carrying a live passcode would be a credential sitting in a table
+     the audit nav can be granted on. The actor's OLD code says who did it, and by the time
+     anybody reads the line it no longer opens anything. */
+  const { AUDITED, subjectOf } = await import('../api/_lib/audit.js');
+  assert.ok(AUDITED.has('changeMyCode'), 'a credential change is worth a line in the log');
+  const s = subjectOf({ next: 'SUPERSECRET9', again: 'SUPERSECRET9' });
+  assert.equal(s, null, 'nothing about the new code may be recorded');
+  assert.ok(!String(s).includes('SUPERSECRET9'));
+});

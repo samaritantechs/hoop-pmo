@@ -869,3 +869,56 @@ test('the Kiongozi switch sits in the row, immediately before Hariri and Futa', 
   assert.match(src, /c\.leader===null/,
     'before the migration it must show a dash, not a button that cannot work');
 });
+
+/* "can update their passcodes at loginpage by iputing current one and double input new one" */
+test('the sign-in screen can change a code, and cannot leave it authenticated as a guess', () => {
+  const src = read('portal.html');
+  for (const id of ['chgNow', 'chgNew', 'chgNew2', 'chgGo', 'chgCancel', 'inChg']) {
+    assert.ok(src.includes('id="' + id + '"'), 'the change-code form is missing #' + id);
+  }
+  // Three password boxes: current, new, and new again. Never a visible one.
+  const box = src.slice(src.indexOf('id="chgBox"'), src.indexOf('id="chgBox"') + 1400);
+  assert.equal((box.match(/type="password"/g) || []).length, 3,
+    'all three boxes must be masked -- this screen is used standing at a desk');
+
+  const fn = src.slice(src.indexOf("$('#chgGo').onclick"), src.indexOf("$('#chgGo').onclick") + 1400);
+  assert.match(fn, /srv\('changeMyCode',\{next:a,again:b\}\)/,
+    'both new-code boxes go to the server: the match is re-checked where it counts');
+  /* srv() sends whatever CODE holds, so the current code is set into it for this one call.
+     A failure MUST put it back -- otherwise the sign-in box is left authenticating as
+     something the person never typed, and the next thing they press fails confusingly. */
+  assert.match(fn, /var was=CODE; CODE=now;/, 'the current code is used as the credential');
+  assert.match(fn, /CODE=was;/, 'and restored when the change is refused');
+  assert.match(fn, /CODE='';/, 'and cleared on success, so nothing signs in on a dead code');
+});
+
+/* "my concern was getting a multi-device token cmd to go and run in cmd-like am copying one
+   when i add one device just before doing anything else" */
+test('bulk enrolment gives one button per phone, each carrying that phone\'s own token', () => {
+  const src = read('portal.html');
+  const fn = src.slice(src.indexOf('function devProvision('),
+                       src.indexOf('function devProvision(') + 5200);
+
+  assert.match(fn, /data-dvcopy="'\+i\+'"/, 'every phone needs its own copy button');
+  assert.match(fn, /esc\(x\.imei\)/, 'and the row must name the handset it belongs to');
+  assert.match(fn, /\(i\+1\)\+'\/'\+p\.length/, 'numbered, so a long batch keeps its place');
+
+  const handler = src.slice(src.indexOf("$all('[data-dvcopy]')"),
+                            src.indexOf("$all('[data-dvcopy]')") + 900);
+  /* BUILT FROM THE SAME devOneLiner AS THE BLOCK ABOVE. Two places composing the same adb
+     command independently is two places that can drift, and a drifted enrol command writes
+     the wrong identity into a handset. */
+  assert.match(handler, /devOneLiner\(x\.token\)/,
+    'the per-row copy must build its command the same way the block does');
+  assert.ok(!/PASTE|<TOKEN>|\bNEW\b/.test(handler),
+    'no placeholder may ever reach a runnable line -- that mistake cost a handset once');
+  assert.match(handler, /opacity='\.45'/, 'a copied row must show it is done');
+
+  /* AND THE ONE-COMMAND-FOR-ALL SHAPE MUST NOT COME BACK. The server does not check a
+     handset's reported IMEI against the token's row (see api/_lib/device-core.js), so nothing
+     downstream catches a phone given the wrong phone's token -- the pairing has to be made by
+     a person, one handset at a time. */
+  assert.ok(!/for %I in|adb wait-for-device|pause >nul/i.test(src),
+    'no batch runner that enrols several phones in one paste: order alone would decide which '
+    + 'handset got which identity, and nothing would catch a swap');
+});
