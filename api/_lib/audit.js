@@ -24,11 +24,17 @@ import { fetchAll, runQuery } from './supabase.js';
       4471" is what a supervisor needs; the comment itself is in followup_comments, where team
       scoping applies.
 
-   3. IT CAN NEVER BREAK A SAVE. The write is fire-and-forget and every failure is swallowed --
-      including the table not existing at all, which is every deployment's state until somebody
-      runs the migration. An audit log that could fail a save would turn every write in the
-      system into two things that must both succeed, which is a worse system than one with no
-      audit log.
+   3. IT CAN NEVER BREAK A SAVE. Every failure is swallowed -- including the table not existing
+      at all, which is every deployment's state until somebody runs the migration. An audit log
+      that could fail a save would turn every write in the system into two things that must both
+      succeed, which is a worse system than one with no audit log.
+
+      It IS waited for, though, which is not the same thing. It was fire-and-forget until an
+      audit of the salary-advance panes pointed out what that means on Vercel: a serverless
+      function can be frozen the moment it returns its response, so an insert nobody waited for
+      may never leave the process -- and the entries most likely to be lost are the ones on the
+      slowest requests, which are not a random sample. Swallowing every error is what makes
+      waiting safe; see auditWrite.
 
    FAILED ATTEMPTS ARE WORTH MORE THAN SUCCESSFUL ONES. Somebody trying to delete a team they
    may not touch is precisely what this exists to show, so a throw is logged and then re-thrown.
@@ -87,14 +93,26 @@ export function subjectOf(args) {
 
 const short = v => (v == null ? null : String(v).replace(/\s+/g, ' ').trim().slice(0, 240) || null);
 
-/** Fire and forget. Returns nothing and throws nothing, ever. */
+/** Awaited, but incapable of failing. Returns a promise that ALWAYS resolves, and throws
+    nothing, ever.
+
+    IT USED TO BE FIRE-AND-FORGET, and on Vercel that is a hole. A serverless function can be
+    frozen the moment it returns its response, so an insert nobody waited for is an insert that
+    may never leave the process -- and the entries most likely to be lost are the ones on the
+    slowest requests, which are not a random sample. A log with holes is worse than none: it
+    invites the conclusion that what is missing did not happen, and for the salary-advance
+    entries that means "nobody approved this".
+
+    Rule 3 still holds and is what makes the await safe: every failure is swallowed here, so
+    waiting for the write cannot turn a save into two things that must both succeed. The cost
+    is a few milliseconds on the dozen writes a day this covers. */
 export function auditWrite(db, row) {
   try {
     const p = db.from('audit_log').insert([row]);
-    // Some callers hand back a thenable, some a promise; either way nothing waits on it and
-    // nothing may escape from it.
-    if (p && typeof p.then === 'function') p.then(() => {}, () => {});
+    // Some callers hand back a thenable, some a promise; either way nothing may escape from it.
+    if (p && typeof p.then === 'function') return p.then(() => {}, () => {});
   } catch (e) { /* no table, no permission, no network -- the save it accompanied still stands */ }
+  return Promise.resolve();
 }
 
 /** Wraps one dispatched call. The handler's own result and its own errors pass straight
@@ -113,11 +131,11 @@ export async function audited(db, user, fn, args, run) {
   };
   try {
     const out = await run();
-    auditWrite(db, { ...base, ok: true, error: null, ms: Date.now() - started });
+    await auditWrite(db, { ...base, ok: true, error: null, ms: Date.now() - started });
     return out;
   } catch (e) {
-    auditWrite(db, { ...base, ok: false, error: short(e && e.message) || 'failed', ms: Date.now() - started });
-    throw e;
+    await auditWrite(db, { ...base, ok: false, error: short(e && e.message) || 'failed', ms: Date.now() - started });
+    throw e;   // the handler's own error, unchanged: auditWrite cannot reject
   }
 }
 

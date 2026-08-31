@@ -779,7 +779,12 @@ function saveFile_(name, mime, data){
   /* RUNG ONE: the wrapper writes it straight into the phone's Downloads folder. */
   if(bridge && typeof bridge.saveBase64==='function'){
     try{
-      var r=bridge.saveBase64(name, mime, b64_(data));
+      /* A BARE TYPE FOR THE PHONE. The bridge writes this straight into MediaStore's
+         MIME_TYPE, and Android resolves a parameterised value like "text/csv;charset=utf-8"
+         poorly or not at all -- the file lands in Downloads with nothing willing to open it.
+         The browser rung below keeps the full type, where the charset is honoured; the CSV
+         carries a BOM either way, so nothing about the encoding depends on this. */
+      var r=bridge.saveBase64(name, String(mime).split(';')[0].trim(), b64_(data));
       /* The bridge answers "OK <name>" or "ERR <reason>". A save that fails silently is the
          whole reason it reports back at all, so the reason is shown rather than swallowed. */
       if(typeof r==='string' && r.indexOf('ERR')===0) toast(r.slice(4).trim()||'Imeshindikana kuhifadhi', true);

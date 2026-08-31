@@ -1884,3 +1884,27 @@ test('the toggle names the migration rather than leaking a database error', asyn
     /RUN-ME-2026-08-31-advance-leader\.sql/,
     'a missing column must name the file to run, not surface raw Postgres');
 });
+
+test('the audit write is waited for, and still cannot break the save it accompanies', async () => {
+  /* Fire-and-forget is a hole on Vercel: a serverless function can be frozen the moment it
+     returns, so an insert nobody waited for may never leave the process -- and the entries most
+     likely to be lost are the ones on the slowest requests, which are not a random sample. */
+  const { auditWrite, audited } = await import('../api/_lib/audit.js');
+  let settled = false;
+  const slow = { from: () => ({ insert: () => new Promise(r => setTimeout(() => { settled = true; r({}); }, 5)) }) };
+  await audited(slow, { code: 'X' }, 'saveTeam', { team: 'DAR' }, async () => 'done');
+  assert.equal(settled, true, 'the log write must have completed before the call returned');
+
+  // ...and rule 3 still holds: nothing it can do may reach the caller.
+  const exploding = { from: () => { throw new Error('no such table'); } };
+  assert.equal(await audited(exploding, { code: 'X' }, 'saveTeam', {}, async () => 'ok'), 'ok');
+  const rejecting = { from: () => ({ insert: () => Promise.reject(new Error('permission denied')) }) };
+  assert.equal(await audited(rejecting, { code: 'X' }, 'saveTeam', {}, async () => 'ok'), 'ok');
+  await assert.doesNotReject(() => auditWrite(exploding, {}));
+  await assert.doesNotReject(() => auditWrite(rejecting, {}));
+
+  // A handler's own error still passes through unchanged, after being logged.
+  await assert.rejects(
+    () => audited(rejecting, { code: 'X' }, 'saveTeam', {}, async () => { throw new Error('the real one'); }),
+    /the real one/);
+});
