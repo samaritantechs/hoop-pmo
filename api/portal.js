@@ -1852,18 +1852,24 @@ const FNS = {
       // Never heard from, or last heard from before we let it go: it is not listening.
       return !(spoke && freed && spoke > freed);
     });
-    if (stuck.length) {
-      const e = new Error('Simu iliyoachiwa haisikii tena — iliachwa na ikaacha kuongea. '
-        + 'Irudishe app kwa kebo, kisha funga. / This phone was released and has not spoken '
-        + 'since, so it is no longer listening: a lock order would sit unheard. Re-provision '
-        + 'it by cable first, or confirm to leave the order standing for when it comes back.');
-      e.status = 409;
-      e.code = 'RELEASED_NOT_LISTENING';
-      e.imeis = stuck.slice(0, 20);
-      throw e;
-    }
+    /* THE REFUSAL IS ABOUT THE PHONES IT NAMES, AND ONLY THOSE.
+       =====================================================================================
+       This used to throw HERE, before touching anything -- so one released-and-silent
+       handset among twenty ticked ones refused the whole order and locked NONE of them. The
+       client then offered its confirmation and, correctly, retried only the phone the server
+       had named. The other nineteen were never locked at all, and the toast that followed
+       read "Zimebadilishwa: 1", which an operator reads as the job being done.
 
-    const changing = list.filter(i => known.has(i) && known.get(i) !== to);
+       Twenty customers' phones left open while the register says they are shut is the worst
+       failure this pane has, and it hid behind a refusal that looks careful.
+
+       Three separate comments in this codebase -- on the client, on this function, and on
+       the test -- already describe the OTHER behaviour: "they were locked the first time".
+       That is the design; this is it being implemented. The reachable phones go through, and
+       the 409 that follows is a question about the ones that did not, carrying the count of
+       what already happened so the operator is never told less than the truth. */
+    const held = new Set(stuck);
+    const changing = list.filter(i => !held.has(i) && known.has(i) && known.get(i) !== to);
     const at = new Date().toISOString();
     let pushed = { sent: 0, failed: 0, stale: [] };
     if (changing.length) {
@@ -1888,6 +1894,25 @@ const FNS = {
          the phones going dark while somebody is still looking at the tick boxes. */
       pushed = await nudge(db, changing);
     }
+
+    /* NOW the question about the ones that were held back -- after the rest are done, so the
+       confirmation the operator is about to answer is only ever about those. `changed` rides
+       on the error because the screen must be able to say what already happened: a dialog
+       that mentions one phone, on a click that just locked nineteen, is a dialog that
+       misleads. Every stuck IMEI is named, not the first twenty: the client retries exactly
+       what it is given, so a truncated list is a set of phones silently left unlocked. */
+    if (stuck.length) {
+      const e = new Error('Simu iliyoachiwa haisikii tena — iliachwa na ikaacha kuongea. '
+        + 'Irudishe app kwa kebo, kisha funga. / This phone was released and has not spoken '
+        + 'since, so it is no longer listening: a lock order would sit unheard. Re-provision '
+        + 'it by cable first, or confirm to leave the order standing for when it comes back.');
+      e.status = 409;
+      e.code = 'RELEASED_NOT_LISTENING';
+      e.imeis = stuck;
+      e.changed = changing.length;
+      throw e;
+    }
+
     return { ok: true, changed: changing.length,
       alreadyThere: list.length - changing.length - missing.length,
       notEnrolled: missing.length, notEnrolledList: missing.slice(0, 20),

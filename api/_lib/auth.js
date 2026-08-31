@@ -196,10 +196,16 @@ export function withApi(handler) {
          the whole answer, and anything else is noise on a screen. But a refusal the caller is
          meant to be able to ARGUE WITH needs to say which rows it is about, or the client can
          only offer "retry everything", which on a bulk action is a second order for the phones
-         that already succeeded. Two fields, both opt-in, both set deliberately at the throw. */
+         that already succeeded. Three fields, all opt-in, all set deliberately at the throw. */
       const extra = {};
       if (e.code) extra.code = e.code;
       if (Array.isArray(e.imeis)) extra.imeis = e.imeis;
+      /* AND SOMETIMES THE REFUSAL FOLLOWS WORK THAT ALREADY HAPPENED. deviceSetState locks
+         every phone it can reach and then asks about the ones it cannot, so the dialog the
+         operator is about to answer has to be able to say what the click has already done: a
+         question about one handset, on a press that just locked nineteen, is a question that
+         misleads. A count, never a payload, like the other two. */
+      if (typeof e.changed === 'number') extra.changed = e.changed;
       res.status(status).json({ ok: false, error: e.message || String(e), ...extra });
     }
   };

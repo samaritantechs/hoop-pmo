@@ -272,3 +272,31 @@ is worse than an error, because an error is at least visibly an error.
   the pane is told the total so a truncated history says so.
 
 No migration. The register itself is unchanged.
+
+### The one that would have cost real money
+
+**One unreachable phone cancelled the lock on the nineteen beside it.**
+
+Funga refuses a handset that was released and has not spoken since — it dropped Device Owner
+and stopped calling home, so a lock ordered against it sits unheard. That refusal is right, and
+the override beside it is right too.
+
+But it threw **before touching anything**. So ticking twenty phones with one such handset among
+them locked **none of them**. The client then did exactly the right thing with the wrong facts:
+it offered the confirmation and retried only the phone the server had named. The other nineteen
+were never locked at all, and the toast that followed read `Zimebadilishwa: 1` — which an
+operator reads as the job being done.
+
+Twenty customers' phones left open while the register says they are shut, with nothing on
+screen to suggest otherwise.
+
+Three separate comments in this codebase — on the client, on the server, and on the test —
+already described the intended behaviour, in the words *"they were locked the first time"*. The
+server now does that: every reachable phone is locked first, and the 409 that follows is a
+question about the ones that were held back, carrying the count of what already happened so the
+dialog can say `19 already locked` instead of implying nothing did.
+
+Two smaller things went with it: **every** unreachable IMEI is named rather than the first
+twenty (the client retries exactly the list it is handed, so a truncated one is a set of phones
+the override silently leaves unlocked), and `withApi` gained a third opt-in field on a refusal —
+a count, never a payload.
