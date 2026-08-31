@@ -879,3 +879,65 @@ Stated plainly, because a security feature oversold is worse than none.
   bench, not a button in the office.
 - **The first handset found three bugs the CI could not.** It compiles in CI; that has never
   been the same as tested. Expect a new model of phone to find something.
+
+## A locked phone that is switched on again
+
+> "then if a locked phone is restarted give grace period of 5 minutes so that one can connect
+> data or wifi — dont leave any loophole of unlocking a phone thats already locked and awake
+> and got the grace period already"
+
+A locked handset draws its pinned screen the moment it finishes booting. That screen is also
+why a phone could be stuck for good: it sits between the customer and the Settings toggle, so a
+customer who has **paid** cannot turn wifi on, the handset cannot call home, and it never hears
+that the office released it hours ago. The only way back was a cable.
+
+So a power cycle now buys a few minutes of ordinary use — long enough to pull the shade down
+and turn the radio on, and no longer. A toast says so, in both languages, in the one moment
+somebody is certainly looking at the screen.
+
+### The three fences
+
+**1. It is only ever opened at boot.** Never from a beat, never from an unlock that failed,
+never while the phone is awake. A locked handset in somebody's hand has no path to a window;
+the only way to ask for one is to power-cycle, and that is fence 2's problem. An app update is
+deliberately *not* a boot — `SelfUpdate` installs on our schedule, so counting it would spend
+a customer's window on something they never asked for.
+
+**2. It is rate-limited, and the clock survives the reboot that would reset it.** The stamp
+goes into `SharedPreferences` when the window **opens**, not when it closes, so a process killed
+mid-window still counts it as spent. Switching the phone off and on again — the first thing
+anybody tries — finds that stamp and locks immediately. A clock wound *backwards* reads as
+"not yet", never "long enough", because on a locked phone the customer holds the clock.
+
+It is a rate limit rather than a one-shot on purpose. A paid-up customer somewhere with no wifi
+in reach spends their window and gets nowhere; if that were the only one they ever got, the
+handset would be bricked by the very mechanism meant to save it. One window per period is
+enough to be a way out and far too little to be a way of using the phone.
+
+**3. It ends the instant the phone reaches us.** That is the whole purpose served — we can see
+the handset and it can hear us. If the register still says lock, it locks; if the loan was
+cleared, it unlocks. The window is spent, never waited out, so nothing is gained by staying
+offline through it.
+
+And it closes even when nothing remembers to close it: an in-process timer for the ordinary
+case, plus `Guard.enforce()` on every beat and every job run for the case where the process
+does not survive. A window that fails to close is a phone that is not locked.
+
+### The two numbers
+
+| Setting | Default | What it means |
+| --- | --- | --- |
+| `DEVICE_BOOT_GRACE_MINUTES` | `5` | How long the window is. **`0` switches it off entirely** — a typo or a blank falls back to the default instead, so a mistyped value can never silently disarm the lock. |
+| `DEVICE_BOOT_GRACE_EVERY_HOURS` | `24` | How often one may be opened. |
+
+Both live in **Settings**, like the beat pace and the offline grace — how long a customer needs
+to find the wifi toggle is a business judgement that should never need a release to revisit, and
+it has to reach handsets already in pockets.
+
+One interaction worth knowing: the offline self-lock stands down while a window is open.
+Without that the feature would be dead on arrival — the window opens at boot, the first beat
+fails because having no network is the entire reason it opened, and that failure would
+self-lock the handset that has been silent longest, which is exactly the paid-up customer this
+exists for. The self-lock is deferred by the length of the window, never skipped.
+
+**Requires APK 1.11.0 (versionCode 13) or later.**

@@ -113,6 +113,13 @@ public class BeatJob extends JobService {
             /* The grace check runs FIRST and runs whether or not the network answers. That is
                the point of it: it is the rule that applies precisely when the beat cannot. */
             Beat.enforceGrace(c);
+            /* AND THE BOOT WINDOW IS CLOSED HERE TOO, because a window that fails to close is
+               a phone that is not locked. openWindow() posts a timer, and a timer is worth
+               exactly as much as the process holding it -- on a handset that has just finished
+               booting, being killed is ordinary rather than exceptional. This runs on the
+               system's schedule instead of ours, so a dead timer costs a few extra minutes
+               rather than costing the lock. */
+            Guard.enforce(c);
             Beat.run(c, false);
             SelfUpdate.check(c);
             // Queue the next early check-in, if this phone has earned one. Always after the

@@ -47,6 +47,23 @@ class Prefs {
        beat; after long enough the handset releases itself rather than staying a brick with
        no office able to reach it. See noteNotEnrolled in Beat.java. */
     static final String GONE_SINCE = "goneSince";
+    /* THE BOOT WINDOW. A locked phone that is switched on again gets a few minutes of
+       ordinary use so its holder can turn wifi or data on -- without which a handset the
+       office has ALREADY RELEASED can never learn that, because the pinned screen sits
+       between the customer and the Settings toggle.
+
+       Both numbers come from the server on every beat and are kept here because the case this
+       exists for is a phone booting with NO network: it has to know the rule it was last
+       told. See bootGraceFor() in device-core.js. */
+    static final String BOOT_GRACE_MINUTES = "bootGraceMinutes";
+    static final String BOOT_GRACE_EVERY_HOURS = "bootGraceEveryHours";
+    /** ms; when the window now open runs out. 0 = no window open. */
+    static final String GRACE_UNTIL = "graceUntil";
+    /* ms; when a window was last GRANTED -- the fence that makes rebooting twice pointless.
+       Written when the window OPENS rather than when it closes, and it survives the reboot
+       that would otherwise reset it, so power-cycling buys nothing. Cleared only when the
+       office issues a NEW lock, which begins an episode that deserves its own window. */
+    static final String GRACE_LAST = "graceLast";
 
     static SharedPreferences of(Context c) {
         return c.getSharedPreferences(FILE, Context.MODE_PRIVATE);
