@@ -62,7 +62,11 @@ export const AUDITED = new Set([
 /** The ONLY argument fields that ever reach the table. Anything not named here is dropped --
     which is the point, and is why this is a list of what is kept rather than a list of what is
     stripped. A new argument nobody thought about is excluded by default. */
-const KEEP = ['ref', 'team', 'key', 'code', 'role', 'name', 'stage', 'date', 'weekday'];
+/* `id` earns its place the hard way: without it, the two salary-advance entries recorded WHO
+   and WHAT but not WHICH. "NEEMA M — advDecide — 14:03" with a null subject cannot be tied to
+   a payment, which is precisely the question an audit log about money exists to answer. It is
+   a row identifier and never a payload, so it carries nothing the log should not hold. */
+const KEEP = ['ref', 'team', 'key', 'code', 'role', 'name', 'stage', 'date', 'weekday', 'id'];
 
 /** One short line describing WHICH thing was acted on, or null. Never an amount, never a phone
     number, never free text. Capped hard, because a caller can put anything in a field. */

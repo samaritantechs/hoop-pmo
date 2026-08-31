@@ -710,9 +710,17 @@ var CODE='', BOOT=null, TAB='dash';
    order's time over who gave it -- and `td.textContent` returns "14:06:314 dk", because a
    <div> boundary is not whitespace. It reads as a corrupt number in Excel rather than as two
    values, which is worse than either of them alone. So block children are separated here. */
+/* THE FUNNEL IS A CONTROL, NOT PART OF THE HEADING. injectExports_ appends a
+   <span class="thfilt">⏷</span> to every header cell in the same pass that installs the
+   export buttons, so it is guaranteed to be there before anybody can press one -- and
+   textContent swept it up. Every heading in every Excel export carried a stray ⏷, and in
+   the PDF it came out as "?" because that glyph is outside WinAnsi: "STAFF NAME?" and
+   "ACCOUNTS NO.?" on a sheet that gets printed and taken to a bank. Dropped by class, the
+   same way `noxl` drops a whole control cell. */
 function cellText_(td){
   var s='';
   [].slice.call(td.childNodes).forEach(function(n){
+    if(n.nodeType===1&&n.classList&&n.classList.contains('thfilt')) return;
     if(n.nodeType===1&&/^(DIV|BR|P|LI|TR)$/.test(n.nodeName)) s+=' ';
     s+=(n.textContent||'');
   });
@@ -1322,8 +1330,24 @@ function busy(on){
    deviceSetState writes no event when the state does not move. The exception is
    portalAddComment, which APPENDS -- retrying it could post a follow-up twice, and a
    duplicated comment in a customer's history is a small lie about what happened. It is on
-   the deny-list, and anything added later that appends belongs there too. */
-var NO_RETRY={portalAddComment:1};
+   the deny-list, and anything added later that appends belongs there too.
+
+   ADVREQUEST IS THE SECOND APPEND, AND IT IS MONEY. It shipped without being put here, which
+   is exactly the mistake the sentence above was written to prevent. An officer taps "Tuma
+   ombi" on mobile data, the INSERT commits, the answer is lost on a tower handover -- and this
+   client files the identical advance two more times. The approver's queue then shows three
+   asks that are indistinguishable from three real ones, approving each is the natural thing to
+   do, and the bank run pays the advance three times. Note the retry window is wider than a
+   dropped socket: `answered` is only set once the body has parsed as JSON, so a 504 whose body
+   is HTML lands here too.
+
+   ADVDECIDE is on it for a quieter reason. The decision itself is safe to repeat -- the update
+   is guarded on status='pending', so the second attempt matches no row -- but that is exactly
+   what makes the retry lie: the approver is told "somebody else just decided this one" about a
+   decision they themselves successfully made a second earlier. A write that never arrived is
+   better re-pressed by a person who can see what happened than re-sent by a client that
+   cannot. */
+var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1};
 function srv(fn,args,tries){
   tries=tries||0;
   busy(true);
@@ -2995,7 +3019,7 @@ function drawAdvReq(m){
         drawAdvReq(m);
       }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
     };
-  }).catch(function(e){ m.innerHTML=paneFailed(safeErr(e)); });
+  }).catch(function(e){ paneFailed(m,e); });
 }
 
 /* The requester's own list and the approver's queue share a table: the same request, and the
@@ -3026,7 +3050,10 @@ function advTable(rows, act){
 function drawAdvAppr(m){
   m.innerHTML='<div class="sk"></div>';
   srv('advQueue',{state:ADVQ}).then(function(d){
-    if(d.notReady){ m.innerHTML=advNotReady(); return; }
+    /* Two different "not ready" states, and they need two different sentences: the advances
+       table missing, and the Kiongozi column missing. The server names the file in `note` for
+       the second, because telling somebody to run the wrong migration wastes the trip. */
+    if(d.notReady){ m.innerHTML=d.note?'<div class="note bad">'+esc(d.note)+'</div>':advNotReady(); return; }
     var rows=d.rows||[];
     var chip=function(k,label){ return '<button class="btn sm'+(ADVQ===k?'':' ghost')
       +'" data-avq="'+k+'">'+label+'</button>'; };
@@ -3039,7 +3066,11 @@ function drawAdvAppr(m){
       +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')
       +'</div>'
       +(rows.length?advTable(rows,true)
-        :'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
+        :'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>')
+      /* WHY THE LIST IS SHORT. Without this line a credit leader seeing three rows on a day the
+         company filed twenty would reasonably think the pane was broken. */
+      +'<div class="mut" style="font-size:11px;margin-top:10px">Unaona maombi ya '
+      +esc(d.scope||'idara yako')+' pekee. / You see requests from your own role only.</div>';
     wireTiles(m);
     [].slice.call(m.querySelectorAll('[data-avq]')).forEach(function(b){
       b.onclick=function(){ ADVQ=b.getAttribute('data-avq'); drawAdvAppr(m); };
@@ -3048,10 +3079,10 @@ function drawAdvAppr(m){
       b.onclick=function(){
         var id=b.getAttribute('data-avd');
         var r=rows.filter(function(x){ return String(x.id)===id; })[0];
-        if(r) advDecideDrawer(m, r, d.amounts, d.me);
+        if(r) advDecideDrawer(m, r, d.amounts);
       };
     });
-  }).catch(function(e){ m.innerHTML=paneFailed(safeErr(e)); });
+  }).catch(function(e){ paneFailed(m,e); });
 }
 var ADVQ='pending';
 
@@ -3059,8 +3090,10 @@ var ADVQ='pending';
    typed figure -- "give this 200k request just 100k" is the owner's own example, and it is
    the same four amounts the request came from. The list is capped at what was requested:
    approving MORE than somebody asked for is not a decision anybody delegated. */
-function advDecideDrawer(m, r, amounts, me){
-  var mine = me && r.staffCode && String(me)===String(r.staffCode);
+function advDecideDrawer(m, r, amounts){
+  /* The server decides this now and sends a plain boolean: the access code it used to be
+     compared against is the login credential, and it has no business on the wire. */
+  var mine = !!r.mine;
   drawer('<h3>Ombi la '+esc(r.staffName||'—')+'</h3>'
     +'<div class="sub">'+esc(r.staffRole||'')+' · tarehe '+esc(r.applyDate||'—')
     +' · aliomba <b>'+money(r.amount||0)+'</b></div>'
@@ -3133,6 +3166,8 @@ function monthRange_(){
 /* HR'S PANE: the filing copy and the bank run. The columns are the owner's list, in the
    owner's order, because this is the sheet that gets printed and taken to a bank. */
 function drawAdvRep(m){
+  // Unset means "this month", resolved now -- see the note on ADVR below.
+  if(!ADVR.from&&!ADVR.to&&!ADVR.explicit){ var mr=monthRange_(); ADVR.from=mr.from; ADVR.to=mr.to; }
   m.innerHTML='<div class="sk"></div>';
   srv('advReport',ADVR).then(function(d){
     if(d.notReady){ m.innerHTML=advNotReady(); return; }
@@ -3192,19 +3227,27 @@ function drawAdvRep(m){
         :'<div class="mut">Hakuna maombi kwenye kipindi hiki. / No requests in this period.</div>');
     wireTiles(m);
     $('#avrGo').onclick=function(){
-      ADVR={ from:$('#avrFrom').value, to:$('#avrTo').value, status:$('#avrSt').value };
+      ADVR={ from:$('#avrFrom').value, to:$('#avrTo').value, status:$('#avrSt').value,
+             explicit:true };
       drawAdvRep(m);
     };
     /* Two ways back, because they are two different questions. "This month" returns to the
        default the pane opens on; "All dates" is the deliberate unbounded look, chosen rather
        than arrived at by leaving two boxes empty. */
     $('#avrClr').onclick=function(){
-      var r=monthRange_(); ADVR={from:r.from,to:r.to,status:''}; drawAdvRep(m);
+      var r=monthRange_(); ADVR={from:r.from,to:r.to,status:'',explicit:true}; drawAdvRep(m);
     };
-    $('#avrAll').onclick=function(){ ADVR={from:'',to:'',status:''}; drawAdvRep(m); };
-  }).catch(function(e){ m.innerHTML=paneFailed(safeErr(e)); });
+    /* `explicit` marks "the user asked for no dates", which is a different state from "not
+       filled in yet" -- without it the redraw below would helpfully put this month back. */
+    $('#avrAll').onclick=function(){ ADVR={from:'',to:'',status:'',explicit:true}; drawAdvRep(m); };
+  }).catch(function(e){ paneFailed(m,e); });
 }
-var ADVR=(function(){ var r=monthRange_(); return { from:r.from, to:r.to, status:'' }; })();
+/* THE MONTH IS RESOLVED WHEN THE PANE OPENS, NOT WHEN THE SCRIPT LOADS. Seeding this at load
+   time froze the range for the life of the tab -- and these tabs stay open. Somebody who left
+   the portal open on the 31st and came back on the 1st got last month's report presented as
+   "this month", on the pane the payment run is built from. The blank state is the marker, and
+   drawAdvRep fills it in on every draw. */
+var ADVR={from:'',to:'',status:''};
 
 /* ---------- stock accountability ----------
    "the stock is too large and hoop agents are stealing stock"
@@ -3938,16 +3981,30 @@ function drawCodes(m){
   Promise.all([srv('accessCodes'),srv('officers')]).then(function(res){
     var d=res[0], off=res[1];
     m.innerHTML='<div class="card"><h2>Access codes — mfumo (portal)</h2>'
-      +'<div class="scroll"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Timu</th><th>Tabs</th><th></th></tr></thead><tbody>'
+      +'<div class="scroll"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Kiongozi</th><th>Timu</th><th>Tabs</th><th class="noxl"></th></tr></thead><tbody>'
       +(d.codes||[]).map(function(c){
         return '<tr><td class="code">'+esc(c.code)+'</td><td>'+esc(c.name)+'</td><td>'+esc(c.role)+'</td>'
+          /* KIONGOZI: the per-person half of the approval grant. Shown as its own column
+             because it decides who opens the advance approval pane, and a switch that only
+             exists inside an edit form is a switch nobody audits at a glance. */
+          +'<td>'+(c.leader===null?'<span class="mut">—</span>'
+            :c.leader?'<span class="chip ok">Kiongozi</span>':'<span class="mut">—</span>')+'</td>'
           +'<td>'+esc(c.teams?c.teams.join(', '):'ZOTE')+'</td><td class="mut">'+esc((c.tabs||[]).join(', '))+'</td>'
-          +'<td class="r"><button class="btn sm ghost" data-ed="'+esc(c.code)+'" data-name="'+esc(c.name)+'" data-role="'+esc(c.role)+'" data-teams="'+esc(c.teams&&c.teams.length?c.teams.join(','):'ALL')+'">Hariri</button> '
+          +'<td class="r noxl"><button class="btn sm ghost" data-ed="'+esc(c.code)+'" data-name="'+esc(c.name)+'" data-role="'+esc(c.role)+'" data-lead="'+(c.leader?1:0)+'" data-teams="'+esc(c.teams&&c.teams.length?c.teams.join(','):'ALL')+'">Hariri</button> '
           +'<button class="btn sm ghost" data-del="'+esc(c.code)+'">Futa</button></td></tr>';
       }).join('')+'</tbody></table></div>'
       +'<div class="row" style="margin-top:14px"><input class="inp" id="acCode" placeholder="Code (siri)"><input class="inp" id="acName" placeholder="Jina">'
       +'<select class="inp" id="acRole">'+(d.roles||[]).map(function(r){return '<option>'+esc(r.role)+'</option>';}).join('')+'</select>'
       +'<input class="inp" id="acTeams" placeholder="Timu: andika ALL au orodha (comma)"><button class="btn sm" id="acAdd">Ongeza</button></div>'
+      +'<label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12.5px">'
+      +'<input type="checkbox" id="acLead"'+(d.leaderKnown===false?' disabled':'')+'> '
+      +'<b>Kiongozi wa idara hii</b> — anaweza kufungua <i>Idhini ya advance</i> na kuona maombi '
+      +'ya role yake pekee. / Leads this department: opens the advance approval pane, and sees '
+      +'only their own role\'s requests.</label>'
+      +(d.leaderKnown===false
+        ? '<div class="note bad" style="margin-top:8px">Endesha <b>db/migrations/RUN-ME-2026-08-31-advance-leader.sql</b> '
+          +'kwenye Supabase ili kutumia alama hii. / Run that migration to use this switch.</div>'
+        : '')
       +'<div class="mut" style="margin-top:6px">ADMIN inapata kila kitu. AUDITOR ni kuangalia tu. '
       +'Hariri hujaza fomu — badilisha chochote (hata Code yenyewe, hata yako) kisha Hifadhi.</div>'
       +'</div>'
@@ -4068,6 +4125,7 @@ function drawCodes(m){
         $('#acCode').value=EDIT_FROM;
         $('#acName').value=b.getAttribute('data-name')||'';
         $('#acRole').value=b.getAttribute('data-role')||'ADMIN';
+        if($('#acLead')) $('#acLead').checked=b.getAttribute('data-lead')==='1';
         $('#acTeams').value=b.getAttribute('data-teams')||'';
         $('#acAdd').textContent='Hifadhi / Save';
         $('#acCode').focus();
@@ -4081,7 +4139,9 @@ function drawCodes(m){
       var teams=allTeams?[]:rawTeams.split(',').map(function(x){return x.trim();}).filter(Boolean);
       if(!allTeams&&!teams.length){ toast('Andika ALL au orodha ya timu. / State ALL, or name the teams.',true); return; }
       var newCode=$('#acCode').value.trim();
-      var save=function(){ return srv('saveAccessCode',{code:newCode,name:$('#acName').value,role:role,teams:teams,allTeams:allTeams,tabs:tabs}); };
+      var lead=$('#acLead')?$('#acLead').checked:undefined;
+      var save=function(){ return srv('saveAccessCode',{code:newCode,name:$('#acName').value,role:role,
+        teams:teams,allTeams:allTeams,tabs:tabs,leader:lead}); };
       var flow = (EDIT_FROM && EDIT_FROM!==newCode)
         ? srv('renameAccessCode',{from:EDIT_FROM,to:newCode}).then(function(r){
             if(r.self){ CODE=newCode; try{localStorage.setItem('hpCode',newCode);}catch(e){} }

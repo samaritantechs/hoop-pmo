@@ -84,9 +84,47 @@ in **Portal → Access codes → roles**, one tick each; holding one says nothin
 | `advappr` | Idhini ya advance / Advance approval | the leaders who decide |
 | `advrep` | Ripoti ya advance / Advance report | HR — the filing copy and the bank run |
 
-**RUN THE MIGRATION FIRST — `db/migrations/RUN-ME-2026-08-29-salary-advance.sql`.** Until it is
-run, every one of the three panes says so in plain words rather than showing an empty table,
-because "no rows" and "no table" must never look the same on a screen about money.
+**RUN BOTH MIGRATIONS FIRST:**
+
+1. `db/migrations/RUN-ME-2026-08-29-salary-advance.sql` — the `staff_advances` table.
+2. `db/migrations/RUN-ME-2026-08-31-advance-leader.sql` — the **Kiongozi** switch on access codes.
+
+Until each is run, the panes that need it say so in plain words rather than showing an empty
+table, and they name the exact file. "No rows" and "no table" must never look the same on a
+screen about money.
+
+### Who opens the approval pane: the nav AND the person
+
+> "The ones i grant approval role can only see data of the same role to keep confidentiality of
+> departments ... all access codes should have a button to switch that that person is a leader
+> in ther role so those with that switch on can extend to approval nav"
+
+Every other pane in this system is granted by role alone. The approval pane is the exception,
+and it needs **both**:
+
+- `advappr` ticked on the **role**, and
+- **Kiongozi** ticked on the individual **access code** (Access codes → the tick under the form).
+
+Ticking `advappr` on CREDIT would otherwise hand the approval pane to every credit officer, when
+what is meant is the one person who leads them. "Leads their department" is a fact about a
+person, not a role, so it lives on the code.
+
+### What they see: their own department only
+
+An approver sees advances asked for by people carrying **the same role they do**, and can decide
+only those. The amounts are the confidential part. The boundary is enforced twice — the queue
+filters, and `advDecide` checks again, because a filtered view is not a control. A request from
+another department answers "no such request" rather than naming the department, which would
+leak the thing being protected.
+
+**The leader must hold the same role as the people they approve for.** A code with role
+`CREDIT LEAD` will not see `CREDIT` requesters — the roles must match exactly.
+
+**The report is not scoped.** `advrep` is company-wide: HR files and pays for everybody, and
+scoping it would break the bank run it exists to produce.
+
+**ADMIN is full access everywhere**, by standing rule — every department, no Kiongozi tick
+needed. A read-only `AUDITOR` code sees all of it too and can change none of it.
 
 Four amounts only — 50,000 / 100,000 / 150,000 / 200,000 — enforced on the server as well as in
 the dropdown. The requester supplies their own bank or mobile-money details at the moment of
@@ -118,6 +156,33 @@ muted note that blocks nothing.
 One control that IS enforced on the server: **two approvers pressing at once**. The update is
 guarded on `status='pending'`, so the second is told it was already decided rather than silently
 overwriting the first decision.
+
+### Fixed after a live audit (2026-08-31)
+
+The feature shipped, then an audit against real Postgres/PostgREST semantics found defects the
+216-test suite could not see, because the suite runs on an in-memory fake. All are fixed and
+each now has a regression test:
+
+- **Duplicate advances.** `advRequest` appends, and was not on the client's `NO_RETRY` list — a
+  dropped response (including a 504 with an HTML body) re-filed the identical request up to two
+  more times, and the bank run would pay it twice. `advDecide` is on the list too: retrying it
+  is harmless but tells the approver somebody else decided a request they had just decided.
+- **Access codes on the wire.** `staff_code` is the login credential, and it was on every row of
+  the approval queue. The server now answers the only question the screen had — "is this mine" —
+  with a boolean.
+- **Bank details to approvers.** The queue selected `bank_name`/`account_no` for a pane that
+  never shows them. Narrowed at the SELECT.
+- **The word "undefined" over three panes.** All three advance panes called `paneFailed` wrongly,
+  so any load failure painted `undefined` instead of an error card.
+- **Every exported heading carried the filter funnel** — `⏷` in Excel, `?` in the PDF, on every
+  table in the whole portal.
+- **The dispatcher answered to inherited names.** `FNS['constructor']` and friends were truthy,
+  so they were called past `requireNav`, `requireWrite` and the audit log. Own properties only.
+- **500s that should have been 400s** — a non-uuid id, and a date like `2026-02-30`.
+- **A stale month.** The report's default range was frozen at page load, so a tab left open
+  across a month end showed last month as "this month".
+- **Tiles that moved when clicked** — totals are counted over the date range, not the status lens.
+- **An audit log that could not say which request** — `id` now survives into `subject`.
 
 Identity is **stamped, never joined** — HOOP has no staff table, a person is the access code
 they signed in with, and a payment record that rewrote itself when a code was renamed or deleted
