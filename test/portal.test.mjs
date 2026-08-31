@@ -1386,21 +1386,43 @@ test('a decline must say why; an approval need not', async () => {
   assert.equal(d2._dump('staff_advances')[0].status, 'approved');
 });
 
-test('nobody decides their own advance, however many panes they hold', async () => {
-  /* The cheapest financial control there is, and the most expensive one to add back after
-     somebody has already used the gap. A leader who may approve can also ASK -- so the two
-     panes meet on one person by design, and this is the line between them. */
+test('holding both navs means holding both powers, own request included', async () => {
+  /* THE NAVS ARE THE ROLES.
+
+       "role is navigation based so i didnt expect (This is your own request — another approver
+        must decide it) if someone has both navs can do both"
+
+     This shipped once with a self-approval refusal and it was wrong for this system. Ticking
+     both advreq and advappr on somebody is the owner saying, in the only way this system has
+     of saying it, that this person may ask AND may decide; a refusal on top of that is the code
+     overruling the grant it was handed, and it quietly made a tick mean less than it says.
+     The control lives in who gets advappr at all, not in a second opinion held by the code.
+
+     This test exists so nobody helpfully puts the block back. */
   const both = { code: 'L1', name: 'NEEMA M', role: 'RSM', teams: null,
     tabs: ['advreq', 'advappr'], readOnly: false };
-  const d = advDb([anAdvance({ id: 'r1', code: 'L1', name: 'NEEMA M' })]);
-  await assert.rejects(() => _FNS.advDecide(d, both, { id: 'r1', approve: true }),
-    /mwenyewe|your own/i);
-  assert.equal(d._dump('staff_advances')[0].status, 'pending');
+  const d = advDb([anAdvance({ id: 'r1', code: 'L1', name: 'NEEMA M', amount: 200000 })]);
+  const r = await _FNS.advDecide(d, both, { id: 'r1', approve: true, approvedAmount: 100000 });
+  assert.equal(r.status, 'approved', 'a self-decision must go through, not be refused');
 
-  // Somebody else's request, same person: allowed.
+  const row = d._dump('staff_advances')[0];
+  assert.equal(row.approved_amount, 100000, 'and it decides for real, part-approval included');
+  /* WHAT THE CODE OWES INSTEAD OF A BLOCK: a record. decided_by is stamped, so the row reads as
+     self-decided on HR's report -- the same person in the staff and decided-by columns --
+     rather than being indistinguishable from a decision somebody else made. */
+  assert.equal(row.decided_by, 'NEEMA M');
+  assert.equal(row.staff_name, 'NEEMA M',
+    'both columns name the same person, which is what makes it visible after the fact');
+
+  // Somebody else's request, same person: unchanged.
   const d2 = advDb([anAdvance({ id: 'r2', code: 'A1' })]);
   await _FNS.advDecide(d2, both, { id: 'r2', approve: true });
   assert.equal(d2._dump('staff_advances')[0].status, 'approved');
+
+  /* And a code holding ONLY advreq still cannot decide anything: removing the self-approval
+     refusal must not have loosened the nav gate underneath it. */
+  await assert.rejects(() => _FNS.advDecide(advDb([anAdvance({ id: 'r3' })]), ASKER,
+    { id: 'r3', approve: true }), e => e.status === 403);
 });
 
 test('two approvers pressing at once: the second is told, not silently overwritten', async () => {

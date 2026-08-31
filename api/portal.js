@@ -2121,15 +2121,23 @@ const FNS = {
     if (String(dev.status) !== 'pending') {
       bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     }
-    /* NOBODY DECIDES THEIR OWN. An approver who also holds advreq can ask for an advance like
-       anybody else -- and would otherwise be able to grant it to themselves in one click.
-       This is the cheapest financial control there is and the most expensive one to add back
-       after somebody has used it. Compared on the access code, which is the identity the
-       server actually knows. */
-    if (user.code && String(dev.staff_code || '') === String(user.code)) {
-      bad('Huwezi kuamua ombi lako mwenyewe. / You cannot decide your own request — '
-        + 'another approver must action it.');
-    }
+    /* DECIDING YOUR OWN REQUEST IS ALLOWED, AND THAT IS DELIBERATE. Do not "fix" this.
+
+         "role is navigation based so i didnt expect (This is your own request — another
+          approver must decide it) if someone has both navs can do both"
+
+       This shipped once with a self-approval refusal, and it was wrong for this system. The
+       whole permission model here is that the NAVS ARE THE ROLES -- "i'll grant navs to who
+       performs what" -- so ticking both advreq and advappr on somebody is the owner saying, in
+       the only way this system has of saying it, that this person may ask AND may decide. A
+       server-side refusal on top of that is the code overruling the grant it was given, and it
+       silently made a tick the owner had deliberately made mean less than it says.
+
+       The control lives where the owner put it: in who gets advappr at all. What the code owes
+       them instead is a RECORD, and it keeps one -- decided_by is stamped on the row, so a
+       self-decision shows on HR's report as the same person in both columns, and advDecide is
+       in AUDITED so who granted what is in the audit log either way. Visible after the fact
+       beats blocked in front of it, when the person doing it was authorised to do it. */
 
     const asked = Number(dev.amount) || 0;
     let granted = null;
