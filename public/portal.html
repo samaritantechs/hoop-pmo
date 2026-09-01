@@ -3333,6 +3333,32 @@ function devProvision(m, r){
         +'<b>result=1 … ENROLLED</b>, one per phone — not just the last. Fewer than that means '
         +'some phone did not enrol; check the register before you unplug the hub.')
     +'</div>'
+    /* THE ONE FAILURE THAT LOOKS LIKE SUCCESS, ANSWERED AT THE BENCH.
+       =====================================================================================
+       set-device-owner is refused when ANY account is on the handset -- and the account that
+       does it is routinely one nobody can see: Settings -> Accounts showed a clean phone while
+       dumpsys listed Account {name=Meet, type=com.google.android.apps.tachyon}. The enrol
+       broadcast that follows still answers result=1 ENROLLED, because the SERVER minted a
+       token; the phone simply never became Device Owner and can never be locked. Two handsets
+       reached the register that way and one of them shipped. There is no remote cure -- Android
+       will not grant Device Owner over the air, to a phone with accounts, ever -- so the cure
+       has to be here, on the screen the operator is already reading when the count comes up
+       short. The register's alarm catches the ones that slip past; this stops them slipping. */
+    +'<div class="note bad" style="margin-top:10px;font-size:12px">'
+    +'<b>Ikikataa: "there are already some accounts on the device"</b> — simu hiyo '
+    +'<b>HAIJAFUNGWA</b>, hata kama register inaonyesha imeandikishwa. Akaunti nyingine '
+    +'hazionekani kwenye Settings &rarr; Accounts. Ziorodheshe kwa uhakika:'
+    +'<div class="code" style="margin:4px 0;font-size:11px">adb shell dumpsys account</div>'
+    +'Tafuta mistari ya <b>Account {name=</b>. Ikiwa ni <b>Meet / Duo</b>, iondoe:'
+    +'<div class="code" style="margin:4px 0;font-size:11px">'
+    +'adb shell pm uninstall --user 0 com.google.android.apps.tachyon</div>'
+    +'Kisha rudia amri hiyo hiyo. / <b>If set-device-owner is refused</b> with "there are '
+    +'already some accounts on the device", that handset is <b>NOT locked</b> even though the '
+    +'next line may still say <b>result=1 ENROLLED</b> — the office minted a token, the phone '
+    +'never became Device Owner. Accounts do not all show under Settings &rarr; Accounts, so '
+    +'list them for certain with the first command and read the <b>Account {name=</b> lines. '
+    +'Meet/Duo is the usual culprit; remove it with the second and run the same command again. '
+    +'<b>Do not ship the handset until the register stops calling it never-spoke.</b></div>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
   if($('#dvAdbCopy')) $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
   if($('#dvHubCopy')) $('#dvHubCopy').onclick=function(){ devCopyBox('dvHub'); };
