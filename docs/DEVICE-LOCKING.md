@@ -941,3 +941,54 @@ self-lock the handset that has been silent longest, which is exactly the paid-up
 exists for. The self-lock is deferred by the length of the window, never skipped.
 
 **Requires APK 1.11.0 (versionCode 13) or later.**
+
+## Phones already in the field, on an older APK
+
+> "remember some phones locked with previous apk have gone to field already
+> so whenever we update keep in mind they should be able to be unlocked and everything"
+
+A handset in a customer's pocket cannot be updated on demand. It updates when it feels like it,
+and a phone that is **locked and offline may not update for weeks** — so every version of this
+server has to keep talking to every version of the app that has ever shipped, and above all has
+to keep being able to **unlock** one.
+
+### The beat is the contract, and it runs one way
+
+The app reads the fields it knows **by name** and ignores everything else. So:
+
+- **Adding a response field is always safe.** `bootGraceMinutes` and `bootGraceEveryHours` are
+  invisible to every build before 1.11.0, which simply never looks for them.
+- **Renaming or dropping one is never safe.** It would not fail loudly — it would quietly stop
+  unlocking phones, and nobody would find out until a paid-up customer complained.
+
+These names are read by builds that are in customers' hands right now:
+
+```
+ok · command · nextBeatSeconds · graceHours · message · helpPhone · reason · brand · imei · retire
+```
+
+A test asserts every one of them is still sent, and a second test drives the oldest beat there
+is — token and a state, none of the fields later versions send — through lock, unlock and
+release. Changing a name there is not a refactor; it is a decision to strand every handset older
+than the change, and the suite will say so.
+
+### A settings wobble can no longer take the fleet dark
+
+Three reads of `settings` hang off every beat: the lock screen's words, the offline grace, and
+the boot window. Every one of them **decorates** the answer; none of them decides whether a
+phone locks or unlocks.
+
+They were unguarded, so a settings table that was slow, migrating or briefly unreachable threw
+straight out of the beat — a 500 to the handset. A handset that gets a 500 does nothing at all,
+so the phone stays exactly as it was; for a **locked** phone whose owner has just paid, that
+means stays locked, and the whole fleet with it, for as long as the wobble lasts, over a brand
+name and two numbers.
+
+The reads fail soft now. An outage costs the lock screen its custom wording and turns the boot
+window off. It can no longer cost anybody their unlock.
+
+One asymmetry worth knowing: `readSettings` returns **null** for "could not ask" and an **empty
+list** for "asked, nothing set", and the two are handled differently on purpose. Everything
+degrades towards the phone staying as locked as it already is — except the boot window, which
+would degrade towards *opening* a door, so an unreachable settings table means no window at all.
+An unset key still falls through to five minutes.

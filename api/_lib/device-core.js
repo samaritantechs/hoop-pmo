@@ -89,9 +89,40 @@ function fill(text, brand, phone) {
     .trim();
 }
 
+/* THE SETTINGS A BEAT LEANS ON, AND WHY A FAILURE HERE MUST NOT REACH THE HANDSET.
+   =============================================================================================
+     "remember some phones locked with previous apk have gone to field already
+      so whenever we update keep in mind they should be able to be unlocked and everything"
+
+   Three separate reads of `settings` hang off every beat -- the lock screen's words, the offline
+   grace, and the boot window. Every one of them decorates the answer; NONE of them decides
+   whether a phone locks or unlocks, which is the only thing the beat exists to carry.
+
+   They were unguarded, so a settings table that was slow, migrating or briefly unreachable threw
+   straight out of the beat. That is a 500 to the handset, and a handset that gets a 500 does
+   nothing at all: the phone in a customer's pocket stays exactly as it was. For a LOCKED phone
+   whose owner has just paid, "stays as it was" means stays locked -- and the whole fleet with it,
+   for as long as the wobble lasts, over a brand name and two numbers.
+
+   So the reads fail soft. A settings outage now costs the lock screen its custom wording and
+   turns the boot window off; it can no longer cost anybody their unlock.
+
+   NULL FOR "COULD NOT ASK", EMPTY FOR "ASKED, NOTHING SET" -- the same three-state care the
+   rest of this system takes. Collapsing them was a bug the moment it was written: an unset
+   DEVICE_BOOT_GRACE_MINUTES has to fall through to the default, and a settings table that is
+   unreachable must not, or a wobble would silently hand every handset a window. */
+async function readSettings(db, keys) {
+  try {
+    return await fetchAll(() => db.from('settings').select('key, value').in('key', keys));
+  } catch (e) {
+    return null;
+  }
+}
+
 async function lockWords(db) {
-  const rows = await fetchAll(() => db.from('settings').select('key, value')
-    .in('key', LOCK_SETTINGS));
+  // Unreadable settings read the same as unset ones here: the lock screen falls back to the
+  // default brand and drops the help number rather than promising one it does not have.
+  const rows = (await readSettings(db, LOCK_SETTINGS)) || [];
   const get = k => { const r = rows.find(x => S(x.key) === k); return r ? S(r.value) : ''; };
   const brand = get('DEVICE_LOCK_BRAND') || DEFAULT_BRAND;
   const phone = get('DEVICE_HELP_PHONE');
@@ -160,8 +191,8 @@ const PENDING_BEAT_SECONDS = 25;
 const DEFAULT_GRACE_HOURS = 24 * 7;
 async function graceFor(db, dev) {
   if (!S(dev.customer) && !S(dev.sold_ref)) return null;      // still stock: never
-  const rows = await fetchAll(() => db.from('settings').select('key, value')
-    .in('key', ['DEVICE_OFFLINE_GRACE_HOURS']));
+  // Same again: no answer means the standing default, which is what an unset key already gave.
+  const rows = (await readSettings(db, ['DEVICE_OFFLINE_GRACE_HOURS'])) || [];
   const raw = rows.length ? Number(S(rows[0].value)) : NaN;
   return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : DEFAULT_GRACE_HOURS;
 }
@@ -200,8 +231,12 @@ async function graceFor(db, dev) {
 const DEFAULT_BOOT_GRACE_MINUTES = 5;
 const DEFAULT_BOOT_GRACE_EVERY_HOURS = 24;
 async function bootGraceFor(db) {
-  const rows = await fetchAll(() => db.from('settings').select('key, value')
-    .in('key', ['DEVICE_BOOT_GRACE_MINUTES', 'DEVICE_BOOT_GRACE_EVERY_HOURS']));
+  /* AND HERE THE FAILURE IS NOT THE DEFAULT. Every other read above degrades towards the
+     phone staying exactly as locked as it already is; this one would degrade towards OPENING
+     a door, so a settings table we could not reach means no window at all. An unset key is a
+     different matter and still falls through to five minutes. */
+  const rows = await readSettings(db, ['DEVICE_BOOT_GRACE_MINUTES', 'DEVICE_BOOT_GRACE_EVERY_HOURS']);
+  if (rows === null) return { minutes: 0, everyHours: 24 };
   const pick = (key, dflt) => {
     const hit = rows.find(r => S(r.key) === key);
     const raw = hit ? Number(S(hit.value)) : NaN;
