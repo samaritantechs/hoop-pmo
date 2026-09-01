@@ -1213,3 +1213,34 @@ test('the boot-window build actually reaches handsets in the field', () => {
   assert.ok(v.versionCode >= 13, 'raised for the boot window');
   assert.match(String(v.versionName), /^\d+\.\d+/);
 });
+
+test('a failed batch claim says WHICH of the three things went wrong', () => {
+  /* It returned a bare String and null stood for every failure there is, so three completely
+     different bench problems arrived as one sentence: the phone cannot read its own IMEI (a
+     permission or vendor problem on THAT handset), the office said no (wrong IMEIs pasted, or a
+     batch gone stale), or the office could not be reached at all (no wifi on the phone -- USB
+     does not give it one). The next move differs for each and the message named none of them.
+
+     Two handsets on a hub read "NOT IN THIS BATCH" when the batch was not the problem. */
+  const src = fs.readFileSync(new URL(
+    '../android/lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java',
+    import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('private static Claim claim(Context c, String batch)'),
+                       src.indexOf('private static boolean contains('));
+  assert.ok(fn.length > 500, 'the claim helper is where the three are told apart');
+  assert.match(fn, /CANNOT READ THIS PHONE'S IMEI/, 'the handset cannot name itself');
+  assert.match(fn, /THE OFFICE REFUSED THIS PHONE \(HTTP/, 'the office answered and said no');
+  assert.match(fn, /CANNOT REACH THE OFFICE/, 'the office was never reached');
+  assert.match(fn, /a USB cable does not give it a network/,
+    'and it names the cause an operator at a bench will actually hit');
+
+  // The caller must report the reason it was handed, not a sentence of its own.
+  const use = src.slice(src.indexOf('Claim c2 = claim(c, theBatch);'), src.indexOf('ALREADY ENROLLED'));
+  assert.match(use, /msg = c2\.why/);
+  assert.ok(!/NOT IN THIS BATCH/.test(use), 'the one-size-fits-all sentence is gone');
+});
+
+test('the enrol-message build reaches handsets in the field', () => {
+  const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
+  assert.ok(v.versionCode >= 14, 'raised, or SelfUpdate skips it and no handset ever sees it');
+});
