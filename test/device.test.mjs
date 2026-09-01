@@ -1410,3 +1410,30 @@ test('the first-run enrol fix actually reaches handsets', () => {
   const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
   assert.ok(v.versionCode >= 15, 'raised, or SelfUpdate skips it and no bench ever sees it');
 });
+
+test('the ownership refusal names why set-device-owner fails', () => {
+  /* "run this first, then broadcast again: adb shell dpm set-device-owner ..." is useless
+     advice to the operator who just ran exactly that and watched it throw:
+
+       Not allowed to set the device owner because there are already some accounts on the device.
+
+     Android refuses Device Owner while ANY account is signed in, and on the handsets this fleet
+     is built from there are usually two -- a Google account and the vendor's own -- so removing
+     the obvious one still fails.
+
+     This matters more than wording: a phone that never takes ownership CANNOT BE LOCKED, and if
+     it ships in that state there is no way back without the handset in your hands. One already
+     has. The message is the last chance to catch it at the bench. */
+  const src = fs.readFileSync(new URL(
+    '../android/lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java',
+    import.meta.url), 'utf8');
+  const at = src.indexOf('NOT DEVICE OWNER');
+  assert.ok(at > 0);
+  const msg = src.slice(at, at + 900);
+  assert.match(msg, /account is signed in/, 'it names the reason Android refuses');
+  assert.match(msg, /factory reset and SKIP the sign-in/, 'and the way through');
+  assert.match(msg, /cannot be locked until it is/, 'and what is actually at stake');
+  assert.match(msg, /do not ship this handset/,
+    'and the one instruction that would have saved a phone already in the field');
+  assert.match(msg, /dpm set-device-owner/, 'the command is still there');
+});
