@@ -414,3 +414,37 @@ this — `recoveryWeek` recomputes the last seven days on every read — but sus
 visible: suspend somebody at 11am and last week's per-officer numbers shift. `suspendedNamesOn`
 already takes a day so it can be judged correctly per-day; wiring the weekly board to use it is
 the follow-up.
+
+---
+
+## 11. One phone, on its own screen
+
+> "when the list is getting high suffocates so put them on a button 'locking' on each row before
+> the token button so that we deal with each imei on its interface"
+
+The four bulk buttons live at the **foot** of the table. That is right for a bench of twenty and
+wrong for a register of four hundred: to act on one handset you tick its row, scroll past
+everything else to reach the buttons, then scroll back to check you ticked the right one.
+
+Every row now carries **Kufunga**, first in the actions cell, before Token. It opens a panel for
+that one handset with Funga, Fungua, Achia and Imepotea on it — and with the three facts the
+decision actually turns on, which are otherwise spread across a table you have just scrolled
+sideways through:
+
+- what was **last ordered**, and when, and by whom;
+- what the **phone itself says** it is doing;
+- **when it last spoke**, in red if it has gone quiet.
+
+**It reimplements none of the safety.** The reason a lock demands, the sentence Achia has to be
+answered with, the override for a released handset that stopped listening, and the in-flight
+guard against a double-click all live in one shared function that both the bulk bar and this
+panel call — with a list of many, or a list of one. Safety kept in two copies is safety that
+will one day disagree with itself, and a test asserts the panel contains no `prompt`, no
+`confirm` and no call to the server.
+
+The panel closes only when an order actually went out. A cancelled prompt leaves it open, on the
+phone the operator is still deciding about.
+
+**The bulk bar is untouched** — this is a second way in, not a replacement. A hub of twenty
+phones is still one tick-all and one press, which is the flow the multi-enrol work exists to
+serve.
