@@ -1162,3 +1162,76 @@ test('portal.html: the register says when it was read, and offers a way to read 
   assert.match(paint, /rf\.onclick=function\(\)\{ drawDevices\(m\); \}/,
     'which goes through the FETCH half, not the paint half');
 });
+
+/* =========================================================================================
+   ONE PHONE, ON ITS OWN SCREEN.
+
+     "when the list is getting high suffocates so put them on a button 'locking' on each row
+      before the token button so that we deal with each imei on its interface"
+
+   The four bulk buttons live at the FOOT of the table, which is right for a bench of twenty
+   and wrong for a register of four hundred: to act on one handset you tick its row, scroll
+   past everything to reach the buttons, then scroll back to check you ticked the right one.
+   ========================================================================================= */
+
+test('portal.html: every row carries a Kufunga button, before Token', () => {
+  const src = read('portal.html');
+  const pane = src.slice(src.indexOf('function devPaint_(m, d, at){'),
+                         src.indexOf('function devVisibleTicks_'));
+  const lock = pane.indexOf('data-dvlock="');
+  const tok = pane.indexOf('data-dvt="');
+  const hist = pane.indexOf('data-dvh="');
+  const del = pane.indexOf('data-dvd="');
+  assert.ok(lock > 0, 'the row opens a per-handset panel');
+  assert.ok(lock < tok && tok < hist && hist < del,
+    'Kufunga comes first, then Token, Historia, Futa -- the position is the request');
+  // A write, so a view-only code is not offered it, exactly like Token and Futa.
+  assert.ok(/BOOT\.readOnly/.test(pane.slice(Math.max(0, lock - 400), lock)),
+    'gated on BOOT.readOnly');
+});
+
+test('portal.html: the per-row panel reuses the bulk path, it does not reimplement it', () => {
+  /* The reason a lock demands, the sentence Achia must be answered with, and the override for
+     a released handset that stopped listening are all safety. Safety kept in two copies is
+     safety that will one day disagree with itself. */
+  const src = read('portal.html');
+  const one = src.slice(src.indexOf('function devLockOne(m, d, imei){'),
+                        src.indexOf('function devSend_'));
+  assert.ok(one.length > 500, 'the panel exists');
+  assert.match(one, /devAct_\(m, \[imei\], b\.getAttribute\('data-dvs1'\)\)/,
+    'it calls the shared door with a list of one');
+  assert.ok(!/prompt\(/.test(one), 'it must not ask for the reason itself');
+  assert.ok(!/confirm\(/.test(one), 'nor put up its own Achia sentence');
+  assert.ok(!/srv\('deviceSetState'/.test(one), 'nor talk to the server directly');
+
+  // And the shared door reports whether an order actually went, so a cancelled prompt leaves
+  // the panel open on the phone the operator is still deciding about.
+  const act = src.slice(src.indexOf('function devAct_(m, imeis, state){'),
+                        src.indexOf('/* ONE PHONE, ON ITS OWN SCREEN'));
+  assert.match(act, /return false;[\s\S]*return true;/,
+    'devAct_ answers whether it dispatched');
+  // Nested parens inside the call, so match across them rather than up to the first ')'.
+  assert.match(one, /if\(devAct_[\s\S]{0,90}?closeDrawer\(\)/,
+    'the panel closes only on a yes');
+});
+
+test('portal.html: the in-flight guard covers both sets of state buttons', () => {
+  /* The bulk bar and the panel use different attributes on purpose -- two controls sharing one
+     selector is how a disabled button turns up somewhere nobody pressed anything -- so the
+     guard has to name both, or a double-click in the panel sends the order twice. */
+  const src = read('portal.html');
+  const busy = src.slice(src.indexOf('function devBusy_(on){'), src.indexOf('function devSend_'));
+  assert.match(busy, /\[data-dvs\],\[data-dvs1\]/);
+});
+
+test('portal.html: the bulk bar survives -- this is a second way in, not a replacement', () => {
+  /* A hub of twenty phones is still one tick-all and one press, and that is the flow the
+     multi-enrol work exists to serve. */
+  const src = read('portal.html');
+  const pane = src.slice(src.indexOf('function devPaint_(m, d, at){'),
+                         src.indexOf('function devVisibleTicks_'));
+  for (const s of ['locked', 'enrolled', 'released', 'lost']) {
+    assert.ok(pane.includes('data-dvs="' + s + '"'), 'the bulk ' + s + ' button is still there');
+  }
+  assert.match(pane, />Zilizochaguliwa: <span id="dvCount">/, 'and the count beside them');
+});

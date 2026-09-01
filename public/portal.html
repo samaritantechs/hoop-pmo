@@ -2765,6 +2765,10 @@ function devPaint_(m, d, at){
              Futa erases a row -- the server treats both as writes, so a view-only code is
              not offered either. */
           +'<td class="r noxl">'
+          /* KUFUNGA -- this one handset, on its own screen, and it comes FIRST because it is
+             the thing most often wanted from a row. Solid rather than ghost for the same
+             reason. */
+          +(BOOT.readOnly?'':'<button class="btn sm" data-dvlock="'+esc(r.imei)+'">Kufunga</button> ')
           +(BOOT.readOnly?'':'<button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> ')
           +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button>'
           +(BOOT.readOnly?'':' <button class="btn sm danger" data-dvd="'+esc(r.imei)+'" title="Ondoa kwenye register / Remove from the register">Futa</button>')
@@ -2814,6 +2818,7 @@ function devPaint_(m, d, at){
   var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
   $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
   $all('[data-dvh]').forEach(function(b){ b.onclick=function(){ devHistory(b.getAttribute('data-dvh')); }; });
+  $all('[data-dvlock]').forEach(function(b){ b.onclick=function(){ devLockOne(m, d, b.getAttribute('data-dvlock')); }; });
   $all('[data-dvt]').forEach(function(b){ b.onclick=function(){ devToken(b.getAttribute('data-dvt')); }; });
   $all('[data-dvd]').forEach(function(b){ b.onclick=function(){ devDelete(m, b.getAttribute('data-dvd')); }; });
   devWireTicks_();
@@ -2860,13 +2865,28 @@ function devWireTicks_(){
   devSyncTicks_();
 }
 function devPicked(){ return devVisibleTicks_().filter(function(c){ return c.checked; }).map(function(c){ return c.value; }); }
+/** The ticked rows. The bulk bar at the foot of the table stays exactly as it was -- it is the
+    right tool for a hub of twenty phones -- and the per-row button below is the other half:
+    one handset, without hunting for the bottom of a long register. */
 function devSetState(m, state){
   var imeis=devPicked();
   if(!imeis.length){ toast('Chagua simu kwanza. / Pick some phones first.', true); return; }
+  return devAct_(m, imeis, state);
+}
+/* EVERY ORDER GOES THROUGH THIS DOOR, whether it came from the bulk bar or from one row.
+   -------------------------------------------------------------------------------------------
+   The reason a lock demands, the sentence Achia has to be answered with, the override for a
+   released handset that stopped listening -- all of that is safety, and safety that exists in
+   two copies is safety that will one day disagree with itself. So the per-row panel does not
+   reimplement any of it; it calls this with a list of one.
+
+   Returns whether an order was actually sent, so the caller can close its panel on a yes and
+   leave it open on a cancel. */
+function devAct_(m, imeis, state){
   var reason='';
   if(state==='locked'||state==='lost'){
     reason=prompt((state==='locked'?'Sababu ya kufunga':'Sababu')+' / Reason (required):')||'';
-    if(!reason.trim()){ toast('Sababu inahitajika. / A reason is required.', true); return; }
+    if(!reason.trim()){ toast('Sababu inahitajika. / A reason is required.', true); return false; }
   }
   /* ACHIA IS THE ONE-WAY DOOR AND IT ASKED NOTHING.
      ---------------------------------------------------------------------------------------
@@ -2879,8 +2899,66 @@ function devSetState(m, state){
     +'Simu itaacha kuwa chini ya udhibiti — itaachana na Device Owner na itaacha kupiga '
     +'ripoti. Kuirudisha kunahitaji kebo na simu mkononi.\n\n'
     +'Releases '+imeis.length+' handset(s) for good: each one drops Device Owner and stops '
-    +'reporting. Bringing one back is a cable job, per phone.')) return;
+    +'reporting. Bringing one back is a cable job, per phone.')) return false;
   devSend_(m, imeis, state, reason.trim(), false);
+  return true;
+}
+
+/* ONE PHONE, ON ITS OWN SCREEN.
+   =========================================================================================
+     "when the list is getting high suffocates so put them on a button 'locking' on each row
+      before the token button so that we deal with each imei on its interface"
+
+   The four bulk buttons live at the FOOT of the table, which is right for a bench of twenty
+   and wrong for a register of four hundred: to act on one handset you tick its row, then
+   scroll past everything to reach the buttons, then scroll back to check you ticked the right
+   one. The row is where the decision is made, so the row is where the door belongs.
+
+   It opens with THIS handset's facts on it -- what was last ordered and when, what the phone
+   itself says, when it last spoke -- because the question "should I lock this one" is answered
+   by those three and they are otherwise spread across a wide table the operator has just
+   scrolled sideways through.
+
+   The bulk bar is untouched. This is a second way in, not a replacement: a hub of twenty
+   phones is still one tick-all and one press. */
+function devLockOne(m, d, imei){
+  var r=((d&&d.rows)||[]).filter(function(x){ return String(x.imei)===String(imei); })[0]||{imei:imei};
+  var age=agoMins(r.silentMins);
+  var line=function(k,v){ return '<div style="display:flex;gap:8px;font-size:12.5px;margin:2px 0">'
+    +'<span class="mut" style="min-width:120px">'+k+'</span><span>'+v+'</span></div>'; };
+  /* The state is named in words rather than shown as the table's chip: the chip is a colour
+     you learn, and this panel is opened precisely when somebody is not sure. */
+  var st=r.state==='locked'?(r.lockState==='pending'?'imeagizwa kufungwa · bado haijathibitisha':'imefungwa')
+    :r.state==='released'?'imeachiwa':r.state==='lost'?'imepotea':'tayari (haijafungwa)';
+  drawer('<h3>Kufunga · '+esc(imei)+'</h3>'
+    +'<div class="card" style="padding:10px;margin-bottom:10px">'
+    +line('Hali / state', esc(st))
+    +line('Item', esc(r.item||'—')+' · '+esc(r.holder||'—'))
+    +(r.customer?line('Mteja', esc(r.customer)):'')
+    +line('Uliagiza', esc(r.lastOrder||'—')
+      +(r.orderAt||r.orderAgeMins!=null?' <span class="mut">'+esc(clock(r.orderAt)||agoMins(r.orderAgeMins))
+        +(r.orderBy?' · '+esc(r.orderBy):'')+'</span>':''))
+    +line('Simu inasema', esc(r.reported||'—'))
+    +line('Iliongea lini', r.neverSeen?'<span class="mut">hajawahi</span>'
+      :(r.stale?'<span style="color:var(--bad)">':'<span>')+esc(clock(r.seenAt)||age)+'</span>'
+       +(age?' <span class="mut">('+esc(age)+')</span>':''))
+    +'</div>'
+    /* data-dvs1 rather than data-dvs: devBusy_ disables BOTH, but the bulk bar's own selector
+       must not reach into this panel and vice versa -- two controls sharing one attribute is
+       how a disabled button ends up somewhere nobody pressed anything. */
+    +'<button class="btn w danger" data-dvs1="locked">Funga / Lock</button>'
+    +'<button class="btn w" data-dvs1="enrolled" style="margin-top:6px">Fungua / Unlock</button>'
+    +'<button class="btn w ghost" data-dvs1="released" style="margin-top:6px">Achia / Release</button>'
+    +'<button class="btn w ghost" data-dvs1="lost" style="margin-top:6px">Imepotea / Write off</button>'
+    +'<div class="mut" style="font-size:11px;margin-top:8px">Agizo linamfikia simu ikiongea. '
+    +'/ The order reaches the handset on its next beat.</div>');
+  $all('[data-dvs1]').forEach(function(b){
+    b.onclick=function(){
+      // Closed only when an order actually went out -- a cancelled prompt leaves the panel up,
+      // because the operator is still deciding about this phone.
+      if(devAct_(m, [imei], b.getAttribute('data-dvs1'))) closeDrawer();
+    };
+  });
 }
 /* THE ORDER, AND THE ONE REFUSAL THAT IS WORTH ARGUING WITH.
    =========================================================================================
@@ -2905,7 +2983,7 @@ function devSetState(m, state){
     toast reading "Zimebadilishwa: 0" because the first one already did the work. The request
     is what takes time, so the buttons go dead for exactly as long as it is running. */
 function devBusy_(on){
-  $all('[data-dvs]').forEach(function(b){ b.disabled=!!on; });
+  $all('[data-dvs],[data-dvs1]').forEach(function(b){ b.disabled=!!on; });
 }
 function devSend_(m, imeis, state, reason, force){
   devBusy_(true);
