@@ -1067,12 +1067,49 @@ account that never appeared as a Google account:
 Account {name=Meet, type=com.google.android.apps.tachyon}
 ```
 
-Google Meet/Duo creates its own account. So does Samsung, and so do Outlook and OneDrive. List
-them for certain, rather than trusting the Settings screen:
+Google Meet/Duo creates its own account. So does Samsung, and so do Outlook and OneDrive. Ask the
+phone rather than trusting the Settings screen:
 
 ```
-adb shell dumpsys account | findstr /i "Account {"
-adb shell pm uninstall --user 0 com.google.android.apps.tachyon   # removes that account with it
+adb shell dumpsys account
+```
+
+**Read the count at the very top, and nothing else:**
+
+```
+User UserInfo{0:Owner:4c13}:
+  Accounts: 0            <- this line is the answer
+```
+
+`Accounts: 0` means the phone is clean; go straight to `set-device-owner`. Anything higher and the
+accounts are listed immediately beneath that line as `Account {name=…, type=…}`.
+
+**`RegisteredServicesCache` further down is NOT a list of accounts.** It is every app on the
+handset that is *capable* of creating one, and on a spotless phone it still prints twelve entries
+including:
+
+```
+ServiceInfo: AuthenticatorDescription {type=com.google.android.apps.tachyon}, ...
+```
+
+That line means Meet is installed. It does not mean anyone is signed in. Reading it as an account
+sends an operator uninstalling apps on a phone that was ready to enrol — do not grep for
+`Account`, read the count.
+
+**Meet/Duo re-adds itself.** On the handset that caused all this, the account history showed it
+removed twice in one morning:
+
+```
+-1,action_called_account_add,2026-09-01 09:06:43,10232,accounts,0
+-1,action_called_account_remove,2026-09-01 09:09:18,10213,accounts,1
+-1,action_called_account_remove,2026-09-01 10:13:55,10213,accounts,2
+```
+
+`10213` is tachyon's uid, from that services list. So remove the **app**, not the account, or it
+can beat you back to the handset between your check and your command:
+
+```
+adb shell pm uninstall --user 0 com.google.android.apps.tachyon
 ```
 
 Then `set-device-owner`, then the enrol broadcast.
@@ -1100,8 +1137,11 @@ If they are in arrears, leave it: locking on the first beat is the outcome you w
 adb shell dumpsys account
 ```
 
-Read the `Account {name=` lines. `Settings → Accounts` is not the whole story — see above. Remove
-what you find: a Google or Samsung account in Settings, and for the Meet/Duo one,
+Read the **`Accounts:` count at the top** — see above for why that line and not the
+`RegisteredServicesCache` list under it. `Accounts: 0` and you are done with this step.
+
+Anything higher: the accounts are named under that line. Remove a Google or Samsung one in
+Settings, and uninstall Meet/Duo rather than removing its account, because it re-adds itself:
 
 ```
 adb shell pm uninstall --user 0 com.google.android.apps.tachyon

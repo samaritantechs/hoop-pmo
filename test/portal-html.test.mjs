@@ -1321,4 +1321,24 @@ test('portal.html: the enrol drawer answers the refusal that still prints ENROLL
   assert.ok(note.includes('<b>result=1 ENROLLED</b>'),
     'and that the line the operator is counting proves nothing here');
   assert.match(note, /Do not ship the handset/, 'the one instruction that matters');
+
+  /* AND IT NAMES THE RIGHT LINE OF THAT OUTPUT.
+     -----------------------------------------------------------------------------------
+     This note first said "read the Account {name= lines". On a CLEAN phone there are none,
+     and the only thing left to read is a twelve-entry RegisteredServicesCache that lists
+     every app capable of making an account -- naming com.google.android.apps.tachyon on a
+     spotless handset. An operator following that instruction reads a ready phone as a dirty
+     one and starts uninstalling. Confirmed on the returned handset: "Accounts: 0" at the top,
+     tachyon still named twelve lines below it.
+
+     So the anchor is the COUNT, which is unambiguous on every phone, and the services list is
+     ruled out by name. */
+  assert.ok(note.includes('Accounts: 0'), 'the count is the line the operator is sent to');
+  assert.match(note, /RegisteredServicesCache/,
+    'and the list that names Meet on a clean phone is ruled out by name');
+  assert.ok(!/Account \{name=/.test(note),
+    'the old anchor is gone: on a clean phone it matches nothing but the services list');
+  // Both halves carry it -- an operator reading only Swahili must not be sent to the old line.
+  assert.match(note, /Soma[\s\S]{0,120}Accounts: 0/, 'Swahili sends them to the count');
+  assert.match(note, /Read the count at the top/, 'and so does the English');
 });
