@@ -1653,6 +1653,22 @@ const FNS = {
         // When this phone joined the register. Drives the "just enrolled" band below, and is
         // epoch ms like every other time on the wire -- never zone-less text.
         enrolledAt: r.enrolled_at ? Date.parse(r.enrolled_at) : null,
+        /* ORDERED LOCKED, AND HAS NEVER ONCE SPOKEN.
+           ---------------------------------------------------------------------------------
+           This is the worst state a row can be in and it used to read as an ordinary pending
+           lock. A pending lock means "told, waiting for it to confirm" -- a phone that will
+           almost certainly report in within the quarter hour. THIS means the handset has
+           never contacted us at all, in its entire life on the register, and a lock ordered
+           against it was never heard by anything.
+
+           It happens when provisioning half-succeeded: the register minted a token, and the
+           broadcast that would have written that token INTO the phone bailed out -- most often
+           because set-device-owner was refused for accounts on the handset. The office then
+           has a row that says `locked` about a phone which is running YouTube.
+
+           `enrol_token is not null` does NOT rule it out, and that is the trap: the token
+           proves the SERVER has an identity for this IMEI, never that the phone received it. */
+        lockedNeverSpoke: K(r.state) === 'LOCKED' && !r.last_seen,
       };
     }).sort((x, y) => {
       /* THE PHONES YOU JUST ADDED COME FIRST.
@@ -1689,6 +1705,9 @@ const FNS = {
         lost: count(r => r.state === 'lost'),
         neverSeen: count(r => r.neverSeen),
         stale: count(r => r.stale && !r.neverSeen),
+        /* The alarm, counted separately from everything else because it is not a category of
+           phone -- it is a category of MISTAKE, and one the office cannot see any other way. */
+        lockedNeverSpoke: count(r => r.lockedNeverSpoke),
       } };
   },
 

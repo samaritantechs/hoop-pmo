@@ -1437,3 +1437,47 @@ test('the ownership refusal names why set-device-owner fails', () => {
     'and the one instruction that would have saved a phone already in the field');
   assert.match(msg, /dpm set-device-owner/, 'the command is still there');
 });
+
+test('a phone ordered locked that has NEVER spoken is counted as an alarm, not as pending', async () => {
+  /* THE STATE THAT COST A HANDSET.
+
+     A pending lock means "told, waiting for it to confirm" -- a phone that will report in
+     within the quarter hour. This is not that. This handset has never contacted us at all, in
+     its whole life on the register, and the lock ordered against it was never heard by
+     anything. It happens when provisioning half-succeeded: the register minted a token and the
+     broadcast that would have written it INTO the phone bailed out, usually because
+     set-device-owner was refused for an account signed in on the handset.
+
+     The office is then looking at a row that says `locked` about a phone running YouTube. One
+     in that state was shipped to a customer before anybody noticed. */
+  const d = fleet([
+    // Ordered locked, never once spoke. The alarm.
+    { imei: 'GHOST', state: 'locked', enrol_token: 'tok-g', state_reason: 'NEW', last_seen: null },
+    // Ordered locked moments ago and simply has not confirmed yet. Ordinary, not an alarm.
+    { imei: 'PENDING', state: 'locked', enrol_token: 'tok-p', reported: 'unlocked',
+      last_seen: new Date(Date.now() - 60000).toISOString() },
+    // Locked and confirmed.
+    { imei: 'REALLY', state: 'locked', enrol_token: 'tok-r', reported: 'locked',
+      last_seen: new Date(Date.now() - 60000).toISOString() },
+  ]);
+  const r = await _FNS.deviceList(d, ADMIN, {});
+  assert.equal(r.counts.lockedNeverSpoke, 1, 'only the one that has never spoken');
+
+  const by = Object.fromEntries(r.rows.map(x => [x.imei, x]));
+  assert.equal(by.GHOST.lockedNeverSpoke, true);
+  assert.equal(by.PENDING.lockedNeverSpoke, false,
+    'a lock waiting on its next beat is NOT this -- conflating them is what hid it');
+  assert.equal(by.REALLY.lockedNeverSpoke, false);
+
+  /* And the trap that made it invisible: the server holding a token proves the REGISTER has an
+     identity for this IMEI, never that the phone received it. */
+  assert.ok(d._dump('devices').find(x => x.imei === 'GHOST').enrol_token,
+    'it has a token server-side and is still not under control');
+});
+
+test('the alarm is not shown when every locked phone has spoken', async () => {
+  const d = fleet([{ imei: 'OK1', state: 'locked', enrol_token: 't', reported: 'locked',
+    last_seen: new Date(Date.now() - 60000).toISOString() }]);
+  const r = await _FNS.deviceList(d, ADMIN, {});
+  assert.equal(r.counts.lockedNeverSpoke, 0);
+});

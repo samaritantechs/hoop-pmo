@@ -1250,8 +1250,10 @@ test('portal.html: the four orders sit ABOVE the table, not under it', () => {
   const actions = pane.indexOf('var actions=');
   const table = pane.indexOf('var table=rows.length');
   assert.ok(actions > 0 && table > actions, 'the bar is built before the table');
-  assert.match(pane, /\+tiles\+bar\+actions\+table\+/,
-    'and composed above it -- tiles, chips, the orders, then the register');
+  /* The guarantee, not the literal: the orders are composed BEFORE the table. The alarm
+     later took a place between them, which must not break this. */
+  const compose = /\+tiles\+bar\+(\w+\+)*actions\+table\+/.exec(pane);
+  assert.ok(compose, 'composed above it -- tiles, chips, the orders, then the register');
 
   // The count travels with them: that number belongs beside the button, not a scroll away.
   const bar = pane.slice(actions, table);
@@ -1263,4 +1265,27 @@ test('portal.html: the four orders sit ABOVE the table, not under it', () => {
   // And nothing was left behind under the table.
   assert.ok(!pane.slice(table).includes('data-dvs="locked"'),
     'no second copy below the table');
+});
+
+test('portal.html: the pane shouts when a phone is ordered locked but never spoke', () => {
+  /* The cost of missing it is a phone shipped to a customer with no lock on it and no way back
+     without the handset in hand. That has already happened once. So it rides above the table,
+     it is red, and it says do not ship them. */
+  const src = read('portal.html');
+  const pane = src.slice(src.indexOf('function devPaint_(m, d, at){'),
+                         src.indexOf('function devVisibleTicks_'));
+  const alarm = pane.slice(pane.indexOf('var alarm='), pane.indexOf('var actions='));
+  assert.ok(alarm.length > 200, 'the alarm is built');
+  assert.match(alarm, /c\.lockedNeverSpoke/, 'off the server count, not a client guess');
+  assert.match(alarm, /class="note bad"/, 'red, because it is not an observation');
+  assert.match(alarm, /NOT locked/, 'it says plainly what these phones are');
+  assert.match(alarm, /Do not ship them/, 'and the one instruction that matters');
+  assert.match(alarm, /id="dvAlarm"/, 'with a way to see exactly which');
+
+  // Above the table, with the orders -- not buried under the register it is warning about.
+  const compose = /\+tiles\+bar\+alarm\+actions\+table\+/.exec(pane);
+  assert.ok(compose, 'composed between the chips and the orders');
+
+  // And it filters rather than re-reading: the rows are already in hand.
+  assert.match(pane, /DEV\.flag='lockedNeverSpoke'; DEV\.filter=''; devPaint_\(m, d, at\)/);
 });

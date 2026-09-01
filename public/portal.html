@@ -2742,6 +2742,30 @@ function devPaint_(m, d, at){
      everything else that ACTS on this pane already lives. The count sits with them, so the
      number of phones about to be affected is beside the button rather than a scroll away --
      which was the whole reason the count exists. */
+  /* THE ALARM: ORDERED LOCKED, NEVER ONCE SPOKEN.
+     =======================================================================================
+     A pending lock means "told, waiting for it to confirm" -- a phone that will report in
+     within the quarter hour. THIS means the handset has never contacted us at all, in its
+     whole life on the register, and the lock ordered against it was never heard by anything.
+
+     It happens when provisioning half-succeeded: the register minted a token, and the
+     broadcast that would have written that token INTO the phone bailed out -- most often
+     because set-device-owner was refused for an account signed in on the handset. The office
+     is then looking at a row that says `locked` about a phone running YouTube.
+
+     It rides ABOVE the table and it is red, because the cost of missing it is a phone shipped
+     to a customer with no lock on it and no way back without the handset in your hands. That
+     has already happened once. It is not a tile: the five tiles partition the fleet and this
+     is not a kind of phone, it is a kind of MISTAKE. */
+  var alarm=(c.lockedNeverSpoke||0) ? '<div class="note bad" style="margin:10px 0">'
+    +'<b>'+money(c.lockedNeverSpoke)+' zimeagizwa kufungwa lakini hazijawahi kuongea kabisa.</b> '
+    +'Hizi HAZIJAFUNGWA — token haikuingia kwenye simu (mara nyingi set-device-owner ilikataliwa '
+    +'kwa sababu ya akaunti kwenye simu). Usizisafirishe. '
+    +'/ <b>'+money(c.lockedNeverSpoke)+' ordered locked, never once spoke.</b> '
+    +'These are NOT locked: the token never reached the handset — usually set-device-owner '
+    +'refused because an account was signed in. Do not ship them. '
+    +'<button class="btn sm danger" id="dvAlarm" style="margin-left:6px">Nionyeshe / Show me</button>'
+    +'</div>' : '';
   var actions=!rows.length ? '' :
     '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;align-items:center">'
     +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
@@ -2826,9 +2850,10 @@ function devPaint_(m, d, at){
     +'<div class="mut" style="margin-bottom:8px">Simu tulizozidhibiti, kwa IMEI. <b>Kuagiza kufunga si sawa na kufungwa</b> — '
     +'simu ikishathibitisha ndipo inasomeka "imefungwa". App ya simu ikiwa bado haijajengwa, zote zitasoma "hajawahi kuongea". '
     +'/ Ordering a lock is not the same as a confirmed lock.</div>'
-    +tiles+bar+actions+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
+    +tiles+bar+alarm+actions+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
   wireTiles(m);
   $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
+  var al=$('#dvAlarm'); if(al) al.onclick=function(){ DEV.flag='lockedNeverSpoke'; DEV.filter=''; devPaint_(m, d, at); };
   var rf=$('#dvRefresh'); if(rf) rf.onclick=function(){ drawDevices(m); };
   var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
   $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
