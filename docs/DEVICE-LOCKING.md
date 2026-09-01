@@ -992,3 +992,36 @@ list** for "asked, nothing set", and the two are handled differently on purpose.
 degrades towards the phone staying as locked as it already is — except the boot window, which
 would degrade towards *opening* a door, so an unreachable settings table means no window at all.
 An unset key still falls through to five minutes.
+
+## The bench bug that looked like a wrong batch
+
+The hub command is one line: **install → set-device-owner → broadcast**. The last two are
+milliseconds apart.
+
+The batch claim used to read the handset's IMEI **before anything had granted
+`READ_PHONE_STATE`** — `harden()` ran only inside `adopt()`, which is *after* a successful
+claim. So a phone being provisioned for the first time could not name itself, the claim failed,
+and the operator was told **"NOT IN THIS BATCH"** about a batch that was perfectly fine.
+
+Running the same command a second time worked, because by then the handset was already Device
+Owner and `onEnabled` had hardened it. The two runs are distinguishable in the terminal output:
+
+```
+Success: Device owner set to package ...        →  result=5  NOT IN THIS BATCH
+... device owner ... is already set             →  result=1  ENROLLED
+```
+
+Same phones, same batch, same APK, minutes apart. It cost a morning, twice, because it looks
+exactly like a mistyped IMEI.
+
+**Fixed in 1.11.2 (versionCode 15):** the claim path calls `LockAdmin.harden()` itself, before
+asking the phone which handset it is. `harden()` is idempotent and returns immediately when we
+are not Device Owner, so it costs nothing on a phone that was already provisioned.
+
+And because the grant is applied by the system rather than by us — and the process this receiver
+runs in was started by the broadcast itself — the very first read can still come back refused on
+a handset that has been Device Owner for a few hundred milliseconds. The read is retried twice,
+600ms apart. That is free: the claim already runs off the main thread under `goAsync()`.
+
+A handset that genuinely cannot read its IMEI still refuses rather than guessing, and now says
+so in those words instead of blaming the batch.

@@ -1367,3 +1367,46 @@ test('the just-enrolled band empties itself by the next morning', async () => {
   assert.deepEqual(r.rows.map(x => x.imei), ['PROBLEM', 'YESTERDAY'],
     'past a day it is just a phone again, and the fleet\'s priorities take over');
 });
+
+test('a brand-new phone enrols on the FIRST run of the hub command', () => {
+  /* THE BENCH BUG THAT LOOKED LIKE A WRONG BATCH.
+
+     The hub command is one line: install, set-device-owner, broadcast. The last two are
+     milliseconds apart, and the claim used to read the handset's IMEI before anything had
+     granted READ_PHONE_STATE -- harden() ran only inside adopt(), which is AFTER a successful
+     claim. So a phone being provisioned for the first time could not name itself, the claim
+     failed, and the operator was told "NOT IN THIS BATCH" about a batch that was fine.
+
+     Running the same command again worked, because by then the handset was already Device
+     Owner and onEnabled had hardened it. Twice in one morning that read as a bad paste:
+
+       Success: Device owner set ...          -> result=5 NOT IN THIS BATCH
+       ... device owner is already set        -> result=1 ENROLLED
+
+     Same phones, same batch, same APK, minutes apart. A documented one-liner that fails on
+     every new phone and succeeds on the retry is not a flow anybody can trust. */
+  const src = fs.readFileSync(new URL(
+    '../android/lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java',
+    import.meta.url), 'utf8');
+
+  const thread = src.slice(src.indexOf('final PendingResult pending = goAsync();'),
+                           src.indexOf('ALREADY ENROLLED'));
+  const harden = thread.indexOf('LockAdmin.harden(c);');
+  const claim = thread.indexOf('Claim c2 = claim(c, theBatch);');
+  assert.ok(harden > 0, 'the claim path grants the permission itself');
+  assert.ok(harden < claim, 'and does it BEFORE asking the phone which handset it is');
+
+  /* The grant is applied by the system, not by us, so the first read can still be refused on a
+     phone that has been Device Owner for a few hundred milliseconds. */
+  const fn = src.slice(src.indexOf('private static Claim claim(Context c, String batch)'),
+                       src.indexOf('private static boolean contains('));
+  assert.match(fn, /tries < 2/, 'the read is retried while the grant lands');
+  assert.match(fn, /Thread\.sleep\(/, 'which is free -- this already runs off the main thread');
+  // And it still refuses rather than guessing when the phone genuinely cannot say.
+  assert.match(fn, /CANNOT READ THIS PHONE'S IMEI/);
+});
+
+test('the first-run enrol fix actually reaches handsets', () => {
+  const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
+  assert.ok(v.versionCode >= 15, 'raised, or SelfUpdate skips it and no bench ever sees it');
+});

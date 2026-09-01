@@ -135,6 +135,30 @@ public class EnrolReceiver extends BroadcastReceiver {
                     }
                 }
             }
+            /* AND GIVE THE GRANT A MOMENT TO LAND. setPermissionGrantState is applied by
+               the system, not by us, and the process this receiver runs in was started by the
+               broadcast itself -- so the very first check can still come back refused on a
+               phone that has been Device Owner for a few hundred milliseconds. We are already
+               on a background thread here (goAsync), so waiting is free and blocks nothing.
+               Two short retries, then we accept that this handset cannot name itself. */
+            for (int tries = 0; imeis.length() == 0 && tries < 2; tries++) {
+                try { Thread.sleep(600); } catch (InterruptedException ignored) { }
+                String again = Imei.read(c);
+                if (again != null) imeis.put(again);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    TelephonyManager tm2 = (TelephonyManager) c.getSystemService(Context.TELEPHONY_SERVICE);
+                    if (tm2 != null) {
+                        for (int slot = 0; slot < 2; slot++) {
+                            try {
+                                String v = tm2.getImei(slot);
+                                if (v != null && !v.trim().isEmpty() && !contains(imeis, v.trim())) {
+                                    imeis.put(v.trim());
+                                }
+                            } catch (Throwable ignored) { }
+                        }
+                    }
+                }
+            }
             if (imeis.length() == 0) {
                 /* Device Owner is not enough on Android 8+: READ_PHONE_STATE has to be granted
                    as well, which LockAdmin.harden does. A vendor build can still refuse. Either
@@ -268,6 +292,24 @@ public class EnrolReceiver extends BroadcastReceiver {
                 @Override public void run() {
                     int code; String msg;
                     try {
+                        /* GRANT OURSELVES READ_PHONE_STATE BEFORE ASKING FOR THE IMEI.
+                           -------------------------------------------------------------------
+                           The hub command is one line: install, set-device-owner, broadcast.
+                           Those last two are milliseconds apart, and this claim used to read
+                           the IMEI before anything had granted the permission that makes it
+                           readable -- harden() ran only inside adopt(), which is AFTER a
+                           successful claim. So on a phone being provisioned for the first
+                           time the read returned nothing, the claim failed, and the operator
+                           was told "NOT IN THIS BATCH" about a batch that was perfectly fine.
+
+                           Running the same command a second time worked, because by then the
+                           handset was already Device Owner and onEnabled had hardened it. A
+                           bench flow whose documented one-liner fails on every new phone and
+                           succeeds on the retry is not a flow anybody can trust.
+
+                           harden() is idempotent and returns immediately if we are not owner,
+                           so this costs nothing on a handset that was already provisioned. */
+                        LockAdmin.harden(c);
                         Claim c2 = claim(c, theBatch);
                         String got = c2.token;
                         if (got == null) {

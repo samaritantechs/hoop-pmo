@@ -1,6 +1,6 @@
 {
-  "versionCode": 14,
-  "versionName": "1.11.1",
-  "notes": "Ujumbe wa kusajili sasa unasema tatizo ni lipi hasa: simu haisomi IMEI yake, au ofisi imekataa, au simu haina mtandao. / The enrol message now names WHICH of the three things went wrong instead of folding them into one sentence.",
+  "versionCode": 15,
+  "versionName": "1.11.2",
+  "notes": "Simu mpya sasa inajisajili mara ya kwanza: ruhusa ya kusoma IMEI inatolewa kabla ya kuomba token, si baada. / A brand-new phone now enrols on the FIRST run of the hub command instead of needing a second one.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
