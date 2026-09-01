@@ -1025,3 +1025,57 @@ a handset that has been Device Owner for a few hundred milliseconds. The read is
 
 A handset that genuinely cannot read its IMEI still refuses rather than guessing, and now says
 so in those words instead of blaming the batch.
+
+## Ordered locked, never once spoken — the alarm
+
+A **pending** lock means "told, waiting for it to confirm": a phone that will report in within
+the quarter hour. This is not that.
+
+A row in this state has **never contacted us at all**, in its whole life on the register, and the
+lock ordered against it was never heard by anything. The office is looking at a row that says
+`locked` about a phone playing YouTube.
+
+### How a phone gets here
+
+Provisioning half-succeeded. The register minted a token, and the broadcast that would have
+written that token **into the phone** bailed out — nearly always because `set-device-owner` was
+refused:
+
+```
+Not allowed to set the device owner because there are already some accounts on the device.
+```
+
+**The trap is the token.** `enrol_token is not null` proves the **server** has an identity for
+that IMEI. It never proves the **phone** received it. A row can carry a token, read `locked`,
+and be a completely uncontrolled handset.
+
+One in this state was shipped to a customer before anybody noticed. There is no remote fix:
+Device Owner is granted over a cable, on a handset with no accounts, and by no other route.
+
+### What the pane does now
+
+A red banner above the table, counted server-side, with a button that filters to exactly those
+rows. It is deliberately **not** a sixth tile — the five tiles partition the fleet, and this is
+not a kind of phone, it is a kind of mistake.
+
+### The account that is easy to miss
+
+`Settings → Accounts` is not always the whole story. One handset refused ownership with a single
+account that never appeared as a Google account:
+
+```
+Account {name=Meet, type=com.google.android.apps.tachyon}
+```
+
+Google Meet/Duo creates its own account. So does Samsung, and so do Outlook and OneDrive. List
+them for certain, rather than trusting the Settings screen:
+
+```
+adb shell dumpsys account | findstr /i "Account {"
+adb shell pm uninstall --user 0 com.google.android.apps.tachyon   # removes that account with it
+```
+
+Then `set-device-owner`, then the enrol broadcast.
+
+**The rule this all reduces to: a phone is not protected until the register shows it has spoken.**
+Not when the terminal says Success — that scrolls past and lies by omission.

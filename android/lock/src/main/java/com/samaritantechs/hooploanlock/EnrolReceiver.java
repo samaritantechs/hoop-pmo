@@ -232,8 +232,23 @@ public class EnrolReceiver extends BroadcastReceiver {
            and answering "already enrolled" there sends the operator looking for the wrong
            problem: what that phone needs is set-device-owner, which this now says. */
         if (!LockAdmin.isOwner(c)) {                              // not provisioned; not ours
-            say(3, "NOT DEVICE OWNER - run this first, then broadcast again: "
-                 + "adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin");
+            /* AND SAY WHY set-device-owner USUALLY FAILS, because "run this first" is useless
+               advice to the operator who just ran it and watched it throw.
+               -------------------------------------------------------------------------------
+               Android refuses Device Owner on any handset that has an account signed in, and
+               says so in a stack trace scrolling past in the same terminal. On the phones this
+               fleet is built from there are usually two -- a Google account and the vendor's
+               own -- and removing only the obvious one still fails.
+
+               This matters more than a wording nit: a phone that never takes ownership CANNOT
+               BE LOCKED, and if it ships in that state there is no way back without the handset
+               in your hands. The message is the last chance to catch it at the bench. */
+            say(3, "NOT DEVICE OWNER - this phone cannot be locked until it is. "
+                 + "set-device-owner is refused while ANY account is signed in (a Google account "
+                 + "and the vendor's own both count): remove every account under Settings > "
+                 + "Accounts, or factory reset and SKIP the sign-in during setup. Then: "
+                 + "adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin "
+                 + "- and do not ship this handset until it shows on the register.");
             return;
         }
 

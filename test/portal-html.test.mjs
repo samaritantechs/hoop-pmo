@@ -1250,8 +1250,10 @@ test('portal.html: the four orders sit ABOVE the table, not under it', () => {
   const actions = pane.indexOf('var actions=');
   const table = pane.indexOf('var table=rows.length');
   assert.ok(actions > 0 && table > actions, 'the bar is built before the table');
-  assert.match(pane, /\+tiles\+bar\+actions\+table\+/,
-    'and composed above it -- tiles, chips, the orders, then the register');
+  /* The guarantee, not the literal: the orders are composed BEFORE the table. The alarm
+     later took a place between them, which must not break this. */
+  const compose = /\+tiles\+bar\+(\w+\+)*actions\+table\+/.exec(pane);
+  assert.ok(compose, 'composed above it -- tiles, chips, the orders, then the register');
 
   // The count travels with them: that number belongs beside the button, not a scroll away.
   const bar = pane.slice(actions, table);
@@ -1263,4 +1265,60 @@ test('portal.html: the four orders sit ABOVE the table, not under it', () => {
   // And nothing was left behind under the table.
   assert.ok(!pane.slice(table).includes('data-dvs="locked"'),
     'no second copy below the table');
+});
+
+test('portal.html: the pane shouts when a phone is ordered locked but never spoke', () => {
+  /* The cost of missing it is a phone shipped to a customer with no lock on it and no way back
+     without the handset in hand. That has already happened once. So it rides above the table,
+     it is red, and it says do not ship them. */
+  const src = read('portal.html');
+  const pane = src.slice(src.indexOf('function devPaint_(m, d, at){'),
+                         src.indexOf('function devVisibleTicks_'));
+  const alarm = pane.slice(pane.indexOf('var alarm='), pane.indexOf('var actions='));
+  assert.ok(alarm.length > 200, 'the alarm is built');
+  assert.match(alarm, /c\.lockedNeverSpoke/, 'off the server count, not a client guess');
+  assert.match(alarm, /class="note bad"/, 'red, because it is not an observation');
+  assert.match(alarm, /NOT locked/, 'it says plainly what these phones are');
+  assert.match(alarm, /Do not ship them/, 'and the one instruction that matters');
+  assert.match(alarm, /id="dvAlarm"/, 'with a way to see exactly which');
+
+  // Above the table, with the orders -- not buried under the register it is warning about.
+  const compose = /\+tiles\+bar\+alarm\+actions\+table\+/.exec(pane);
+  assert.ok(compose, 'composed between the chips and the orders');
+
+  // And it filters rather than re-reading: the rows are already in hand.
+  assert.match(pane, /DEV\.flag='lockedNeverSpoke'; DEV\.filter=''; devPaint_\(m, d, at\)/);
+});
+
+test('portal.html: the enrol drawer answers the refusal that still prints ENROLLED', () => {
+  /* The alarm above catches these phones AFTER the bench has packed up. This is the same
+     failure caught while the cable is still in: set-device-owner refused for an account that
+     Settings does not show, the enrol broadcast that follows answering result=1 ENROLLED all
+     the same, because the office minted a token for a phone that never became Device Owner.
+     There is no remote cure for one that ships in that state, so the note has to name the
+     refusal, both commands, and the fact that ENROLLED is not proof of anything. */
+  const src = read('portal.html');
+  const fn = src.slice(src.indexOf('function devProvision('),
+                       src.indexOf('$(\'#dvTokDone\').onclick'));
+
+  /* Between the count sentence and the Done button -- OUTSIDE both one-vs-many ternaries.
+     Inside the batch card it would be invisible on a single-phone bench, which is exactly
+     where the two ruined handsets were enrolled. */
+  const tail = fn.slice(fn.indexOf('before you unplug the hub.'), fn.indexOf('id="dvTokDone"'));
+  assert.ok(!/\+\(one/.test(tail), 'nothing conditional may wrap it');
+  const note = tail.slice(tail.indexOf('<div class="note bad"'));
+  assert.ok(note.length > 400, 'the note is built, in both languages');
+  assert.ok(note.includes('HAIJAFUNGWA'), 'and the Swahili half says it is not locked');
+
+  // Both commands whole. A placeholder on either line gets pasted into cmd exactly as written.
+  assert.ok(note.includes('>adb shell dumpsys account</div>'),
+    'the command that lists the accounts Settings hides');
+  assert.ok(note.includes('adb shell pm uninstall --user 0 com.google.android.apps.tachyon</div>'),
+    'and the one that removes the account that actually causes this');
+
+  // The trap named: a green line on the screen is not a locked phone.
+  assert.ok(note.includes('<b>NOT locked</b>'), 'it says plainly what the handset is');
+  assert.ok(note.includes('<b>result=1 ENROLLED</b>'),
+    'and that the line the operator is counting proves nothing here');
+  assert.match(note, /Do not ship the handset/, 'the one instruction that matters');
 });

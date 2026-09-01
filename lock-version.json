@@ -1,6 +1,6 @@
 {
-  "versionCode": 15,
-  "versionName": "1.11.2",
-  "notes": "Simu mpya sasa inajisajili mara ya kwanza: ruhusa ya kusoma IMEI inatolewa kabla ya kuomba token, si baada. / A brand-new phone now enrols on the FIRST run of the hub command instead of needing a second one.",
+  "versionCode": 16,
+  "versionName": "1.11.3",
+  "notes": "Ujumbe wa \"NOT DEVICE OWNER\" sasa unasema sababu: akaunti zipo kwenye simu. / The \"not device owner\" message now names the reason -- accounts signed in on the handset -- and warns not to ship a phone that never took ownership.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

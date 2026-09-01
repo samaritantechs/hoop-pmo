@@ -2742,6 +2742,30 @@ function devPaint_(m, d, at){
      everything else that ACTS on this pane already lives. The count sits with them, so the
      number of phones about to be affected is beside the button rather than a scroll away --
      which was the whole reason the count exists. */
+  /* THE ALARM: ORDERED LOCKED, NEVER ONCE SPOKEN.
+     =======================================================================================
+     A pending lock means "told, waiting for it to confirm" -- a phone that will report in
+     within the quarter hour. THIS means the handset has never contacted us at all, in its
+     whole life on the register, and the lock ordered against it was never heard by anything.
+
+     It happens when provisioning half-succeeded: the register minted a token, and the
+     broadcast that would have written that token INTO the phone bailed out -- most often
+     because set-device-owner was refused for an account signed in on the handset. The office
+     is then looking at a row that says `locked` about a phone running YouTube.
+
+     It rides ABOVE the table and it is red, because the cost of missing it is a phone shipped
+     to a customer with no lock on it and no way back without the handset in your hands. That
+     has already happened once. It is not a tile: the five tiles partition the fleet and this
+     is not a kind of phone, it is a kind of MISTAKE. */
+  var alarm=(c.lockedNeverSpoke||0) ? '<div class="note bad" style="margin:10px 0">'
+    +'<b>'+money(c.lockedNeverSpoke)+' zimeagizwa kufungwa lakini hazijawahi kuongea kabisa.</b> '
+    +'Hizi HAZIJAFUNGWA — token haikuingia kwenye simu (mara nyingi set-device-owner ilikataliwa '
+    +'kwa sababu ya akaunti kwenye simu). Usizisafirishe. '
+    +'/ <b>'+money(c.lockedNeverSpoke)+' ordered locked, never once spoke.</b> '
+    +'These are NOT locked: the token never reached the handset — usually set-device-owner '
+    +'refused because an account was signed in. Do not ship them. '
+    +'<button class="btn sm danger" id="dvAlarm" style="margin-left:6px">Nionyeshe / Show me</button>'
+    +'</div>' : '';
   var actions=!rows.length ? '' :
     '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;align-items:center">'
     +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
@@ -2826,9 +2850,10 @@ function devPaint_(m, d, at){
     +'<div class="mut" style="margin-bottom:8px">Simu tulizozidhibiti, kwa IMEI. <b>Kuagiza kufunga si sawa na kufungwa</b> — '
     +'simu ikishathibitisha ndipo inasomeka "imefungwa". App ya simu ikiwa bado haijajengwa, zote zitasoma "hajawahi kuongea". '
     +'/ Ordering a lock is not the same as a confirmed lock.</div>'
-    +tiles+bar+actions+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
+    +tiles+bar+alarm+actions+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
   wireTiles(m);
   $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
+  var al=$('#dvAlarm'); if(al) al.onclick=function(){ DEV.flag='lockedNeverSpoke'; DEV.filter=''; devPaint_(m, d, at); };
   var rf=$('#dvRefresh'); if(rf) rf.onclick=function(){ drawDevices(m); };
   var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
   $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
@@ -3308,6 +3333,32 @@ function devProvision(m, r){
         +'<b>result=1 … ENROLLED</b>, one per phone — not just the last. Fewer than that means '
         +'some phone did not enrol; check the register before you unplug the hub.')
     +'</div>'
+    /* THE ONE FAILURE THAT LOOKS LIKE SUCCESS, ANSWERED AT THE BENCH.
+       =====================================================================================
+       set-device-owner is refused when ANY account is on the handset -- and the account that
+       does it is routinely one nobody can see: Settings -> Accounts showed a clean phone while
+       dumpsys listed Account {name=Meet, type=com.google.android.apps.tachyon}. The enrol
+       broadcast that follows still answers result=1 ENROLLED, because the SERVER minted a
+       token; the phone simply never became Device Owner and can never be locked. Two handsets
+       reached the register that way and one of them shipped. There is no remote cure -- Android
+       will not grant Device Owner over the air, to a phone with accounts, ever -- so the cure
+       has to be here, on the screen the operator is already reading when the count comes up
+       short. The register's alarm catches the ones that slip past; this stops them slipping. */
+    +'<div class="note bad" style="margin-top:10px;font-size:12px">'
+    +'<b>Ikikataa: "there are already some accounts on the device"</b> — simu hiyo '
+    +'<b>HAIJAFUNGWA</b>, hata kama register inaonyesha imeandikishwa. Akaunti nyingine '
+    +'hazionekani kwenye Settings &rarr; Accounts. Ziorodheshe kwa uhakika:'
+    +'<div class="code" style="margin:4px 0;font-size:11px">adb shell dumpsys account</div>'
+    +'Tafuta mistari ya <b>Account {name=</b>. Ikiwa ni <b>Meet / Duo</b>, iondoe:'
+    +'<div class="code" style="margin:4px 0;font-size:11px">'
+    +'adb shell pm uninstall --user 0 com.google.android.apps.tachyon</div>'
+    +'Kisha rudia amri hiyo hiyo. / <b>If set-device-owner is refused</b> with "there are '
+    +'already some accounts on the device", that handset is <b>NOT locked</b> even though the '
+    +'next line may still say <b>result=1 ENROLLED</b> — the office minted a token, the phone '
+    +'never became Device Owner. Accounts do not all show under Settings &rarr; Accounts, so '
+    +'list them for certain with the first command and read the <b>Account {name=</b> lines. '
+    +'Meet/Duo is the usual culprit; remove it with the second and run the same command again. '
+    +'<b>Do not ship the handset until the register stops calling it never-spoke.</b></div>'
     +'<button class="btn w ghost" id="dvTokDone" style="margin-top:6px">Nimemaliza / Done</button>');
   if($('#dvAdbCopy')) $('#dvAdbCopy').onclick=function(){ devCopyBox('dvAdb'); };
   if($('#dvHubCopy')) $('#dvHubCopy').onclick=function(){ devCopyBox('dvHub'); };
