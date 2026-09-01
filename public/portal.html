@@ -2728,6 +2728,32 @@ function devPaint_(m, d, at){
     if(DEV.flag==='stale') return r.stale===true && r.neverSeen!==true;
     return r[DEV.flag]===true;
   });
+  /* THE FOUR ORDERS, ABOVE THE TABLE RATHER THAN UNDER IT.
+     =======================================================================================
+       "These buttons are so important but giving me headeche to find them on bottom ...
+        put them on top of the table"
+
+     They sat at the foot of the table because that is where a selection ENDS -- you tick your
+     way down and the buttons are waiting. That reasoning holds for twenty rows and collapses
+     for four hundred: the operator ticks a row near the top and then scrolls through the whole
+     register to reach the thing that acts on it, with the tick out of sight the entire way.
+
+     Above the table they are always on screen, next to the tiles and the chips, which is where
+     everything else that ACTS on this pane already lives. The count sits with them, so the
+     number of phones about to be affected is beside the button rather than a scroll away --
+     which was the whole reason the count exists. */
+  var actions=!rows.length ? '' :
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;align-items:center">'
+    +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
+    /* A view-only code cannot change a device, and every one of these buttons answered that
+       with a 403 the operator had to press to discover. Permission is decided in one place on
+       the server; this only stops offering what it will refuse. */
+    +(BOOT.readOnly ? '<span class="mut" style="font-size:11px">View-only — huwezi kubadilisha hali. / no state changes from this code.</span>'
+      : '<button class="btn sm danger" data-dvs="locked">Funga / Lock</button>'
+      +'<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
+      +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'
+      +'<button class="btn sm ghost" data-dvs="lost">Imepotea / Write off</button>')
+    +'</div>';
   var table=rows.length
     ? '<div class="scroll"><table><thead><tr>'
       +'<th class="noxl"><input type="checkbox" id="dvAll" title="Chagua zote zinazoonekana / select all shown"></th>'
@@ -2788,17 +2814,6 @@ function devPaint_(m, d, at){
           +'/ Showing '+money((d.rows||[]).length)+' of '+money(d.total)
           +' — the tiles count them all; narrow with the filters above.</div>'
         : '')
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">'
-      +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
-      /* A view-only code cannot change a device, and every one of these buttons answered
-         that with a 403 the operator had to press to discover. Permission is decided in
-         one place on the server; this only stops offering what it will refuse. */
-      +(BOOT.readOnly ? '<span class="mut" style="font-size:11px">View-only — huwezi kubadilisha hali. / no state changes from this code.</span>'
-        : '<button class="btn sm danger" data-dvs="locked">Funga / Lock</button>'
-        +'<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
-        +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'
-        +'<button class="btn sm ghost" data-dvs="lost">Imepotea / Write off</button>')
-      +'</div>'
     : (d.notReady
       /* NOT THE SAME THING as an empty register, and it must not read like one: nobody
          would ever guess from "no devices yet" that the answer is to run a SQL file. */
@@ -2811,7 +2826,7 @@ function devPaint_(m, d, at){
     +'<div class="mut" style="margin-bottom:8px">Simu tulizozidhibiti, kwa IMEI. <b>Kuagiza kufunga si sawa na kufungwa</b> — '
     +'simu ikishathibitisha ndipo inasomeka "imefungwa". App ya simu ikiwa bado haijajengwa, zote zitasoma "hajawahi kuongea". '
     +'/ Ordering a lock is not the same as a confirmed lock.</div>'
-    +tiles+bar+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
+    +tiles+bar+actions+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
   wireTiles(m);
   $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
   var rf=$('#dvRefresh'); if(rf) rf.onclick=function(){ drawDevices(m); };

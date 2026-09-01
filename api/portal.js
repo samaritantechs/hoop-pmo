@@ -221,6 +221,11 @@ const ADV_LEADER_NOT_READY = 'Kibali cha kiongozi hakijawekwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-08-31-advance-leader.sql kwenye Supabase, kisha weka alama ya '
   + 'Kiongozi kwenye misimbo inayoongoza idara. / The leader switch does not exist yet — run '
   + 'that migration, then tick Kiongozi on the codes that lead a department.';
+/* How long a phone counts as "just enrolled" and rides at the top of the register. A day,
+   because that is the length of a bench session and the life of an enrol batch -- so the band
+   empties itself by the next morning with nothing to switch off. */
+const FRESH_ENROL_MS = 24 * 60 * 60 * 1000;
+
 const SUSPEND_NOT_READY = 'Kusimamisha mtu hakujawekwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-08-31-access-suspend.sql kwenye Supabase, kisha rudi hapa. '
   + '/ The suspension window does not exist yet -- run that migration, then come back.';
@@ -1645,10 +1650,33 @@ const FNS = {
         lng: r.last_lng == null ? null : Number(r.last_lng),
         locAcc: r.last_loc_acc == null ? null : Number(r.last_loc_acc),
         locAt: r.last_loc_at ? Date.parse(r.last_loc_at) : null,
+        // When this phone joined the register. Drives the "just enrolled" band below, and is
+        // epoch ms like every other time on the wire -- never zone-less text.
+        enrolledAt: r.enrolled_at ? Date.parse(r.enrolled_at) : null,
       };
     }).sort((x, y) => {
+      /* THE PHONES YOU JUST ADDED COME FIRST.
+         -----------------------------------------------------------------------------------
+           "all recent added imeis should be on top so that i dont hustle finding them"
+
+         The ordering below is deliberate and stays: a written-off phone, then a lock nobody
+         has confirmed, then silence -- problems before routine, so the register opens on what
+         needs somebody. That is right for a fleet at rest and useless at the bench, where the
+         phones that matter are the ones plugged in five minutes ago and the sort buries them
+         among four hundred others by IMEI.
+
+         So a band on top, and it is a BAND rather than a new sort: anything enrolled in the
+         last day floats up, newest first, and everything else keeps the order it always had.
+         A day because that is what a bench session is, and it matches the batch's own life --
+         by tomorrow morning these are just phones and the fleet's own priorities take over
+         again, with nothing to switch off and nothing to remember. */
+      const justAdded = d => (d.enrolledAt && (now - d.enrolledAt) < FRESH_ENROL_MS) ? 0 : 1;
       const rank = d => (d.state === 'lost' ? 0 : d.state === 'locked' && d.lockState === 'pending' ? 1
         : d.stale ? 2 : d.state === 'locked' ? 3 : 4);
+      const fx = justAdded(x), fy = justAdded(y);
+      if (fx !== fy) return fx - fy;
+      // Newest first WITHIN the fresh band; below it, the fleet's own order is untouched.
+      if (fx === 0 && x.enrolledAt !== y.enrolledAt) return y.enrolledAt - x.enrolledAt;
       return rank(x) - rank(y) || String(x.imei).localeCompare(String(y.imei));
     });
     const count = f => out.filter(f).length;

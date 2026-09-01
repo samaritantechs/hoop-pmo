@@ -448,3 +448,39 @@ phone the operator is still deciding about.
 **The bulk bar is untouched** — this is a second way in, not a replacement. A hub of twenty
 phones is still one tick-all and one press, which is the flow the multi-enrol work exists to
 serve.
+
+---
+
+## 12. The orders moved above the table, and new phones float to the top
+
+> "These buttons are so important but giving me headeche to find them on bottom
+> (Zilizochaguliwa / Funga / Fungua / Achia / Imepotea) — put them on top of the table and all
+> recent added imeis should be on top so that i dont hustle finding them"
+
+### The four orders now sit above the register
+
+They were at the foot because that is where a selection *ends* — you tick your way down the rows
+and the buttons are waiting. That reasoning holds for twenty rows and collapses for four hundred:
+the operator ticks a row near the top, then scrolls the whole register to reach the thing that
+acts on it, with the tick out of sight the entire way.
+
+Above the table they are always on screen, beside the tiles and the chips — which is where
+everything else that *acts* on this pane already lives. **The count moved with them**, because a
+number that tells you how many phones are about to go dark belongs next to the button, not a
+scroll away; that was the whole reason it exists.
+
+Nothing is left under the table, and a test asserts there is no second copy.
+
+### Phones enrolled today ride on top
+
+The existing order is deliberate and **stays**: written off, then a lock nobody has confirmed,
+then silence — problems before routine, so the register opens on whatever needs a person. That
+is right for a fleet at rest and useless at a bench, where the phones that matter are the ones
+plugged in five minutes ago, and the sort buried them among hundreds by IMEI.
+
+So a **band**, not a new sort. Anything enrolled in the last **24 hours** floats to the top,
+newest first. Everything below keeps exactly the order it always had.
+
+A day, because that is the length of a bench session and the life of an enrol batch — so by the
+next morning these are just phones again and the fleet's own priorities take over, with nothing
+to switch off and nothing to remember.

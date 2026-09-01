@@ -1317,3 +1317,53 @@ test('a settings hiccup cannot take the fleet dark for the sake of the boot wind
   assert.equal(r.command, 'lock', 'the beat still answers, which is what keeps the fleet reachable');
   assert.equal(r.bootGraceMinutes, 0, 'and the window simply does not open');
 });
+
+test('the phones you just added come first, and the fleet keeps its own order below', async () => {
+  /* "all recent added imeis should be on top so that i dont hustle finding them"
+
+     The ordering below the band is deliberate and stays: written off, then a lock nobody has
+     confirmed, then silence -- problems before routine, so the register opens on what needs
+     somebody. Right for a fleet at rest, useless at the bench, where the phones that matter
+     are the ones plugged in five minutes ago. */
+  /* deviceList reads the wall clock (`Date.now()`), not the fixed NOW these tests usually
+     pin, so the fixtures are relative to the real one -- otherwise every row would be a month
+     stale and nothing would be in the band at all. */
+  const t = Date.now();
+  const old = new Date(t - 30 * 24 * 3600000).toISOString();
+  const d = fleet([
+    // Settled fleet, deliberately in the wrong order to prove the rank still decides below.
+    { imei: 'OLD-OK', state: 'enrolled', enrol_token: 'a', enrolled_at: old,
+      last_seen: new Date(t).toISOString(), reported: 'unlocked' },
+    { imei: 'OLD-LOST', state: 'lost', enrol_token: 'b', enrolled_at: old,
+      last_seen: new Date(t).toISOString() },
+    // Two enrolled at the bench, an hour apart.
+    { imei: 'BENCH-1', state: 'enrolled', enrol_token: 'c',
+      enrolled_at: new Date(t - 2 * 3600000).toISOString() },
+    { imei: 'BENCH-2', state: 'enrolled', enrol_token: 'd',
+      enrolled_at: new Date(t - 60000).toISOString() },
+  ]);
+  const r = await _FNS.deviceList(d, ADMIN, {});
+  const order = r.rows.map(x => x.imei);
+  assert.deepEqual(order.slice(0, 2), ['BENCH-2', 'BENCH-1'],
+    'both of today\'s phones on top, newest first');
+  assert.deepEqual(order.slice(2), ['OLD-LOST', 'OLD-OK'],
+    'and below them the fleet keeps problems-first, untouched');
+  assert.equal(typeof r.rows[0].enrolledAt, 'number', 'sent as epoch ms, like every other time');
+});
+
+test('the just-enrolled band empties itself by the next morning', async () => {
+  /* A band rather than a new sort, and it expires on its own -- nothing to switch off and
+     nothing to remember. A day, because that is a bench session and the life of a batch. */
+  const t = Date.now();
+  const d = fleet([
+    { imei: 'YESTERDAY', state: 'enrolled', enrol_token: 'a',
+      enrolled_at: new Date(t - 25 * 3600000).toISOString(),
+      last_seen: new Date(t).toISOString(), reported: 'unlocked' },
+    { imei: 'PROBLEM', state: 'lost', enrol_token: 'b',
+      enrolled_at: new Date(t - 40 * 24 * 3600000).toISOString(),
+      last_seen: new Date(t).toISOString() },
+  ]);
+  const r = await _FNS.deviceList(d, ADMIN, {});
+  assert.deepEqual(r.rows.map(x => x.imei), ['PROBLEM', 'YESTERDAY'],
+    'past a day it is just a phone again, and the fleet\'s priorities take over');
+});
