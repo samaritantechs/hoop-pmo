@@ -1235,3 +1235,32 @@ test('portal.html: the bulk bar survives -- this is a second way in, not a repla
   }
   assert.match(pane, />Zilizochaguliwa: <span id="dvCount">/, 'and the count beside them');
 });
+
+test('portal.html: the four orders sit ABOVE the table, not under it', () => {
+  /* "These buttons are so important but giving me headeche to find them on bottom ...
+      put them on top of the table"
+
+     They were at the foot because that is where a selection ENDS -- you tick down the rows and
+     the buttons are waiting. True for twenty rows, false for four hundred: the operator ticks
+     near the top and then scrolls the whole register to reach the thing that acts on it, with
+     the tick out of sight the whole way. */
+  const src = read('portal.html');
+  const pane = src.slice(src.indexOf('function devPaint_(m, d, at){'),
+                         src.indexOf('function devVisibleTicks_'));
+  const actions = pane.indexOf('var actions=');
+  const table = pane.indexOf('var table=rows.length');
+  assert.ok(actions > 0 && table > actions, 'the bar is built before the table');
+  assert.match(pane, /\+tiles\+bar\+actions\+table\+/,
+    'and composed above it -- tiles, chips, the orders, then the register');
+
+  // The count travels with them: that number belongs beside the button, not a scroll away.
+  const bar = pane.slice(actions, table);
+  assert.match(bar, />Zilizochaguliwa: <span id="dvCount">/);
+  for (const s of ['locked', 'enrolled', 'released', 'lost']) {
+    assert.ok(bar.includes('data-dvs="' + s + '"'), s + ' moved up with the rest');
+  }
+  assert.match(bar, /BOOT\.readOnly/, 'still not offered to a view-only code');
+  // And nothing was left behind under the table.
+  assert.ok(!pane.slice(table).includes('data-dvs="locked"'),
+    'no second copy below the table');
+});
