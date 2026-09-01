@@ -29,8 +29,8 @@
 #
 #   tokens.txt -- one phone per line, IMEI then token, from Devices -> + Sajili simu:
 #
-#       351388334583295 0123456789abcdef0123456789abcdef
-#       351388334583296 fedcba9876543210fedcba9876543210
+#       351388334583295 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#       351388334583296 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 #
 # Every phone must already be at the point where `adb devices` lists it as `device` -- the
 # setup wizard skipped, Build number tapped seven times, USB debugging on, and "Allow USB
@@ -89,11 +89,14 @@ if (-not $Token -and -not $TokenFile) {
        .ps1 in PATHEXT, so cd-ing into scripts\ to make the path resolve opens an editor
        instead. Either way the handset is never touched and nothing says why. That is the exact
        failure this script's own header says it exists to remove.
-       The example token is deliberately 0123456789abcdef... -- an obvious specimen rather than
-       something that could be mistaken for a live credential, and the shape the phone now
-       enforces. #>
+       THE SPECIMEN TOKEN IS DELIBERATELY NOT HEX. It was 0123456789abcdef... for one commit,
+       which is the right length AND valid hex -- so it passes the handset's own token check.
+       Pasted from this very usage line it would be ADOPTED, stranding the phone exactly as a
+       real placeholder does. A specimen has to be the right shape to read as a token and the
+       wrong content to ever be one, so it is 32 x's: obvious to a person, refused by the
+       phone. #>
     Fail @"
-usage, one phone:    powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 -Token 0123456789abcdef0123456789abcdef
+usage, one phone:    powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 -Token xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 usage, many phones:  powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 tokens.txt
 
 add -Was THE_TOKEN_IT_HOLDS_NOW to move a phone onto a new token (no factory reset).

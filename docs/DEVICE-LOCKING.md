@@ -105,8 +105,22 @@ given a fallback identity. Enrol it on its own with its per-phone command — ev
 list has its own Copy button.
 
 **The phones need working Wi-Fi**, because each one calls home to claim. USB debugging alone is
-not enough. If the bench network is down every phone answers `NOT IN THIS BATCH`; that is the
-safe failure, not a broken handset. Re-run once the network is back.
+not enough — a cable gives the handset no network of its own.
+
+A phone that cannot reach the office answers **`result=5`** with
+**`CANNOT REACH THE OFFICE from this handset after waiting 30s`**, and the `UnknownHostException`
+in the message is the proof: it never got as far as us. That is the safe failure — nothing is
+written — not a broken handset. Re-run once the network is back.
+
+It does **not** say `NOT IN THIS BATCH`. This page used to claim it did, and that cost a bench
+session: the operator went looking for a bad paste and a stale batch while the actual problem was
+the network. The claim tells its three failures apart on purpose, so read which one you got:
+
+| What it says | What is actually wrong |
+|---|---|
+| `CANNOT REACH THE OFFICE` | this handset has no wifi or data |
+| `THE OFFICE REFUSED THIS PHONE (HTTP 403)` | its IMEI is not in that batch, or the batch is over a day old |
+| `CANNOT READ THIS PHONE'S IMEI` | the handset cannot name itself; the batch is not the problem |
 
 **The batch expires after a day.** It is a bearer secret for the length of a bench session:
 whoever holds it, plus an IMEI that is in it, can obtain that device's token. Enrolling the
@@ -762,7 +776,7 @@ C:\Users\marki>adb install -r "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk"
 Performing Streamed Install
 Success
 
-C:\Users\marki>adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.RELEASE -n com.samaritantechs.hooploanlock/.ReleaseReceiver -e token 0123456789abcdef0123456789abcdef
+C:\Users\marki>adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.RELEASE -n com.samaritantechs.hooploanlock/.ReleaseReceiver -e token xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 Broadcasting: Intent { act=com.samaritantechs.hooploanlock.RELEASE flg=0x400020 cmp=com.samaritantechs.hooploanlock/.ReleaseReceiver (has extras) }
 Broadcast completed: result=1, data="RELEASED - no longer Device Owner..."
 ```
@@ -1189,8 +1203,14 @@ Success: Device owner set to package com.samaritantechs.hooploanlock/.LockAdmin
 Broadcast completed: result=1, data="ENROLLED - reporting in now; ..."
 ```
 
-`result=1` on its own is not enough here — that is the exact pair that lied the first time. The
-line above it must say **Device owner set**, or the phone is in the state it came back in.
+`result=1` on its own is not enough here — that is the exact pair that lied the first time. You
+also need **`Success: Device owner set`** for *this* handset, or the phone is in the state it came
+back in.
+
+Match them by handset, not by position on the screen. On a hub every phone prints its own
+install/ownership/broadcast lines and they interleave, so "the line above" is simply whatever
+scrolled last. With one phone on the cable — which is how a returned handset should be done —
+there is no ambiguity.
 
 **5. Confirm on the register, and that is the only confirmation that counts.** The row must leave
 the never-spoke alarm and show a `last_seen` within the quarter hour. Until it does, the handset

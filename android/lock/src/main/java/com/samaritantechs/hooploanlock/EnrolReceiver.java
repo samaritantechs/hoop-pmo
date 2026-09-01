@@ -485,9 +485,13 @@ public class EnrolReceiver extends BroadcastReceiver {
            the batch path, whose token comes from the register itself. The guard is against
            human input, which is where the danger has always been. */
         if (!looksMinted(token)) {
+            /* The shape is DESCRIBED rather than shown. A printed specimen that is 32 valid
+               hex characters is a token this very check would accept, sitting in the operator's
+               terminal one copy away from being pasted into the next command. */
             say(4, "THAT IS NOT A TOKEN - nothing was written and this phone is UNCHANGED. "
-                 + "A real one is 32 characters, digits and a-f only, like "
-                 + "0123456789abcdef0123456789abcdef. You passed: \"" + shorten(token) + "\". "
+                 + "A real one is exactly 32 characters long, digits and the letters a-f only. "
+                 + "You passed: \"" + shorten(token) + "\", which is "
+                 + token.length() + " characters. "
                  + "If that looks like a placeholder somebody forgot to replace, it is. Do not "
                  + "type tokens at all: open the register, Devices > this phone's row > Token, "
                  + "and it hands you the whole command with the real one already in it.");

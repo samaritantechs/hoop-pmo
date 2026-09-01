@@ -35,8 +35,8 @@
 #   2. Save it as a plain text file, one phone per line, IMEI and token separated by a space
 #      or a comma:
 #
-#         351388334583295 0123456789abcdef0123456789abcdef
-#         351388334583296 fedcba9876543210fedcba9876543210
+#         351388334583295 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#         351388334583296 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 #
 #   3. Get every phone to the point where `adb devices` lists it as `device` (the tapping
 #      above). Then:

@@ -1588,12 +1588,15 @@ test('no live device token is committed anywhere in the repo', () => {
      takes -- so a live one in a file anybody can read is a phone anybody can unlock.
 
      Checked by SHAPE rather than by a list of known-bad strings, because a list only catches
-     the ones somebody remembered to add. Specimen tokens are deliberately built from
-     0123456789abcdef / fedcba9876543210 so they are obvious to a reader and cheap to allow. */
-  const SPECIMEN = new Set([
-    '0123456789abcdef0123456789abcdef',
-    'fedcba9876543210fedcba9876543210',
-  ]);
+     the ones somebody remembered to add.
+
+     AND THE RULE IS ABSOLUTE: no 32-hex string at all, not even a specimen. The first fix here
+     swapped the live tokens for 0123456789abcdef0123456789abcdef -- which is the right length
+     AND valid hex, so it passes the handset's own looksMinted() check. It sat in lock-bench.ps1's
+     usage text on a complete, runnable command line: pasted, the phone would have ADOPTED it and
+     stranded itself exactly as a real placeholder does. A specimen has to be the right shape to
+     read as a token and the wrong content to ever be one, so they are 32 x's and 32 y's. */
+  const SPECIMEN = new Set([]);
   const files = ['../docs/DEVICE-LOCKING.md', '../scripts/lock-bench.ps1',
                  '../scripts/lock-bench.sh', '../scripts/lock-bench.bat',
                  '../public/portal.html', '../README.md'];
@@ -1607,8 +1610,16 @@ test('no live device token is committed anywhere in the repo', () => {
     }
   }
   assert.deepEqual(leaks, [],
-    'a 32-hex string that is not one of the specimens is a live device token: re-mint that '
-    + "phone's token and use a specimen here instead");
+    'a 32-hex string in an operator-facing file is either a live device token or a specimen the '
+    + 'handset would accept as one. Neither belongs here: re-mint that phone\'s token, and write '
+    + 'specimens as 32 x\'s so looksMinted() refuses them');
+
+  // And the specimens really are refused by the same rule the handset applies.
+  const hex32 = s => /^[0-9a-fA-F]{32}$/.test(s);
+  assert.ok(!hex32('x'.repeat(32)) && !hex32('y'.repeat(32)),
+    'the specimens must fail the check, or a pasted usage line strands a handset');
+  assert.ok(hex32('0123456789abcdef0123456789abcdef'),
+    'and the rule is genuinely about hex -- this is what made the old specimen dangerous');
 });
 
 test('the ownership refusal names why set-device-owner fails', () => {
