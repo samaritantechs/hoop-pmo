@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.SystemClock;
 import android.telephony.TelephonyManager;
 
 import org.json.JSONArray;
@@ -114,8 +115,116 @@ public class EnrolReceiver extends BroadcastReceiver {
         Claim(String token, String why) { this.token = token; this.why = why; }
     }
 
+    /**
+     * WAIT FOR THE NETWORK INSTEAD OF FAILING ON THE FIRST DNS MISS.
+     * =====================================================================================
+     *   "the cmd always fail on 1st attempt (return=5) and work on second only"
+     *
+     * Every bulk run went like this, and the second run was not fixing anything -- it was
+     * simply happening a minute later:
+     *
+     *   Success: Device owner set ...
+     *   result=5  "CANNOT REACH THE OFFICE ...
+     *              [java.net.UnknownHostException: Unable to resolve host ...]"
+     *   (run the identical command again)
+     *   result=1  "ENROLLED"
+     *
+     * UnknownHostException is DNS, and DNS on a handset that has this moment been unboxed or
+     * wiped is not ready the instant `adb install` finishes: the wifi it was just joined to is
+     * still associating and being validated. The broadcast fires within a second of the
+     * install, lands inside that window, and we gave up on the very first miss -- so an
+     * operator with nine phones on a hub ran the whole bench twice, every time.
+     *
+     * The office is never asked twice about anything it already answered: a 200, a refusal, a
+     * token-less reply are all final and return immediately. Only a transport failure -- no
+     * DNS, no route, a timeout -- comes back here, and only for as long as the broadcast can
+     * safely be held. A background broadcast has 60 seconds before the system kills the
+     * receiver, so the wait stops well inside that and reports honestly how long it waited.
+     */
+    private static final long NET_WAIT_MS = 30000;
+    private static final long NET_RETRY_MS = 2500;
+
     private static Claim claim(Context c, String batch) {
+        JSONArray imeis = readImeis(c);
+        if (imeis == null || imeis.length() == 0) {
+            /* Device Owner is not enough on Android 8+: READ_PHONE_STATE has to be granted
+               as well, which LockAdmin.harden does. A vendor build can still refuse. Either
+               way this phone cannot name itself, so the batch was never the problem. */
+            return new Claim(null, "CANNOT READ THIS PHONE'S IMEI - so it cannot say which "
+                + "handset it is. The batch is not the problem. Enrol this one on its own "
+                + "with: -e token <its token from the register>.");
+        }
+
+        long start = SystemClock.elapsedRealtime();
+        Throwable last = null;
+        while (true) {
+            try {
+                return post(c, batch, imeis);
+            } catch (Throwable t) {
+                last = t;   // transport only: post() never throws once the office has spoken
+            }
+            if (SystemClock.elapsedRealtime() - start >= NET_WAIT_MS) break;
+            try { Thread.sleep(NET_RETRY_MS); } catch (InterruptedException ignored) { break; }
+        }
+        long waited = (SystemClock.elapsedRealtime() - start) / 1000;
+        /* Never reached the office at all, and not for want of trying. USB does NOT give the
+           handset a network: it needs wifi or data of its own, and on a phone just wiped for
+           the bench there is usually neither. This is the commonest of the three failures and
+           used to read as "not in batch". */
+        return new Claim(null, "CANNOT REACH THE OFFICE from this handset after waiting "
+            + waited + "s - it has no wifi or data (a USB cable does not give it a network). "
+            + "Join it to wifi, watch for the wifi icon, then run the same command again. "
+            + "Nothing was written. [" + last + "]");
+    }
+
+    /** One attempt. Returns an answer for anything the office says; throws if it never spoke. */
+    private static Claim post(Context c, String batch, JSONArray imeis) throws Exception {
         HttpURLConnection conn = null;
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("batch", batch);
+            payload.put("imeis", imeis);
+            JSONObject body = new JSONObject();
+            body.put("fn", "dev_claim");
+            body.put("args", new JSONArray().put(payload));
+
+            conn = (HttpURLConnection) new URL(Prefs.server(c) + "/api/device").openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setConnectTimeout(12000);
+            conn.setReadTimeout(12000);
+            conn.setDoOutput(true);
+            OutputStream os = conn.getOutputStream();
+            os.write(body.toString().getBytes("UTF-8"));
+            os.close();
+            int http = conn.getResponseCode();
+            if (http != 200) {
+                /* The office answered and said no. 403 covers all three of its refusals on
+                   purpose -- this endpoint never explains itself to a handset -- so the message
+                   names them here, where the person reading it is the one at the bench. */
+                return new Claim(null, "THE OFFICE REFUSED THIS PHONE (HTTP " + http + "). Either "
+                    + "its IMEI is not one of the IMEIs that batch was made for, or the batch is "
+                    + "more than a day old. Re-open Sajili simu, paste these IMEIs again, and "
+                    + "copy the fresh command.");
+            }
+            BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line);
+            r.close();
+            String t = new JSONObject(sb.toString()).optString("token", "");
+            if (t.isEmpty()) {
+                return new Claim(null, "THE OFFICE ANSWERED WITHOUT A TOKEN for this handset. "
+                    + "Enrol it on its own with: -e token <its token from the register>.");
+            }
+            return new Claim(t, null);
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    /** Every IMEI this handset will admit to, or null if it cannot name itself at all. */
+    private static JSONArray readImeis(Context c) {
         try {
             JSONArray imeis = new JSONArray();
             String one = Imei.read(c);
@@ -159,61 +268,9 @@ public class EnrolReceiver extends BroadcastReceiver {
                     }
                 }
             }
-            if (imeis.length() == 0) {
-                /* Device Owner is not enough on Android 8+: READ_PHONE_STATE has to be granted
-                   as well, which LockAdmin.harden does. A vendor build can still refuse. Either
-                   way this phone cannot name itself, so the batch was never the problem. */
-                return new Claim(null, "CANNOT READ THIS PHONE'S IMEI - so it cannot say which "
-                    + "handset it is. The batch is not the problem. Enrol this one on its own "
-                    + "with: -e token <its token from the register>.");
-            }
-
-            JSONObject payload = new JSONObject();
-            payload.put("batch", batch);
-            payload.put("imeis", imeis);
-            JSONObject body = new JSONObject();
-            body.put("fn", "dev_claim");
-            body.put("args", new JSONArray().put(payload));
-
-            conn = (HttpURLConnection) new URL(Prefs.server(c) + "/api/device").openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setConnectTimeout(12000);
-            conn.setReadTimeout(12000);
-            conn.setDoOutput(true);
-            OutputStream os = conn.getOutputStream();
-            os.write(body.toString().getBytes("UTF-8"));
-            os.close();
-            int http = conn.getResponseCode();
-            if (http != 200) {
-                /* The office answered and said no. 403 covers all three of its refusals on
-                   purpose -- this endpoint never explains itself to a handset -- so the message
-                   names them here, where the person reading it is the one at the bench. */
-                return new Claim(null, "THE OFFICE REFUSED THIS PHONE (HTTP " + http + "). Either "
-                    + "its IMEI is not one of the IMEIs that batch was made for, or the batch is "
-                    + "more than a day old. Re-open Sajili simu, paste these IMEIs again, and "
-                    + "copy the fresh command.");
-            }
-            BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = r.readLine()) != null) sb.append(line);
-            r.close();
-            String t = new JSONObject(sb.toString()).optString("token", "");
-            if (t.isEmpty()) {
-                return new Claim(null, "THE OFFICE ANSWERED WITHOUT A TOKEN for this handset. "
-                    + "Enrol it on its own with: -e token <its token from the register>.");
-            }
-            return new Claim(t, null);
-        } catch (Throwable t) {
-            /* Never reached the office at all. USB does NOT give the handset a network: it needs
-               wifi or data of its own, and on a phone just wiped for the bench there is usually
-               neither. This is the commonest of the three and used to read as "not in batch". */
-            return new Claim(null, "CANNOT REACH THE OFFICE from this handset - check that it has "
-                + "wifi or data (a USB cable does not give it a network). Nothing was written. "
-                + "[" + t + "]");
-        } finally {
-            if (conn != null) conn.disconnect();
+            return imeis;
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 

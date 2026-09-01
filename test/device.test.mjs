@@ -1398,17 +1398,78 @@ test('a brand-new phone enrols on the FIRST run of the hub command', () => {
 
   /* The grant is applied by the system, not by us, so the first read can still be refused on a
      phone that has been Device Owner for a few hundred milliseconds. */
-  const fn = src.slice(src.indexOf('private static Claim claim(Context c, String batch)'),
-                       src.indexOf('private static boolean contains('));
-  assert.match(fn, /tries < 2/, 'the read is retried while the grant lands');
-  assert.match(fn, /Thread\.sleep\(/, 'which is free -- this already runs off the main thread');
+  const reads = src.slice(src.indexOf('private static JSONArray readImeis(Context c)'),
+                          src.indexOf('private static boolean contains('));
+  assert.match(reads, /tries < 2/, 'the read is retried while the grant lands');
+  assert.match(reads, /Thread\.sleep\(/, 'which is free -- this already runs off the main thread');
   // And it still refuses rather than guessing when the phone genuinely cannot say.
+  const fn = src.slice(src.indexOf('private static Claim claim(Context c, String batch)'),
+                       src.indexOf('/** One attempt.'));
   assert.match(fn, /CANNOT READ THIS PHONE'S IMEI/);
 });
 
 test('the first-run enrol fix actually reaches handsets', () => {
   const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
   assert.ok(v.versionCode >= 15, 'raised, or SelfUpdate skips it and no bench ever sees it');
+});
+
+test('a bench command is not run twice just because the wifi was not up yet', () => {
+  /* THE SECOND RUN WAS NEVER FIXING ANYTHING -- IT WAS JUST HAPPENING A MINUTE LATER.
+     =====================================================================================
+       "the cmd always fail on 1st attempt (return=5) and work on second only"
+
+       Success: Device owner set ...
+       result=5  "CANNOT REACH THE OFFICE ...
+                  [java.net.UnknownHostException: Unable to resolve host ...]"
+       (the identical command again)
+       result=1  "ENROLLED"
+
+     UnknownHostException is DNS, and DNS is not ready the instant `adb install` finishes on a
+     handset whose wifi was joined moments earlier: it is still associating and being
+     validated. The broadcast fires inside that window and we quit on the very first miss, so
+     every bulk bench was run twice. The retry was never fixing state -- it was buying seconds.
+     So the app buys them itself. */
+  const src = fs.readFileSync(new URL(
+    '../android/lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java',
+    import.meta.url), 'utf8');
+
+  const fn = src.slice(src.indexOf('private static Claim claim(Context c, String batch)'),
+                       src.indexOf('/** One attempt.'));
+  assert.match(fn, /return post\(c, batch, imeis\);/, 'one pass of the loop is one attempt');
+  assert.match(fn, /SystemClock\.elapsedRealtime\(\) - start >= NET_WAIT_MS\) break;/,
+    'bounded by the wall clock, not by a count of attempts');
+  assert.match(fn, /Thread\.sleep\(NET_RETRY_MS\)/, 'with a pause between them');
+
+  /* AND ONLY FOR A FAILURE THAT MEANS THE OFFICE NEVER SPOKE. A refusal is an answer: asking
+     again cannot turn a stale batch or a wrong IMEI into a right one, and hammering it would
+     turn a clear message into a 30-second hang before the same message. */
+  const post = src.slice(src.indexOf('private static Claim post('),
+                         src.indexOf('private static JSONArray readImeis('));
+  assert.ok(!/NET_WAIT_MS|NET_RETRY_MS|Thread\.sleep/.test(post),
+    'post makes exactly one attempt and leaves the waiting to its caller');
+  assert.match(post, /if \(http != 200\) \{[\s\S]{0,700}?return new Claim\(null,/,
+    'the office refusing is returned at once, never retried');
+  assert.match(post, /if \(t\.isEmpty\(\)\) \{[\s\S]{0,400}?return new Claim\(null,/,
+    'so is a reply that carried no token');
+
+  /* THE BUDGET, and it is not a style point. A background broadcast is killed at 60 seconds,
+     and a killed receiver prints "result=0" with no data -- which reads exactly like success
+     and is strictly worse than the failure this fixes. Worst case is the last attempt starting
+     just under the deadline and then spending its full connect + read timeouts. */
+  const wait = Number(/NET_WAIT_MS = (\d+)/.exec(src)[1]);
+  const connect = Number(/setConnectTimeout\((\d+)\)/.exec(src)[1]);
+  const readMs = Number(/setReadTimeout\((\d+)\)/.exec(src)[1]);
+  assert.ok(wait >= 20000, 'long enough for a fresh handset to associate and validate');
+  assert.ok(wait + connect + readMs < 60000,
+    'and short enough that the broadcast is never killed mid-claim');
+
+  // The operator is told it waited, so "this one has no wifi" is a finding and not a guess.
+  assert.match(fn, /after waiting "\s*\+ waited \+ "s/,
+    'the message reports how long it actually waited');
+
+  // And the fix only counts if a bench can install it.
+  const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
+  assert.ok(v.versionCode >= 17, 'raised, or SelfUpdate skips the build that carries this');
 });
 
 test('the ownership refusal names why set-device-owner fails', () => {
