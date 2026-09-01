@@ -1202,8 +1202,15 @@ test('a batch claim happens off the main thread and can never invent an identity
   /* BOTH SIM SLOTS. A dual-SIM handset has two IMEIs and which one the stock report wrote
      down is a coin toss -- Imei.java has said so from the start. */
   assert.match(enrol, /getImei\(slot\)/, 'both slots must be offered, or dual-SIM phones drop out');
-  assert.match(enrol, /if \(imeis\.length\(\) == 0\) return null;/,
+  /* The guarantee, not the literal: a phone that read no IMEI hands back a Claim carrying NO
+     token. It used to be `return null` and now carries a reason as well -- what must never
+     change is that nothing downstream can get an identity out of this branch. */
+  const noImei = enrol.slice(enrol.indexOf('if (imeis.length() == 0)'),
+                             enrol.indexOf('JSONObject payload'));
+  assert.ok(noImei.length > 20 && noImei.length < 700, 'the zero-IMEI branch is where it refuses');
+  assert.match(noImei, /return new Claim\(null,/,
     'a handset that cannot read any IMEI must refuse, not guess');
+  assert.ok(!/return new Claim\([^n]/.test(noImei), 'and it can never hand back a token');
 
   // The single-phone path is untouched and still the fallback the message points at.
   assert.match(enrol, /-e token <its token from the register>/,

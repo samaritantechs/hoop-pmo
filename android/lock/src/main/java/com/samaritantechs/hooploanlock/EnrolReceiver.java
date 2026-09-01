@@ -92,12 +92,29 @@ public class EnrolReceiver extends BroadcastReceiver {
     /**
      * Ask the office which token belongs to THIS handset, given a batch every phone shares.
      *
-     * Returns the token, or null for every kind of failure there is -- no IMEI readable, not in
-     * the batch, batch expired, office unreachable. The caller writes nothing on a null, which
-     * is the property that matters: a handset that cannot prove which phone it is must end up
-     * with no identity rather than with somebody else's.
+     * The caller writes nothing unless a token comes back, which is the property that matters:
+     * a handset that cannot prove which phone it is must end up with NO identity rather than
+     * with somebody else's.
+     *
+     * WHY IT FAILED TRAVELS WITH THE ANSWER. This returned a bare String, and null stood for
+     * every kind of failure there is -- three completely different bench problems folded into
+     * one sentence the operator could not act on:
+     *
+     *   the phone cannot read its own IMEI     a permission or vendor problem on THAT handset
+     *   the office said no                     the wrong IMEIs pasted, or a batch gone stale
+     *   the office could not be reached        this phone has no wifi or data
+     *
+     * The next move is different for each and the message named none of them. That cost a whole
+     * bench cycle to discover, with two phones on a hub reading "NOT IN THIS BATCH" when the
+     * batch was not the problem at all.
      */
-    private static String claim(Context c, String batch) {
+    private static final class Claim {
+        final String token;   // null unless it worked
+        final String why;     // null when it did
+        Claim(String token, String why) { this.token = token; this.why = why; }
+    }
+
+    private static Claim claim(Context c, String batch) {
         HttpURLConnection conn = null;
         try {
             JSONArray imeis = new JSONArray();
@@ -118,7 +135,14 @@ public class EnrolReceiver extends BroadcastReceiver {
                     }
                 }
             }
-            if (imeis.length() == 0) return null;      // cannot say which phone this is
+            if (imeis.length() == 0) {
+                /* Device Owner is not enough on Android 8+: READ_PHONE_STATE has to be granted
+                   as well, which LockAdmin.harden does. A vendor build can still refuse. Either
+                   way this phone cannot name itself, so the batch was never the problem. */
+                return new Claim(null, "CANNOT READ THIS PHONE'S IMEI - so it cannot say which "
+                    + "handset it is. The batch is not the problem. Enrol this one on its own "
+                    + "with: -e token <its token from the register>.");
+            }
 
             JSONObject payload = new JSONObject();
             payload.put("batch", batch);
@@ -136,16 +160,34 @@ public class EnrolReceiver extends BroadcastReceiver {
             OutputStream os = conn.getOutputStream();
             os.write(body.toString().getBytes("UTF-8"));
             os.close();
-            if (conn.getResponseCode() != 200) return null;   // 403 = not in this batch
+            int http = conn.getResponseCode();
+            if (http != 200) {
+                /* The office answered and said no. 403 covers all three of its refusals on
+                   purpose -- this endpoint never explains itself to a handset -- so the message
+                   names them here, where the person reading it is the one at the bench. */
+                return new Claim(null, "THE OFFICE REFUSED THIS PHONE (HTTP " + http + "). Either "
+                    + "its IMEI is not one of the IMEIs that batch was made for, or the batch is "
+                    + "more than a day old. Re-open Sajili simu, paste these IMEIs again, and "
+                    + "copy the fresh command.");
+            }
             BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = r.readLine()) != null) sb.append(line);
             r.close();
             String t = new JSONObject(sb.toString()).optString("token", "");
-            return t.isEmpty() ? null : t;
-        } catch (Throwable ignored) {
-            return null;
+            if (t.isEmpty()) {
+                return new Claim(null, "THE OFFICE ANSWERED WITHOUT A TOKEN for this handset. "
+                    + "Enrol it on its own with: -e token <its token from the register>.");
+            }
+            return new Claim(t, null);
+        } catch (Throwable t) {
+            /* Never reached the office at all. USB does NOT give the handset a network: it needs
+               wifi or data of its own, and on a phone just wiped for the bench there is usually
+               neither. This is the commonest of the three and used to read as "not in batch". */
+            return new Claim(null, "CANNOT REACH THE OFFICE from this handset - check that it has "
+                + "wifi or data (a USB cable does not give it a network). Nothing was written. "
+                + "[" + t + "]");
         } finally {
             if (conn != null) conn.disconnect();
         }
@@ -226,13 +268,12 @@ public class EnrolReceiver extends BroadcastReceiver {
                 @Override public void run() {
                     int code; String msg;
                     try {
-                        String got = claim(c, theBatch);
+                        Claim c2 = claim(c, theBatch);
+                        String got = c2.token;
                         if (got == null) {
+                            // The reason came back with the refusal -- see Claim above.
                             code = 5;
-                            msg = "NOT IN THIS BATCH - this handset's IMEI is not one of the "
-                                + "IMEIs that batch was made for, or the office could not be "
-                                + "reached. NOTHING was written. Enrol it on its own with: "
-                                + "-e token <its token from the register>.";
+                            msg = c2.why + " NOTHING was written.";
                         } else if (!wasFresh && !was.equals(got)) {
                             /* The register handed back a token this phone does not hold. It
                                keeps the one it has: a batch is a convenience, and no
