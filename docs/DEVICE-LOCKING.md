@@ -1079,3 +1079,83 @@ Then `set-device-owner`, then the enrol broadcast.
 
 **The rule this all reduces to: a phone is not protected until the register shows it has spoken.**
 Not when the terminal says Success — that scrolls past and lies by omission.
+
+### Bringing one back — the recovery, step by step
+
+This is the whole process for a handset that got out in this state and has been returned. It was
+written against `351388336892959`, which shipped without Device Owner and has come back.
+
+Nothing on the register needs undoing first. The row already carries this phone's token, and a
+batch hands a **known** IMEI its **existing** token back — the same identity, not a new one. The
+`tayari` chip in the Sajili simu drawer is that fact on the screen.
+
+**1. Decide the state you want it in before you plug it in.** The row says `locked`, so the moment
+this phone enrols it will lock itself on its first beat — the register doing exactly what it was
+told, months late. If the customer is current, press **Fungua** on the row *now*, before step 3.
+If they are in arrears, leave it: locking on the first beat is the outcome you wanted all along.
+
+**2. Clear the accounts, and check rather than trust.**
+
+```
+adb shell dumpsys account
+```
+
+Read the `Account {name=` lines. `Settings → Accounts` is not the whole story — see above. Remove
+what you find: a Google or Samsung account in Settings, and for the Meet/Duo one,
+
+```
+adb shell pm uninstall --user 0 com.google.android.apps.tachyon
+```
+
+If a real signed-in Google account will not come off, factory reset and **skip the sign-in**.
+
+**3. Enrol it.** Portal → Devices → **Sajili simu**, paste the IMEI on its own, copy the hub
+command, run it in `cmd`.
+
+**4. Read both lines, not one.**
+
+```
+Success: Device owner set to package com.samaritantechs.hooploanlock/.LockAdmin
+Broadcast completed: result=1, data="ENROLLED - reporting in now; ..."
+```
+
+`result=1` on its own is not enough here — that is the exact pair that lied the first time. The
+line above it must say **Device owner set**, or the phone is in the state it came back in.
+
+**5. Confirm on the register, and that is the only confirmation that counts.** The row must leave
+the never-spoke alarm and show a `last_seen` within the quarter hour. Until it does, the handset
+is not protected, whatever the terminal said.
+
+## The bench command that always had to be run twice
+
+```
+Success: Device owner set ...
+result=5  "CANNOT REACH THE OFFICE ... [java.net.UnknownHostException:
+           Unable to resolve host "hoop-pmo.vercel.app"]"
+(the identical command again, a minute later)
+result=1  "ENROLLED"
+```
+
+The second run was never fixing anything. `UnknownHostException` is DNS, and DNS is not ready the
+instant `adb install` finishes on a handset whose wifi was joined moments earlier — it is still
+associating and being validated. The broadcast fires inside that window, and the app used to give
+up on the first miss. So every bulk bench was run twice, and the operator learned to expect it.
+
+From **v17** the claim waits: it retries for up to 30 seconds, pausing 2.5s between attempts,
+until the phone can resolve the office. One run enrols the hub.
+
+It waits **only** for a failure that means the office never spoke. A refusal — wrong IMEI, stale
+batch — is an answer, and asking again cannot change it, so those still come back instantly with
+the message they always did. If the 30 seconds run out, the message now says how long it waited,
+which turns "no wifi" from a guess into a finding:
+
+```
+CANNOT REACH THE OFFICE from this handset after waiting 30s - it has no wifi or data
+(a USB cable does not give it a network). Join it to wifi, watch for the wifi icon,
+then run the same command again.
+```
+
+The ceiling is not arbitrary. A background broadcast is killed at 60 seconds, and a killed
+receiver prints `result=0` with no data — which reads exactly like success and is strictly worse
+than the failure this fixes. 30s of waiting plus a last attempt spending its full 12s connect and
+12s read timeouts is 54s, and a test holds that sum under 60.

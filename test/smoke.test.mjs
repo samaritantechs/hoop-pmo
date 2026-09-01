@@ -1205,8 +1205,9 @@ test('a batch claim happens off the main thread and can never invent an identity
   /* The guarantee, not the literal: a phone that read no IMEI hands back a Claim carrying NO
      token. It used to be `return null` and now carries a reason as well -- what must never
      change is that nothing downstream can get an identity out of this branch. */
-  const noImei = enrol.slice(enrol.indexOf('if (imeis.length() == 0)'),
-                             enrol.indexOf('JSONObject payload'));
+  const zero = enrol.indexOf('if (imeis == null || imeis.length() == 0)');
+  assert.ok(zero > 0, 'the claim still branches on a handset that could name no IMEI');
+  const noImei = enrol.slice(zero, enrol.indexOf('SystemClock.elapsedRealtime()'));
   assert.ok(noImei.length > 20 && noImei.length < 700, 'the zero-IMEI branch is where it refuses');
   assert.match(noImei, /return new Claim\(null,/,
     'a handset that cannot read any IMEI must refuse, not guess');
