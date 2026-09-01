@@ -29,8 +29,8 @@
 #
 #   tokens.txt -- one phone per line, IMEI then token, from Devices -> + Sajili simu:
 #
-#       351388334583295 f1b942f3991b43dd8d8f857535a0d468
-#       351388334583296 a2c051e4aa2c54ee9e9f968646b1f579
+#       351388334583295 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#       351388334583296 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 #
 # Every phone must already be at the point where `adb devices` lists it as `device` -- the
 # setup wizard skipped, Build number tapped seven times, USB debugging on, and "Allow USB
@@ -79,13 +79,33 @@ if (-not (Get-Command adb -ErrorAction SilentlyContinue)) {
     Fail "adb not found. Install it first:  winget install --id Google.PlatformTools -e`nThen close this window and open a new one."
 }
 if (-not $Token -and -not $TokenFile) {
+    <# THE INVOCATION WE PRINT IS THE ONE THEY CAN RUN.
+       This said `.\lock-bench.ps1 ...`, which is how you would call it from a PowerShell
+       prompt -- but the only way to SEE this message is to have run the script the way the
+       header and the manual say to, from cmd:
+           powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1
+       so the operator is standing in cmd at the repo root. Pasting `.\lock-bench.ps1` back
+       there answers "is not recognized as an internal or external command" -- and cmd has no
+       .ps1 in PATHEXT, so cd-ing into scripts\ to make the path resolve opens an editor
+       instead. Either way the handset is never touched and nothing says why. That is the exact
+       failure this script's own header says it exists to remove.
+       THE SPECIMEN TOKEN IS DELIBERATELY NOT HEX. It was 0123456789abcdef... for one commit,
+       which is the right length AND valid hex -- so it passes the handset's own token check.
+       Pasted from this very usage line it would be ADOPTED, stranding the phone exactly as a
+       real placeholder does. A specimen has to be the right shape to read as a token and the
+       wrong content to ever be one, so it is 32 x's: obvious to a person, refused by the
+       phone. #>
     Fail @"
-usage, one phone:    .\lock-bench.ps1 -Token f1b942f3991b43dd8d8f857535a0d468
-usage, many phones:  .\lock-bench.ps1 tokens.txt
-add -Was <the token it holds now> to move a phone onto a new token (no factory reset).
+usage, one phone:    powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 -Token xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+usage, many phones:  powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 tokens.txt
+
+add -Was THE_TOKEN_IT_HOLDS_NOW to move a phone onto a new token (no factory reset).
+Tokens come from the register: Devices > that phone's row > Token. Never type one by hand --
+the handset refuses anything that is not 32 hex characters, and a placeholder that DOES get
+through would leave it owned, unreachable and impossible to reset.
 
 to RELEASE a phone the portal cannot reach (unlock it and hand it back):
-                     .\lock-bench.ps1 -Release -Token <that phone's token>
+                     powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 -Release -Token THAT_PHONES_TOKEN
 "@
 }
 if ($TokenFile -and -not (Test-Path $TokenFile)) { Fail "Token file not found: $TokenFile" }
@@ -243,16 +263,34 @@ foreach ($s in $serials) {
 Write-Host "`nenrolled $ok . failed $failed . unmatched $($unmatched.Count)"
 
 if ($unmatched.Count -gt 0) {
-    Write-Host @"
+    <# ONE FINISHED BLOCK PER HANDSET, because we already know every serial.
+       ---------------------------------------------------------------------------------------
+       This printed ONE template carrying `<serial>` and `THAT_PHONES_TOKEN`, and the two
+       placeholders were wrong in different ways:
 
-THE UNMATCHED ONES, one at a time. Read the IMEI off the box, then:
+         <serial>            cmd reads < and > as REDIRECTION, so the line never reaches adb.
+                             cmd answers "The system cannot find the file specified." directly
+                             beneath a line about installing an APK, which reads as a missing
+                             APK -- the one thing certainly present, since this script tests for
+                             it and refuses to start without it.
+         THAT_PHONES_TOKEN   a bare word, so it does NOT error: it RUNS. The handset stores the
+                             literal string as its credential and answers result=1 ENROLLED.
+                             Device Owner, factory reset blocked, every beat 403, no way back.
+                             This fleet has already lost a handset to a placeholder called NEW.
 
-    adb -s <serial> install -r "$Apk"
-    adb -s <serial> shell dpm set-device-owner $admin
-    adb -s <serial> shell am broadcast --include-stopped-packages -a $pkg.ENROL -n $pkg/.EnrolReceiver -e server $Server -e token THAT_PHONES_TOKEN
-
-Serials waiting: $($unmatched -join ' ')
-"@ -ForegroundColor Yellow
+       The serials are sitting in $unmatched, so nothing needs assembling. The token is the one
+       thing this script cannot know for these phones -- so it prints no slot for it at all and
+       sends them to the register, which emits the whole line with the real token in it. #>
+    Write-Host "`nTHE UNMATCHED ONES. These phones did not report an IMEI we hold a token for," -ForegroundColor Yellow
+    Write-Host "so each needs its own from the register. Read the IMEI off the box, open" -ForegroundColor Yellow
+    Write-Host "Devices > that IMEI > Token, and paste the line it hands you -- the token is" -ForegroundColor Yellow
+    Write-Host "already in it. Never type a token by hand.`n" -ForegroundColor Yellow
+    foreach ($s in $unmatched) {
+        Write-Host "  $s -- these two are ready to paste:" -ForegroundColor Yellow
+        Write-Host "    adb -s $s install -r `"$Apk`"" -ForegroundColor Yellow
+        Write-Host "    adb -s $s shell dpm set-device-owner $admin" -ForegroundColor Yellow
+        Write-Host "    then the enrol line from Devices > Token, with  -s $s  added after adb.`n" -ForegroundColor Yellow
+    }
 }
 
 Write-Host @"
