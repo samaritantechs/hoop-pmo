@@ -1472,6 +1472,145 @@ test('a bench command is not run twice just because the wifi was not up yet', ()
   assert.ok(v.versionCode >= 17, 'raised, or SelfUpdate skips the build that carries this');
 });
 
+test('a handset refuses a token that the register could not have minted', () => {
+  /* THE ONE THAT COST A HANDSET, MADE IMPOSSIBLE RATHER THAN DOCUMENTED.
+     =========================================================================================
+     EnrolReceiver accepted ANY non-empty string as a token. docs/DEVICE-LOCKING.md published
+     the enrol line in a COPYABLE block reading `-e token PASTE_THE_TOKEN_HERE`, under the
+     words "one line, pasted once". Pasted whole, that does not error -- it runs:
+
+       adb install -r ...                     Success
+       dpm set-device-owner ...               Success        <- harden() blocks factory reset
+       am broadcast ... -e token PASTE_...    result=1 "ENROLLED"
+
+     and result=1 ENROLLED is the exact line the manual trains the operator to read. The
+     handset is then Device Owner holding a credential the register never minted: every beat
+     403s, so it can never be locked, unlocked or released, and DISALLOW_FACTORY_RESET means
+     it cannot be wiped. No remote way back. This fleet has already lost one to a placeholder
+     called NEW.
+
+     Angle brackets used to be the defence -- cmd reads < and > as redirection, so `<token>`
+     errors instead of running -- and an earlier edit REMOVED them, reading the error as the
+     problem rather than as the safety net. Prose cannot be the guard: one page that forgets
+     costs a phone. So the phone checks for itself, and this test is what keeps it checking. */
+  const src = fs.readFileSync(new URL(
+    '../android/lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java',
+    import.meta.url), 'utf8');
+
+  // The shape is exactly what api/portal.js mints, and that is asserted against the real mint.
+  const api = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  assert.match(api, /const token = \(\) => randomUUID\(\)\.replace\(\/-\/g, ''\)/,
+    'the register mints 32 hex characters -- if this changes, the handset check must change too');
+
+  const guard = src.slice(src.indexOf('private static boolean looksMinted('),
+                          src.indexOf('private static String shorten('));
+  assert.match(guard, /t\.length\(\) != 32/, 'exactly 32 characters, the length of a UUID undashed');
+  assert.match(guard, /ch >= '0' && ch <= '9'/, 'digits');
+  assert.match(guard, /ch >= 'a' && ch <= 'f'/, 'and hex letters -- nothing else may pass');
+
+  /* IT REFUSES BEFORE IT WRITES. The order is the whole point: a check that ran after
+     Prefs.put would document the problem instead of preventing it. */
+  const onRecv = src.slice(src.indexOf('String token = intent.getStringExtra("token");'),
+                           src.indexOf('private static String adopt('));
+  const refuse = onRecv.indexOf('if (!looksMinted(token))');
+  const adopt = onRecv.indexOf('say(1, adopt(');
+  assert.ok(refuse > 0, 'the guard is on the operator-supplied path');
+  assert.ok(refuse < adopt, 'and it refuses BEFORE anything is written to the phone');
+  assert.match(onRecv, /THAT IS NOT A TOKEN[\s\S]{0,120}nothing was written/,
+    'and says plainly that the handset is unchanged');
+  assert.match(onRecv, /looks like a placeholder/,
+    'naming the actual mistake, which is the one an operator can act on');
+
+  /* SCOPE. `current` is proof against what this phone ALREADY holds -- a handset in the field
+     carrying an odd token must still be able to move off it -- and the batch token comes from
+     the register itself. Guarding those would break real phones to no benefit. */
+  assert.ok(!/looksMinted\(proof/.test(src), 'the proof of the old token is not shape-checked');
+  const claim = src.slice(src.indexOf('private static Claim claim(Context c, String batch)'),
+                          src.indexOf('private static JSONArray readImeis('));
+  assert.ok(!/looksMinted/.test(claim), 'nor is the token the register hands back on a batch');
+
+  const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
+  assert.ok(v.versionCode >= 18, 'raised, or no bench ever gets the handset-side guard');
+});
+
+test('nothing an operator can copy carries a bare-word placeholder in the token slot', () => {
+  /* The handset-side guard above is the real fix, and this is the other half: a placeholder
+     that gets as far as being pasted has already wasted a bench cycle even when it is refused.
+
+     WHAT COUNTS AS RUNNABLE, and why this is not a plain grep over the file. The manual has to
+     be able to DESCRIBE the old mistake -- naming `-e token PASTE_THE_TOKEN_HERE` in prose is
+     how a reader learns what nearly cost a handset, and a blunt search forbids the explanation
+     along with the defect. My first version of this test did exactly that and failed on the
+     paragraph warning about it. So it looks only where a person can copy from:
+
+       .md    inside ``` fences
+       .ps1   lines outside # comments and <# ... #> blocks
+       .sh    lines outside # comments and heredoc prose is caught too, being unquoted lines
+       .html  inside the copy boxes -- <div class="code"> and <textarea> */
+  const BARE = /-e token (?:PASTE_THE_TOKEN_HERE|THAT_PHONES_TOKEN|THE_TOKEN_ON_ITS_REGISTER_ROW)/;
+
+  const runnable = (name, text) => {
+    if (name.endsWith('.md')) {
+      return [...text.matchAll(/```[\s\S]*?```/g)].map(m => m[0]).join('\n');
+    }
+    if (name.endsWith('.html')) {
+      return [...text.matchAll(/<div class="code"[^>]*>([\s\S]*?)<\/div>/g)].map(m => m[1])
+        .concat([...text.matchAll(/<textarea[^>]*>([\s\S]*?)<\/textarea>/g)].map(m => m[1]))
+        .join('\n');
+    }
+    // Shell and PowerShell: drop block comments, then every line that is a # comment.
+    return text.replace(/<#[\s\S]*?#>/g, '')
+      .split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
+  };
+
+  for (const f of ['../docs/DEVICE-LOCKING.md', '../scripts/lock-bench.ps1',
+                   '../scripts/lock-bench.sh', '../public/portal.html']) {
+    const text = fs.readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.ok(!BARE.test(runnable(f, text)),
+      f + ': a copyable command carries a bare-word placeholder in the token slot. A bare word '
+      + 'does not error in cmd -- it RUNS, and the handset adopts it. Send them to '
+      + 'Devices > Token instead, which emits the line with the real token in it.');
+  }
+
+  /* And the extractor is not vacuous: the manual really does describe the defect in prose, so
+     a whole-file search still finds it. That difference is the entire point of this test. */
+  const doc = fs.readFileSync(new URL('../docs/DEVICE-LOCKING.md', import.meta.url), 'utf8');
+  assert.ok(/PASTE_THE_TOKEN_HERE/.test(doc),
+    'the manual must keep explaining the placeholder that nearly cost a handset');
+  assert.ok(!BARE.test(runnable('../docs/DEVICE-LOCKING.md', doc)),
+    'while never publishing it anywhere a person can copy from');
+});
+
+test('no live device token is committed anywhere in the repo', () => {
+  /* Two real IMEIs were published in the bench scripts paired with what look exactly like the
+     tokens minted for them, and one of those tokens appeared again in a worked RELEASE
+     transcript in the manual. A token is the phone's whole credential -- it is what Achia
+     takes -- so a live one in a file anybody can read is a phone anybody can unlock.
+
+     Checked by SHAPE rather than by a list of known-bad strings, because a list only catches
+     the ones somebody remembered to add. Specimen tokens are deliberately built from
+     0123456789abcdef / fedcba9876543210 so they are obvious to a reader and cheap to allow. */
+  const SPECIMEN = new Set([
+    '0123456789abcdef0123456789abcdef',
+    'fedcba9876543210fedcba9876543210',
+  ]);
+  const files = ['../docs/DEVICE-LOCKING.md', '../scripts/lock-bench.ps1',
+                 '../scripts/lock-bench.sh', '../scripts/lock-bench.bat',
+                 '../public/portal.html', '../README.md'];
+  const leaks = [];
+  for (const f of files) {
+    let text;
+    try { text = fs.readFileSync(new URL(f, import.meta.url), 'utf8'); }
+    catch { continue; }                       // an optional file is not a failure
+    for (const m of text.matchAll(/\b[0-9a-f]{32}\b/g)) {
+      if (!SPECIMEN.has(m[0])) leaks.push(`${f}: ${m[0].slice(0, 8)}...`);
+    }
+  }
+  assert.deepEqual(leaks, [],
+    'a 32-hex string that is not one of the specimens is a live device token: re-mint that '
+    + "phone's token and use a specimen here instead");
+});
+
 test('the ownership refusal names why set-device-owner fails', () => {
   /* "run this first, then broadcast again: adb shell dpm set-device-owner ..." is useless
      advice to the operator who just ran exactly that and watched it throw:

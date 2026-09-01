@@ -1,6 +1,6 @@
 {
-  "versionCode": 17,
-  "versionName": "1.11.4",
-  "notes": "Simu sasa inasubiri wifi ijiunge badala ya kukata tamaa mara ya kwanza — amri ya hub inaandikisha mara ya KWANZA, siyo ya pili. / The handset now waits up to 30s for its wifi to come up instead of giving up on the first DNS miss, so the hub command enrols on the FIRST run instead of always needing a second.",
+  "versionCode": 18,
+  "versionName": "1.11.5",
+  "notes": "Simu sasa inakataa token isiyo halali (lazima iwe herufi 32) — placeholder haiwezi tena kuandikwa kwenye simu na kuifunga milele. / The handset now refuses any token that is not 32 hex characters, so a placeholder left in a pasted command can no longer be adopted as a credential and strand the phone.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

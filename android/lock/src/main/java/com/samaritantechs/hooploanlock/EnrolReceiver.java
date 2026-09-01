@@ -279,6 +279,34 @@ public class EnrolReceiver extends BroadcastReceiver {
         return false;
     }
 
+    /**
+     * Does this look like something the register minted?
+     *
+     * api/portal.js: `const token = () => randomUUID().replace(/-/g, '')` -- 32 hex characters,
+     * and the comment above it says minted there and nowhere else. Upper case is tolerated
+     * because a person retyping one is not wrong about the shape; it is still compared exactly
+     * against what the office holds, so a wrong case fails later and honestly rather than here.
+     *
+     * Written out by hand rather than as a regex so it can be read at a glance by whoever is
+     * deciding, at a bench, whether to trust it.
+     */
+    private static boolean looksMinted(String t) {
+        if (t == null || t.length() != 32) return false;
+        for (int i = 0; i < 32; i++) {
+            char ch = t.charAt(i);
+            boolean hex = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')
+                       || (ch >= 'A' && ch <= 'F');
+            if (!hex) return false;
+        }
+        return true;
+    }
+
+    /** Echo back what they passed, capped -- naming it is the point, flooding the terminal is not. */
+    private static String shorten(String s) {
+        if (s == null) return "";
+        return s.length() <= 40 ? s : s.substring(0, 40) + "...";
+    }
+
     @Override
     public void onReceive(Context context, Intent intent) {
         Context c = context.getApplicationContext();
@@ -419,6 +447,52 @@ public class EnrolReceiver extends BroadcastReceiver {
             return;
         }
         token = token.trim();
+
+        /* A PLACEHOLDER IS NOT A TOKEN, AND UNTIL NOW THIS PHONE COULD NOT TELL.
+           =================================================================================
+           This accepted ANY non-empty string. So a bench command pasted with its placeholder
+           still in it -- docs/DEVICE-LOCKING.md published exactly that, `-e token
+           PASTE_THE_TOKEN_HERE`, inside a copyable block introduced by "one line, pasted
+           once" -- did not error. It ran:
+
+             adb install -r ...                     Success
+             dpm set-device-owner ...              Success   <- harden() blocks factory reset
+             the ENROL broadcast, token PASTE_...  result=1, "ENROLLED"
+
+           (written out like that rather than as a real command line on purpose: a test holds
+           every written enrol broadcast in this repo to carrying --include-stopped-packages,
+           and a sketch in a comment should not be able to look like the thing it describes.)
+
+           result=1 ENROLLED is the exact line the manual tells the operator to read. The
+           handset is then Device Owner carrying a credential the register never minted: every
+           beat 403s, so it can never be locked, unlocked or released, and DISALLOW_FACTORY_RESET
+           means it cannot be wiped either. There is no remote way back. This repo has already
+           lost a handset to a placeholder, one called NEW.
+
+           Angle brackets were the old defence -- cmd treats < and > as redirection, so
+           `<token>` errors instead of running. That is exactly why they work, and it is also
+           why an earlier edit REMOVED them: it read the error as the problem rather than as the
+           safety net. Either way, documentation cannot be the guard. It only takes one page
+           that forgets, and the cost of that page is a handset. The phone can prove it itself.
+
+           WHAT A REAL TOKEN IS: api/portal.js mints it as randomUUID() with the dashes taken
+           out -- "ONE TOKEN PER PHONE, minted here and nowhere else" -- so it is always 32 hex
+           characters. Nothing an operator could leave in that slot looks like that.
+
+           SCOPE, deliberately narrow. This checks the token an operator HANDS us. It does not
+           touch `current` (compared against what this phone already holds, and a handset in the
+           field carrying an odd token must still be able to move off it), and it does not touch
+           the batch path, whose token comes from the register itself. The guard is against
+           human input, which is where the danger has always been. */
+        if (!looksMinted(token)) {
+            say(4, "THAT IS NOT A TOKEN - nothing was written and this phone is UNCHANGED. "
+                 + "A real one is 32 characters, digits and a-f only, like "
+                 + "0123456789abcdef0123456789abcdef. You passed: \"" + shorten(token) + "\". "
+                 + "If that looks like a placeholder somebody forgot to replace, it is. Do not "
+                 + "type tokens at all: open the register, Devices > this phone's row > Token, "
+                 + "and it hands you the whole command with the real one already in it.");
+            return;
+        }
 
         // Compared directly rather than through a `same` flag: that flag now lives in adopt(),
         // which is the only place that needs to phrase the outcome.

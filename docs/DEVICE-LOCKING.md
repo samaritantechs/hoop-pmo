@@ -147,20 +147,41 @@ real session:
 - `\` is a **bash** line continuation. In `cmd.exe` it is not a continuation at all, so the
   first line runs on its own, truncated, and the rest arrive as separate broken commands.
   (`^` is cmd's continuation. Simpler still: don't wrap.)
-- `<that phone's token>` — `<` and `>` are **redirection** in cmd. Pasting a placeholder in
-  angle brackets does not read as "fill this in", it errors.
 - `public/HOOPLOAN-Lock.apk` is a path inside this repo, which the station does not have.
 
+### Do not type the token. Ever.
+
+**Devices → the phone's row → Token** hands you the finished command with that handset's real
+token already in it. Copy, paste, enter. There is no step where a person types or substitutes a
+credential, and that is the point:
+
+> **The placeholder that used to live here.** This page published the enrol line in a copyable
+> block with `-e token PASTE_THE_TOKEN_HERE` in it, under the words *"one line, pasted once"*.
+> Pasted whole, that command **does not error**. `adb install` succeeds, `set-device-owner`
+> succeeds — and `harden()` blocks factory reset — and the broadcast answers
+> `result=1, "ENROLLED"`, which is the very line this document tells you to look for. The
+> handset ends up Device Owner holding a credential the register never minted: every beat 403s,
+> so it can never be locked, unlocked or released, and it cannot be wiped either. There is no
+> remote way back. This is the state that already cost one handset, to a placeholder called
+> `NEW`.
+>
+> An earlier edit here removed the angle brackets from `<token>` because `<` and `>` are
+> redirection in cmd and the line errored. **The error was the safety net, not the bug.** A
+> bare word is the dangerous form, because it runs.
+>
+> From **v18 the handset settles this itself**: a real token is 32 hex characters (`api/portal.js`
+> mints it as `randomUUID()` with the dashes out, and nowhere else), so anything else is refused
+> with *"THAT IS NOT A TOKEN — nothing was written and this phone is UNCHANGED"*. Documentation
+> cannot be the guard; it only takes one page that forgets.
+
+If you ever need to see the shape of the line rather than run it, it is: `adb install -r` the
+APK, then `dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin`, then
+`am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.ENROL -n
+com.samaritantechs.hooploanlock/.EnrolReceiver -e server https://hoop-pmo.vercel.app -e token`
+followed by that phone's token. Read it, don't assemble it.
+
 Download the APK from **<https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk>** first — it lands in
-Downloads, which is where the command looks. Then **one line, pasted once**:
-
-```bat
-adb install -r "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk" && (adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin & adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.ENROL -n com.samaritantechs.hooploanlock/.EnrolReceiver -e server https://hoop-pmo.vercel.app -e token PASTE_THE_TOKEN_HERE)
-```
-
-Replace `PASTE_THE_TOKEN_HERE` with the token from step 1 — no brackets, no quotes. **Or
-don't type it at all:** Devices → the phone's row → **Token** hands you this exact line with
-the token already in it, ready to paste.
+Downloads, which is where the command looks.
 
 > **Why `&&` once and `&` once, and not three `&&`.**
 >
@@ -198,7 +219,7 @@ cannot read one. Both files carry the instructions in their own headers.
 |---|---|---|
 | **Many phones** | `…lock-bench.ps1 tokens.txt` | `./scripts/lock-bench.sh tokens.txt` |
 | **One phone** | `…lock-bench.ps1 -Token <token>` | `TOKEN=<token> ./scripts/lock-bench.sh` |
-| **Already holds a token** | add `-ReEnrol` | prefix `REENROL=1` |
+| **Already holds a token** | add `-Was <the token it holds now>` | prefix `WAS=<the token it holds now>` |
 
 (Windows form in full: `powershell -ExecutionPolicy Bypass -File scripts\lock-bench.ps1 …`,
 or double-click `scripts\lock-bench.bat`.)
@@ -217,8 +238,10 @@ or double-click `scripts\lock-bench.bat`.)
 > Device Owner takes. With several phones the match is back, because then there IS a wrong
 > pairing to make and it costs a customer their handset.
 >
-> **`-ReEnrol` replaces the token a handset is already holding** — by naming the current one,
-> so the phone can tell the office from anybody else. No factory reset, no `pm clear`.
+> **`-Was` replaces the token a handset is already holding** — you pass it the token the phone
+> holds *now*, which is what `EnrolReceiver` requires as proof before it will accept a
+> replacement, so the phone can tell the office from anybody else. It is not a bare switch: it
+> takes that value. No factory reset, no `pm clear`.
 >
 > > This flag used to run `adb shell pm clear`, and the comment three lines above that call —
 > > in the same file — records that `pm clear` is **refused** on a Device Owner app
@@ -661,22 +684,29 @@ the point of the lock, and which is exactly the problem when the phone is ours.
 *update*. A newer APK goes on over the top of a locked, owned handset:
 
 ```
-C:\Users\marki>adb install -r HOOPLOAN-Lock.apk
+C:\Users\marki>adb install -r "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk"
 Performing Streamed Install
 Success
 ```
 
 That is the whole recovery route. The app can clear its own data even though the shell
-cannot, and it can call `clearDeviceOwnerApp` on itself even though `dpm` will not. So it
-carries a command for doing both:
+cannot, and it can call `clearDeviceOwnerApp` on itself even though `dpm` will not.
 
-```
-adb install -r HOOPLOAN-Lock.apk
-adb shell am broadcast --include-stopped-packages ^
-    -a com.samaritantechs.hooploanlock.RELEASE ^
-    -n com.samaritantechs.hooploanlock/.ReleaseReceiver ^
-    -e token THE_TOKEN_ON_ITS_REGISTER_ROW
-```
+**Get the release command from the register, not from here:** Devices → that phone's row →
+**Token** gives you the line with its real token in it. This page deliberately does not print
+a fill-in-the-blank version of it — see *"Do not type the token. Ever."* above for what that
+costs.
+
+The shape, for reading only: `adb install -r "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk"`,
+then `adb shell am broadcast --include-stopped-packages -a
+com.samaritantechs.hooploanlock.RELEASE -n com.samaritantechs.hooploanlock/.ReleaseReceiver
+-e token` and that phone's token.
+
+**The install path matters.** `cmd` opens in `C:\Users\<you>`, not where the APK is, so a bare
+`HOOPLOAN-Lock.apk` answers `cannot stat ... No such file or directory` — and because the two
+commands are separate lines, the broadcast then fires anyway, against the *old* build that
+could not release itself. The install error has scrolled above the `Broadcast completed:` line
+by then, which is the line you are trained to read.
 
 *(`^` is the line-continuation for the black cmd window. In PowerShell it is a backtick; on
 one line it needs neither.)*
@@ -732,7 +762,7 @@ C:\Users\marki>adb install -r "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk"
 Performing Streamed Install
 Success
 
-C:\Users\marki>adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.RELEASE -n com.samaritantechs.hooploanlock/.ReleaseReceiver -e token f1b942f3991b43dd8d8f857535a0d468
+C:\Users\marki>adb shell am broadcast --include-stopped-packages -a com.samaritantechs.hooploanlock.RELEASE -n com.samaritantechs.hooploanlock/.ReleaseReceiver -e token 0123456789abcdef0123456789abcdef
 Broadcasting: Intent { act=com.samaritantechs.hooploanlock.RELEASE flg=0x400020 cmp=com.samaritantechs.hooploanlock/.ReleaseReceiver (has extras) }
 Broadcast completed: result=1, data="RELEASED - no longer Device Owner..."
 ```
