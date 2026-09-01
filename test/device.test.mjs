@@ -1244,3 +1244,76 @@ test('the enrol-message build reaches handsets in the field', () => {
   const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
   assert.ok(v.versionCode >= 14, 'raised, or SelfUpdate skips it and no handset ever sees it');
 });
+
+/* =========================================================================================
+   PHONES ALREADY IN THE FIELD, ON AN OLDER APK.
+
+     "remember some phones locked with previous apk have gone to field already
+      so whenever we update keep in mind they should be able to be unlocked and everything"
+
+   A handset in a customer's pocket cannot be updated on demand. It updates when it feels like
+   it, and a phone that is LOCKED and offline may not update for weeks -- so every version of
+   this server has to keep talking to every version of the app that has ever shipped, and above
+   all has to keep being able to UNLOCK one.
+
+   The beat is the whole contract, and it is a contract in one direction only: the app reads
+   the fields it knows by NAME and ignores everything else. So new fields are always safe, and
+   renaming or dropping an old one is never safe -- it would not fail loudly, it would just
+   stop unlocking phones, and nobody would find out until a paid-up customer complained.
+
+   These names are read by builds that are out there right now. Changing one is not a
+   refactor, it is a decision to strand every handset older than the change.
+   ========================================================================================= */
+
+const FIELD_APK_READS = ['ok', 'command', 'nextBeatSeconds', 'graceHours', 'message',
+  'helpPhone', 'reason', 'brand', 'imei', 'retire'];
+
+test('an old APK in the field can still be unlocked', async () => {
+  /* The oldest beat there is: token and a state, none of the fields later versions send --
+     no fcmToken, no reported imei, no location. It must still be told to unlock. */
+  const d = fleet([{ imei: 'FIELD1', state: 'locked', enrol_token: 'oldtok',
+    customer: 'Asha', reported: 'locked', last_seen: new Date(NOW - 60000).toISOString() }]);
+
+  let r = await deviceApi(d, 'dev_beat', [{ token: 'oldtok', locked: true }], NOW);
+  assert.equal(r.command, 'lock', 'still locked, so it is told to stay locked');
+
+  // The office frees it. The very next beat from that same old handset must say unlock.
+  await _FNS.deviceSetState(d, ADMIN, { imeis: ['FIELD1'], state: 'enrolled' });
+  r = await deviceApi(d, 'dev_beat', [{ token: 'oldtok', locked: true }], NOW + 1000);
+  assert.equal(r.command, 'unlock', 'a phone in the field must always be reachable to unlock');
+
+  // And releasing it for good still retires it, which is the other one-way door.
+  await _FNS.deviceSetState(d, ADMIN, { imeis: ['FIELD1'], state: 'released' });
+  r = await deviceApi(d, 'dev_beat', [{ token: 'oldtok', locked: false }], NOW + 2000);
+  assert.equal(r.command, 'unlock');
+  assert.equal(r.retire, true, 'and it can still be handed back');
+});
+
+test('every field name an APK in the field reads is still sent', async () => {
+  /* Pinned by NAME, because that is the whole contract. A rename would not fail loudly -- it
+     would quietly stop unlocking every handset older than the change. */
+  const d = fleet([{ imei: 'FIELD2', state: 'locked', enrol_token: 't2', customer: 'Juma',
+    state_reason: 'arrears' }], [{ key: 'DEVICE_HELP_PHONE', value: '0700000000' }]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 't2', locked: true }], NOW);
+  for (const k of FIELD_APK_READS) {
+    assert.ok(Object.prototype.hasOwnProperty.call(r, k),
+      'the beat must still carry "' + k + '" -- an APK in the field reads it by that name');
+  }
+  // The two the boot window added are extra, and old builds simply never look for them.
+  assert.equal(typeof r.bootGraceMinutes, 'number', 'new fields are additive');
+});
+
+test('a settings hiccup cannot take the fleet dark for the sake of the boot window', async () => {
+  /* The boot window is a convenience. Reading its two numbers must never be able to fail a
+     BEAT -- that would leave every locked phone in the field unreachable, including the ones
+     whose customers have paid, for the sake of a feature about turning wifi on. */
+  const d = fleet([{ imei: 'FIELD3', state: 'locked', enrol_token: 't3', customer: 'Neema' }]);
+  const real = d.from.bind(d);
+  d.from = name => {
+    if (name !== 'settings') return real(name);
+    throw new Error('settings unavailable');
+  };
+  const r = await deviceApi(d, 'dev_beat', [{ token: 't3', locked: true }], NOW);
+  assert.equal(r.command, 'lock', 'the beat still answers, which is what keeps the fleet reachable');
+  assert.equal(r.bootGraceMinutes, 0, 'and the window simply does not open');
+});
