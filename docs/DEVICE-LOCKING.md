@@ -1203,9 +1203,16 @@ Success: Device owner set to package com.samaritantechs.hooploanlock/.LockAdmin
 Broadcast completed: result=1, data="ENROLLED - reporting in now; ..."
 ```
 
-`result=1` on its own is not enough here — that is the exact pair that lied the first time. You
-also need **`Success: Device owner set`** for *this* handset, or the phone is in the state it came
-back in.
+You need **both**: `Success: Device owner set` for *this* handset, and `result=1`.
+
+**What the terminal will actually tell you if ownership failed is `result=3 NOT DEVICE OWNER`.**
+It cannot say ENROLLED — `EnrolReceiver` checks ownership first and returns before it ever looks
+at a token. So the terminal is not what lied the first time round.
+
+**The register is.** `Sajili simu` mints the token the moment you paste the IMEI, not when the
+phone answers, so the row reads as enrolled — and can be ordered locked — for a handset that has
+never spoken once. That is the whole reason the never-spoke alarm exists, and why step 5 is the
+step that counts.
 
 Match them by handset, not by position on the screen. On a hub every phone prints its own
 install/ownership/broadcast lines and they interleave, so "the line above" is simply whatever

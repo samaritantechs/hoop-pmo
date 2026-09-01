@@ -1316,11 +1316,38 @@ test('portal.html: the enrol drawer answers the refusal that still prints ENROLL
   assert.ok(note.includes('adb shell pm uninstall --user 0 com.google.android.apps.tachyon</div>'),
     'and the one that removes the account that actually causes this');
 
-  // The trap named: a green line on the screen is not a locked phone.
+  // The trap named: a row on the register is not a locked phone.
   assert.ok(note.includes('<b>NOT locked</b>'), 'it says plainly what the handset is');
-  assert.ok(note.includes('<b>result=1 ENROLLED</b>'),
-    'and that the line the operator is counting proves nothing here');
-  assert.match(note, /Do not ship the handset/, 'the one instruction that matters');
+
+  /* AND IT NAMES THE RIGHT RESULT CODE. This note first claimed the broadcast "may still say
+     result=1 ENROLLED" after set-device-owner was refused. It cannot: EnrolReceiver checks
+     LockAdmin.isOwner FIRST and returns say(3, "NOT DEVICE OWNER") before it ever looks at a
+     token. Telling an operator to distrust a line the app does not print in this situation
+     sends them hunting for the wrong thing.
+
+     What actually lies is the REGISTER -- Sajili simu mints the token when the IMEI is pasted,
+     so the row reads as enrolled for a phone that has never spoken. That is the whole reason
+     the never-spoke alarm exists, and it is what the note must say. */
+  assert.ok(note.includes('result=3 NOT DEVICE OWNER'),
+    'the code the app actually returns when ownership was refused');
+  assert.ok(!/may still say <b>result=1/.test(note),
+    'and not the code it cannot return on this path');
+  assert.match(note, /What lies is the register/,
+    'the register is what misleads here, not the terminal');
+
+  const java = fs.readFileSync(new URL(
+    '../android/lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java',
+    import.meta.url), 'utf8');
+  const owner = java.indexOf('if (!LockAdmin.isOwner(c))');
+  const tokenRead = java.indexOf('String token = intent.getStringExtra("token");');
+  assert.ok(owner > 0 && owner < tokenRead,
+    'the ownership check really does come first -- this is why result=1 is impossible here');
+  assert.match(java.slice(owner, tokenRead), /say\(3, "NOT DEVICE OWNER/,
+    'and it really does answer 3, which is the number the note quotes');
+
+  // Both halves carry the instruction that saves a handset, not just the English one.
+  assert.match(note, /Usisafirishe simu hii/, 'Swahili says do not ship it');
+  assert.match(note, /Do not ship the handset/, 'and so does the English');
 
   /* AND IT NAMES THE RIGHT LINE OF THAT OUTPUT.
      -----------------------------------------------------------------------------------
