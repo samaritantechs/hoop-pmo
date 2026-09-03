@@ -1599,6 +1599,7 @@ test('no live device token is committed anywhere in the repo', () => {
   const SPECIMEN = new Set([]);
   const files = ['../docs/DEVICE-LOCKING.md', '../scripts/lock-bench.ps1',
                  '../scripts/lock-bench.sh', '../scripts/lock-bench.bat',
+                 '../scripts/lock-hub-auto.bat',
                  '../public/portal.html', '../README.md'];
   const leaks = [];
   for (const f of files) {
@@ -1691,4 +1692,83 @@ test('the alarm is not shown when every locked phone has spoken', async () => {
     last_seen: new Date(Date.now() - 60000).toISOString() }]);
   const r = await _FNS.deviceList(d, ADMIN, {});
   assert.equal(r.counts.lockedNeverSpoke, 0);
+});
+
+test('lock-hub-auto.bat only handles the result codes the batch path can actually produce', () => {
+  /* THE OPERATOR ASKED FOR THIS EXACT LOOP.
+     =========================================================================================
+       "cant cmd always check if result 3 run the clearing and return to inserting lock ,
+        if result 5 retry the cmd"
+
+     Built as a script rather than a paste-and-repeat because every earlier attempt to talk
+     someone through this by hand this evening produced a fresh cmd/PowerShell mistake -- the
+     handset never causes the failure here, the shell does. A script removes the retyping.
+
+     Only FOUR result codes are reachable on the batch path, confirmed against EnrolReceiver.java
+     rather than assumed: 1 ENROLLED, 2 TOKEN MISMATCH, 3 NOT DEVICE OWNER, 5 the claim failed
+     (network, refusal, or an unreadable IMEI, told apart by message text, not by the number).
+     Code 4 -- a malformed token -- belongs only to the DIRECT -e token path; the batch path is
+     never handed anything a person typed, so a script that checked for it would be defending
+     against a state that cannot occur, exactly the kind of feature that looks like it does
+     something and does nothing. */
+  const enrol = fs.readFileSync(new URL(
+    '../android/lock/src/main/java/com/samaritantechs/hooploanlock/EnrolReceiver.java',
+    import.meta.url), 'utf8');
+  const claimBody = enrol.slice(enrol.indexOf('String batch = intent.getStringExtra("batch");'),
+                                enrol.indexOf('say(1, adopt(c, token, existing, fresh));') + 40);
+  assert.ok(!/code = 4/.test(claimBody),
+    'the batch/claim path must not be able to set code 4 -- if it ever can, this script needs '
+    + 'a fourth branch and this assumption is wrong');
+  assert.match(claimBody, /code = 5;/, 'a failed claim really does answer 5');
+  assert.match(claimBody, /code = 2;/, 'a mismatch really does answer 2');
+
+  const bat = fs.readFileSync(new URL('../scripts/lock-hub-auto.bat', import.meta.url), 'utf8');
+
+  // The three commands are the real ones, targeted at THAT phone -- never the bare command,
+  // which on a hub full of phones would hit whichever one adb picks.
+  assert.match(bat, /adb -s %%a install -r "%APK%"/);
+  assert.match(bat, /adb -s %%a shell dpm set-device-owner %ADMIN%/);
+  assert.match(bat, /adb -s %%a shell am broadcast --include-stopped-packages/);
+  assert.match(bat, /-a %PKG%\.ENROL -n %PKG%\/\.EnrolReceiver/);
+  assert.match(bat, /-e batch %BATCH%/, 'the batch flag, not a token -- this drives many phones');
+
+  // Component and action names must match what the manifest actually declares.
+  const manifest = fs.readFileSync(new URL(
+    '../android/lock/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+  assert.match(manifest, /android:name="\.EnrolReceiver"/);
+  assert.match(manifest, /android:name="com\.samaritantechs\.hooploanlock\.ENROL"/);
+
+  /* THE THREE BRANCHES, IN ORDER, AND WHAT EACH ONE MUST NEVER DO. */
+  const two = bat.slice(bat.indexOf('findstr /c:"result=2,"'), bat.indexOf('findstr /c:"result=3,"'));
+  const three = bat.slice(bat.indexOf('findstr /c:"result=3,"'), bat.indexOf('findstr /c:"result=5,"'));
+  const five = bat.slice(bat.indexOf('findstr /c:"result=5,"'));
+
+  // result=2: stops. A retry cannot turn a wrong token into the right one.
+  assert.match(two, /exit \/b 1/, 'a mismatch must stop the script');
+  assert.ok(!/goto round/.test(two), 'and never loop back on its own');
+
+  // result=3: clears the same three packages the portal and the manual now agree on, once,
+  // then retries; a second refusal after clearing must stop rather than loop forever against
+  // a real Google account no adb command can remove.
+  assert.match(three, /pm uninstall --user 0 com\.google\.android\.apps\.tachyon/);
+  assert.match(three, /pm uninstall --user 0 com\.microsoft\.office\.outlook/);
+  assert.match(three, /pm uninstall --user 0 com\.microsoft\.skydrive/);
+  assert.match(three, /if "%CLEARED%"=="1"/, 'clearing only happens once, not every round');
+  assert.match(three, /goto round/, 'and it does retry after clearing');
+
+  // result=5: nothing local to fix, so it only waits and retries -- no uninstall, no exit.
+  assert.ok(!/pm uninstall/.test(five), 'nothing is uninstalled on a network failure');
+  assert.match(five, /goto round/, 'it retries rather than giving up on the first miss');
+
+  // The loop is bounded. An operator who leaves this running must not come back to a script
+  // still hammering a phone that was never going to answer.
+  assert.match(bat, /set "MAXROUNDS=\d+"/);
+  assert.match(bat, /if %ROUND% GTR %MAXROUNDS%/);
+
+  // And re-checked every round, not just once at the top -- a hub that goes empty mid-loop
+  // must not fall through to "no failures seen" and report success on zero phones.
+  const rounds = bat.split(':round');
+  assert.ok(rounds.length > 1, 'the round label exists');
+  assert.match(rounds[1], /findstr \/e \/c:"device"/,
+    'the device check runs inside the loop body, not only before it');
 });

@@ -139,6 +139,32 @@ time. The only ways to spend less are to run phones in parallel on a powered USB
 bench script is built for exactly that — or to buy through a Knox-participating reseller, the
 one route where a handset provisions itself at first boot with nobody touching it.
 
+#### When the hub command needs re-running, and you'd rather it ran itself
+
+The hub command answers three ways that all just mean "run it again": accounts blocking
+ownership (`result=3`), a phone that has not reached the office yet (`result=5`), and the
+genuine success you're waiting for (`result=1`). `scripts\lock-hub-auto.bat` reads the answer
+instead of a person reading it:
+
+```
+scripts\lock-hub-auto.bat <the batch id from the hub command>
+```
+
+`result=3` → it clears the accounts that usually cause it (Meet/Duo, Outlook, OneDrive) on
+every phone still on the cable, then runs the whole hub again. `result=5` → nothing local to
+fix, so it waits a moment and runs the whole hub again. Re-running phones that already
+succeeded is safe, not wasted effort: a batch hands an already-enrolled phone back its own
+token, which `EnrolReceiver` treats as re-arming, not a new identity — that is what lets the
+script retry everything on the cable each round rather than tracking which phone still needs
+what.
+
+**Two things it will not do, on purpose**, because retrying cannot fix either: a `result=2`
+**token mismatch** stops the script outright — that phone already holds a *different* token and
+needs `-e current`, one phone at a time (below); and a genuine signed-in Google account stops
+it after one round of clearing — that needs Settings on the handset, or a factory reset
+skipping sign-in, and no `adb` command does either. Both print the same guidance you'd get
+doing this by hand, and the script never hides the raw output above it.
+
 ### 1. Enrol (portal, before you touch the phones)
 
 Devices → **+ Sajili simu**, paste the IMEIs from Sipho's report. Model and holder fill in
