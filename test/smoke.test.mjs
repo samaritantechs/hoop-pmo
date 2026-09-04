@@ -754,6 +754,42 @@ test('a new lock reason repaints a screen that is already up', () => {
     'and coming back to the front must repaint too, for a broadcast that arrived too early');
 });
 
+/* "put HOOP logo above the title on locked info that displays: the white png since the bg
+   is already full blue"
+
+   The asset itself is generated, not hand-drawn: scripts/make-white-logo.py takes
+   brand/hoop-logo.png -- the same wordmark shapes used everywhere else, launcher icon
+   included -- and turns every inked pixel white, keeping alpha. So the thing on the lock
+   screen can never quietly drift from the brand file; if the master logo changes, re-running
+   the generator is what keeps this in step, not a second hand-edit here. */
+test('the lock screen shows the HOOP mark, above the title, and cannot crash on a missing one', () => {
+  const lock = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockActivity.java');
+  const assetPath = new URL(
+    '../android/lock/src/main/res/drawable-nodpi/hoop_logo_white.png', import.meta.url);
+  assert.ok(fs.existsSync(assetPath), 'the generated asset must be committed, not built on the fly');
+
+  const build = lock.slice(lock.indexOf('private View build()'), lock.indexOf('private TextView row('));
+  const logoAt = build.indexOf('R.drawable.hoop_logo_white');
+  const brandAt = build.indexOf('brandView = row(root, 26,');
+  assert.ok(logoAt > 0, 'the screen must actually reference the generated resource');
+  assert.ok(brandAt > 0, 'brandView is the title line this sits above');
+  assert.ok(logoAt < brandAt, 'the logo must be added to root BEFORE the title -- LinearLayout '
+    + 'stacks children in addView order, so this is what makes it appear above rather than below');
+
+  /* adjustViewBounds, not a fixed width -- a hard-coded width would stretch or squash the
+     mark the moment the source PNG's trim changes even slightly. */
+  assert.match(build, /setAdjustViewBounds\(true\)/);
+
+  /* A LOCK SCREEN THAT CANNOT DRAW IS A PHONE NOBODY CAN EXPLAIN. Same principle as row()'s
+     own comment two functions down: nothing about a logo is worth the four words a locked
+     customer actually needs. A vendor build missing this density bucket, or an npm/gradle
+     step that skipped the generator, must not blank the screen the office phone number lives
+     on -- so the whole block is guarded and a failure here changes nothing else. */
+  const logoBlock = build.slice(build.lastIndexOf('try {', logoAt), build.indexOf('brandView'));
+  assert.match(logoBlock, /catch \(Exception ignored\) \{ \}/,
+    'a missing or unloadable logo resource must not take the rest of the screen down with it');
+});
+
 /* =========================================================================================
    A PHONE THAT CANNOT HEAR US IS NOT LOCKED, IT IS LOST.
 
