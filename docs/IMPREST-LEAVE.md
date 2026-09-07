@@ -12,7 +12,7 @@
 > rejects there (another one)"
 
 Five navs. **Grant them in Portal → Access codes → roles**, one tick each. Nothing in the
-code knows the words "administrator", "GM" or "HR" — which pane a person sees is which nav
+code knows the words "administrator", "CEO" or "HR" — which pane a person sees is which nav
 they hold, and that is the whole permission model. **ADMIN is full access everywhere**, by
 standing rule; a read-only `AUDITOR` code sees every pane and can change nothing.
 
@@ -20,7 +20,7 @@ standing rule; a read-only `AUDITOR` code sees every pane and can change nothing
 |---|---|---|
 | `impreq` | Omba imprest / Imprest request | anybody who travels for the company |
 | `impappr` | Idhini ya imprest / Imprest approval | the administrator — decides, and owns the rate table |
-| `imprep` | Ripoti ya imprest / Imprest reports | the GM — the review copy |
+| `imprep` | Ripoti ya imprest / Imprest reports | the CEO — the review copy |
 | `leavereq` | Omba likizo / Leave request | everybody |
 | `leaveappr` | Idhini ya likizo / Leave approval | HR |
 
@@ -31,10 +31,10 @@ standing rule; a read-only `AUDITOR` code sees every pane and can change nothing
    Safe to run more than once.
 2. **Tick the navs** on the roles above.
 3. **Rates.** Open Idhini ya imprest as the administrator and fill **Viwango vya malazi**: one
-   row per role (CREDIT, RSM, GM…) with its accommodation per day in TZS. Until a role has a
+   row per role (CREDIT, RSM, CEO…) with its accommodation per day in TZS. Until a role has a
    rate, the request form cannot offer it — and a request for a role with no rate is refused
    with "ask the approver to add it".
-4. **Email, optional.** Settings → `IMPREST_ADMIN_EMAIL`, `IMPREST_GM_EMAIL`, `HR_EMAIL`
+4. **Email, optional.** Settings → `IMPREST_ADMIN_EMAIL`, `IMPREST_CEO_EMAIL`, `HR_EMAIL`
    (several addresses separated by commas), and `EMAIL_FROM` (a verified sender such as
    `HOOPLOAN <no-reply@hoop.co.tz>`; blank falls back to Resend's onboarding sender, which
    lands in spam). Then set **`RESEND_API_KEY`** on Vercel — it is a secret, so it is an
@@ -85,9 +85,9 @@ legible — and shrunk again, smaller, if that is still over the server's **200K
 which the server enforces regardless of what the phone did. They are stored as data URLs in
 their own table (`imprest_photos`), **never on the request row**: every list this feature draws
 stays light, and a receipt is fetched only when somebody presses **Picha**. A requester may
-see only their own; the administrator and the GM may see anybody's.
+see only their own; the administrator and the CEO may see anybody's.
 
-**Review** (`imprep`). The GM's copy is a period of trips — **by travel date**, this month by
+**Review** (`imprep`). The CEO's copy is a period of trips — **by travel date**, this month by
 default like the advance report — every row with its retirement beside it: fare, accommodation,
 others, requested, status, approved, decided by, retired when, actual spent, balance, receipts.
 Seven widgets: requests, waiting, approved (TZS), spent (actuals filed), not yet retired,
@@ -95,7 +95,7 @@ Seven widgets: requests, waiting, approved (TZS), spent (actuals filed), not yet
 was advanced). Filter by any status, by "retired" or "not retired", or by all dates.
 
 **Email, as a courtesy on top.** A new request nudges `IMPREST_ADMIN_EMAIL`; an approval sends
-the **GM copy** to `IMPREST_GM_EMAIL` and tells the requester at the address on the form; a
+the **CEO copy** to `IMPREST_CEO_EMAIL` and tells the requester at the address on the form; a
 rejection tells the requester only. The pane is the system of record and email can never break
 it: a request whose mail did not go is still filed, and the toast says *email haikutumwa* with
 the reason so the person can tell the approver in words.
@@ -126,8 +126,9 @@ A new leave request emails `HR_EMAIL` when it is set, on the same best-effort te
 - **No accountant step.** "No accountants intergration yet" — approval is the last decision.
   The report's "to be refunded / to be reimbursed" widgets are the figures an accountant would
   start from when that pane is wanted.
-- **No department scoping on the imprest approval.** Unlike the advance, the administrator is
-  an administrator for the company, so there is no Kiongozi switch and no same-role filter.
+- **No department scoping on the imprest approval.** The administrator is an administrator for
+  the company, so there is no per-person switch and no same-role filter. The advance approval
+  works the same way since 2026-09-07.
 - **No editing a request after it is sent.** The retirement is the correction mechanism.
 - **Leave balances.** The form has no entitlement field and neither does this; HR decides
   against whatever record they keep.

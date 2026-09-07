@@ -28,7 +28,7 @@
 -- report that only knew the total could not say WHERE a trip came in over.
 --
 -- THE ACCOMMODATION RATE IS THE APPROVER'S NUMBER, NOT THE REQUESTER'S. imprest_roles holds a
--- rate per role (a credit officer, an RSM and the GM do not sleep in the same hotel), and the
+-- rate per role (a credit officer, an RSM and the CEO do not sleep in the same hotel), and the
 -- server multiplies days by THAT rate at request time, ignoring any figure the form sent. The
 -- rate in force is also stamped onto the request (accom_rate), so a later change to the table
 -- does not silently reprice trips already filed.
@@ -39,7 +39,7 @@
 -- the phone (long side <= 1024px, quality ~0.6, roughly 60-120KB each) and refused by the
 -- server above 200KB. They live in imprest_photos, NOT on the request or retirement row: every
 -- list this feature draws selects requests and retirements, and a list that dragged three
--- photos per row across the wire would make the GM's report unusable on a phone. Photos are
+-- photos per row across the wire would make the CEO's report unusable on a phone. Photos are
 -- fetched one request at a time, when somebody presses "Picha".
 --
 -- LEAVE follows the HR form the company already prints, field for field, so HR can read a row
@@ -232,7 +232,7 @@ create index if not exists leave_requests_from_date_idx on leave_requests (from_
 -- ---------------------------------------------------------------------------------------------
 insert into settings (key, value) values
   ('IMPREST_ADMIN_EMAIL', ''),
-  ('IMPREST_GM_EMAIL', ''),
+  ('IMPREST_CEO_EMAIL', ''),
   ('HR_EMAIL', ''),
   ('EMAIL_FROM', '')
 on conflict (key) do nothing;

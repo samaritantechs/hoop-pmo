@@ -843,32 +843,24 @@ test('the approval drawer opens at the requested amount and cannot go above it',
     'the decide drawer must seed the dropdown from the requested amount, both ways');
 });
 
-/* "the leader button i need it visible as a column before the hariri and futa ones" -- the
-   position is the request, so the position is what is pinned. */
-test('the Kiongozi switch sits in the row, immediately before Hariri and Futa', () => {
+/* The Kiongozi switch is gone (2026-09-07): one approver for the company, and the nav is the
+   grant. What is pinned now is its absence, so it cannot drift back in through a merge. */
+test('the access-codes table has no Kiongozi column and the page never calls the old toggle', () => {
   const src = read('portal.html');
   const head = /<tr><th>Code<\/th>[\s\S]{0,400}?<\/tr>/.exec(src);
   assert.ok(head, 'the access-codes header row has changed shape');
   const cols = [...head[0].matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map(m => m[1]);
-  assert.deepEqual(cols, ['Code', 'Jina', 'Role', 'Timu', 'Tabs', 'Kiongozi', 'Yupo?', ''],
-    'Kiongozi and Yupo? are the named columns, both before the actions cell');
-
+  assert.deepEqual(cols, ['Code', 'Jina', 'Role', 'Timu', 'Tabs', 'Yupo?', ''],
+    'Yupo? is the one named control column, still before the actions cell');
   const row = src.slice(src.indexOf("<tr><td class=\"code\">"));
-  const lead = row.indexOf('data-lead="');
-  const susp = row.indexOf('data-susp="');
-  const edit = row.indexOf('data-ed="');
-  const del = row.indexOf('data-del="');
-  assert.ok(lead > 0 && susp > 0 && edit > 0 && del > 0, 'all four row controls must be present');
-  assert.ok(lead < susp && susp < edit && edit < del,
-    'Kiongozi, then Yupo?, both still before Hariri and Futa');
-
-  // It is a switch, not a label: the face shows the state and one click flips it.
-  assert.match(src, /srv\('accessCodeLeader',\{code:code,leader:!on\}\)/,
-    'the button must post the OPPOSITE of what it currently shows');
-  assert.match(src, /confirm\(on/,
-    'it hands over the approval pane, so it confirms rather than firing on a stray tap');
-  assert.match(src, /c\.leader===null/,
-    'before the migration it must show a dash, not a button that cannot work');
+  const susp = row.indexOf('data-susp="'), edit = row.indexOf('data-ed="'), del = row.indexOf('data-del="');
+  assert.ok(susp > 0 && edit > 0 && del > 0 && susp < edit && edit < del, 'Yupo?, then Hariri and Futa');
+  assert.ok(!/data-lead\b|data-lead2|accessCodeLeader|acLead|Kiongozi wa idara|leaderKnown/.test(src),
+    'no trace of the switch on the page');
+  // And the approval pane no longer explains a department scope it no longer has.
+  const appr = src.slice(src.indexOf('function drawAdvAppr('), src.indexOf('var ADVQ='));
+  assert.ok(!/d\.scope|role yako|own role only|d\.note/.test(appr),
+    'the queue is the whole company and says nothing else about whose it is');
 });
 
 /* "can update their passcodes at loginpage by iputing current one and double input new one" */
@@ -1497,7 +1489,7 @@ test('portal.html: every imprest and leave list says which migration to run when
     'and that file exists under the name the panes print');
 });
 
-test('portal.html: the approval pane owns the rate table and the GM report reads by travel date', () => {
+test('portal.html: the approval pane owns the rate table and the CEO report reads by travel date', () => {
   const html = read('portal.html');
   const appr = IMP_SRC('drawImpAppr', html);
   assert.match(appr, /srv\('impRoleSave',\{role:role, rate:rate\}\)/, 'add or change a role\'s nightly rate');
@@ -1509,7 +1501,7 @@ test('portal.html: the approval pane owns the rate table and the GM report reads
   const table = IMP_SRC('impTable', html);
   assert.match(table, /o\.retire&&r\.mine&&r\.status==='approved'&&!r\.retiredAt/, 'Retire only on an approved, un-retired trip of your own');
   const rep = IMP_SRC('drawImpRep', html);
-  assert.match(rep, /Tarehe ya safari:/, 'the GM filters on the trip, not the click');
+  assert.match(rep, /Tarehe ya safari:/, 'the CEO filters on the trip, not the click');
   assert.match(rep, /monthRange_\(\)/, 'this month by default, like the advance report');
   for (const k of ['toRefund', 'toReimburse', 'toRetire', 'spent', 'approvedAmount']) {
     assert.match(rep, new RegExp('t\\.' + k), 'the ' + k + ' widget is drawn');

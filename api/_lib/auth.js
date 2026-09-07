@@ -15,29 +15,28 @@ import { todayKey } from './time.js';
    caller still calls authCode(code) and nothing about them changes. */
 /* THE COLUMN LIST SIGN-IN ASKS FOR, and the narrower one it falls back to.
    ---------------------------------------------------------------------------------------------
-   is_leader arrives with db/migrations/RUN-ME-2026-08-31-advance-leader.sql. PostgREST refuses a
-   WHOLE select when one named column is unknown -- so naming it here without a fallback would
-   not darken some pane, it would fail THE SIGN-IN QUERY, and every person in the company would
-   be told their access code is invalid until somebody ran a migration. That is the worst failure
-   this file is capable of, so the narrower list is kept and used the instant the wider one is
-   refused for mentioning the column. */
-/* IT IS A CASCADE NOW, because there are two of these columns and there will be a third one
-   day. Widest first; each rung drops the newest column and is used the instant the one above it
-   is refused for naming a column this database has not been given yet. The rule that matters is
-   unchanged and is the reason this shape exists at all: a select that names an unknown column
-   fails ENTIRELY, and the select in question is the sign-in.
+   The suspension window arrives with db/migrations/RUN-ME-2026-08-31-access-suspend.sql.
+   PostgREST refuses a WHOLE select when one named column is unknown -- so naming those columns
+   here without a fallback would not darken some pane, it would fail THE SIGN-IN QUERY, and every
+   person in the company would be told their access code is invalid until somebody ran a
+   migration. That is the worst failure this file is capable of, so the narrower list is kept and
+   used the instant the wider one is refused for mentioning a column.
 
-   The INDEX of the rung that worked is what the caller reads afterwards, so "we did not ask"
-   stays distinguishable from "we asked and the answer was no" -- see leader/suspended below,
-   both of which are three-state for that reason. */
+   A CASCADE, widest first; each rung drops the newest column and is used the instant the one
+   above it is refused. The INDEX of the rung that worked is what the caller reads afterwards, so
+   "we did not ask" stays distinguishable from "we asked and the answer was no" -- see
+   `suspended` below, which is three-state for that reason.
+
+   is_leader used to be a rung of its own. The Kiongozi switch is gone (one approver for the
+   company decides every advance -- see navsFor in portal.js), so sign-in no longer asks for
+   the column, whether or not the database still has it. */
 const CODE_COL_TIERS = [
-  'code, name, role, teams, tabs, is_leader, suspend_from, suspend_to',
-  'code, name, role, teams, tabs, is_leader',
+  'code, name, role, teams, tabs, suspend_from, suspend_to',
   'code, name, role, teams, tabs',
 ];
-const TIER_ALL = 0, TIER_NO_SUSPEND = 1;
+const TIER_ALL = 0;
 const missingCol = err =>
-  /is_leader|suspend_from|suspend_to/i.test(String((err && (err.message || err.details || err.code)) || ''));
+  /suspend_from|suspend_to/i.test(String((err && (err.message || err.details || err.code)) || ''));
 
 /** Runs `ask(cols)` down the cascade until one is not refused for an unknown column.
     Returns { data, error, tier } -- tier being the rung that actually answered. */
@@ -55,14 +54,12 @@ export async function authCode(code, db = supabase) {
   if (!code) throw new AuthError('Access code required.');
   // Sign-in is the one request EVERYTHING else waits behind, so it is the one that most needs
   // to survive a momentary blip rather than turn the whole company away at the door.
-  /* tier tells us what this database HAS been told about. leaderKnown=false means "not told
-     about leaders yet", which is a different fact from "this person is not a leader" -- and the
-     approval pane says which, rather than showing an empty queue that would read as "nobody has
-     asked for anything". suspendKnown carries the same distinction for the absence window. */
+  /* tier tells us what this database HAS been told about. suspendKnown=false means "not told
+     about the absence window yet", which is a different fact from "this person is not away" --
+     and the door treats it as nobody suspended, the safe direction. */
   const first = await downTheTiers(cols => runQuery(() =>
     db.from('access_codes').select(cols).eq('code', code).maybeSingle()));
   let { data: exact, error } = first;
-  const leaderKnown = first.tier <= TIER_NO_SUSPEND;
   const suspendKnown = first.tier === TIER_ALL;
   if (error) throw new AuthError(friendlyDbError(error));
   /* CASE IS NOT PART OF THE SECRET.
@@ -108,9 +105,8 @@ export async function authCode(code, db = supabase) {
     role: data.role,
     teams: data.teams && data.teams.length ? data.teams : null,   // null = ALL teams, matching Code.gs's convention
     tabs: data.tabs || [],
-    /* Three states, not two: true, false, and null for "the column is not there yet". */
-    leader: (leaderKnown && found.leaderKnown) ? !!data.is_leader : null,
-    // Same three states. Only ever false here -- a suspended code never gets this far.
+    /* Three states, not two: false, and null for "the column is not there yet". Only ever
+       false here -- a suspended code never gets this far. */
     suspended: knowSuspend ? false : null,
   };
 }
@@ -172,7 +168,6 @@ async function caseInsensitiveCode(code, db, startTier = 0) {
   if (error) throw new AuthError(friendlyDbError(error));
   return {
     row: (data && data.length === 1) ? data[0] : null,
-    leaderKnown: tier <= TIER_NO_SUSPEND,
     suspendKnown: tier === TIER_ALL,
   };
 }

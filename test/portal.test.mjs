@@ -1273,14 +1273,12 @@ test('a future-dated row never drags the dashboard into a week that has not happ
    colleagues are borrowing.
    ========================================================================================= */
 const ASKER = { code: 'A1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: ['advreq'],
-  readOnly: false, leader: false };
-/* THE APPROVER LEADS THEIR OWN ROLE. Both halves matter: `leader: true` is the per-person switch
-   in Access codes, and the role is what the department scope compares against -- an approver
-   sees only advances asked for by people carrying the SAME role they do. */
+  readOnly: false };
+/* THE APPROVER holds the nav, and that is the whole grant (one approver for the company). */
 const APPROVER = { code: 'L1', name: 'NEEMA M', role: 'OFFICER', teams: null, tabs: ['advappr'],
-  readOnly: false, leader: true };
+  readOnly: false };
 const HRUSER = { code: 'H1', name: 'SIPHO K', role: 'HR', teams: null, tabs: ['advrep'],
-  readOnly: false, leader: false };
+  readOnly: false };
 
 const advDb = rows => fakeDb({ staff_advances: rows || [] });
 /* advDecide checks the shape of `id` before it reaches Postgres, because a uuid column answers
@@ -1414,7 +1412,7 @@ test('holding both navs means holding both powers, own request included', async 
 
      This test exists so nobody helpfully puts the block back. */
   const both = { code: 'L1', name: 'NEEMA M', role: 'OFFICER', teams: null,
-    tabs: ['advreq', 'advappr'], readOnly: false, leader: true };
+    tabs: ['advreq', 'advappr'], readOnly: false };
   const d = advDb([anAdvance({ id: uid('r1'), code: 'L1', name: 'NEEMA M', amount: 200000 })]);
   const r = await _FNS.advDecide(d, both, { id: uid('r1'), approve: true, approvedAmount: 100000 });
   assert.equal(r.status, 'approved', 'a self-decision must go through, not be refused');
@@ -1510,7 +1508,7 @@ test('every advance pane says run the migration rather than showing an empty tab
 test('a view-only code may read the advance panes but never move money', async () => {
   const d = advDb([anAdvance({ id: uid('r1'), code: 'V' })]);
   const ro = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: [],
-    readOnly: true, leader: false };
+    readOnly: true };
   // AUDITOR sees every pane, as everywhere else in the system...
   assert.equal((await _FNS.advReport(d, ro, {})).rows.length, 1);
   assert.equal((await _FNS.advQueue(d, ro, {})).pending, 1);
@@ -1676,77 +1674,45 @@ test('both advance writes are audited with which request they were about', async
 });
 
 /* =========================================================================================
-   THE APPROVAL PANE IS A PERSON *AND* A DEPARTMENT.
+   WHO APPROVES AN ADVANCE: the nav, and nothing else.
 
-     "The ones i grant approval role can only see data of the same role to keep confidentiality
-      of departments ... all access codes should have a button to switch that that person is a
-      leader in ther role so those with that switch on can extend to approval nav"
+     "Hoop doesnt need the deprt leader approval for salary advance they want just requests and
+      approval or rejection with comments: so people will only request then then approval nav
+      is done by a single person and we stay with reports, so kill the kiongozi column and its
+      working scheme just a approval nav will be granted to approver"
 
      "NB: ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP"
 
-   Two rules that have to hold together, and neither is expressible as a role grant alone:
-
-     1. WHO may open the pane -- the advappr nav ticked on the role AND the Kiongozi switch
-        ticked on the individual access code. Granting the nav to CREDIT must not hand the
-        approval pane to every credit officer; it is meant for the one who leads them.
-     2. WHAT they see once inside -- only advances asked for by people of their OWN role.
-        The amounts are the confidential part, and a credit leader has no business reading
-        what the store or IT are borrowing.
-
-   ADMIN is exempt from both, everywhere, by the owner's standing rule. So is a read-only
-   AUDITOR code: it is supervision, it sees everything and requireWrite stops it changing
-   anything.
+   The Kiongozi switch and the same-department filter shipped on 2026-08-31 and were removed on
+   2026-09-07 at the owner's word. These tests pin the simpler rule so neither comes back by
+   accident: advappr on a role is the whole grant, the queue is the whole company, and a code
+   that still carries a `leader` field -- an older screen, an older row -- is neither helped nor
+   hindered by it.
    ========================================================================================= */
-const asLeader = (role, over) => ({ code: 'LEAD-' + role, name: role + ' LEADER', role,
-  teams: null, tabs: ['advappr'], readOnly: false, leader: true, ...over });
-
-test('the approval nav needs the Kiongozi switch as well as the grant', async () => {
-  const navs = u => _FNS.boot ? null : null;   // navsFor is exercised through requireNav below
-  const d = advDb([anAdvance({ id: uid('a') })]);
-
-  // Nav ticked, switch off -> the pane is not theirs, and the server says 403 rather than
-  // quietly serving an empty queue.
-  const notLeader = { ...APPROVER, leader: false };
-  await assert.rejects(() => _FNS.advQueue(d, notLeader, {}), e => e.status === 403,
-    'the nav alone must not open the approval pane');
-  await assert.rejects(() => _FNS.advDecide(d, notLeader, { id: uid('a'), approve: true }),
-    e => e.status === 403);
-
-  // Nav ticked, switch on -> in.
-  assert.equal((await _FNS.advQueue(d, APPROVER, {})).rows.length, 1);
-
-  // Switch on but the nav never granted -> still out. Both are required, in both directions.
-  await assert.rejects(() => _FNS.advQueue(d, { ...ASKER, leader: true }, {}),
-    e => e.status === 403, 'the switch alone must not conjure the pane either');
-});
-
-test('an approver sees only their own department, and cannot decide outside it', async () => {
+test('the approval nav alone opens the whole company\'s queue', async () => {
   const d = advDb([
     { ...anAdvance({ id: uid('credit1'), code: 'C1', name: 'CREDIT PERSON' }), staff_role: 'CREDIT' },
-    { ...anAdvance({ id: uid('credit2'), code: 'C2', name: 'ANOTHER CREDIT' }), staff_role: 'CREDIT' },
     { ...anAdvance({ id: uid('store1'), code: 'S1', name: 'STORE PERSON' }), staff_role: 'STORE' },
+    { ...anAdvance({ id: uid('it1'), code: 'I1', name: 'IT PERSON' }), staff_role: 'IT' },
   ]);
-  const creditLead = asLeader('CREDIT');
-
-  const q = await _FNS.advQueue(d, creditLead, {});
-  assert.deepEqual(q.rows.map(r => r.id).sort(), [uid('credit1'), uid('credit2')].sort(),
-    'a credit leader sees credit advances and nothing else');
-  assert.equal(q.pending, 2, 'the pending count is their department, not the company');
-  assert.ok(!JSON.stringify(q).includes('STORE PERSON'),
-    'no trace of another department may reach the response');
-
-  /* THE FILTER IS A VIEW; THE WRITE NEEDS ITS OWN GUARD. Anybody who can read an id can post
-     it, so the boundary is enforced again on the decision -- and answered as "no such request"
-     rather than "that belongs to STORE", which would confirm both that it exists and which
-     department it came from. */
-  await assert.rejects(() => _FNS.advDecide(d, creditLead, { id: uid('store1'), approve: true }),
-    /halipo|no longer exists/i);
-  assert.equal(d._dump('staff_advances').find(r => r.id === uid('store1')).status, 'pending',
-    'and nothing was written to the other department\'s row');
-
-  // Their own department decides normally.
-  await _FNS.advDecide(d, creditLead, { id: uid('credit1'), approve: true });
-  assert.equal(d._dump('staff_advances').find(r => r.id === uid('credit1')).status, 'approved');
+  // A plain OFFICER holding advappr and nothing else about them.
+  const approver = { code: 'P1', name: 'ONE APPROVER', role: 'OFFICER', teams: null, tabs: ['advappr'], readOnly: false };
+  const q = await _FNS.advQueue(d, approver, {});
+  assert.deepEqual(q.rows.map(r => r.id).sort(), [uid('credit1'), uid('store1'), uid('it1')].sort(),
+    'every department, whatever role the approver carries');
+  assert.equal(q.pending, 3, 'the pending count is the company');
+  assert.ok(!('scope' in q), 'there is no department scope left to explain');
+  // And decides any of them.
+  await _FNS.advDecide(d, approver, { id: uid('store1'), approve: true });
+  assert.equal(d._dump('staff_advances').find(r => r.id === uid('store1')).status, 'approved');
+  // A stale leader field, whichever way it points, changes nothing.
+  for (const leader of [false, null, true]) {
+    assert.equal((await _FNS.advQueue(d, { ...approver, leader }, {})).rows.length, 3, 'leader=' + leader + ' is ignored');
+  }
+  // The nav is still required: the switch alone never opened anything, and cannot now.
+  await assert.rejects(() => _FNS.advQueue(d, { ...ASKER, leader: true }, {}), e => e.status === 403);
+  await assert.rejects(() => _FNS.advDecide(d, { ...ASKER, leader: true }, { id: uid('it1'), approve: true }),
+    e => e.status === 403);
 });
 
 test('ADMIN is full access everywhere, and so is read-only supervision', async () => {
@@ -1755,28 +1721,19 @@ test('ADMIN is full access everywhere, and so is read-only supervision', async (
     { ...anAdvance({ id: uid('store1'), code: 'S1' }), staff_role: 'STORE' },
     { ...anAdvance({ id: uid('it1'), code: 'I1' }), staff_role: 'IT' },
   ]);
-  /* The owner's standing rule. ADMIN carries no Kiongozi switch and belongs to no department,
-     and must still see and decide everything -- otherwise the person who administers the
-     system is the one person locked out of it. */
-  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: [], readOnly: false,
-    leader: false };
-  assert.equal((await _FNS.advQueue(d, admin, {})).rows.length, 3,
-    'admin sees every department regardless of the leader switch');
+  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: [], readOnly: false };
+  assert.equal((await _FNS.advQueue(d, admin, {})).rows.length, 3, 'admin sees every request');
   await _FNS.advDecide(d, admin, { id: uid('store1'), approve: true });
   assert.equal(d._dump('staff_advances').find(r => r.id === uid('store1')).status, 'approved');
 
   // Read-only supervision sees all of it and can change none of it.
-  const ro = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: [],
-    readOnly: true, leader: false };
+  const ro = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: [], readOnly: true };
   assert.equal((await _FNS.advQueue(d, ro, {})).rows.length, 3);
   await assert.rejects(() => _FNS.advDecide(d, ro, { id: uid('it1'), approve: true }),
     e => e.status === 403);
 });
 
 test('the report stays company-wide: that is what HR is for', async () => {
-  /* "the advance report nav compose all the company" -- the department boundary is on the
-     APPROVAL pane only. HR files and pays for everybody, so scoping this one would break the
-     bank run it exists to produce. */
   const d = advDb([
     { ...anAdvance({ id: uid('credit1'), code: 'C1' }), staff_role: 'CREDIT' },
     { ...anAdvance({ id: uid('store1'), code: 'S1' }), staff_role: 'STORE' },
@@ -1784,105 +1741,40 @@ test('the report stays company-wide: that is what HR is for', async () => {
   const rep = await _FNS.advReport(d, HRUSER, {});
   assert.equal(rep.rows.length, 2, 'HR sees every department');
   assert.deepEqual([...new Set(rep.rows.map(r => r.staffRole))].sort(), ['CREDIT', 'STORE']);
-  // And HR's own leader switch is irrelevant to it.
-  assert.equal((await _FNS.advReport(d, { ...HRUSER, leader: true }, {})).rows.length, 2);
 });
 
-test('before the leader migration the pane says so instead of showing an empty queue', async () => {
-  /* leader === null means authCode could not find the column. An empty queue in that state
-     would read as "nobody has asked for anything", which is the one conclusion a pane about
-     money must never invite by accident. */
-  const d = advDb([anAdvance({ id: uid('a') })]);
-  const unknown = { ...APPROVER, leader: null };
-  const q = await _FNS.advQueue(d, unknown, {});
-  assert.equal(q.notReady, true);
-  assert.deepEqual(q.rows, []);
-  assert.match(q.note, /RUN-ME-2026-08-31-advance-leader\.sql/,
-    'and it names the exact file to run');
-  await assert.rejects(() => _FNS.advDecide(d, unknown, { id: uid('a'), approve: true }),
-    /RUN-ME-2026-08-31-advance-leader\.sql/);
+test('the Kiongozi switch is gone: no endpoint, no audit entry, no column written or read', async () => {
+  assert.equal(typeof _FNS.accessCodeLeader, 'undefined', 'the toggle endpoint no longer exists');
+  const { AUDITED } = await import('../api/_lib/audit.js');
+  assert.ok(!AUDITED.has('accessCodeLeader'), 'and is not on the audit list');
 
-  // Admin is unaffected by the missing column, as by everything else.
-  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: [], leader: null };
-  assert.equal((await _FNS.advQueue(d, admin, {})).rows.length, 1);
-});
-
-test('saving an access code carries the Kiongozi switch, and never clears it by accident', async () => {
   const d = fakeDb({ access_codes: [], roles: [], settings: [] });
   const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
-  const base = { code: 'C9', name: 'CREDIT LEADER', role: 'CREDIT', allTeams: true, tabs: ['advappr'] };
-
-  await _FNS.saveAccessCode(d, admin, { ...base, leader: true });
-  assert.equal(d._dump('access_codes')[0].is_leader, true);
-
-  await _FNS.saveAccessCode(d, admin, { ...base, leader: false });
-  assert.equal(d._dump('access_codes')[0].is_leader, false, 'and it can be taken away again');
-
-  /* AN EDIT THAT SAYS NOTHING ABOUT LEADERSHIP MUST NOT REVOKE IT. An older screen -- or any
-     save of a name or a team list -- would otherwise quietly demote somebody. */
-  await _FNS.saveAccessCode(d, admin, { ...base, leader: true });
-  await _FNS.saveAccessCode(d, admin, { ...base, name: 'RENAMED' });
+  // An older screen still sending `leader` writes nothing for it and loses nothing else.
+  await _FNS.saveAccessCode(d, admin, { code: 'C9', name: 'ONE APPROVER', role: 'CREDIT', allTeams: true,
+    tabs: ['advappr'], leader: true });
   const row = d._dump('access_codes')[0];
-  assert.equal(row.name, 'RENAMED');
-  assert.equal(row.is_leader, true, 'an unrelated edit must leave the switch alone');
-});
+  assert.ok(!('is_leader' in row), 'is_leader is never written');
+  assert.deepEqual(row.tabs, ['advappr']);
+  assert.equal(row.name, 'ONE APPROVER');
 
-/* "the leader button i need it visible as a column before the hariri and futa ones" --
-   one click in the row, and deliberately NOT routed through saveAccessCode. */
-test('the Kiongozi toggle changes one column and can lose nothing else', async () => {
-  const d = fakeDb({ access_codes: [
-    { code: 'C9', name: 'CREDIT LEADER', role: 'CREDIT', teams: ['DAR', 'MWANZA'],
-      tabs: ['advappr', 'customers'], is_leader: false },
-  ] });
-  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
+  const codes = await _FNS.accessCodes(d, admin, {});
+  assert.ok(!('leaderKnown' in codes), 'the pane is not told about a switch it no longer has');
+  assert.ok(!('leader' in codes.codes[0]));
 
-  const on = await _FNS.accessCodeLeader(d, admin, { code: 'C9', leader: true });
-  assert.equal(on.leader, true);
-  let row = d._dump('access_codes')[0];
-  assert.equal(row.is_leader, true);
-  /* THE WHOLE POINT OF ITS OWN FUNCTION. A toggle in a table row has no name, teams or tabs to
-     hand -- routing it through saveAccessCode would mean rebuilding them from data attributes
-     on a button, and the day that comes back wrong somebody loses their access by pressing a
-     switch about something else. */
-  assert.deepEqual(row.teams, ['DAR', 'MWANZA'], 'teams must be untouched');
-  assert.deepEqual(row.tabs, ['advappr', 'customers'], 'tabs must be untouched');
-  assert.equal(row.name, 'CREDIT LEADER');
-  assert.equal(row.role, 'CREDIT');
-
-  await _FNS.accessCodeLeader(d, admin, { code: 'C9', leader: false });
-  assert.equal(d._dump('access_codes')[0].is_leader, false, 'and it flips back');
-
-  // Only somebody who may edit access codes at all may flip it.
-  const officer = { code: 'A1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: ['advreq'], readOnly: false };
-  await assert.rejects(() => _FNS.accessCodeLeader(d, officer, { code: 'C9', leader: true }),
-    e => e.status === 403);
-  const ro = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['settings'], readOnly: true };
-  await assert.rejects(() => _FNS.accessCodeLeader(d, ro, { code: 'C9', leader: true }),
-    e => e.status === 403, 'read-only supervision changes nothing, here as everywhere');
-
-  await assert.rejects(() => _FNS.accessCodeLeader(d, admin, { code: 'NOPE', leader: true }),
-    /Unknown code/);
-
-  // Flipping somebody's leadership is a permission change, so it is logged like one.
-  const { AUDITED, subjectOf } = await import('../api/_lib/audit.js');
-  assert.ok(AUDITED.has('accessCodeLeader'));
-  assert.match(subjectOf({ code: 'C9', leader: true }) || '', /code=C9/,
-    'the entry must name whose switch was flipped');
-});
-
-test('the toggle names the migration rather than leaking a database error', async () => {
-  const d = {
-    from() {
-      return { update() { return this; }, eq() { return this; },
-        select() { return Promise.resolve({ data: null,
-          error: { code: '42703', message: 'column "is_leader" of relation "access_codes" does not exist' } }); } };
-    },
-    _dump: () => [],
-  };
-  const admin = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
-  await assert.rejects(() => _FNS.accessCodeLeader(d, admin, { code: 'C9', leader: true }),
-    /RUN-ME-2026-08-31-advance-leader\.sql/,
-    'a missing column must name the file to run, not surface raw Postgres');
+  /* SIGN-IN NEVER ASKS FOR THE COLUMN. A database that still has it and one that never had it
+     must read the same, so the select lists are pinned in the source: no is_leader anywhere in
+     the code, comments aside. */
+  const noComments = src => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const auth = fs.readFileSync(new URL('../api/_lib/auth.js', import.meta.url), 'utf8');
+  assert.ok(!/is_leader/.test(noComments(auth)), 'auth.js does not select is_leader');
+  const portal = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  /* call_users has an is_leader of its own (the calls app's team leader) and keeps it; what
+     must be gone is every use tied to ACCESS CODES and the advance. */
+  const body = noComments(portal);
+  assert.ok(!/ADV_LEADER_NOT_READY|user\.leader|leaderKnown|row\.is_leader|is_leader: leader/.test(body),
+    'portal.js neither writes nor reads the switch');
+  assert.ok(!/access_codes[^\n]{0,120}is_leader/.test(body), 'and never selects it off access_codes');
 });
 
 test('the audit write is waited for, and still cannot break the save it accompanies', async () => {
@@ -2085,7 +1977,7 @@ test('sign-in survives a database that has never heard of suspension', async () 
   const u = await authCode('OLD', pre);
   assert.equal(u.name, 'Asha', 'the door still opens');
   assert.equal(u.suspended, null, 'three states: not false, but "we were not able to ask"');
-  assert.equal(u.leader, null);
+  assert.ok(!('leader' in u), 'the door no longer reports a leader switch');
 });
 
 test('suspending a credit officer deals today\'s customers among the ones who are present', async () => {

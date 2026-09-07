@@ -15,12 +15,12 @@ import { todayKey, addDaysKey } from '../api/_lib/time.js';
       there (another one)"
 
    The same rule as the advance tests: THE PERMISSION IS THE NAV. Nothing here names an
-   administrator, a GM or HR; the fixtures hold panes, and a test that asserted on a role
+   administrator, a CEO or HR; the fixtures hold panes, and a test that asserted on a role
    name would be testing a rule the code deliberately does not have.
    ========================================================================================= */
 const ASKER = { code: 'A1', name: 'JUMA G', role: 'OFFICER', teams: null, tabs: ['impreq', 'leavereq'], readOnly: false };
 const ADMIN_IMP = { code: 'D1', name: 'NEEMA M', role: 'OFFICER', teams: null, tabs: ['impappr'], readOnly: false };
-const GM = { code: 'G1', name: 'BOSS', role: 'MANAGER', teams: null, tabs: ['imprep'], readOnly: false };
+const CEO = { code: 'G1', name: 'BOSS', role: 'MANAGER', teams: null, tabs: ['imprep'], readOnly: false };
 const HR = { code: 'H1', name: 'SIPHO K', role: 'HR', teams: null, tabs: ['leaveappr'], readOnly: false };
 const VIEWER = { code: 'V1', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['impreq', 'impappr', 'leavereq', 'leaveappr'], readOnly: true };
 const OWNER = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
@@ -78,12 +78,12 @@ test('the five panes are five separate grants, and view-only codes can look but 
   // impreq is the right to ASK and to retire one's own trip; nothing else.
   await denied('impQueue', ASKER); await denied('impDecide', ASKER, { id: uid('r1'), approve: true });
   await denied('impReport', ASKER); await denied('impRoleSave', ASKER, { role: 'X', rate: 1 });
-  // impappr decides and owns the rate table; it does not file the GM's report.
+  // impappr decides and owns the rate table; it does not file the CEO's report.
   await denied('impMine', ADMIN_IMP); await denied('impReport', ADMIN_IMP);
   await denied('impRetire', ADMIN_IMP, { id: uid('r1') });
   // imprep reviews; it neither asks nor decides.
-  await denied('impMine', GM); await denied('impQueue', GM);
-  await denied('impDecide', GM, { id: uid('r1'), approve: true }); await denied('impRoleSave', GM, { role: 'X', rate: 1 });
+  await denied('impMine', CEO); await denied('impQueue', CEO);
+  await denied('impDecide', CEO, { id: uid('r1'), approve: true }); await denied('impRoleSave', CEO, { role: 'X', rate: 1 });
   // Leave: the asker cannot sit at HR's desk, HR cannot ask on the asker's pane.
   await denied('leaveQueue', ASKER); await denied('leaveDecide', ASKER, { id: uid('r1'), approve: true });
   await denied('leaveMine', HR);
@@ -138,7 +138,7 @@ test('a request is refused for the reasons the paper form would be sent back', a
   await bad({ fullName: ' ' }, /jina|name/i);
   await bad({ email: 'not-an-email' }, /barua|email/i);
   await bad({ imprestRole: '' }, /wadhifa|role/i);
-  await bad({ imprestRole: 'GM' }, /kiwango|no rate/i);            // a role with no rate yet
+  await bad({ imprestRole: 'CEO' }, /kiwango|no rate/i);            // a role with no rate yet
   await bad({ travelDate: '15/09/2026' }, /tarehe|date/i);
   await bad({ purpose: '' }, /madhumuni|purpose/i);
   await bad({ fareTrips: 1.5 }, /namba nzima|whole/i);
@@ -151,14 +151,14 @@ test('the rate table is the approver\'s: upsert by role, whole numbers, case-fol
   const d = impDb({ roles: [] });
   await _FNS.impRoleSave(d, ADMIN_IMP, { role: ' credit ', rate: '40000' });
   await _FNS.impRoleSave(d, ADMIN_IMP, { role: 'CREDIT', rate: 45000 });   // same role, new figure
-  await _FNS.impRoleSave(d, ADMIN_IMP, { role: 'gm', rate: 0 });
+  await _FNS.impRoleSave(d, ADMIN_IMP, { role: 'ceo', rate: 0 });
   const roles = (await _FNS.impRoles(d, ASKER)).roles;           // the requester may read it
-  assert.deepEqual(roles.map(r => [r.role, r.rate]), [['CREDIT', 45000], ['GM', 0]], 'one row per role, sorted');
+  assert.deepEqual(roles.map(r => [r.role, r.rate]), [['CEO', 0], ['CREDIT', 45000]], 'one row per role, sorted');
   assert.equal(roles[0].by, 'NEEMA M');
   await assert.rejects(() => _FNS.impRoleSave(d, ADMIN_IMP, { role: 'RSM', rate: 12.5 }), /namba nzima|whole/i);
   await assert.rejects(() => _FNS.impRoleSave(d, ADMIN_IMP, { role: '', rate: 1 }), /jina|role name/i);
-  await _FNS.impRoleDelete(d, ADMIN_IMP, { role: 'gm' });
-  assert.deepEqual((await _FNS.impRoles(d, GM)).roles.map(r => r.role), ['CREDIT']);
+  await _FNS.impRoleDelete(d, ADMIN_IMP, { role: 'ceo' });
+  assert.deepEqual((await _FNS.impRoles(d, CEO)).roles.map(r => r.role), ['CREDIT']);
 });
 
 test('a later rate change never reprices a trip already filed', async () => {
@@ -289,13 +289,13 @@ test('the photos are fetched one request at a time, and never ride along with a 
     photos: [{ request_id: uid('ok'), seq: 2, data: photoOf(20), bytes: 20 }, { request_id: uid('ok'), seq: 1, data: photoOf(10), bytes: 10 },
       { request_id: uid('theirs'), seq: 1, data: photoOf(30), bytes: 30 }],
   });
-  const wire = JSON.stringify([await _FNS.impMine(d, ASKER), await _FNS.impQueue(d, ADMIN_IMP, {}), await _FNS.impReport(d, GM, {})]);
+  const wire = JSON.stringify([await _FNS.impMine(d, ASKER), await _FNS.impQueue(d, ADMIN_IMP, {}), await _FNS.impReport(d, CEO, {})]);
   assert.ok(!wire.includes('base64'), 'no list carries a photo');
   const mine = await _FNS.impPhotos(d, ASKER, { id: uid('ok') });
   assert.deepEqual(mine.photos.map(p => p.seq), [1, 2], 'in order, whatever order the table returned');
   await assert.rejects(() => _FNS.impPhotos(d, ASKER, { id: uid('theirs') }), /halipo|no longer exists/i,
     'a requester sees only their own receipts');
-  const gm = await _FNS.impPhotos(d, GM, { id: uid('theirs') });
+  const gm = await _FNS.impPhotos(d, CEO, { id: uid('theirs') });
   assert.equal(gm.photos.length, 1, 'a reviewer sees anybody\'s');
   const adm = await _FNS.impPhotos(d, ADMIN_IMP, { id: uid('theirs') });
   assert.equal(adm.photos.length, 1);
@@ -303,7 +303,7 @@ test('the photos are fetched one request at a time, and never ride along with a 
 });
 
 /* ---------------------------------------------------------------------------------------- */
-test('the GM\'s report: by travel date, with the retirement beside each row and honest totals', async () => {
+test('the CEO\'s report: by travel date, with the retirement beside each row and honest totals', async () => {
   const d = impDb({
     requests: [
       aRequest({ id: uid('a'), travel: '2026-09-03', status: 'approved', approved: 170000, retiredAt: '2026-09-06T08:00:00Z', retireTotal: 150000, retireBalance: 20000 }),
@@ -318,23 +318,23 @@ test('the GM\'s report: by travel date, with the retirement beside each row and 
       { request_id: uid('b'), filed_at: '2026-09-12T08:00:00Z', filed_by_name: 'JUMA G', fare_actual: 30000, accom_actual: 100000, other1_actual: 0, other2_actual: 0, other3_actual: 0, total_actual: 130000, notes: null, photo_count: 2 },
     ],
   });
-  const r = await _FNS.impReport(d, GM, { from: '2026-09-01', to: '2026-09-30' });
+  const r = await _FNS.impReport(d, CEO, { from: '2026-09-01', to: '2026-09-30' });
   assert.equal(r.totals.count, 5, 'August\'s trip is outside the period');
   assert.deepEqual(r.totals, { count: 5, pending: 1, rejected: 1, approved: 3, approvedAmount: 350000,
     retired: 2, toRetire: 1, spent: 280000, toRefund: 20000, toReimburse: 30000 });
   const a = r.rows.find(x => x.id === uid('a'));
   assert.equal(a.retirement.total, 150000); assert.equal(a.retirement.photos, 3); assert.equal(a.retirement.by, 'JUMA G');
   assert.equal(r.rows.find(x => x.id === uid('c')).retirement, null);
-  assert.deepEqual((await _FNS.impReport(d, GM, { from: '2026-09-01', to: '2026-09-30', status: 'retired' })).rows.map(x => x.id).sort(), [uid('a'), uid('b')].sort());
-  assert.deepEqual((await _FNS.impReport(d, GM, { from: '2026-09-01', to: '2026-09-30', status: 'toRetire' })).rows.map(x => x.id), [uid('c')]);
-  assert.deepEqual((await _FNS.impReport(d, GM, { from: '2026-09-01', to: '2026-09-30', status: 'pending' })).rows.map(x => x.id), [uid('d')]);
-  assert.equal((await _FNS.impReport(d, GM, {})).totals.count, 6, 'no dates means everything');
+  assert.deepEqual((await _FNS.impReport(d, CEO, { from: '2026-09-01', to: '2026-09-30', status: 'retired' })).rows.map(x => x.id).sort(), [uid('a'), uid('b')].sort());
+  assert.deepEqual((await _FNS.impReport(d, CEO, { from: '2026-09-01', to: '2026-09-30', status: 'toRetire' })).rows.map(x => x.id), [uid('c')]);
+  assert.deepEqual((await _FNS.impReport(d, CEO, { from: '2026-09-01', to: '2026-09-30', status: 'pending' })).rows.map(x => x.id), [uid('d')]);
+  assert.equal((await _FNS.impReport(d, CEO, {})).totals.count, 6, 'no dates means everything');
 });
 
 test('each imprest pane says which migration to run instead of failing', async () => {
   const d = fakeDb({ imprest_requests: [], imprest_roles: [], imprest_retirements: [], leave_requests: [], settings: [] },
     { missingColumns: { imprest_requests: ['id'], imprest_roles: ['role'], leave_requests: ['id'] } });
-  for (const [fn, user] of [['impMine', ASKER], ['impQueue', ADMIN_IMP], ['impReport', GM], ['impRoles', ASKER], ['leaveMine', ASKER], ['leaveQueue', HR]]) {
+  for (const [fn, user] of [['impMine', ASKER], ['impQueue', ADMIN_IMP], ['impReport', CEO], ['impRoles', ASKER], ['leaveMine', ASKER], ['leaveQueue', HR]]) {
     const r = await _FNS[fn](d, user, {});
     assert.equal(r.notReady, true, fn + ' reports not-ready rather than throwing');
   }
@@ -342,11 +342,11 @@ test('each imprest pane says which migration to run instead of failing', async (
 });
 
 /* ---------------------------------------------------------------------------------------- */
-test('email is a courtesy: the administrator is nudged, the GM gets the approval copy, and nothing depends on it', async () => {
+test('email is a courtesy: the administrator is nudged, the CEO gets the approval copy, and nothing depends on it', async () => {
   const cap = captureMail();
   try {
     const d = impDb({ settings: [{ key: 'IMPREST_ADMIN_EMAIL', value: 'admin@hoop.co.tz; second@hoop.co.tz' },
-      { key: 'IMPREST_GM_EMAIL', value: 'gm@hoop.co.tz' }, { key: 'EMAIL_FROM', value: 'HOOPLOAN <no-reply@hoop.co.tz>' }] });
+      { key: 'IMPREST_CEO_EMAIL', value: 'gm@hoop.co.tz' }, { key: 'EMAIL_FROM', value: 'HOOPLOAN <no-reply@hoop.co.tz>' }] });
     const ask = await _FNS.impRequest(d, ASKER, GOOD_ASK);
     assert.equal(ask.emailed, true);
     assert.equal(cap.sent.length, 1);
@@ -360,7 +360,7 @@ test('email is a courtesy: the administrator is nudged, the GM gets the approval
     // The fake gives inserted rows a non-uuid id; decide by the same shape the client would send.
     d._dump('imprest_requests')[0].id = uid('sent');
     const dec = await _FNS.impDecide(d, ADMIN_IMP, { id: uid('sent'), approve: true, approvedAmount: 160000 });
-    assert.deepEqual(dec.emailed, { gm: true, requester: true });
+    assert.deepEqual(dec.emailed, { ceo: true, requester: true });
     assert.equal(cap.sent.length, 3);
     assert.deepEqual(cap.sent[1].body.to, ['gm@hoop.co.tz'], 'the copy that "stays for the gm review"');
     assert.match(cap.sent[1].body.html, /160,000/);
@@ -369,13 +369,13 @@ test('email is a courtesy: the administrator is nudged, the GM gets the approval
   } finally { cap.restore(); }
 });
 
-test('a rejection copies the requester but not the GM; a mail provider that is down loses no request', async () => {
+test('a rejection copies the requester but not the CEO; a mail provider that is down loses no request', async () => {
   const cap = captureMail();
   try {
-    const d = impDb({ requests: [aRequest({ id: uid('r1') })], settings: [{ key: 'IMPREST_GM_EMAIL', value: 'gm@hoop.co.tz' },
+    const d = impDb({ requests: [aRequest({ id: uid('r1') })], settings: [{ key: 'IMPREST_CEO_EMAIL', value: 'gm@hoop.co.tz' },
       { key: 'IMPREST_ADMIN_EMAIL', value: 'admin@hoop.co.tz' }] });
     const dec = await _FNS.impDecide(d, ADMIN_IMP, { id: uid('r1'), approve: false, comment: 'Safari si ya lazima' });
-    assert.equal(dec.emailed.gm, false); assert.equal(dec.emailed.requester, true);
+    assert.equal(dec.emailed.ceo, false); assert.equal(dec.emailed.requester, true);
     assert.equal(cap.sent.length, 1);
     assert.match(cap.sent[0].body.html, /REJECTED/);
 
@@ -400,8 +400,8 @@ test('without a key or an address, sendMail says so and never throws', async () 
     assert.equal(r.sent, false); assert.match(r.reason, /RESEND_API_KEY/);
     process.env.RESEND_API_KEY = 'k';
     _setFetch(async () => { throw new Error('must not be called with no recipient'); });
-    const r2 = await sendMail(d, { toKey: 'IMPREST_GM_EMAIL', subject: 's', html: 'h' });
-    assert.equal(r2.sent, false); assert.match(r2.reason, /IMPREST_GM_EMAIL/);
+    const r2 = await sendMail(d, { toKey: 'IMPREST_CEO_EMAIL', subject: 's', html: 'h' });
+    assert.equal(r2.sent, false); assert.match(r2.reason, /IMPREST_CEO_EMAIL/);
     const r3 = await sendMail(d, { to: 'garbage', subject: 's', html: 'h' });
     assert.equal(r3.sent, false);
     assert.match(noticeHtml('T <b>', [['k', '<i>'], ['n', 1234567]], '<f>'), /T &lt;b&gt;[\s\S]*&lt;i&gt;[\s\S]*1,234,567 TZS[\s\S]*&lt;f&gt;/);
@@ -410,7 +410,7 @@ test('without a key or an address, sendMail says so and never throws', async () 
 
 test('the email settings are editable from the Settings pane and the writes are audited', () => {
   const src = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
-  for (const k of ['IMPREST_ADMIN_EMAIL', 'IMPREST_GM_EMAIL', 'HR_EMAIL', 'EMAIL_FROM']) {
+  for (const k of ['IMPREST_ADMIN_EMAIL', 'IMPREST_CEO_EMAIL', 'HR_EMAIL', 'EMAIL_FROM']) {
     assert.match(src, new RegExp(`EDITABLE_SETTINGS[\\s\\S]{0,800}'${k}'`), k + ' must be a setting the office can change without a deploy');
   }
   for (const f of ['impRequest', 'impDecide', 'impRetire', 'impRoleSave', 'impRoleDelete', 'leaveRequest', 'leaveDecide']) {
