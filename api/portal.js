@@ -101,7 +101,7 @@ const EDITABLE_SETTINGS = [
   /* WHO IS TOLD, by email, when somebody asks or something is decided. Blank means nobody --
      the panes are the record and work without these; see api/_lib/mail.js. EMAIL_FROM is the
      sender, and needs a domain verified with the provider before mail stops landing in spam. */
-  'IMPREST_ADMIN_EMAIL', 'IMPREST_GM_EMAIL', 'HR_EMAIL', 'EMAIL_FROM',
+  'IMPREST_ADMIN_EMAIL', 'IMPREST_CEO_EMAIL', 'HR_EMAIL', 'EMAIL_FROM',
 ];
 
 /* =======================================================================================
@@ -181,7 +181,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
      "they want to be asking for leaves in app (another nav), and hr approves or rejects there
       (another one)"
    impreq asks, impappr decides (and keeps the per-role accommodation rates), imprep is the
-   GM's review copy -- logs, retirements, widgets. leavereq asks, leaveappr is HR's desk. */
+   CEO's review copy -- logs, retirements, widgets. leavereq asks, leaveappr is HR's desk. */
 const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
@@ -189,27 +189,24 @@ const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
    it sees the whole system, and requireWrite stops it changing any of it. */
 const advSeesEveryRole = user => isAdminRole(user) || isReadOnly(user);
 
-/* THE APPROVAL PANE NEEDS THE NAV *AND* THE PERSON.
+/* THE APPROVAL NAV IS THE WHOLE GRANT, like every other nav.
    ---------------------------------------------------------------------------------------------
-     "all access codes should have a button to switch that that person is a leader in ther role
-      so those with that switch on can extend to approval nav"
+     "Hoop doesnt need the deprt leader approval for salary advance they want just requests and
+      approval or rejection with comments: so people will only request then then approval nav
+      is done by a single person and we stay with reports, so kill the kiongozi column and its
+      working scheme just a approval nav will be granted to approver"
 
-   Every other pane in this system is granted by role alone, and that is right -- but it does not
-   work here. Ticking advappr on CREDIT would hand the approval pane to every credit officer,
-   when what the owner means is the ONE person who leads them. "Leads their department" is a fact
-   about a person, not about a role, so it is a switch on the access code, and the pane opens
-   only when both are true.
-
-   `leader === null` means the migration has not run yet. The nav stays visible in that state on
-   purpose: taking it away would be a pane that silently vanished, whereas advQueue can open and
-   say exactly which SQL file is missing. It shows no rows either way -- see advQueue. */
+   There WAS a second switch here -- Kiongozi, on the access code -- and a same-department
+   filter on the queue, both from a time when each department's leader was to approve their own
+   people. One approver for the company makes both of them ceremony: the owner ticks advappr on
+   that one person, and the tick is the permission. The is_leader column stays in the database,
+   because a column that exists harms nothing and a migration that drops one can; nothing reads
+   it any more. */
 function navsFor(user) {
   if (advSeesEveryRole(user)) return NAV_TABS.slice();
   const t = (user.tabs || []).map(x => String(x).toLowerCase());
   if (t.includes('sales')) t.push('fraud', 'scorecards', 'stock', 'movement');
-  let chosen = NAV_TABS.filter(k => t.includes(k));
-  // The nav grant is necessary but not sufficient for the approval pane: see the note above.
-  if (user && user.leader === false) chosen = chosen.filter(k => k !== 'advappr');
+  const chosen = NAV_TABS.filter(k => t.includes(k));
   // 'dashboard' and 'settings' were the OLD vocabulary too -- a role carrying only
   // those was saved before panes were choosable and must keep the old defaults, or
   // yesterday's codes go dark today. Any OTHER nav key means the owner chose deliberately.
@@ -244,10 +241,6 @@ const ADV_QUEUE_COLS = 'id, requested_at, staff_code, staff_name, staff_role, ap
 const ADV_NOT_READY = 'Jedwali la advance halijatengenezwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-08-29-salary-advance.sql kwenye Supabase. '
   + '/ The salary advance table has not been created yet — run that migration first.';
-const ADV_LEADER_NOT_READY = 'Kibali cha kiongozi hakijawekwa bado. Endesha '
-  + 'db/migrations/RUN-ME-2026-08-31-advance-leader.sql kwenye Supabase, kisha weka alama ya '
-  + 'Kiongozi kwenye misimbo inayoongoza idara. / The leader switch does not exist yet — run '
-  + 'that migration, then tick Kiongozi on the codes that lead a department.';
 /* How long a phone counts as "just enrolled" and rides at the top of the register. A day,
    because that is the length of a bench session and the life of an enrol batch -- so the band
    empties itself by the next morning with nothing to switch off. */
@@ -2535,14 +2528,6 @@ const FNS = {
       below it so somebody can see what they just did and catch a slip immediately. */
   async advQueue(db, user, args) {
     requireNav(user, 'advappr');
-    /* THE MIGRATION IS NOT OPTIONAL FOR THIS PANE. Until is_leader exists the server cannot
-       tell a leader from anybody else, and the honest answer to "whose advances may I see" is
-       "I do not know yet" -- which must not be served as an empty queue, because an empty queue
-       reads as "nobody has asked for anything". */
-    if (user && user.leader === null && !advSeesEveryRole(user)) {
-      return { ok: true, rows: [], pending: 0, amounts: ADV_AMOUNTS, notReady: true,
-        note: ADV_LEADER_NOT_READY };
-    }
     const a = args || {};
     let rows;
     try {
@@ -2551,20 +2536,14 @@ const FNS = {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS, pending: 0 };
     }
-    /* CONFIDENTIALITY BY DEPARTMENT. A credit leader approves credit advances and has no
-       business reading what the store or IT are borrowing -- the amounts ARE the confidential
-       part. Scoped on the role STAMPED on the request, not on a live lookup of the requester,
-       so a person who changes department later does not retroactively move their old asks into
-       somebody else's queue. Admin and read-only supervision see every role. */
-    const mine = advSeesEveryRole(user) ? null : K(user.role);
-    if (mine !== null) rows = rows.filter(r => K(r.staff_role) === mine);
+    /* THE WHOLE COMPANY. One approver decides every advance, so the queue is every request --
+       the same shape as the imprest queue, for the same reason. The department filter that
+       used to sit here went with the Kiongozi switch; see navsFor. */
     const all = rows.map(r => advRow(r, user.code));
     const want = String(a.state || '').trim();
     const shown = want === 'decided' ? all.filter(r => r.status !== 'pending')
       : want === 'pending' ? all.filter(r => r.status === 'pending') : all;
     return { ok: true, amounts: ADV_AMOUNTS,
-      // What the pane tells the approver about why their list is short.
-      scope: mine === null ? 'kampuni nzima / the whole company' : String(user.role || ''),
       pending: all.filter(r => r.status === 'pending').length,
       // Pending first, then newest -- the queue is a worklist, not a diary.
       rows: shown.sort((x, y) => (x.status === 'pending' ? 0 : 1) - (y.status === 'pending' ? 0 : 1)
@@ -2575,10 +2554,6 @@ const FNS = {
   async advDecide(db, user, args) {
     requireNav(user, 'advappr');
     requireWrite(user);
-    /* The queue's department filter is a VIEW, and a view is not a control. Anybody who can
-       read an id can post it here, so the same boundary is enforced again on the write --
-       checked below, once the row has been read and its stamped role is known. */
-    if (user && user.leader === null && !advSeesEveryRole(user)) bad(ADV_LEADER_NOT_READY);
     const a = args || {};
     /* CHECKED AS A UUID, not merely as non-empty. `id` goes straight into .eq('id', id) against
        a uuid column, and Postgres answers a malformed one with "invalid input syntax for type
@@ -2606,13 +2581,6 @@ const FNS = {
     }
     const dev = rows.find(r => String(r.id) === id);
     if (!dev) bad('Ombi halipo. / That request no longer exists.');
-    /* THE DEPARTMENT BOUNDARY, ENFORCED ON THE WRITE. Answered the same way as a missing row,
-       and deliberately so: telling somebody "that belongs to STORE" would confirm the request
-       exists and name the department it came from, which is the confidentiality this was asked
-       for in the first place. Compared on the role stamped on the request. */
-    if (!advSeesEveryRole(user) && K(dev.staff_role) !== K(user.role)) {
-      bad('Ombi halipo. / That request no longer exists.');
-    }
     if (String(dev.status) !== 'pending') {
       bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     }
@@ -2717,9 +2685,9 @@ const FNS = {
 
      Five functions over one request table, gated by three navs and nothing else. NOBODY'S
      ROLE IS EVER NAMED HERE: the owner ticks impreq on whoever may ask, impappr on whoever
-     decides (the "administrator"), imprep on whoever reviews (the GM). Unlike the advance,
-     the approver sees EVERY request -- an administrator is an administrator for the company,
-     not for a department -- so there is no leader switch and no role scoping.
+     decides (the "administrator"), imprep on whoever reviews (the CEO). The approver sees EVERY
+     request -- an administrator is an administrator for the company, not for a department --
+     so there is no leader switch and no role scoping; the advance works the same way now.
 
      WHO ASKED comes off the signed-in code and is stamped on the row. WHAT IT COSTS is computed
      here from the parts the form sent, never taken as a total: fare = trips x per-trip,
@@ -2939,25 +2907,25 @@ const FNS = {
     if (error) throw new Error(error.message);
     if (!data || !data.length) bad('Ombi hili limeamuliwa na mtu mwingine sasa hivi. / Somebody else just decided this one.');
 
-    /* THE COPIES. The GM's inbox copy on approval -- "a copy stays for the gm review" -- and the
+    /* THE COPIES. The CEO's inbox copy on approval -- "a copy stays for the gm review" -- and the
        requester told either way, at the address they wrote on the form. Both best effort. */
     const facts = [['Jina / Name', row.full_name || row.staff_name], ['Wadhifa / Role', row.imprest_role || ''],
       ['Safari / Travel', String(row.travel_date || '').slice(0, 10)], ['Mahali / Destination', row.destination || '—'],
       ['Kiliombwa / Requested', asked], ['Uamuzi / Decision', approve ? 'APPROVED · ' + money0(granted) + ' TZS' : 'REJECTED'],
       ['Maoni / Comment', comment || '—'], ['Aliyeamua / Decided by', user.name || '']];
-    const gm = approve ? await sendMail(db, { toKey: 'IMPREST_GM_EMAIL',
+    const ceo = approve ? await sendMail(db, { toKey: 'IMPREST_CEO_EMAIL',
       subject: 'HOOPLOAN — imprest imeidhinishwa / approved: ' + (row.full_name || row.staff_name) + ' · ' + money0(granted) + ' TZS',
-      html: noticeHtml('Nakala ya GM / GM copy — imprest approved', facts,
+      html: noticeHtml('Nakala ya CEO / CEO copy — imprest approved', facts,
         'Nakala hii ni ya kumbukumbu; fungua Ripoti ya imprest kuona kila kitu. / Filed for review; the imprest report pane has the full record.') })
-      : { sent: false, reason: 'rejected: GM not copied' };
+      : { sent: false, reason: 'rejected: CEO not copied' };
     const requester = await sendMail(db, { to: row.email,
       subject: 'HOOPLOAN — ombi lako la imprest / your imprest request: ' + (approve ? 'imeidhinishwa / approved' : 'imekataliwa / rejected'),
       html: noticeHtml('Ombi lako la imprest / Your imprest request', facts,
         approve ? 'Ukifika, jaza retirement na picha 3 za risiti. / On arrival, file the retirement with 3 receipt photos.'
                 : 'Wasiliana na mwidhinishaji ukihitaji maelezo. / Speak to the approver if you need more.') });
     return { ok: true, id, status: patch.status, granted,
-      emailed: { gm: gm.sent, requester: requester.sent },
-      emailNote: [gm.sent ? '' : 'GM: ' + gm.reason, requester.sent ? '' : 'mwombaji / requester: ' + requester.reason].filter(Boolean).join(' · ') };
+      emailed: { ceo: ceo.sent, requester: requester.sent },
+      emailNote: [ceo.sent ? "" : "CEO: " + ceo.reason, requester.sent ? '' : 'mwombaji / requester: ' + requester.reason].filter(Boolean).join(' · ') };
   },
 
   /** THE RETIREMENT. "when someone gets where he was destinated for their tasks they fill
@@ -3059,7 +3027,7 @@ const FNS = {
       .sort((x, y) => x.seq - y.seq) };
   },
 
-  /** THE GM'S REVIEW COPY: every request in a period, with its retirement beside it, and the
+  /** THE CEO'S REVIEW COPY: every request in a period, with its retirement beside it, and the
       widgets -- what is waiting, what was paid, what is out with no receipts back, and the net
       balance the company is owed or owes. Filtered on TRAVEL DATE, like the advance is filtered
       on its application date: a review reads by the trip, not by the click. */
@@ -3471,8 +3439,7 @@ const FNS = {
          column. */
       (async () => {
         const tiers = [
-          'code, name, role, teams, tabs, is_leader, suspend_from, suspend_to',
-          'code, name, role, teams, tabs, is_leader',
+          'code, name, role, teams, tabs, suspend_from, suspend_to',
           'code, name, role, teams, tabs',
         ];
         let last;
@@ -3480,7 +3447,7 @@ const FNS = {
           try { return await fetchAll(() => db.from('access_codes').select(cols)); }
           catch (e) {
             last = e;
-            if (!/is_leader|suspend_from|suspend_to/i.test(String(e && e.message))) throw e;
+            if (!/suspend_from|suspend_to/i.test(String(e && e.message))) throw e;
           }
         }
         throw last;
@@ -3507,9 +3474,6 @@ const FNS = {
       navTabs: NAV_TABS,
       roles: [...seen.values()].map(r => ({ ...r, inUse: useCount[r.role] || 0 }))
         .sort((a, b) => a.role < b.role ? -1 : 1),
-      /* null, not false, when the column is absent -- so the editor can show the switch as
-         unavailable-until-migrated rather than as "everybody is off". */
-      leaderKnown: rows.some(r => 'is_leader' in r) || !rows.length,
       suspendKnown: rows.some(r => 'suspend_from' in r) || !rows.length,
       /* The day the window is judged against, sent rather than worked out on the client: the
          browser's clock belongs to whoever is holding it, and this is the same EAT day the
@@ -3519,7 +3483,6 @@ const FNS = {
       codes: rows.map(r => ({
         code: mask ? '••••••' : r.code, name: r.name, role: r.role,
         teams: r.teams || null, tabs: r.tabs || [],
-        leader: 'is_leader' in r ? !!r.is_leader : null,
         /* A SUSPENDED ROW STAYS ON THIS SCREEN, marked rather than hidden. Filtering it out
            would remove the one pane where the window can be lifted -- the same trap as a
            deleted role that quietly resurrects itself. */
@@ -3587,17 +3550,8 @@ const FNS = {
     const row = { code, name: String(a.name).trim(), role: K(a.role),
       teams: wantsAll ? null : list,
       tabs: Array.isArray(a.tabs) ? a.tabs : [] };
-    /* KIONGOZI. Only written when the caller actually said something about it, so an older
-       screen that does not know about the switch cannot silently clear somebody's leadership
-       by saving an unrelated edit to their name or teams. */
-    if (a.leader !== undefined) row.is_leader = a.leader === true;
-    let { error } = await db.from('access_codes').upsert(row, { onConflict: 'code' });
-    if (error && /is_leader/i.test(String(error.message))) {
-      // The migration has not run. Save everything else rather than refusing the whole edit.
-      delete row.is_leader;
-      ({ error } = await db.from('access_codes').upsert(row, { onConflict: 'code' }));
-      if (!error) return { ok: true, code, leaderNotReady: true };
-    }
+    // `leader`, if an older screen still sends it, is ignored: the switch is gone (see navsFor).
+    const { error } = await db.from('access_codes').upsert(row, { onConflict: 'code' });
     if (error) throw new Error(error.message);
     return { ok: true, code };
   },
@@ -3620,17 +3574,6 @@ const FNS = {
     return { ok: true, from, to, self: from === user.code };
   },
 
-  /** THE KIONGOZI SWITCH, ON ITS OWN.
-        "the leader button i need it visible as a column before the hariri and futa ones"
-
-      Deliberately NOT saveAccessCode with a leader field bolted on. That call rewrites the
-      whole row -- name, role, teams, tabs -- from whatever the screen happened to be holding,
-      and a one-click toggle in a table row has none of that to hand. Routing a toggle through
-      it would mean reconstructing a person's teams and panes from data attributes on a button
-      and hoping they came back identical; the day they do not, somebody loses their access by
-      pressing a switch about something else entirely.
-
-      This touches one column and can lose nothing else. */
   /* =========================================================================================
      CHANGING YOUR OWN PASSCODE, FROM THE SIGN-IN SCREEN.
 
@@ -3698,22 +3641,6 @@ const FNS = {
     }
     // The caller must sign in again with the new one; nothing here hands back a session.
     return { ok: true };
-  },
-
-  async accessCodeLeader(db, user, args) {
-    requireWrite(user); requireSettings(user);
-    const code = String((args && args.code) || '').trim();
-    if (!code) throw new Error('code is required.');
-    const leader = (args && args.leader) === true;
-    const { data, error } = await db.from('access_codes')
-      .update({ is_leader: leader }).eq('code', code).select('code');
-    if (error) {
-      // The migration has not been run: say which file, rather than a raw database message.
-      if (/is_leader/i.test(String(error.message))) bad(ADV_LEADER_NOT_READY);
-      throw new Error(error.message);
-    }
-    if (!data || !data.length) throw new Error('Unknown code: ' + code);
-    return { ok: true, code, leader };
   },
 
   /* AWAY TODAY -- an absence recorded as a window, not a switch.

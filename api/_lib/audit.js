@@ -47,10 +47,6 @@ export const AUDITED = new Set([
   // teams & staff
   'saveTeam', 'deleteTeam', 'saveStaffTeams', 'saveRole', 'deleteRole',
   'saveAccessCode', 'deleteAccessCode', 'changeMyCode',
-  /* Making somebody a department leader hands them the advance approval pane and every
-     request their department has filed. That is a permission change, so it is logged like
-     one -- and `code` is in KEEP below, so the entry names whose switch was flipped. */
-  'accessCodeLeader',
   /* Suspending somebody stops them signing in AND takes them out of the credit round, so the
      customers they would have been dealt go to other people. That is a change to who may work
      and to who is carrying whose book, which is exactly what this log exists for. `code` is in

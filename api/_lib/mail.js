@@ -5,7 +5,7 @@
 
    The imprest and leave panes are the system of record: a request exists the moment its row
    does, and an approver sees it the moment they open their pane. Email is the nudge that says
-   "there is something in your pane" and the copy the GM keeps in their inbox. So it MUST NOT
+   "there is something in your pane" and the copy the CEO keeps in their inbox. So it MUST NOT
    be able to break the thing it is announcing: a request that failed because a mail provider
    was down, or because nobody had set an address yet, would be a request lost to a courtesy.
 
@@ -19,7 +19,7 @@
      EMAIL_FROM       Settings; blank falls back to Resend's own onboarding sender, which works
                       for a first send but lands in spam and should be replaced with a verified
                       domain before anybody relies on it
-   The recipient is a Settings KEY passed by the caller (IMPREST_ADMIN_EMAIL, IMPREST_GM_EMAIL,
+   The recipient is a Settings KEY passed by the caller (IMPREST_ADMIN_EMAIL, IMPREST_CEO_EMAIL,
    HR_EMAIL) so the office can change who is told without a deploy. Several addresses may be
    separated by commas or semicolons. */
 

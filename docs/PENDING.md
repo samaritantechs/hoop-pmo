@@ -81,53 +81,35 @@ in **Portal → Access codes → roles**, one tick each; holding one says nothin
 | nav | pane | who |
 |---|---|---|
 | `advreq` | Omba advance / Advance request | anybody with a portal code you tick it on |
-| `advappr` | Idhini ya advance / Advance approval | the leaders who decide |
+| `advappr` | Idhini ya advance / Advance approval | the one person who decides |
 | `advrep` | Ripoti ya advance / Advance report | HR — the filing copy and the bank run |
 
-**RUN BOTH MIGRATIONS FIRST:**
+**Run `db/migrations/RUN-ME-2026-08-29-salary-advance.sql` first** — the `staff_advances`
+table. Until it is run, every advance pane says so in plain words rather than showing an empty
+table, and names the file. "No rows" and "no table" must never look the same on a screen about
+money.
 
-1. `db/migrations/RUN-ME-2026-08-29-salary-advance.sql` — the `staff_advances` table.
-2. `db/migrations/RUN-ME-2026-08-31-advance-leader.sql` — the **Kiongozi** switch on access codes.
+### SIMPLIFIED 2026-09-07: one approver, the nav is the whole grant
 
-Until each is run, the panes that need it say so in plain words rather than showing an empty
-table, and they name the exact file. "No rows" and "no table" must never look the same on a
-screen about money.
+> "Hoop doesnt need the deprt leader approval for salary advance they want just requests and
+> approval or rejection with comments: so people will only request then then approval nav is
+> done by a single person and we stay with reports, so kill the kiongozi column and its working
+> scheme just a approval nav will be granted to approver"
 
-### Who opens the approval pane: the nav AND the person
+The approval pane is granted like every other pane: tick `advappr` on the approver's role, and
+that is the permission. The approver sees **every** request in the company and decides any of
+them. There is no department filter and no per-person switch.
 
-> "The ones i grant approval role can only see data of the same role to keep confidentiality of
-> departments ... all access codes should have a button to switch that that person is a leader
-> in ther role so those with that switch on can extend to approval nav"
+What was removed: the **Kiongozi** column and button in Access codes, the switch on the new-code
+form, the `accessCodeLeader` endpoint, and the same-role filter on the queue and on `advDecide`.
+The `is_leader` column that `RUN-ME-2026-08-31-advance-leader.sql` added stays in the database
+untouched and unread — a column that exists harms nothing, and a migration that drops one can.
+You need not run that migration on a fresh database; sign-in no longer asks for the column.
 
-Every other pane in this system is granted by role alone. The approval pane is the exception,
-and it needs **both**:
+**The report is company-wide**, as it always was: HR files and pays for everybody.
 
-- `advappr` ticked on the **role**, and
-- **Kiongozi** ticked on the individual **access code** — a one-click button in its own column
-  in the codes table, sitting just before Hariri and Futa. It confirms first, because pressing
-  it hands that person the approval pane and every request their department has filed. (The
-  same switch is on the form below, for setting it while creating a new code.)
-
-Ticking `advappr` on CREDIT would otherwise hand the approval pane to every credit officer, when
-what is meant is the one person who leads them. "Leads their department" is a fact about a
-person, not a role, so it lives on the code.
-
-### What they see: their own department only
-
-An approver sees advances asked for by people carrying **the same role they do**, and can decide
-only those. The amounts are the confidential part. The boundary is enforced twice — the queue
-filters, and `advDecide` checks again, because a filtered view is not a control. A request from
-another department answers "no such request" rather than naming the department, which would
-leak the thing being protected.
-
-**The leader must hold the same role as the people they approve for.** A code with role
-`CREDIT LEAD` will not see `CREDIT` requesters — the roles must match exactly.
-
-**The report is not scoped.** `advrep` is company-wide: HR files and pays for everybody, and
-scoping it would break the bank run it exists to produce.
-
-**ADMIN is full access everywhere**, by standing rule — every department, no Kiongozi tick
-needed. A read-only `AUDITOR` code sees all of it too and can change none of it.
+**ADMIN is full access everywhere**, by standing rule. A read-only `AUDITOR` code sees all of it
+too and can change none of it.
 
 Four amounts only — 50,000 / 100,000 / 150,000 / 200,000 — enforced on the server as well as in
 the dropdown. The requester supplies their own bank or mobile-money details at the moment of
@@ -494,7 +476,7 @@ Five navs, two forms the office already prints. The full story is
 |---|---|---|
 | `impreq` | Omba imprest / Imprest request | anybody who travels |
 | `impappr` | Idhini ya imprest / Imprest approval | the administrator — and the **Viwango** rate table |
-| `imprep` | Ripoti ya imprest / Imprest reports | the GM's review copy |
+| `imprep` | Ripoti ya imprest / Imprest reports | the CEO's review copy |
 | `leavereq` | Omba likizo / Leave request | everybody |
 | `leaveappr` | Idhini ya likizo / Leave approval | HR |
 
@@ -505,7 +487,7 @@ Five navs, two forms the office already prints. The full story is
 2. Tick the five navs on the right roles in Access codes.
 3. As the administrator, fill **Viwango vya malazi** on the approval pane: one row per role
    with accommodation per day. The request form offers only roles that have a rate.
-4. Optional email: Settings → `IMPREST_ADMIN_EMAIL`, `IMPREST_GM_EMAIL`, `HR_EMAIL`,
+4. Optional email: Settings → `IMPREST_ADMIN_EMAIL`, `IMPREST_CEO_EMAIL`, `HR_EMAIL`,
    `EMAIL_FROM`; then `RESEND_API_KEY` on Vercel. Blank means no email; the panes are the
    record either way.
 
