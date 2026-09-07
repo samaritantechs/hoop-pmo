@@ -259,6 +259,13 @@ const LEAVE_NOT_READY = 'Jedwali la likizo halijatengenezwa bado. Endesha '
    client did, because a client is not entitled to fill a table with 8MB originals. */
 const IMP_PHOTO_MAX_BYTES = 200 * 1024;
 const IMP_PHOTO_MAX = 3;
+/* AND THE LEAST. A receipt the phone shrank to 480px is still a few kilobytes; a data URL of
+   one padding character passed the old shape check with a size of minus one. Below this it is
+   not a picture of anything. */
+const IMP_PHOTO_MIN_BYTES = 1024;
+/* How old a retirement CLAIM must be before it is wreckage rather than a filing in progress:
+   longer than any serverless function is allowed to live. See impRetire. */
+const RETIRE_CLAIM_MS = 2 * 60 * 1000;
 const IMP_COLS = 'id, requested_at, staff_code, staff_name, staff_role, full_name, mobile, '
   + 'recipient_name, email, imprest_role, pay_mode, account_no, travel_date, destination, '
   + 'fare_trips, fare_per_trip, fare_amount, accom_days, accom_rate, accom_amount, '
@@ -290,6 +297,9 @@ const isDay = s => {
    silently rounded figure on a cash form is the argument the form exists to prevent. */
 const intNN = v => {
   if (v === '' || v == null) return 0;
+  /* A number, or the digits of one. Booleans, arrays and hex strings all coerce under Number()
+     -- true is 1, [7] is 7, "0x10" is 16 -- and none of them is a shilling amount anybody typed. */
+  if (typeof v !== 'number' && (typeof v !== 'string' || !/^\s*\d+(?:\.0+)?\s*$/.test(v))) return null;
   const n = Number(v);
   // Above this the integer column itself would refuse the row, as a 500 with Postgres's
   // words in it; two billion shillings is not a figure this form will ever carry honestly.
@@ -322,8 +332,9 @@ function resumeDayAfter(to) {
    image data URL outright; the caller compares bytes to the ceiling. */
 function photoBytes(s) {
   const v = String(s || '');
-  const m = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(v);
-  if (!m) return null;
+  // Base64 as the canvas writes it: whole quartets, padding only at the end.
+  const m = /^data:image\/(jpeg|jpg|png|webp);base64,((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)$/.exec(v);
+  if (!m || !m[2]) return null;
   const b64 = m[2];
   const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
   return Math.floor(b64.length * 3 / 4) - pad;
@@ -357,7 +368,11 @@ const impRow = (r, me) => ({
   comment: r.comment || '',
   decidedBy: r.decided_by || '',
   decidedAt: r.decided_at ? Date.parse(r.decided_at) : null,
-  retiredAt: r.retired_at ? Date.parse(r.retired_at) : null,
+  /* FINISHED, not merely claimed: retired_at is stamped first as the lock a filing takes, and
+     retire_total last when the receipts are in. Only the second makes a trip "retired" anywhere
+     this row is read -- the queue, the report, the Retire button -- so a filing that died
+     half-way shows as not retired everywhere at once. See impRetire. */
+  retiredAt: (r.retired_at && r.retire_total != null) ? Date.parse(r.retired_at) : null,
   retireTotal: r.retire_total == null ? null : Number(r.retire_total),
   retireBalance: r.retire_balance == null ? null : Number(r.retire_balance),
 });
@@ -2719,6 +2734,8 @@ const FNS = {
     const a = args || {};
     const role = K(a.role).slice(0, 60);
     if (!role) bad('Andika jina la wadhifa. / Enter a role name.');
+    // Blank is not zero: a forgotten box must not become a role that sleeps for free.
+    if (a.rate === '' || a.rate == null) bad('Andika kiwango cha malazi kwa siku (0 inaruhusiwa). / Enter the nightly rate (0 is allowed).');
     const rate = intNN(a.rate);
     if (rate === null) bad('Kiwango cha malazi lazima kiwe namba nzima. / The nightly rate must be a whole number.');
     const { error } = await db.from('imprest_roles')
@@ -2785,6 +2802,9 @@ const FNS = {
       if (amt > 0 && !desc) bad('Eleza gharama nyingine ' + i + '. / Describe other expense ' + i + '.');
       return { desc, amt };
     });
+    if (accomDays > 0 && accomRate === 0) {
+      bad('Wadhifa huu una kiwango cha malazi 0 — mwidhinishaji aweke kiwango kwanza. / This role\'s nightly rate is 0; ask the approver to set it before claiming nights.');
+    }
     const fareAmount = fareTrips * farePerTrip;
     const accomAmount = accomDays * accomRate;
     const total = fareAmount + accomAmount + others.reduce((s, o) => s + o.amt, 0);
@@ -2894,7 +2914,7 @@ const FNS = {
     const asked = num(row.total_amount);
     let granted = null;
     if (approve) {
-      granted = a.approvedAmount == null || a.approvedAmount === '' ? asked : intNN(a.approvedAmount);
+      granted = a.approvedAmount == null ? asked : intNN(a.approvedAmount);
       if (granted === null || granted <= 0) bad('Kiasi cha kuidhinisha lazima kiwe namba nzima. / The approved amount must be a whole number.');
       // LESS THAN ASKED IS THE POINT; more than asked is not a decision anybody delegated.
       if (granted > asked) bad('Huwezi kuidhinisha zaidi ya kilichoombwa. / You cannot approve more than was requested.');
@@ -2951,7 +2971,9 @@ const FNS = {
        learn which requests exist. */
     if (!row || String(row.staff_code || '') !== String(user.code || '')) bad('Ombi halipo. / That request no longer exists.');
     if (String(row.status) !== 'approved') bad('Retirement ni ya ombi lililoidhinishwa tu. / Only an approved request can be retired.');
-    if (row.retired_at) bad('Ombi hili tayari lina retirement. / This request has already been retired.');
+    /* FINISHED is retire_total set -- see the write order below. A claim with no summary is a
+       filing that died, or one that is going on right now; both are handled at the claim. */
+    if (row.retire_total != null) bad('Ombi hili tayari lina retirement. / This request has already been retired.');
 
     const fare = intNN(a.fareActual), accom = intNN(a.accomActual);
     const o1 = intNN(a.other1Actual), o2 = intNN(a.other2Actual), o3 = intNN(a.other3Actual);
@@ -2967,40 +2989,65 @@ const FNS = {
       bad('Picha moja ni kubwa mno (zaidi ya ' + Math.round(IMP_PHOTO_MAX_BYTES / 1024) + 'KB). Ipunguze kisha jaribu tena. '
         + '/ One photo is too large; shrink it and try again.');
     }
+    if (sized.some(p => p.bytes < IMP_PHOTO_MIN_BYTES)) bad('Picha moja ni ndogo mno kuwa risiti. / One photo is too small to be a receipt.');
     const total = fare + accom + o1 + o2 + o3;
     if (total > MONEY_MAX) bad('Kiasi ni kikubwa kupita kiasi — angalia namba. / The amount is implausibly large; check the figures.');
     const approved = num(row.approved_amount);
     const balance = approved - total;
     const at = new Date().toISOString();
 
-    /* ORDER OF WRITES. The retirement row first: its unique request_id is the lock that stops a
-       double press filing twice. Then the photos, then the summary onto the request -- and
-       retired_at on the request, written LAST, is the only thing "retired" means.
-
-       A FAILURE HALF-WAY IS RESUMABLE. If the photos or the summary failed to write on an
-       earlier attempt, a retirement row exists that the request does not yet summarise; the
-       traveller presses Retire again and, without this, the unique key would tell them "already
-       retired" about a retirement nobody can see. So: while the request says NOT retired, any
-       retirement or photo rows under it can only be the wreckage of that earlier attempt, and
-       are cleared before this one writes. A finished retirement is never touched -- the
-       retired_at check above refuses before this line is reached. */
-    await db.from('imprest_photos').delete().eq('request_id', id);
-    await db.from('imprest_retirements').delete().eq('request_id', id);
+    /* ORDER OF WRITES -- THE REQUEST IS THE LOCK, AND IT IS TAKEN FIRST.
+         1. CLAIM: stamp retired_at on the request, guarded on it being null. Of two overlapping
+            presses exactly one matches the row; the other matches nothing and is told so.
+            retire_total stays null, which is what "claimed, not finished" means everywhere.
+         2. The retirement row, then the photos.
+         3. FINISH: stamp retire_total and the balance, guarded on OUR claim stamp.
+       A press that died between 1 and 3 leaves a claim with no summary. It is resumable ONLY
+       once the claim is older than any serverless function can live (RETIRE_CLAIM_MS): the same
+       requester re-claims -- guarded on the stale stamp, so two resumers cannot both win --
+       clears the wreckage under it, and writes again. A young claim is "being filed, try again
+       in a minute", never wreckage, and a finished retirement is refused before any of this. */
+    const busy = () => bad('Retirement ya ombi hili inaendelea kuwasilishwa — jaribu tena baada ya dakika moja. '
+      + '/ This retirement is being filed right now; try again in a minute.');
+    let claim = await db.from('imprest_requests')
+      .update({ retired_at: at, updated_at: at })
+      .eq('id', id).eq('status', 'approved').is('retired_at', null).select('id');
+    if (claim.error) throw new Error(claim.error.message);
+    if (!claim.data || !claim.data.length) {
+      const dead = row.retired_at && (Date.now() - Date.parse(row.retired_at)) > RETIRE_CLAIM_MS;
+      if (!dead) busy();
+      claim = await db.from('imprest_requests')
+        .update({ retired_at: at, updated_at: at })
+        .eq('id', id).eq('retired_at', row.retired_at).is('retire_total', null).select('id');
+      if (claim.error) throw new Error(claim.error.message);
+      if (!claim.data || !claim.data.length) busy();
+      for (const t of ['imprest_photos', 'imprest_retirements']) {
+        const { error } = await db.from(t).delete().eq('request_id', id);
+        if (error) throw new Error(error.message);
+      }
+    }
+    const dup = err => /duplicate|unique|23505/i.test(String((err && (err.message || err.code)) || ''));
     const { error: rErr } = await db.from('imprest_retirements').insert([{
       request_id: id, filed_at: at, filed_by_code: user.code || null, filed_by_name: user.name || '',
       fare_actual: fare, accom_actual: accom, other1_actual: o1, other2_actual: o2, other3_actual: o3,
       total_actual: total, notes: String(a.notes || '').trim().slice(0, 1000) || null, photo_count: sized.length }]);
     if (rErr) {
       if (tableMissing(rErr)) bad(IMP_NOT_READY);
-      if (/duplicate|unique/i.test(String(rErr.message || ''))) bad('Ombi hili tayari lina retirement. / This request has already been retired.');
+      if (dup(rErr)) busy();
       throw new Error(rErr.message);
     }
     const { error: pErr } = await db.from('imprest_photos').insert(
       sized.map((p, i) => ({ request_id: id, seq: i + 1, data: p.data, bytes: p.bytes })));
-    if (pErr) throw new Error(pErr.message);
-    const { error: uErr } = await db.from('imprest_requests')
-      .update({ retired_at: at, retire_total: total, retire_balance: balance, updated_at: at }).eq('id', id);
+    if (pErr) {
+      if (dup(pErr)) busy();
+      throw new Error(pErr.message);
+    }
+    const { data: done, error: uErr } = await db.from('imprest_requests')
+      .update({ retire_total: total, retire_balance: balance, updated_at: at })
+      .eq('id', id).eq('retired_at', at).select('id');
     if (uErr) throw new Error(uErr.message);
+    // Cannot happen inside RETIRE_CLAIM_MS; kept so a stale re-claim can never finish over a live one.
+    if (!done || !done.length) busy();
     return { ok: true, id, total, approved, balance, photos: sized.length };
   },
 
@@ -3013,7 +3060,13 @@ const FNS = {
     const navs = navsFor(user);
     const reviewer = navs.includes('impappr') || navs.includes('imprep');
     if (!reviewer) {
-      const own = await fetchAll(() => db.from('imprest_requests').select('id, staff_code').eq('id', id));
+      let own;
+      try {
+        own = await fetchAll(() => db.from('imprest_requests').select('id, staff_code').eq('id', id));
+      } catch (e) {
+        if (!tableMissing(e)) throw e;
+        return { ok: true, photos: [], notReady: true };
+      }
       const r = own.find(x => String(x.id) === id);
       if (!r || String(r.staff_code || '') !== String(user.code || '')) bad('Ombi halipo. / That request no longer exists.');
     }
@@ -3053,7 +3106,8 @@ const FNS = {
       .filter(r => !from || (r.travelDate && r.travelDate >= from))
       .filter(r => !to || (r.travelDate && r.travelDate <= to))
       .map(r => {
-        const t = retBy.get(r.id);
+        // Only a FINISHED retirement is shown beside its trip -- retiredAt, see impRow.
+        const t = r.retiredAt ? retBy.get(r.id) : null;
         return Object.assign(r, { retirement: t ? {
           at: t.filed_at ? Date.parse(t.filed_at) : null, by: t.filed_by_name || '',
           fare: num(t.fare_actual), accom: num(t.accom_actual),
@@ -3061,8 +3115,8 @@ const FNS = {
           total: num(t.total_actual), notes: t.notes || '', photos: num(t.photo_count) } : null });
       });
     const shown = inPeriod.filter(r => {
-      if (want === 'retired') return !!r.retirement;
-      if (want === 'toRetire') return r.status === 'approved' && !r.retirement;
+      if (want === 'retired') return !!r.retiredAt;
+      if (want === 'toRetire') return r.status === 'approved' && !r.retiredAt;
       return !['pending', 'approved', 'rejected'].includes(want) || r.status === want;
     }).sort((x, y) => (y.at || 0) - (x.at || 0));
     const approvedRows = inPeriod.filter(r => r.status === 'approved');
@@ -3074,9 +3128,9 @@ const FNS = {
         approved: approvedRows.length,
         // What the cashier paid out: approved rows only.
         approvedAmount: approvedRows.reduce((s, r) => s + (r.approved || 0), 0),
-        retired: approvedRows.filter(r => r.retirement).length,
-        toRetire: approvedRows.filter(r => !r.retirement).length,
-        spent: approvedRows.reduce((s, r) => s + (r.retirement ? r.retirement.total : 0), 0),
+        retired: approvedRows.filter(r => r.retiredAt).length,
+        toRetire: approvedRows.filter(r => !r.retiredAt).length,
+        spent: approvedRows.reduce((s, r) => s + (r.retiredAt ? (r.retireTotal || 0) : 0), 0),
         // Positive balances: travellers who owe the company change back.
         toRefund: approvedRows.reduce((s, r) => s + (r.retireBalance != null && r.retireBalance > 0 ? r.retireBalance : 0), 0),
         // Negative balances: trips that cost more than was advanced; the company owes.

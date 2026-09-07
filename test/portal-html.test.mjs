@@ -1428,20 +1428,38 @@ test('portal.html: receipts are shrunk on the phone to the same ceiling the serv
   assert.ok(server && page, 'both sides state the ceiling as a literal');
   assert.equal(eval(page[1]), eval(server[1]), 'the page shrinks to the size the server accepts');
 
-  const shrink = IMP_SRC('shrinkPhoto', html);
-  assert.match(shrink, /toDataURL\('image\/jpeg', q\)/, 'JPEG at a quality, not a PNG of the original');
-  assert.match(shrink, /maxPx\/Math\.max\(w,h,1\)/, 'scaled by the LONG side');
-  assert.match(shrink, /ctx\.fillStyle='#fff'; ctx\.fillRect/, 'a transparent PNG receipt does not go black');
+  /* DECODED ONCE, DRAWN SMALLER. An 8MB photo read into a base64 string and decoded again for
+     every size tried is how an old WebView's renderer gets killed and the typed actuals with it. */
+  const load = IMP_SRC('loadImage', html);
+  assert.equal((load.match(/readAsDataURL\(file\)/g) || []).length, 1, 'one read of the file');
+  assert.equal((load.match(/new Image\(\)/g) || []).length, 1, 'one decode');
+  assert.ok(!/createObjectURL/.test(load), 'and not through the route the export guard reserves for saveFile_');
+  const draw = IMP_SRC('drawScaled', html);
+  assert.match(draw, /toDataURL\('image\/jpeg', q\)/, 'JPEG at a quality, not a PNG of the original');
+  assert.match(draw, /maxPx\/Math\.max\(w,h,1\)/, 'scaled by the LONG side');
+  assert.match(draw, /ctx\.fillStyle='#fff'; ctx\.fillRect/, 'a transparent PNG receipt does not go black');
+  assert.match(draw, /if\(!ctx\) throw/, 'a WebView with no canvas memory left is an error in words, not a slot stuck on "shrinking"');
   const steps = IMP_SRC('shrinkForReceipt', html);
   assert.match(steps, /\[\[1024,0\.6\],\[800,0\.5\]/, 'starts at 1024px and steps down');
-  assert.match(steps, /dataUrlBytes\(u\)<=IMP_PHOTO_MAX \? u : next\(\)/, 'and keeps going until it fits');
+  assert.match(steps, /dataUrlBytes\(u\)<=IMP_PHOTO_MAX\) return u;/, 'and keeps going until it fits');
+  assert.match(steps, /Promise\.all\(\[loadImage\(file\), photoOrientation\(file\)\]\)/, 'one decode, one EXIF read, every size from those');
+  // Old WebViews draw the camera's raw pixels sideways; the orientation is applied only there.
+  assert.match(IMP_SRC('photoOrientation', html), /if\(autoOrients\(\)\|\|!file\|\|!jpeg\)\{ res\(1\); return; \}/,
+    'a browser that turns photos the right way up itself is never rotated twice');
+  assert.match(IMP_SRC('autoOrients', html), /CSS\.supports\('image-orientation','from-image'\)/);
+  assert.match(draw, /case 6: ctx\.transform\(0,1,-1,0,ch,0\); break;/, 'the common portrait-phone case');
 
   const drawerFn = IMP_SRC('impRetireDrawer', html);
   // One slot per pass of a three-pass loop: the file input is written once, drawn three times.
   assert.match(drawerFn, /\[1,2,3\]\.map\(function\(i\)\{[\s\S]*?type="file" accept="image\/\*"/,
     'three photo slots, camera or gallery -- accept="image/*" with no capture= so the gallery is offered too');
   assert.ok(!/capture=/.test(drawerFn), 'no capture= attribute: a receipt already in the gallery must be attachable');
-  assert.match(drawerFn, /var photos=\[null,null,null\]/, 'exactly three slots');
+  assert.match(drawerFn, /var photos=\[null,null,null\], seq=\[0,0,0\], pending=0/, 'exactly three slots, each with its own sequence');
+  assert.match(drawerFn, /var my=\+\+seq\[i-1\];/, 'the newest pick on a slot owns it; a slower earlier shrink is dropped');
+  assert.match(drawerFn, /if\(my!==seq\[i-1\]\) return;/);
+  assert.match(drawerFn, /b\.disabled=pending>0\|\|invalid/, 'File waits for every chosen photo to finish shrinking');
+  assert.match(drawerFn, /if\(IMP_INFLIGHT\[r\.id\]\)\{ toast\(/, 'a second drawer on a trip still uploading is refused');
+  assert.match(drawerFn, /IMP_INFLIGHT\[r\.id\]=true;/);
   assert.match(drawerFn, /photos\.filter\(Boolean\)/, 'only the slots that were filled are sent');
   assert.match(drawerFn, /srv\('impRetire',\{[\s\S]*photos:got/, 'as data URLs, already shrunk');
   assert.match(drawerFn, /shrinkForReceipt\(f\)/, 'every chosen file goes through the shrink');
@@ -1454,6 +1472,32 @@ test('portal.html: receipts are shrunk on the phone to the same ceiling the serv
   assert.equal(bytesFn('data:image/jpeg;base64,' + Buffer.alloc(2, 1).toString('base64')), 2, 'padding is subtracted');
 });
 
+test('portal.html: the drawers refuse what the server would refuse, and say so first', () => {
+  const html = read('portal.html');
+  const decide = IMP_SRC('impDecideDrawer', html);
+  assert.match(decide, /if\(approve\)\{ var amt=\$\('#imdAmt'\)\.value; if\(amt===''\|\|!\(Number\(amt\)>0\)\)\{ toast\(/,
+    'a cleared amount box is not "approve the full amount"');
+  const appr = IMP_SRC('drawImpAppr', html);
+  assert.match(appr, /if\(\$\('#rlRate'\)\.value===''\)\{ toast\(/, 'a blank rate is not a zero rate');
+  const req = IMP_SRC('drawImpReq', html);
+  assert.match(req, /Math\.floor\(n\)!==n\|\|n<0/, 'the preview refuses decimals and negatives like the server');
+  assert.match(req, /\$\('#imSend'\)\.disabled=invalid\|\|!roles\.length;/, 'and will not offer to send them');
+  // The receipts button in the details drawer is bound, never inlined.
+  const details = IMP_SRC('impDetailsDrawer', html);
+  assert.ok(!/onclick="impPhotosDrawer/.test(details), 'no inline handler with a quoted id in it');
+  assert.match(details, /\$\('#drawer \[data-impp\]'\)/, 'bound after the drawer is drawn, like every other button');
+  // A slow answer redraws its own pane only: every post-write redraw in the block is guarded.
+  const block = html.slice(html.indexOf("var ADVR={from:'',to:'',status:''};"), html.indexOf('/* ---------- stock accountability'));
+  const bare = block.split('\n').filter(l => /\bdraw(ImpReq|ImpAppr|ImpRep|LeaveReq|LeaveAppr|LeaveRep)\(m\);/.test(l)
+    && !/return draw|if\(TAB==='/.test(l));
+  assert.deepEqual(bare, [], 'an imprest or leave redraw never lands under whatever tab the person moved to');
+  assert.ok((block.match(/if\(TAB==='impreq'\) drawImpReq\(m\);/g) || []).length >= 2);
+  // A dropped ANSWER to a write is not "the request never arrived".
+  const srvFn = IMP_SRC('srv', html);
+  assert.match(srvFn, /if\(dropped\) e=new Error\(NO_RETRY\[fn\]/, 'the message depends on whether a re-send could file twice');
+  assert.match(srvFn, /BEFORE sending again/);
+});
+
 test('portal.html: the leave preview counts the same working days the server will', () => {
   const html = read('portal.html');
   const days = new Function(IMP_SRC('leaveWorkingDays', html) + '; return leaveWorkingDays;')();
@@ -1462,6 +1506,9 @@ test('portal.html: the leave preview counts the same working days the server wil
   assert.equal(days('2026-09-12', '2026-09-13'), 0, 'a weekend alone is no working days');
   assert.equal(days('2026-10-07', '2026-10-07'), 1);
   assert.equal(days('2026-09-25', '2026-09-14'), 0, 'reversed dates count nothing rather than crashing');
+  const t0 = Date.now();
+  assert.equal(days('0002-01-01', '9999-12-31'), 0, 'a span of centuries -- a year typed digit by digit -- is not walked day by day');
+  assert.ok(Date.now() - t0 < 50, 'and costs nothing');
   assert.equal(resume('2026-09-25'), '2026-09-28', 'a leave ending Friday resumes Monday');
   assert.equal(resume('2026-10-07'), '2026-10-08');
 

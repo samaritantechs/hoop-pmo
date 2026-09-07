@@ -223,8 +223,11 @@ test('an approver may grant less than was asked but never more, and a rejection 
   await assert.rejects(() => _FNS.impDecide(d2, ADMIN_IMP, { id: uid('r2'), approve: true, approvedAmount: 0 }), /namba nzima|whole/i);
   await assert.rejects(() => _FNS.impDecide(d2, ADMIN_IMP, { id: uid('r2'), approve: false, comment: '  ' }), /sababu|comment is required/i);
   assert.equal(d2._dump('imprest_requests')[0].status, 'pending', 'and nothing was written');
-  // Blank amount on approve means "as asked".
-  await _FNS.impDecide(d2, ADMIN_IMP, { id: uid('r2'), approve: true, approvedAmount: '' });
+  // A CLEARED box is a mistake, not "the full amount": only an ABSENT amount means "as asked".
+  await assert.rejects(() => _FNS.impDecide(d2, ADMIN_IMP, { id: uid('r2'), approve: true, approvedAmount: '' }), /namba nzima|whole/i);
+  await assert.rejects(() => _FNS.impDecide(d2, ADMIN_IMP, { id: uid('r2'), approve: true, approvedAmount: true }), /namba nzima|whole/i,
+    'a boolean is not an amount, however Number() reads it');
+  await _FNS.impDecide(d2, ADMIN_IMP, { id: uid('r2'), approve: true });
   assert.equal(d2._dump('imprest_requests')[0].approved_amount, 50000);
   await assert.rejects(() => _FNS.impDecide(d2, ADMIN_IMP, { id: 'not-a-uuid', approve: true }), /chagu|chosen/i);
 });
@@ -261,6 +264,10 @@ test('the retirement is the traveller\'s own, on an approved trip, once, with sm
   await assert.rejects(() => _FNS.impRetire(d, ASKER, Object.assign({}, good, { photos: [] })), /picha|photo/i);
   await assert.rejects(() => _FNS.impRetire(d, ASKER, Object.assign({}, good, { photos: [photoOf(10), photoOf(10), photoOf(10), photoOf(10)] })), /3/);
   await assert.rejects(() => _FNS.impRetire(d, ASKER, Object.assign({}, good, { photos: [photoOf(201 * 1024)] })), /kubwa|too large/i);
+  await assert.rejects(() => _FNS.impRetire(d, ASKER, Object.assign({}, good, { photos: [photoOf(10)] })), /ndogo|too small/i,
+    'a data URL of ten bytes is not a picture of a receipt');
+  await assert.rejects(() => _FNS.impRetire(d, ASKER, Object.assign({}, good, { photos: ['data:image/jpeg;base64,='] })), /halali|valid image/i,
+    'one padding character used to pass the shape check with a size of minus one');
   await assert.rejects(() => _FNS.impRetire(d, ASKER, Object.assign({}, good, { photos: ['data:text/html;base64,PHNjcmlwdD4='] })), /halali|valid image/i);
   await assert.rejects(() => _FNS.impRetire(d, ASKER, Object.assign({}, good, { fareActual: 'abc' })), /namba nzima|whole/i);
   assert.equal(d._dump('imprest_retirements').length, 0, 'nothing filed by any refused call');
@@ -528,10 +535,11 @@ test('leave requests tell HR by email, and say so in the answer', async () => {
 });
 
 /* ---------------------------------------------------------------------------------------- */
-test('a retirement that died half-way can be filed again, and a finished one still cannot', async () => {
-  const d = impDb({ requests: [aRequest({ id: uid('ok'), code: 'A1', status: 'approved', approved: 150000 })] });
-  const good = { id: uid('ok'), fareActual: 30000, accomActual: 100000, photos: [photoOf(100), photoOf(100)] };
-  // First attempt: the photos insert fails after the retirement row is in.
+test('a retirement that died half-way is resumable once its claim is stale, and a finished one never', async () => {
+  const d = impDb({ requests: [aRequest({ id: uid('ok'), code: 'A1', status: 'approved', approved: 150000 })] },
+    { unique: { imprest_retirements: [['request_id']], imprest_photos: [['request_id', 'seq']] } });
+  const good = { id: uid('ok'), fareActual: 30000, accomActual: 100000, photos: [photoOf(2048), photoOf(2048)] };
+  // First attempt: the photos insert fails after the claim and the retirement row are in.
   const real = d.from.bind(d);
   let blow = true;
   d.from = name => {
@@ -543,21 +551,118 @@ test('a retirement that died half-way can be filed again, and a finished one sti
     return q;
   };
   await assert.rejects(() => _FNS.impRetire(d, ASKER, good), /statement timeout/);
+  const row = () => d._dump('imprest_requests')[0];
+  assert.ok(row().retired_at, 'the claim was taken first');
+  assert.equal(row().retire_total, null, 'and never finished');
   assert.equal(d._dump('imprest_retirements').length, 1, 'the wreckage of the first attempt');
-  assert.equal(d._dump('imprest_photos').length, 0);
-  assert.equal(d._dump('imprest_requests')[0].retired_at, null, 'and the request does not claim to be retired');
-  // Second attempt, provider recovered: it must not be told "already retired".
+  /* NOT RETIRED, anywhere. The queue, the report and the Retire button all read the same
+     fact -- retire_total -- so a dead claim shows as "bila retirement" everywhere at once. */
+  assert.equal((await _FNS.impMine(d, ASKER)).rows[0].retiredAt, null);
+  assert.deepEqual((await _FNS.impQueue(d, ADMIN_IMP, { state: 'toRetire' })).rows.map(r => r.id), [uid('ok')]);
+  const rep = await _FNS.impReport(d, CEO, {});
+  assert.equal(rep.totals.toRetire, 1); assert.equal(rep.totals.retired, 0); assert.equal(rep.totals.spent, 0);
+  assert.equal(rep.rows[0].retirement, null, 'an orphan retirement row is not shown beside the trip');
+
+  // Straight away, a retry is told the filing is in progress: a young claim is never wreckage.
   blow = false;
+  await assert.rejects(() => _FNS.impRetire(d, ASKER, good), /inaendelea|being filed/i);
+  assert.equal(d._dump('imprest_retirements').length, 1, 'and nothing was cleared');
+  // Older than any serverless function can live, it is wreckage, and the same person resumes.
+  row().retired_at = new Date(Date.now() - 3 * 60 * 1000).toISOString();
   const r = await _FNS.impRetire(d, ASKER, Object.assign({}, good, { fareActual: 35000 }));
   assert.equal(r.total, 135000);
-  assert.equal(d._dump('imprest_retirements').length, 1, 'one retirement, the second attempt\'s');
+  assert.equal(d._dump('imprest_retirements').length, 1, 'one retirement, the resumed attempt\'s');
   assert.equal(d._dump('imprest_retirements')[0].fare_actual, 35000);
   assert.equal(d._dump('imprest_photos').length, 2);
-  assert.ok(d._dump('imprest_requests')[0].retired_at);
-  // And now it is finished, so a third press is refused before anything is cleared.
+  assert.equal(row().retire_total, 135000);
+  assert.ok((await _FNS.impMine(d, ASKER)).rows[0].retiredAt, 'and now it is retired everywhere');
+  // Finished, so a further press is refused before anything is touched -- however old the stamp.
+  row().retired_at = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   await assert.rejects(() => _FNS.impRetire(d, ASKER, good), /tayari|already been retired/i);
   assert.equal(d._dump('imprest_retirements')[0].fare_actual, 35000, 'the finished retirement was not touched');
   assert.equal(d._dump('imprest_photos').length, 2);
+});
+
+test('two overlapping Retire presses: one files, the other is told, and nothing of the first is clobbered', async () => {
+  /* The first cut deleted "orphans" before writing and guarded nothing, so a second press that
+     had passed the not-yet-retired check could delete the first press's finished retirement.
+     The request row is the lock now, taken first. B runs to completion while A sits between
+     its claim and its retirement insert -- the widest window there is. */
+  const d = impDb({ requests: [aRequest({ id: uid('ok'), code: 'A1', status: 'approved', approved: 150000 })] },
+    { unique: { imprest_retirements: [['request_id']], imprest_photos: [['request_id', 'seq']] } });
+  const A = { id: uid('ok'), fareActual: 30000, accomActual: 100000, photos: [photoOf(2048)] };
+  const B = { id: uid('ok'), fareActual: 99000, accomActual: 1000, photos: [photoOf(4096), photoOf(4096)] };
+  const real = d.from.bind(d);
+  let bResult = null, armed = true;
+  d.from = name => {
+    const q = real(name);
+    if (name === 'imprest_retirements' && armed) {
+      const then = q.then.bind(q);
+      q.then = (res, rej) => {
+        if (q.mode !== 'insert') return then(res, rej);
+        armed = false;
+        // B, in full, while A is mid-flight.
+        return _FNS.impRetire(d, ASKER, B).then(v => { bResult = { ok: v }; }, e => { bResult = { err: e }; })
+          .then(() => then(res, rej));
+      };
+    }
+    return q;
+  };
+  const a = await _FNS.impRetire(d, ASKER, A);
+  assert.equal(a.total, 130000, 'A filed');
+  assert.ok(bResult && bResult.err, 'B did not');
+  assert.match(String(bResult.err.message), /inaendelea|being filed/i, 'and was told a filing was in progress');
+  assert.equal(d._dump('imprest_retirements').length, 1);
+  assert.equal(d._dump('imprest_retirements')[0].fare_actual, 30000, 'the retirement row is A\'s');
+  assert.equal(d._dump('imprest_photos').length, 1, 'the photos are A\'s');
+  assert.equal(d._dump('imprest_requests')[0].retire_total, 130000, 'and the summary agrees with the row beside it');
+});
+
+test('amounts are numbers or the digits of one, and a role\'s rate is typed, never assumed', async () => {
+  const d = impDb();
+  await assert.rejects(() => _FNS.impRoleSave(d, ADMIN_IMP, { role: 'X', rate: [7] }), /namba nzima|whole/i);
+  await assert.rejects(() => _FNS.impRoleSave(d, ADMIN_IMP, { role: 'X', rate: '0x10' }), /namba nzima|whole/i);
+  await assert.rejects(() => _FNS.impRoleSave(d, ADMIN_IMP, { role: 'X', rate: '' }), /andika kiwango|enter the nightly rate/i,
+    'a forgotten box must not become a role that sleeps for free');
+  await _FNS.impRoleSave(d, ADMIN_IMP, { role: 'X', rate: '0' });
+  assert.equal((await _FNS.impRoles(d, ASKER)).roles.find(r => r.role === 'X').rate, 0, 'a typed zero is allowed');
+  await assert.rejects(() => _FNS.impRequest(d, ASKER, Object.assign({}, GOOD_ASK, { fareTrips: '1e3' })), /namba nzima|whole/i);
+  await assert.rejects(() => _FNS.impRequest(d, ASKER, Object.assign({}, GOOD_ASK, { fareTrips: true })), /namba nzima|whole/i);
+  await assert.rejects(() => _FNS.impRequest(d, ASKER, Object.assign({}, GOOD_ASK, { imprestRole: 'X', accomDays: 2 })),
+    /kiwango cha malazi 0|nightly rate is 0/i, 'nights against a zero rate say why, not "no costs"');
+  const dr = impDb({ requests: [aRequest({ id: uid('ok'), code: 'A1', status: 'approved', approved: 150000 })] });
+  await assert.rejects(() => _FNS.impRetire(dr, ASKER, { id: uid('ok'), fareActual: '0x10', accomActual: 0, photos: [photoOf(2048)] }), /namba nzima|whole/i);
+});
+
+test('the receipts read answers the un-migrated case for a requester as it does for a reviewer', async () => {
+  const d = fakeDb({ imprest_requests: [], imprest_photos: [] }, { missingColumns: { imprest_requests: ['id'] } });
+  const r = await _FNS.impPhotos(d, ASKER, { id: uid('x') });
+  assert.equal(r.notReady, true); assert.deepEqual(r.photos, []);
+});
+
+test('mail: a recipient written as "Name <addr>" is understood, a bad one is named, and the body read is on the clock', async () => {
+  const cap = captureMail();
+  try {
+    const d = impDb({ settings: [{ key: 'IMPREST_ADMIN_EMAIL', value: 'Admin <admin@hoop.co.tz>, second@hoop.co.tz' }] });
+    const r = await _FNS.impRequest(d, ASKER, GOOD_ASK);
+    assert.equal(r.emailed, true);
+    assert.deepEqual(cap.sent[0].body.to, ['admin@hoop.co.tz', 'second@hoop.co.tz']);
+    const bad = impDb({ settings: [{ key: 'IMPREST_ADMIN_EMAIL', value: 'the admin' }] });
+    const r2 = await _FNS.impRequest(bad, ASKER, GOOD_ASK);
+    assert.equal(r2.emailed, false);
+    assert.match(r2.emailNote, /si anwani|not a valid address/i, 'set-but-wrong is told apart from blank');
+    assert.match(r2.emailNote, /the admin/);
+    const src = fs.readFileSync(new URL('../api/_lib/mail.js', import.meta.url), 'utf8');
+    const tryBlock = src.slice(src.indexOf('let res, body;'), src.indexOf('} finally {'));
+    assert.match(tryBlock, /body = await res\.json\(\)/, 'the body is read before the timer is cleared, so a stall after the headers is cut off too');
+  } finally { cap.restore(); }
+});
+
+test('the audit line for an email setting says where it now points, and for nothing else', async () => {
+  const { subjectOf } = await import('../api/_lib/audit.js');
+  assert.match(subjectOf({ key: 'IMPREST_CEO_EMAIL', value: 'ceo@hoop.co.tz' }) || '', /value=ceo@hoop\.co\.tz/);
+  assert.ok(!/value=/.test(subjectOf({ key: 'CALL_BRAND', value: 'HOOPLOAN' }) || ''), 'other settings keep their values out of the log');
+  assert.ok(!/value=/.test(subjectOf({ key: 'DEVICE_LOCK_MESSAGE', value: 'x' }) || ''));
 });
 
 test('figures the integer column could not hold are refused in words, not as a database error', async () => {
