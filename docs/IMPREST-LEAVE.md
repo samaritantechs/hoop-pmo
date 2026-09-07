@@ -23,6 +23,11 @@ standing rule; a read-only `AUDITOR` code sees every pane and can change nothing
 | `imprep` | Ripoti ya imprest / Imprest reports | the CEO — the review copy |
 | `leavereq` | Omba likizo / Leave request | everybody |
 | `leaveappr` | Idhini ya likizo / Leave approval | HR |
+| `leaverep` | Ripoti ya likizo / Leave reports | the CEO, HR and Finance |
+
+> "All staff can request leaves / HR can grant leave / REPORTS are seen by CEO, Admin, HR and
+> Finance." Tick `imprep` and `leaverep` on the CEO, HR and Finance roles; ADMIN holds every
+> pane already.
 
 ## Before anybody opens a pane
 
@@ -119,6 +124,13 @@ a glance and decides, which is what the form's own exceptions make it.
 short notice, **on leave today**, approved. Approve, or reject with a comment. Guarded like
 every decision here: a request already decided is not decided twice.
 
+**Report** (`leaverep`). A period of leave, company-wide, read by the leave's **start date**,
+this month by default. Six widgets: requests, waiting, approved with the **working days
+granted**, rejected, short notice, and **on leave today** — that last one counted over the whole
+table rather than the period, because somebody whose leave began last month is still away this
+morning. Filter by status, by short notice, by away today, or by all dates. Every row opens the
+same details drawer HR sees.
+
 A new leave request emails `HR_EMAIL` when it is set, on the same best-effort terms.
 
 ## What is deliberately NOT here
@@ -138,8 +150,8 @@ A new leave request emails `HR_EMAIL` when it is set, on the same best-effort te
 | what | where |
 |---|---|
 | tables | `db/migrations/RUN-ME-2026-09-07-imprest-leave.sql` — `imprest_roles`, `imprest_requests`, `imprest_retirements`, `imprest_photos`, `leave_requests` |
-| server | `api/portal.js` — `impRoles/impRoleSave/impRoleDelete`, `impRequest/impMine`, `impQueue/impDecide`, `impRetire/impPhotos`, `impReport`, `leaveRequest/leaveMine`, `leaveQueue/leaveDecide` |
+| server | `api/portal.js` — `impRoles/impRoleSave/impRoleDelete`, `impRequest/impMine`, `impQueue/impDecide`, `impRetire/impPhotos`, `impReport`, `leaveRequest/leaveMine`, `leaveQueue/leaveDecide`, `leaveReport` |
 | email | `api/_lib/mail.js` — `sendMail`, never throws |
-| page | `public/portal.html` — `drawImpReq`, `drawImpAppr`, `drawImpRep`, `drawLeaveReq`, `drawLeaveAppr` |
+| page | `public/portal.html` — `drawImpReq`, `drawImpAppr`, `drawImpRep`, `drawLeaveReq`, `drawLeaveAppr`, `drawLeaveRep` |
 | audit | every write is on the audit list; the audit line keeps the request id and the role name, never an amount, never a photo |
 | tests | `test/imprest-leave.test.mjs` (server), the imprest/leave block at the end of `test/portal-html.test.mjs` (page) |

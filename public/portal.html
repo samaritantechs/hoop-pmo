@@ -1543,11 +1543,15 @@ var NAV=[
   { g:'imp',   t:'imprep',   nav:'imprep',     sw:'Ripoti ya imprest', en:'Imprest reports',
     ic:'<path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/><path d="M14 6h5v5"/>' },
 
-  /* LEAVE: ask, and HR decides. Two panes, no third -- there is no payment run for a leave. */
+  /* LEAVE: ask, HR decides, and the report the CEO, HR and Finance read.
+       "All staff can request leaves / HR can grant leave / REPORTS are seen by CEO, Admin, HR
+        and Finance ... so for leaves we should have requests, approval and reports" */
   { g:'leave', t:'leavereq', nav:'leavereq',   sw:'Omba likizo',      en:'Leave request',
     ic:'<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M9 15l2 2 4-4"/>' },
   { g:'leave', t:'leaveappr',nav:'leaveappr',  sw:'Idhini ya likizo', en:'Leave approval',
     ic:'<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M12 13v5M9.5 15.5h5"/>' },
+  { g:'leave', t:'leaverep', nav:'leaverep',   sw:'Ripoti ya likizo', en:'Leave reports',
+    ic:'<path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/><path d="M14 6h5v5"/>' },
 
   { g:'admin', t:'staff',    nav:'staff',      sw:'Wafanyakazi',      en:'Staff',
     ic:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
@@ -1679,6 +1683,7 @@ function draw(){
   if(TAB==='imprep') return drawImpRep(m);
   if(TAB==='leavereq') return drawLeaveReq(m);
   if(TAB==='leaveappr') return drawLeaveAppr(m);
+  if(TAB==='leaverep') return drawLeaveRep(m);
   if(TAB==='sales') return drawSalesPerf(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
@@ -4530,6 +4535,78 @@ function leaveDecideDrawer(m, r){
   $('#lvdNo').onclick=function(){ send(false); };
 }
 
+/* THE LEAVE REPORT -- the third leave pane.
+     "All staff can request leaves / HR can grant leave / REPORTS are seen by CEO, Admin, HR
+      and Finance ... so for leaves we should have requests, approval and reports"
+
+   A period of leave, company-wide, read by the leave's START date -- this month by default,
+   like the advance and imprest reports -- with the widgets that answer the questions asked
+   across a desk: how many asked, how many working days were granted, what was filed late, and
+   who is away today. That last one is deliberately NOT bound to the period: somebody whose
+   leave began last month is still away this morning. Granted by the leaverep nav, which the
+   owner ticks on the CEO, HR and Finance roles; ADMIN holds it as everything. */
+var LEAVER={from:'',to:'',status:''};
+function leaveReportStatus(r){
+  if(r.status==='approved') return '<span class="chip ok">Approved</span>';
+  if(r.status==='rejected') return '<span class="chip bad">Rejected</span>';
+  return '<span class="chip warn">Requested</span>';
+}
+function drawLeaveRep(m){
+  if(!LEAVER.from&&!LEAVER.to&&!LEAVER.explicit){ var mr=monthRange_(); LEAVER.from=mr.from; LEAVER.to=mr.to; }
+  m.innerHTML='<div class="sk"></div>';
+  srv('leaveReport',LEAVER).then(function(d){
+    if(d.notReady){ m.innerHTML=leaveNotReady(); return; }
+    var rows=d.rows||[], t=d.totals||{};
+    var pick=function(k){ return function(){ LEAVER.status=(LEAVER.status===k?'':k); drawLeaveRep(m); }; };
+    m.innerHTML='<div class="tiles">'
+      +tile('Maombi',money(t.count||0),'kwenye kipindi hiki',{on:LEAVER.status==='',cta:LEAVER.status===''?'zote':'onyesha zote ›',go:function(){ LEAVER.status=''; drawLeaveRep(m); }})
+      +tile('Yanasubiri',money(t.pending||0),'hayajaamuliwa',{color:t.pending?'bad':'',on:LEAVER.status==='pending',cta:'chuja ›',go:pick('pending')})
+      +tile('Yameidhinishwa',money(t.approved||0),'siku za kazi '+money(t.approvedDays||0)+' zimetolewa',{color:'ok',on:LEAVER.status==='approved',cta:'chuja ›',go:pick('approved')})
+      +tile('Yamekataliwa',money(t.rejected||0),'',{on:LEAVER.status==='rejected',cta:'chuja ›',go:pick('rejected')})
+      +tile('Taarifa fupi',money(t.shortNotice||0),'yaliwasilishwa chini ya wiki moja',{color:t.shortNotice?'warn':'',on:LEAVER.status==='shortNotice',cta:'chuja ›',go:pick('shortNotice')})
+      +tile('Likizoni leo',money(t.onLeaveToday||0),'wote walio likizoni sasa — si kipindi hiki tu',{on:LEAVER.status==='today',cta:'onyesha ›',go:pick('today')})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<span class="mut" style="font-size:12px">Tarehe ya kuanza likizo:</span>'
+      +'<input id="lvrFrom" class="inp" type="date" style="width:auto" value="'+esc(LEAVER.from||'')+'">'
+      +'<input id="lvrTo" class="inp" type="date" style="width:auto" value="'+esc(LEAVER.to||'')+'">'
+      +'<select id="lvrSt" class="inp" style="width:auto">'
+      +[['','Zote / All'],['pending','Zinasubiri / Pending'],['approved','Zilizoidhinishwa / Approved'],['rejected','Zilizokataliwa / Rejected'],
+        ['shortNotice','Taarifa fupi / Short notice'],['today','Likizoni leo / On leave today']].map(function(k){
+        return '<option value="'+k[0]+'"'+(LEAVER.status===k[0]?' selected':'')+'>'+k[1]+'</option>'; }).join('')+'</select>'
+      +'<button class="btn sm" id="lvrGo">Chuja / Filter</button>'
+      +'<button class="btn sm ghost" id="lvrClr">Mwezi huu / This month</button>'
+      +'<button class="btn sm ghost" id="lvrAll">Tarehe zote / All dates</button>'
+      +'</div>'
+      +(rows.length?'<div class="scroll"><table><thead><tr>'
+        +'<th>TIMESTAMP</th><th>STAFF NAME</th><th>EMPLOYEE ID</th><th>DEPARTMENT</th><th>TYPE</th>'
+        +'<th>FROM</th><th>TO</th><th class="r">WORKING DAYS</th><th>RESUMES</th><th>NOTICE</th>'
+        +'<th>STATUS</th><th>DECIDED BY</th><th>SUPERVISOR</th><th>HANDED TO</th><th>COMMENT</th><th class="noxl"></th></tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
+            +'<td>'+esc(r.staffName||'—')+'<div class="mut" style="font-size:10px">'+esc(r.staffRole||'')+'</div></td>'
+            +'<td>'+esc(r.employeeId||'—')+'</td><td>'+esc(r.department||'—')+'</td>'
+            +'<td>'+esc(leaveTypeLabel(r))+'</td>'
+            +'<td>'+esc(r.from||'—')+'</td><td>'+esc(r.to||'—')+'</td>'
+            +'<td class="r">'+money(r.workingDays||0)+'</td><td>'+esc(r.resume||'—')+'</td>'
+            +'<td>'+(r.shortNotice?'<span class="chip warn">Short</span>':'In time')+'</td>'
+            +'<td>'+leaveReportStatus(r)+'</td>'
+            +'<td style="font-size:11px">'+esc(r.decidedBy||'—')+(r.decidedAt?'<div class="mut" style="font-size:10px">'+esc(advWhen(r.decidedAt))+'</div>':'')+'</td>'
+            +'<td>'+esc(r.supervisor||'—')+'</td><td>'+esc(r.handedTo||'—')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.comment||'')+'</td>'
+            +'<td class="r noxl"><button class="btn sm ghost" data-lvv="'+esc(r.id)+'">Maelezo</button></td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">Hakuna maombi kwenye kipindi hiki. / No requests in this period.</div>');
+    wireTiles(m);
+    $('#lvrGo').onclick=function(){ LEAVER={from:$('#lvrFrom').value,to:$('#lvrTo').value,status:$('#lvrSt').value,explicit:true}; drawLeaveRep(m); };
+    $('#lvrClr').onclick=function(){ var r=monthRange_(); LEAVER={from:r.from,to:r.to,status:'',explicit:true}; drawLeaveRep(m); };
+    $('#lvrAll').onclick=function(){ LEAVER={from:'',to:'',status:'',explicit:true}; drawLeaveRep(m); };
+    [].slice.call(m.querySelectorAll('[data-lvv]')).forEach(function(b){
+      b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-lvv'); })[0]; if(r) leaveDetailsDrawer(r); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 /* ---------- stock accountability ----------
    "the stock is too large and hoop agents are stealing stock"
 
@@ -5316,7 +5393,7 @@ function drawCodes(m){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',recovery:'Recovery',
             fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',movement:'Stock movement',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
-            leavereq:'Leave request',leaveappr:'Leave approval (HR)',
+            leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
             +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';

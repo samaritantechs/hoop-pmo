@@ -84,9 +84,11 @@ test('the five panes are five separate grants, and view-only codes can look but 
   // imprep reviews; it neither asks nor decides.
   await denied('impMine', CEO); await denied('impQueue', CEO);
   await denied('impDecide', CEO, { id: uid('r1'), approve: true }); await denied('impRoleSave', CEO, { role: 'X', rate: 1 });
-  // Leave: the asker cannot sit at HR's desk, HR cannot ask on the asker's pane.
+  // Leave: the asker cannot sit at HR's desk, HR cannot ask on the asker's pane, and the report
+  // is its own grant -- HR's desk does not include it, nor does the asker's form.
   await denied('leaveQueue', ASKER); await denied('leaveDecide', ASKER, { id: uid('r1'), approve: true });
-  await denied('leaveMine', HR);
+  await denied('leaveMine', HR); await denied('leaveReport', HR); await denied('leaveReport', ASKER);
+  await denied('leaveReport', ADMIN_IMP); await denied('leaveReport', CEO);
   // A view-only code holding every nav still cannot write a thing.
   for (const [fn, args] of [['impRequest', GOOD_ASK], ['impDecide', { id: uid('r1'), approve: true }],
     ['impRoleSave', { role: 'X', rate: 1 }], ['impRoleDelete', { role: 'CREDIT' }],
@@ -105,7 +107,7 @@ test('the new navs are on the list the role editor is built from', async () => {
   const src = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
   const m = /const NAV_TABS = \[([^\]]+)\]/.exec(src);
   assert.ok(m, 'NAV_TABS is a literal list');
-  for (const k of ['impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr']) {
+  for (const k of ['impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep']) {
     assert.ok(m[1].includes(`'${k}'`), k + ' must be a nav the owner can tick, or nobody can ever be granted it');
   }
 });
@@ -595,4 +597,41 @@ test('a hung mail provider is cut off, the request is still filed, and a subject
     assert.ok(!/[\r\n]/.test(subject), 'a line break typed into a name never becomes a second header');
     assert.match(subject, /Juma Bcc: x@y\.z/);
   } finally { _setFetch(null); if (prev == null) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = prev; }
+});
+
+/* ---------------------------------------------------------------------------------------- */
+const FINANCE = { code: 'F1', name: 'JANETH', role: 'FINANCE', teams: null, tabs: ['leaverep'], readOnly: false };
+
+test('the leave report: a period by start date, company-wide, with the desk\'s widgets', async () => {
+  /* "REPORTS are seen by CEO, Admin, HR and Finance ... so for leaves we should have requests,
+     approval and reports". The report is a grant of its own: whoever holds leaverep reads every
+     department, and holding HR's desk or the asker's form says nothing about it. */
+  const d = impDb({ leaves: [
+    { id: uid('l1'), requested_at: '2026-09-01T08:00:00Z', staff_code: 'A1', staff_name: 'JUMA G', staff_role: 'CREDIT', leave_type: 'annual',
+      from_date: '2026-09-14', to_date: '2026-09-25', working_days: 10, status: 'approved', short_notice: false, decided_by: 'SIPHO K' },
+    { id: uid('l2'), requested_at: '2026-09-02T08:00:00Z', staff_code: 'B2', staff_name: 'ASHA', staff_role: 'STORE', leave_type: 'sick',
+      from_date: '2026-09-03', to_date: '2026-09-04', working_days: 2, status: 'approved', short_notice: false },
+    { id: uid('l3'), requested_at: '2026-09-03T08:00:00Z', staff_code: 'C3', staff_name: 'BAKARI', staff_role: 'IT', leave_type: 'annual',
+      from_date: '2026-09-08', to_date: '2026-09-10', working_days: 3, status: 'pending', short_notice: true },
+    { id: uid('l4'), requested_at: '2026-09-03T09:00:00Z', staff_code: 'A1', staff_name: 'JUMA G', staff_role: 'CREDIT', leave_type: 'other', other_type: 'Study',
+      from_date: '2026-09-21', to_date: '2026-09-22', working_days: 2, status: 'rejected', comment: 'no' },
+    // Started last month: outside a September period, but away today if today falls inside it.
+    { id: uid('old'), requested_at: '2026-08-10T08:00:00Z', staff_code: 'D4', staff_name: 'DAUDI', staff_role: 'RSM', leave_type: 'maternity',
+      from_date: '2026-08-20', to_date: '2099-01-01', working_days: 999, status: 'approved', short_notice: false },
+  ] });
+  const r = await _FNS.leaveReport(d, FINANCE, { from: '2026-09-01', to: '2026-09-30' });
+  assert.deepEqual(r.totals, { count: 4, pending: 1, approved: 2, rejected: 1, approvedDays: 12, shortNotice: 1, onLeaveToday: 1 });
+  assert.deepEqual(r.rows.map(x => x.id), [uid('l4'), uid('l3'), uid('l2'), uid('l1')], 'newest first, every department');
+  assert.ok(!('staffCode' in r.rows[0]), 'the access code never rides the wire');
+  assert.equal(r.rows.find(x => x.id === uid('l4')).otherType, 'Study');
+
+  assert.deepEqual((await _FNS.leaveReport(d, FINANCE, { from: '2026-09-01', to: '2026-09-30', status: 'pending' })).rows.map(x => x.id), [uid('l3')]);
+  assert.deepEqual((await _FNS.leaveReport(d, FINANCE, { from: '2026-09-01', to: '2026-09-30', status: 'shortNotice' })).rows.map(x => x.id), [uid('l3')]);
+  assert.deepEqual((await _FNS.leaveReport(d, FINANCE, { from: '2026-09-01', to: '2026-09-30', status: 'today' })).rows.map(x => x.id), [uid('old')],
+    '"away today" reaches outside the period: the person is still away this morning');
+  assert.equal((await _FNS.leaveReport(d, FINANCE, {})).totals.count, 5, 'no dates means everything');
+  assert.equal((await _FNS.leaveReport(d, OWNER, {})).totals.count, 5, 'ADMIN holds it as everything');
+
+  const bare = fakeDb({ leave_requests: [] }, { missingColumns: { leave_requests: ['id'] } });
+  assert.equal((await _FNS.leaveReport(bare, FINANCE, {})).notReady, true, 'names the migration rather than failing');
 });
