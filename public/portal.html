@@ -4009,7 +4009,10 @@ function impDetailsDrawer(r){
 function impPhotosDrawer(id){
   drawer('<h3>Picha za risiti / Receipt photos</h3><div class="sk"></div>');
   srv('impPhotos',{id:id}).then(function(d){
-    var ps=d.photos||[];
+    /* Only an image data URL goes into a src. The server refused anything else on the way in;
+       this is the same rule kept on the way out, so a row edited by hand in the database can
+       never become a script on this page. */
+    var ps=(d.photos||[]).filter(function(p){ return /^data:image\/(jpeg|jpg|png|webp);base64,/.test(String(p.data||'')); });
     drawer('<h3>Picha za risiti / Receipt photos</h3>'
       +(ps.length?ps.map(function(p){
           return '<div style="margin:8px 0"><img src="'+esc(p.data)+'" alt="risiti '+p.seq+'" '

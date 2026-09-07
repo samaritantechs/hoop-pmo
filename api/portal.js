@@ -297,8 +297,14 @@ const isDay = s => {
 const intNN = v => {
   if (v === '' || v == null) return 0;
   const n = Number(v);
-  return Number.isInteger(n) && n >= 0 ? n : null;
+  // Above this the integer column itself would refuse the row, as a 500 with Postgres's
+  // words in it; two billion shillings is not a figure this form will ever carry honestly.
+  return Number.isInteger(n) && n >= 0 && n <= MONEY_MAX ? n : null;
 };
+const MONEY_MAX = 2000000000;
+/* A leave longer than this is not a leave request, and a span of years typed by mistake
+   would otherwise be walked day by day below. */
+const LEAVE_MAX_DAYS = 366;
 /* MONDAY TO FRIDAY, INCLUSIVE, on the calendar the dates are written in. */
 function workingDaysBetween(from, to) {
   let n = 0;
@@ -2814,6 +2820,10 @@ const FNS = {
     const accomAmount = accomDays * accomRate;
     const total = fareAmount + accomAmount + others.reduce((s, o) => s + o.amt, 0);
     if (total <= 0) bad('Ombi halina gharama yoyote. / The request has no costs on it.');
+    // The parts each fit; their products and sum must too, or the insert fails in Postgres's words.
+    if ([fareAmount, accomAmount, total].some(v => v > MONEY_MAX)) {
+      bad('Kiasi ni kikubwa kupita kiasi — angalia namba. / The amount is implausibly large; check the figures.');
+    }
 
     const at = new Date().toISOString();
     const row = {
@@ -2989,14 +2999,24 @@ const FNS = {
         + '/ One photo is too large; shrink it and try again.');
     }
     const total = fare + accom + o1 + o2 + o3;
+    if (total > MONEY_MAX) bad('Kiasi ni kikubwa kupita kiasi — angalia namba. / The amount is implausibly large; check the figures.');
     const approved = num(row.approved_amount);
     const balance = approved - total;
     const at = new Date().toISOString();
 
     /* ORDER OF WRITES. The retirement row first: its unique request_id is the lock that stops a
-       double press filing twice. Then the photos, then the summary onto the request. A failure
-       between the second and third leaves a retirement that the request does not yet summarise,
-       which the report shows as "retired, no summary" rather than losing the receipts. */
+       double press filing twice. Then the photos, then the summary onto the request -- and
+       retired_at on the request, written LAST, is the only thing "retired" means.
+
+       A FAILURE HALF-WAY IS RESUMABLE. If the photos or the summary failed to write on an
+       earlier attempt, a retirement row exists that the request does not yet summarise; the
+       traveller presses Retire again and, without this, the unique key would tell them "already
+       retired" about a retirement nobody can see. So: while the request says NOT retired, any
+       retirement or photo rows under it can only be the wreckage of that earlier attempt, and
+       are cleared before this one writes. A finished retirement is never touched -- the
+       retired_at check above refuses before this line is reached. */
+    await db.from('imprest_photos').delete().eq('request_id', id);
+    await db.from('imprest_retirements').delete().eq('request_id', id);
     const { error: rErr } = await db.from('imprest_retirements').insert([{
       request_id: id, filed_at: at, filed_by_code: user.code || null, filed_by_name: user.name || '',
       fare_actual: fare, accom_actual: accom, other1_actual: o1, other2_actual: o2, other3_actual: o3,
@@ -3118,6 +3138,7 @@ const FNS = {
     if (!isDay(from)) bad('Weka tarehe ya kuanza likizo. / Pick the leave start date.');
     if (!isDay(to)) bad('Weka tarehe ya kumaliza likizo. / Pick the leave end date.');
     if (to < from) bad('Tarehe ya kumaliza haiwezi kutangulia ya kuanza. / The end date cannot be before the start.');
+    if (addDaysKey(from, LEAVE_MAX_DAYS) < to) bad('Likizo haiwezi kuzidi mwaka mmoja. / A leave cannot run longer than a year.');
     const reason = S(a.reason, 2000);
     if (!reason) bad('Andika sababu. / Give a reason.');
     /* THE DECLARATION IS THE SIGNATURE. The paper form carries "I confirm ... I have arranged

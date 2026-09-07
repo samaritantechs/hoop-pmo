@@ -524,3 +524,75 @@ test('leave requests tell HR by email, and say so in the answer', async () => {
     assert.equal(d2._dump('leave_requests').length, 1, 'filed regardless');
   } finally { cap.restore(); }
 });
+
+/* ---------------------------------------------------------------------------------------- */
+test('a retirement that died half-way can be filed again, and a finished one still cannot', async () => {
+  const d = impDb({ requests: [aRequest({ id: uid('ok'), code: 'A1', status: 'approved', approved: 150000 })] });
+  const good = { id: uid('ok'), fareActual: 30000, accomActual: 100000, photos: [photoOf(100), photoOf(100)] };
+  // First attempt: the photos insert fails after the retirement row is in.
+  const real = d.from.bind(d);
+  let blow = true;
+  d.from = name => {
+    const q = real(name);
+    if (name === 'imprest_photos' && blow) {
+      const exec = q._exec.bind(q);
+      q._exec = () => (q.mode === 'insert' ? { data: null, error: { message: 'canceling statement due to statement timeout' } } : exec());
+    }
+    return q;
+  };
+  await assert.rejects(() => _FNS.impRetire(d, ASKER, good), /statement timeout/);
+  assert.equal(d._dump('imprest_retirements').length, 1, 'the wreckage of the first attempt');
+  assert.equal(d._dump('imprest_photos').length, 0);
+  assert.equal(d._dump('imprest_requests')[0].retired_at, null, 'and the request does not claim to be retired');
+  // Second attempt, provider recovered: it must not be told "already retired".
+  blow = false;
+  const r = await _FNS.impRetire(d, ASKER, Object.assign({}, good, { fareActual: 35000 }));
+  assert.equal(r.total, 135000);
+  assert.equal(d._dump('imprest_retirements').length, 1, 'one retirement, the second attempt\'s');
+  assert.equal(d._dump('imprest_retirements')[0].fare_actual, 35000);
+  assert.equal(d._dump('imprest_photos').length, 2);
+  assert.ok(d._dump('imprest_requests')[0].retired_at);
+  // And now it is finished, so a third press is refused before anything is cleared.
+  await assert.rejects(() => _FNS.impRetire(d, ASKER, good), /tayari|already been retired/i);
+  assert.equal(d._dump('imprest_retirements')[0].fare_actual, 35000, 'the finished retirement was not touched');
+  assert.equal(d._dump('imprest_photos').length, 2);
+});
+
+test('figures the integer column could not hold are refused in words, not as a database error', async () => {
+  const d = impDb();
+  await assert.rejects(() => _FNS.impRequest(d, ASKER, Object.assign({}, GOOD_ASK, { farePerTrip: 3000000000 })), /namba nzima|whole/i);
+  await assert.rejects(() => _FNS.impRequest(d, ASKER, Object.assign({}, GOOD_ASK, { fareTrips: 2000, farePerTrip: 2000000 })), /kikubwa|implausibly/i,
+    'two parts that fit, whose product does not');
+  await assert.rejects(() => _FNS.impRequest(d, ASKER, Object.assign({}, GOOD_ASK, { other1Amount: 1500000000, other2Desc: 'x', other2Amount: 1500000000 })), /kikubwa|implausibly/i,
+    'or whose sum does not');
+  assert.equal(d._dump('imprest_requests').length, 0);
+  await assert.rejects(() => _FNS.leaveRequest(d, ASKER, Object.assign({}, GOOD_LEAVE, { from: '2026-01-01', to: '2027-01-03' })), /mwaka|a year/i,
+    'a leave of more than a year is a typo, not a request');
+});
+
+test('a hung mail provider is cut off, the request is still filed, and a subject is one line', async () => {
+  const prev = process.env.RESEND_API_KEY;
+  process.env.RESEND_API_KEY = 're_test_key';
+  try {
+    const src = fs.readFileSync(new URL('../api/_lib/mail.js', import.meta.url), 'utf8');
+    assert.match(src, /const SEND_TIMEOUT_MS = 8000;/, 'eight seconds: longer than a send, shorter than the function');
+    assert.match(src, /setTimeout\(\(\) => ctl\.abort\(\), SEND_TIMEOUT_MS\)/, 'and the timer really aborts the fetch');
+    /* Do not wait eight real seconds. The transport below behaves as fetch does when its
+       signal fires: it checks that a signal was handed to it at all, then rejects the way an
+       aborted fetch rejects. What is proven is the wiring -- a signal reaches the transport
+       and an abort comes back as "not sent", never as a thrown error or a lost row. */
+    let sawSignal = false, subject = null;
+    _setFetch(async (url, init) => {
+      sawSignal = !!(init.signal && typeof init.signal.aborted === 'boolean');
+      subject = JSON.parse(init.body).subject;
+      throw Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+    });
+    const d = impDb({ settings: [{ key: 'IMPREST_ADMIN_EMAIL', value: 'admin@hoop.co.tz' }] });
+    const r = await _FNS.impRequest(d, ASKER, Object.assign({}, GOOD_ASK, { fullName: 'Juma\r\nBcc: x@y.z' }));
+    assert.equal(sawSignal, true, 'the transport was given an abort signal');
+    assert.equal(r.emailed, false); assert.match(r.emailNote, /aborted/);
+    assert.equal(d._dump('imprest_requests').length, 1, 'filed regardless');
+    assert.ok(!/[\r\n]/.test(subject), 'a line break typed into a name never becomes a second header');
+    assert.match(subject, /Juma Bcc: x@y\.z/);
+  } finally { _setFetch(null); if (prev == null) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = prev; }
+});

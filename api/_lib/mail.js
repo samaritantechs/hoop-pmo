@@ -23,6 +23,12 @@
    HR_EMAIL) so the office can change who is told without a deploy. Several addresses may be
    separated by commas or semicolons. */
 
+/* BOUNDED, because the row is already written by the time a send runs. A provider that accepts
+   the connection and then hangs would hold the serverless function open past its limit, and
+   the response that says "filed" would never reach the phone -- the person would see a dropped
+   request and press again. Eight seconds is longer than any real send and shorter than the
+   function's own budget. */
+const SEND_TIMEOUT_MS = 8000;
 let fetchImpl = (...a) => globalThis.fetch(...a);
 /** Tests only: swap the transport so a send can be observed without a network. */
 export function _setFetch(f) { fetchImpl = f || ((...a) => globalThis.fetch(...a)); }
@@ -56,11 +62,22 @@ export async function sendMail(db, { toKey, to, subject, html }) {
       return { sent: false, reason: (toKey ? toKey + ' ' : '') + 'haijawekwa kwenye Settings / no recipient set' };
     }
     const from = (await setting(db, 'EMAIL_FROM')) || 'HOOPLOAN <onboarding@resend.dev>';
-    const res = await fetchImpl('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: list, subject: String(subject || 'HOOPLOAN'), html: String(html || '') }),
-    });
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), SEND_TIMEOUT_MS) : null;
+    let res;
+    try {
+      res = await fetchImpl('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        // A subject is one line. A name typed with a line break in it must not become a header.
+        body: JSON.stringify({ from, to: list,
+          subject: String(subject || 'HOOPLOAN').replace(/[\r\n]+/g, ' ').slice(0, 200),
+          html: String(html || '') }),
+        signal: ctl ? ctl.signal : undefined,
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) return { sent: false, reason: 'provider: ' + (body.message || res.status) };
     return { sent: true, to: list.join(', '), id: body.id || null };
