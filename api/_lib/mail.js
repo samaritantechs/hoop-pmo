@@ -16,9 +16,10 @@
    Same provider and the same two knobs as HOPE's weekly report, deliberately, so one deploy
    variable serves both systems:
      RESEND_API_KEY   environment variable on the deployment -- a secret, so never a settings row
-     EMAIL_FROM       Settings; blank falls back to Resend's own onboarding sender, which works
-                      for a first send but lands in spam and should be replaced with a verified
-                      domain before anybody relies on it
+     EMAIL_FROM       Settings; blank falls back to Resend's own onboarding sender, which Resend
+                      delivers ONLY to the address of the Resend account itself -- enough to see
+                      the first test arrive, useless for the office. Set a sender on a domain
+                      verified in Resend before anybody relies on it
    The recipient is a Settings KEY passed by the caller (IMPREST_ADMIN_EMAIL, IMPREST_CEO_EMAIL,
    HR_EMAIL) so the office can change who is told without a deploy. Several addresses may be
    separated by commas or semicolons. */
@@ -57,14 +58,21 @@ export async function sendMail(db, { toKey, to, subject, html }) {
     if (!key) return { sent: false, reason: 'RESEND_API_KEY haijawekwa / not set on the deployment' };
     let addr = String(to || '').trim();
     if (!addr && toKey) addr = await setting(db, toKey);
-    const list = addr.split(/[;,]/).map(x => x.trim()).filter(x => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+    /* "Name <addr>" is how the Settings hint shows the sender, so somebody will type a
+       recipient that way too; the address inside the brackets is what is meant. And "set to
+       something that is not an address" is told apart from "blank", because the fix is different. */
+    const parts = addr.split(/[;,]/).map(x => x.trim()).filter(Boolean)
+      .map(x => { const m = /<([^>]+)>/.exec(x); return (m ? m[1] : x).trim(); });
+    const list = parts.filter(x => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
     if (!list.length) {
-      return { sent: false, reason: (toKey ? toKey + ' ' : '') + 'haijawekwa kwenye Settings / no recipient set' };
+      return { sent: false, reason: (toKey ? toKey + ' ' : '') + (parts.length
+        ? 'si anwani sahihi / is not a valid address: ' + parts.join(', ').slice(0, 120)
+        : 'haijawekwa kwenye Settings / no recipient set') };
     }
     const from = (await setting(db, 'EMAIL_FROM')) || 'HOOPLOAN <onboarding@resend.dev>';
     const ctl = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = ctl ? setTimeout(() => ctl.abort(), SEND_TIMEOUT_MS) : null;
-    let res;
+    let res, body;
     try {
       res = await fetchImpl('https://api.resend.com/emails', {
         method: 'POST',
@@ -75,10 +83,12 @@ export async function sendMail(db, { toKey, to, subject, html }) {
           html: String(html || '') }),
         signal: ctl ? ctl.signal : undefined,
       });
+      // The body read is under the same clock: a provider that sends headers and then stalls
+      // would otherwise hold the function open exactly as a hung connection would.
+      body = await res.json().catch(() => ({}));
     } finally {
       if (timer) clearTimeout(timer);
     }
-    const body = await res.json().catch(() => ({}));
     if (!res.ok) return { sent: false, reason: 'provider: ' + (body.message || res.status) };
     return { sent: true, to: list.join(', '), id: body.id || null };
   } catch (e) {

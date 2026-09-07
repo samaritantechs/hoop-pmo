@@ -1427,8 +1427,15 @@ function srv(fn,args,tries){
             return new Promise(function(res){ setTimeout(res,tries?1500:500); })
               .then(function(){ return srv(fn,args,tries+1); });
           }
-          if(dropped) e=new Error('Mtandao umekatika — imejaribu mara '+(tries+1)+'. Angalia intaneti kisha bofya ↻. '
-            + '/ The request never reached the server; tried '+(tries+1)+' times. Check the connection, then tap ↻.');
+          /* TWO DIFFERENT TRUTHS. A read that was dropped never happened and can be pressed again.
+             A write on the NO_RETRY list was dropped on the way BACK as often as on the way there
+             -- impRequest writes its row and then waits for a mail provider -- so "never reached
+             the server" would send the person straight into filing it twice. */
+          if(dropped) e=new Error(NO_RETRY[fn]
+            ? 'Jibu la seva halikufika — huenda ombi lilifika. Onyesha upya (↻) na uangalie orodha KABLA ya kutuma tena. '
+              + '/ The server\'s answer was lost; the request may well have arrived. Refresh (↻) and check the list BEFORE sending again.'
+            : 'Mtandao umekatika — imejaribu mara '+(tries+1)+'. Angalia intaneti kisha bofya ↻. '
+              + '/ The request never reached the server; tried '+(tries+1)+' times. Check the connection, then tap ↻.');
           throw e;
         });
 }
@@ -3878,37 +3885,103 @@ function dataUrlBytes(u){
   var b64=u.slice(i+1), pad=b64.slice(-2)==='=='?2:b64.slice(-1)==='='?1:0;
   return Math.floor(b64.length*3/4)-pad;
 }
-function shrinkPhoto(file, maxPx, q){
+/* DECODED ONCE. A phone photo is 3000x4000 pixels; the first cut of this read the file and
+   decoded the whole bitmap again for every size it tried, which on a 1GB handset is how the
+   WebView renderer gets killed and the typed actuals with it. The file is read once and the
+   image decoded once; every size is a redraw of that one decode. (A FileReader rather than an
+   object URL, deliberately: the object-URL call belongs to saveFile_ alone on this page, and
+   the guard that keeps it there is worth more than the megabytes a data URL costs.) */
+function loadImage(file){
   return new Promise(function(res, rej){
     var fr=new FileReader();
     fr.onerror=function(){ rej(new Error('Picha haikusomeka. / Could not read the photo.')); };
     fr.onload=function(){
       var img=new Image();
       img.onerror=function(){ rej(new Error('Faili si picha. / That file is not an image.')); };
-      img.onload=function(){
-        var w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
-        var s=Math.min(1, maxPx/Math.max(w,h,1));
-        var cw=Math.max(1,Math.round(w*s)), ch=Math.max(1,Math.round(h*s));
-        var c=document.createElement('canvas'); c.width=cw; c.height=ch;
-        var ctx=c.getContext('2d');
-        // A white ground first: a PNG receipt with transparency would otherwise go black as JPEG.
-        ctx.fillStyle='#fff'; ctx.fillRect(0,0,cw,ch);
-        ctx.drawImage(img,0,0,cw,ch);
-        try{ res(c.toDataURL('image/jpeg', q)); }catch(e){ rej(e); }
-      };
+      img.onload=function(){ res(img); };
       img.src=fr.result;
     };
     fr.readAsDataURL(file);
   });
 }
+/* Does this browser turn a photo the right way up by itself? Chromium has since 81; an Android
+   System WebView older than that -- an Android 6 handset never updated from Play -- draws the
+   camera's raw pixels sideways and, once re-encoded here, they stay sideways for every reader
+   after. The CSS property arrived in the same release as the canvas behaviour, so it is the
+   feature test. */
+function autoOrients(){ try{ return !!(window.CSS&&CSS.supports&&CSS.supports('image-orientation','from-image')); }catch(e){ return false; } }
+/* The EXIF orientation tag (1..8) of a JPEG, read from its first 64KB -- only ever asked for on
+   a browser that will not apply it itself, so a modern phone never pays for this. Anything
+   unreadable is 1: drawn as-is, which is what happened before. */
+function photoOrientation(file){
+  return new Promise(function(res){
+    var jpeg=/jpe?g/i.test((file&&file.type)||'')||/\.jpe?g$/i.test((file&&file.name)||'');
+    if(autoOrients()||!file||!jpeg){ res(1); return; }
+    var fr=new FileReader();
+    fr.onerror=function(){ res(1); };
+    fr.onload=function(){
+      try{
+        var v=new DataView(fr.result), n=v.byteLength, o=2;
+        if(n<4||v.getUint16(0)!==0xFFD8){ res(1); return; }
+        while(o+4<=n){
+          var marker=v.getUint16(o); o+=2;
+          if(marker===0xFFE1){
+            var start=o+2;
+            if(start+6<=n&&v.getUint32(start)===0x45786966){          // "Exif"
+              var tiff=start+6, little=v.getUint16(tiff)===0x4949;
+              var ifd=tiff+v.getUint32(tiff+4, little), count=v.getUint16(ifd, little);
+              for(var i=0;i<count;i++){
+                var e=ifd+2+i*12; if(e+12>n) break;
+                if(v.getUint16(e, little)===0x0112){ var t=v.getUint16(e+8, little); res(t>=1&&t<=8?t:1); return; }
+              }
+            }
+            res(1); return;
+          }
+          if((marker&0xFF00)!==0xFF00||marker===0xFFDA){ res(1); return; }
+          o+=v.getUint16(o);
+        }
+      }catch(e){}
+      res(1);
+    };
+    fr.readAsArrayBuffer(file.slice(0,65536));
+  });
+}
+/* One size of one decoded image, as a JPEG data URL. Everything that can throw here -- a context
+   the WebView refuses because its canvas memory is spent, a bitmap that will not draw -- throws
+   out to the caller, which is a promise chain that turns it into words on the slot; the first
+   cut let a throw inside an onload handler leave the slot saying "shrinking…" forever. */
+function drawScaled(img, maxPx, q, orient){
+  var w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+  if(!w||!h) throw new Error('Faili si picha. / That file is not an image.');
+  var sc=Math.min(1, maxPx/Math.max(w,h,1));
+  var cw=Math.max(1,Math.round(w*sc)), ch=Math.max(1,Math.round(h*sc));
+  var swap=orient>=5&&orient<=8;
+  var c=document.createElement('canvas'); c.width=swap?ch:cw; c.height=swap?cw:ch;
+  var ctx=c.getContext('2d');
+  if(!ctx) throw new Error('Simu haina kumbukumbu ya kutosha kupunguza picha hii. / The phone ran out of memory shrinking this photo.');
+  // A white ground first: a PNG receipt with transparency would otherwise go black as JPEG.
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);
+  switch(orient){
+    case 2: ctx.transform(-1,0,0,1,cw,0); break;
+    case 3: ctx.transform(-1,0,0,-1,cw,ch); break;
+    case 4: ctx.transform(1,0,0,-1,0,ch); break;
+    case 5: ctx.transform(0,1,1,0,0,0); break;
+    case 6: ctx.transform(0,1,-1,0,ch,0); break;
+    case 7: ctx.transform(0,-1,-1,0,ch,cw); break;
+    case 8: ctx.transform(0,-1,1,0,0,cw); break;
+  }
+  ctx.drawImage(img,0,0,cw,ch);
+  return c.toDataURL('image/jpeg', q);
+}
 function shrinkForReceipt(file){
-  var steps=[[1024,0.6],[800,0.5],[640,0.42],[480,0.35]], i=0;
-  var next=function(){
-    if(i>=steps.length) return Promise.reject(new Error('Picha ni kubwa mno hata baada ya kupunguzwa. / The photo is too large even after shrinking.'));
-    var st=steps[i++];
-    return shrinkPhoto(file, st[0], st[1]).then(function(u){ return dataUrlBytes(u)<=IMP_PHOTO_MAX ? u : next(); });
-  };
-  return next();
+  var steps=[[1024,0.6],[800,0.5],[640,0.42],[480,0.35]];
+  return Promise.all([loadImage(file), photoOrientation(file)]).then(function(r){
+    for(var i=0;i<steps.length;i++){
+      var u=drawScaled(r[0], steps[i][0], steps[i][1], r[1]);
+      if(dataUrlBytes(u)<=IMP_PHOTO_MAX) return u;
+    }
+    throw new Error('Picha ni kubwa mno hata baada ya kupunguzwa. / The photo is too large even after shrinking.');
+  });
 }
 var IMP_PAY_MODES=['MPESA','CRDB','CASH','NMB','AIRTEL MONEY','TIGO PESA','HALOPESA'];
 
@@ -3999,8 +4072,14 @@ function impDetailsDrawer(r){
             +'<div class="mut" style="font-size:11px">'+esc(t.by||'')+' · '+esc(advWhen(t.at))+' · picha '+money(t.photos)+'</div>'
           : '<div>Halisi / Actual: <b>'+money(r.retireTotal||0)+'</b> · '+esc(advWhen(r.retiredAt))+'</div>')
         +'<div>Salio / Balance: '+impBalance(r)+'</div>'
-        +'<button class="btn sm ghost" style="margin-top:6px" onclick="impPhotosDrawer(\''+esc(r.id)+'\')">Picha za risiti / Receipt photos</button>'
+        +'<button class="btn sm ghost" style="margin-top:6px" data-impp="'+esc(r.id)+'">Picha za risiti / Receipt photos</button>'
       : ''));
+  /* Bound after the drawer is drawn, like every other button in this feature. An inline
+     onclick= with a quoted id in it is HTML-escaped and then entity-decoded by the browser
+     before the handler compiles -- which is one apostrophe away from running as script. A uuid
+     could never carry one; the rule is kept anyway, so the day the id is not a uuid nothing
+     has to be remembered. */
+  var pb=$('#drawer [data-impp]'); if(pb) pb.onclick=function(){ impPhotosDrawer(r.id); };
 }
 /* THE RECEIPTS, fetched only now. Three data URLs per request are the one heavy thing this
    feature carries and they never ride along with a list. */
@@ -4029,7 +4108,12 @@ function drawImpReq(m){
     if(d.notReady){ m.innerHTML=impNotReady(); return; }
     var rows=d.rows||[], roles=d.roles||[];
     var rateOf=function(role){ var x=roles.filter(function(r){ return r.role===role; })[0]; return x?Number(x.rate)||0:0; };
-    var num=function(id){ var v=Number(($(id)||{}).value); return isFinite(v)&&v>0?v:0; };
+    /* The preview refuses exactly what the server refuses -- a decimal, a minus -- and marks the
+       box, so a form that cannot be filed is never shown with a plausible total on it. */
+    var invalid=false;
+    var num=function(id){ var el=$(id), v=el?el.value:''; if(v===''||v==null) return 0; var n=Number(v);
+      if(!isFinite(n)||Math.floor(n)!==n||n<0){ invalid=true; if(el) el.style.borderColor='var(--bad)'; return 0; }
+      if(el) el.style.borderColor=''; return n; };
     m.innerHTML='<div class="card" style="padding:14px;max-width:640px">'
       +'<h3 style="margin:0 0 4px">Ombi la imprest / Imprest requisition</h3>'
       +'<div class="sub">Jaza fomu; ombi linakwenda kwa mwidhinishaji na nakala kwa CEO. '
@@ -4085,11 +4169,13 @@ function drawImpReq(m){
       +'<h3 style="margin:18px 0 6px">Maombi yangu / My requests</h3>'
       +(rows.length?impTable(rows,{retire:true,photos:true}):'<div class="mut">Bado hujaomba imprest. / No requests yet.</div>');
     var recalc=function(){
+      invalid=false;
       var rate=rateOf($('#imRole').value);
       var fare=num('#imTrips')*num('#imTrip'), accom=num('#imDays')*rate;
       var others=num('#imO1a')+num('#imO2a')+num('#imO3a');
       $('#imRate').value=money(rate); $('#imFare').value=money(fare); $('#imAccom').value=money(accom);
-      $('#imTotal').textContent=money(fare+accom+others);
+      $('#imTotal').textContent=invalid?'—':money(fare+accom+others);
+      $('#imSend').disabled=invalid||!roles.length;
     };
     ['#imRole','#imTrips','#imTrip','#imDays','#imO1a','#imO2a','#imO3a'].forEach(function(id){
       var el=$(id); if(el){ el.oninput=recalc; el.onchange=recalc; }
@@ -4110,7 +4196,7 @@ function drawImpReq(m){
         /* THE PANE SAYS WHETHER THE NUDGE WENT. The request is filed either way; a mail that
            did not go is a thing to tell the approver in person, not a reason to file twice. */
         toast('Ombi limetumwa · '+money(d.total)+' TZS'+(d.emailed?' · email imetumwa':' · email haikutumwa: '+(d.emailNote||'')), !d.emailed);
-        drawImpReq(m);
+        if(TAB==='impreq') drawImpReq(m);
       }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
     };
     impWireRows(m, rows, { view:impDetailsDrawer, photos:function(r){ impPhotosDrawer(r.id); },
@@ -4122,8 +4208,14 @@ function drawImpReq(m){
    what they were costed at and the traveller edits the lines that differed. The photos are
    shrunk as they are chosen, so the person sees the size before pressing send and a slow
    connection carries three small files rather than three large ones. */
+var IMP_INFLIGHT={};
 function impRetireDrawer(m, r){
-  var photos=[null,null,null];
+  /* ONE FILING AT A TIME PER TRIP. The drawer closes on a backdrop tap or Escape while the first
+     filing is still uploading; the list behind it still shows Retire; a second drawer would file
+     again on top of the first. The server holds the real lock -- this only saves the person the
+     confusing refusal. */
+  if(IMP_INFLIGHT[r.id]){ toast('Retirement ya safari hii inatumwa bado — subiri ijibiwe. / This retirement is still being sent; wait for the answer.', true); return; }
+  var photos=[null,null,null], seq=[0,0,0], pending=0, invalid=false;
   drawer('<h3>Retirement — '+esc(r.destination||r.travelDate||'')+'</h3>'
     +'<div class="sub">Imeidhinishwa <b>'+money(r.approved||0)+'</b> · safari '+esc(r.travelDate||'')+'</div>'
     +'<div class="mut" style="font-size:11px;margin:4px 0 8px">Andika gharama HALISI ulizotumia, kisha weka picha za risiti (hadi 3). '
@@ -4146,11 +4238,19 @@ function impRetireDrawer(m, r){
         +'<div id="irV'+i+'" class="mut" style="font-size:11px;margin:-4px 0 6px"></div>';
     }).join('')
     +'<button class="btn w" id="irSend" style="margin-top:10px">Wasilisha retirement / File retirement</button>');
-  var num=function(id){ var v=Number(($(id)||{}).value); return isFinite(v)&&v>0?v:0; };
+  var num=function(id){ var el=$(id), v=el?el.value:''; if(v===''||v==null) return 0; var n=Number(v);
+    if(!isFinite(n)||Math.floor(n)!==n||n<0){ invalid=true; if(el) el.style.borderColor='var(--bad)'; return 0; }
+    if(el) el.style.borderColor=''; return n; };
+  /* File is offered only when every figure is whole and every chosen photo has finished
+     shrinking: a press while the third receipt is still being reduced would file two and lose
+     the third for good, since a filed trip cannot be retired twice. */
+  var gate=function(){ var b=$('#irSend'); if(b) b.disabled=pending>0||invalid; };
   var recalc=function(){
+    invalid=false;
     var t=num('#irFare')+num('#irAccom')+num('#irO1')+num('#irO2')+num('#irO3');
-    $('#irTotal').textContent=money(t);
-    $('#irBal').innerHTML=impBalance({retireBalance:(r.approved||0)-t});
+    $('#irTotal').textContent=invalid?'—':money(t);
+    $('#irBal').innerHTML=invalid?'—':impBalance({retireBalance:(r.approved||0)-t});
+    gate();
   };
   ['#irFare','#irAccom','#irO1','#irO2','#irO3'].forEach(function(id){ var el=$(id); if(el) el.oninput=recalc; });
   recalc();
@@ -4158,14 +4258,22 @@ function impRetireDrawer(m, r){
     var inp=$('#irP'+i), v=$('#irV'+i);
     inp.onchange=function(){
       var f=inp.files&&inp.files[0];
+      /* A second pick on the same slot while the first is still shrinking: whichever finishes
+         LAST would otherwise win, whatever the input now names. The newest pick owns the slot. */
+      var my=++seq[i-1];
       photos[i-1]=null;
-      if(!f){ v.innerHTML=''; return; }
+      if(!f){ v.innerHTML=''; gate(); return; }
+      pending++; gate();
       v.textContent='inapunguzwa… / shrinking…';
       shrinkForReceipt(f).then(function(u){
+        if(my!==seq[i-1]) return;
         photos[i-1]=u;
         v.innerHTML='<img src="'+esc(u)+'" style="max-height:80px;border-radius:6px;border:1px solid var(--line);margin-top:4px"> '
           +Math.round(dataUrlBytes(u)/1024)+'KB (ilikuwa '+Math.round(f.size/1024)+'KB)';
-      }).catch(function(e){ v.textContent=safeErr(e); inp.value=''; });
+      }, function(e){
+        if(my!==seq[i-1]) return;
+        v.textContent=safeErr(e); inp.value='';
+      }).then(function(){ pending--; gate(); });
     };
   });
   $('#irSend').onclick=function(){
@@ -4173,13 +4281,14 @@ function impRetireDrawer(m, r){
     var got=photos.filter(Boolean);
     if(!got.length){ toast('Weka angalau picha moja ya risiti. / Attach at least one receipt photo.', true); return; }
     if(got.length<3&&!confirm('Umeweka picha '+got.length+' kati ya 3. Wasilisha hivyo? / Only '+got.length+' of 3 photos. File anyway?')) return;
-    b.disabled=true;
+    b.disabled=true; IMP_INFLIGHT[r.id]=true;
     srv('impRetire',{ id:r.id, fareActual:$('#irFare').value, accomActual:$('#irAccom').value,
       other1Actual:$('#irO1').value, other2Actual:$('#irO2').value, other3Actual:$('#irO3').value,
       notes:$('#irNotes').value, photos:got }).then(function(d){
+      delete IMP_INFLIGHT[r.id];
       toast('Retirement imewasilishwa · halisi '+money(d.total)+' · salio '+money(d.balance));
-      closeDrawer(); drawImpReq(m);
-    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+      closeDrawer(); if(TAB==='impreq') drawImpReq(m);
+    }, function(e){ delete IMP_INFLIGHT[r.id]; b.disabled=false; toast(safeErr(e), true); });
   };
 }
 
@@ -4193,7 +4302,7 @@ function drawImpAppr(m){
     if(d.notReady){ m.innerHTML=impNotReady(); return; }
     var rows=d.rows||[], c=d.counts||{};
     var chip=function(k,label){ return '<button class="btn sm'+(IMPQ===k?'':' ghost')+'" data-impq="'+k+'">'+label+'</button>'; };
-    var pick=function(k){ return function(){ IMPQ=(IMPQ===k?'':k); drawImpAppr(m); }; };
+    var pick=function(k){ return function(){ IMPQ=(IMPQ===k?'':k); if(TAB==='impappr') drawImpAppr(m); }; };
     m.innerHTML='<div class="tiles">'
       +tile('Yanasubiri',money(c.pending||0),'maombi ambayo hayajaamuliwa',{color:c.pending?'bad':'',on:IMPQ==='pending',cta:'chuja ›',go:pick('pending')})
       +tile('Yameidhinishwa',money(c.approved||0),'jumla ya maombi',{color:'ok',on:IMPQ==='decided',cta:'chuja ›',go:pick('decided')})
@@ -4220,14 +4329,17 @@ function drawImpAppr(m){
       +(rows.length?impTable(rows,{decide:true,photos:true}):'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
     wireTiles(m);
     [].slice.call(m.querySelectorAll('[data-impq]')).forEach(function(b){
-      b.onclick=function(){ IMPQ=b.getAttribute('data-impq'); drawImpAppr(m); };
+      b.onclick=function(){ IMPQ=b.getAttribute('data-impq'); if(TAB==='impappr') drawImpAppr(m); };
     });
     var saveRole=function(role, rate, b){
       if(b) b.disabled=true;
-      srv('impRoleSave',{role:role, rate:rate}).then(function(){ toast('Kiwango kimehifadhiwa / Rate saved'); drawImpAppr(m); })
+      srv('impRoleSave',{role:role, rate:rate}).then(function(){ toast('Kiwango kimehifadhiwa / Rate saved'); if(TAB==='impappr') drawImpAppr(m); })
         .catch(function(e){ if(b) b.disabled=false; toast(safeErr(e), true); });
     };
-    $('#rlAdd').onclick=function(){ saveRole($('#rlRole').value, $('#rlRate').value, this); };
+    $('#rlAdd').onclick=function(){
+      if($('#rlRate').value===''){ toast('Andika kiwango cha malazi (0 inaruhusiwa). / Enter the nightly rate (0 is allowed).', true); return; }
+      saveRole($('#rlRole').value, $('#rlRate').value, this);
+    };
     [].slice.call(m.querySelectorAll('[data-rle]')).forEach(function(b){
       b.onclick=function(){ $('#rlRole').value=b.getAttribute('data-rle'); $('#rlRate').value=b.getAttribute('data-rate'); $('#rlRate').focus(); };
     });
@@ -4236,7 +4348,7 @@ function drawImpAppr(m){
         var role=b.getAttribute('data-rld');
         if(!confirm('Futa wadhifa '+role+'? Maombi ya zamani hayabadiliki. / Delete role '+role+'? Old requests keep their stamped rate.')) return;
         b.disabled=true;
-        srv('impRoleDelete',{role:role}).then(function(){ toast('Imefutwa / Deleted'); drawImpAppr(m); })
+        srv('impRoleDelete',{role:role}).then(function(){ toast('Imefutwa / Deleted'); if(TAB==='impappr') drawImpAppr(m); })
           .catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
       };
     });
@@ -4263,11 +4375,14 @@ function impDecideDrawer(m, r){
     +'<button class="btn w" id="imdOk" style="margin-top:10px">Idhinisha / Approve</button>'
     +'<button class="btn w danger ghost" id="imdNo" style="margin-top:6px">Kataa / Reject</button>');
   var send=function(approve){
+    /* A cleared box -- or a half-typed "-" or "1e", which a number input reports as "" -- must
+       not become "approve the full amount". The server refuses it too; this says why first. */
+    if(approve){ var amt=$('#imdAmt').value; if(amt===''||!(Number(amt)>0)){ toast('Andika kiasi cha kuidhinisha. / Enter the amount to approve.', true); return; } }
     var b=$('#imdOk'), n=$('#imdNo'); if(b) b.disabled=true; if(n) n.disabled=true;
     srv('impDecide',{ id:r.id, approve:approve, approvedAmount:approve?$('#imdAmt').value:null, comment:$('#imdCmt').value })
     .then(function(d){
       toast((approve?'Imeidhinishwa / Approved':'Imekataliwa / Rejected')+(d.emailNote?' · email: '+d.emailNote:''), !!d.emailNote);
-      closeDrawer(); drawImpAppr(m);
+      closeDrawer(); if(TAB==='impappr') drawImpAppr(m);
     }).catch(function(e){ if(b) b.disabled=false; if(n) n.disabled=false; toast(safeErr(e), true); });
   };
   $('#imdOk').onclick=function(){ send(true); };
@@ -4285,9 +4400,9 @@ function drawImpRep(m){
   srv('impReport',IMPR).then(function(d){
     if(d.notReady){ m.innerHTML=impNotReady(); return; }
     var rows=d.rows||[], t=d.totals||{};
-    var pick=function(k){ return function(){ IMPR.status=(IMPR.status===k?'':k); drawImpRep(m); }; };
+    var pick=function(k){ return function(){ IMPR.status=(IMPR.status===k?'':k); if(TAB==='imprep') drawImpRep(m); }; };
     m.innerHTML='<div class="tiles">'
-      +tile('Maombi',money(t.count||0),'kwenye kipindi hiki',{on:IMPR.status==='',cta:IMPR.status===''?'zote':'onyesha zote ›',go:function(){ IMPR.status=''; drawImpRep(m); }})
+      +tile('Maombi',money(t.count||0),'kwenye kipindi hiki',{on:IMPR.status==='',cta:IMPR.status===''?'zote':'onyesha zote ›',go:function(){ IMPR.status=''; if(TAB==='imprep') drawImpRep(m); }})
       +tile('Yanasubiri',money(t.pending||0),'hayajaamuliwa',{color:t.pending?'bad':'',on:IMPR.status==='pending',cta:'chuja ›',go:pick('pending')})
       +tile('Yameidhinishwa',money(t.approvedAmount||0),'TZS — '+money(t.approved||0)+' maombi',{color:'ok',on:IMPR.status==='approved',cta:'chuja ›',go:pick('approved')})
       +tile('Yametumika',money(t.spent||0),'TZS halisi — retirement '+money(t.retired||0),{on:IMPR.status==='retired',cta:'chuja ›',go:pick('retired')})
@@ -4334,9 +4449,9 @@ function drawImpRep(m){
         }).join('')+'</tbody></table></div>'
         :'<div class="mut">Hakuna maombi kwenye kipindi hiki. / No requests in this period.</div>');
     wireTiles(m);
-    $('#imrGo').onclick=function(){ IMPR={from:$('#imrFrom').value,to:$('#imrTo').value,status:$('#imrSt').value,explicit:true}; drawImpRep(m); };
-    $('#imrClr').onclick=function(){ var r=monthRange_(); IMPR={from:r.from,to:r.to,status:'',explicit:true}; drawImpRep(m); };
-    $('#imrAll').onclick=function(){ IMPR={from:'',to:'',status:'',explicit:true}; drawImpRep(m); };
+    $('#imrGo').onclick=function(){ IMPR={from:$('#imrFrom').value,to:$('#imrTo').value,status:$('#imrSt').value,explicit:true}; if(TAB==='imprep') drawImpRep(m); };
+    $('#imrClr').onclick=function(){ var r=monthRange_(); IMPR={from:r.from,to:r.to,status:'',explicit:true}; if(TAB==='imprep') drawImpRep(m); };
+    $('#imrAll').onclick=function(){ IMPR={from:'',to:'',status:'',explicit:true}; if(TAB==='imprep') drawImpRep(m); };
     impWireRows(m, rows, { view:impDetailsDrawer, photos:function(r){ impPhotosDrawer(r.id); } });
   }).catch(function(e){ paneFailed(m,e); });
 }
@@ -4363,10 +4478,14 @@ function leaveChip(r){
 }
 /* Monday-Friday, inclusive, on the calendar the dates are written in -- the same count the
    server makes, so the preview and the row never disagree. */
+var LEAVE_MAX_DAYS=366;
 function leaveWorkingDays(from,to){
   if(!from||!to||to<from) return 0;
   var n=0, a=Date.parse(from+'T00:00:00Z'), b=Date.parse(to+'T00:00:00Z');
   if(isNaN(a)||isNaN(b)) return 0;
+  // The server refuses more than a year, so a span of centuries -- a year typed digit by digit
+  // -- is not walked day by day on every keystroke either.
+  if(b-a>366*86400000) return 0;                      // LEAVE_MAX_DAYS; literal so this stays self-contained
   for(var t=a;t<=b;t+=86400000){ var wd=new Date(t).getUTCDay(); if(wd!==0&&wd!==6) n++; }
   return n;
 }
@@ -4457,7 +4576,9 @@ function drawLeaveReq(m){
       var type=$('#lvType').value, from=$('#lvFrom').value, to=$('#lvTo').value;
       $('#lvOther').style.display=type==='other'?'':'none';
       var n=leaveWorkingDays(from,to);
+      var tooLong=from&&to&&to>=from&&(Date.parse(to+'T00:00:00Z')-Date.parse(from+'T00:00:00Z'))>LEAVE_MAX_DAYS*86400000;
       $('#lvCalc').textContent=(from&&to)?(to<from?'Tarehe ya kumaliza inatangulia ya kuanza. / End date is before the start.'
+        :tooLong?'Likizo haiwezi kuzidi mwaka mmoja. / A leave cannot run longer than a year.'
         :'Siku za kazi / Working days: '+n+' · Kurudi kazini / Resumes: '+leaveResumeDay(to)):'';
       var noNotice=type==='sick'||type==='compassionate';
       $('#lvWarn').style.display=(from&&!noNotice&&from<isoToday(7))?'':'none';
@@ -4471,7 +4592,7 @@ function drawLeaveReq(m){
         supervisor:$('#lvSup').value, contact:$('#lvContact').value, handedTo:$('#lvHanded').value })
       .then(function(d){
         toast('Ombi limetumwa · siku za kazi '+money(d.workingDays)+(d.emailed?' · HR ameambiwa kwa email':' · email haikutumwa: '+(d.emailNote||'')), !d.emailed);
-        drawLeaveReq(m);
+        if(TAB==='leavereq') drawLeaveReq(m);
       }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
     };
     [].slice.call(m.querySelectorAll('[data-lvv]')).forEach(function(b){
@@ -4489,7 +4610,7 @@ function drawLeaveAppr(m){
     if(d.notReady){ m.innerHTML=leaveNotReady(); return; }
     var rows=d.rows||[], c=d.counts||{};
     var chip=function(k,label){ return '<button class="btn sm'+(LEAVEQ===k?'':' ghost')+'" data-lvq="'+k+'">'+label+'</button>'; };
-    var pick=function(k){ return function(){ LEAVEQ=(LEAVEQ===k?'':k); drawLeaveAppr(m); }; };
+    var pick=function(k){ return function(){ LEAVEQ=(LEAVEQ===k?'':k); if(TAB==='leaveappr') drawLeaveAppr(m); }; };
     m.innerHTML='<div class="tiles">'
       +tile('Yanasubiri',money(c.pending||0),'maombi ambayo hayajaamuliwa',{color:c.pending?'bad':'',on:LEAVEQ==='pending',cta:'chuja ›',go:pick('pending')})
       +tile('Taarifa fupi',money(c.shortNotice||0),'yanasubiri, chini ya wiki moja',{color:c.shortNotice?'warn':''})
@@ -4502,7 +4623,7 @@ function drawLeaveAppr(m){
       +(rows.length?leaveTable(rows,true):'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
     wireTiles(m);
     [].slice.call(m.querySelectorAll('[data-lvq]')).forEach(function(b){
-      b.onclick=function(){ LEAVEQ=b.getAttribute('data-lvq'); drawLeaveAppr(m); };
+      b.onclick=function(){ LEAVEQ=b.getAttribute('data-lvq'); if(TAB==='leaveappr') drawLeaveAppr(m); };
     });
     var find=function(id){ return rows.filter(function(x){ return String(x.id)===id; })[0]; };
     [].slice.call(m.querySelectorAll('[data-lvv]')).forEach(function(b){
@@ -4528,7 +4649,7 @@ function leaveDecideDrawer(m, r){
     var b=$('#lvdOk'), n=$('#lvdNo'); if(b) b.disabled=true; if(n) n.disabled=true;
     srv('leaveDecide',{ id:r.id, approve:approve, comment:$('#lvdCmt').value }).then(function(){
       toast(approve?'Imeidhinishwa / Approved':'Imekataliwa / Rejected');
-      closeDrawer(); drawLeaveAppr(m);
+      closeDrawer(); if(TAB==='leaveappr') drawLeaveAppr(m);
     }).catch(function(e){ if(b) b.disabled=false; if(n) n.disabled=false; toast(safeErr(e), true); });
   };
   $('#lvdOk').onclick=function(){ send(true); };
@@ -4557,9 +4678,9 @@ function drawLeaveRep(m){
   srv('leaveReport',LEAVER).then(function(d){
     if(d.notReady){ m.innerHTML=leaveNotReady(); return; }
     var rows=d.rows||[], t=d.totals||{};
-    var pick=function(k){ return function(){ LEAVER.status=(LEAVER.status===k?'':k); drawLeaveRep(m); }; };
+    var pick=function(k){ return function(){ LEAVER.status=(LEAVER.status===k?'':k); if(TAB==='leaverep') drawLeaveRep(m); }; };
     m.innerHTML='<div class="tiles">'
-      +tile('Maombi',money(t.count||0),'kwenye kipindi hiki',{on:LEAVER.status==='',cta:LEAVER.status===''?'zote':'onyesha zote ›',go:function(){ LEAVER.status=''; drawLeaveRep(m); }})
+      +tile('Maombi',money(t.count||0),'kwenye kipindi hiki',{on:LEAVER.status==='',cta:LEAVER.status===''?'zote':'onyesha zote ›',go:function(){ LEAVER.status=''; if(TAB==='leaverep') drawLeaveRep(m); }})
       +tile('Yanasubiri',money(t.pending||0),'hayajaamuliwa',{color:t.pending?'bad':'',on:LEAVER.status==='pending',cta:'chuja ›',go:pick('pending')})
       +tile('Yameidhinishwa',money(t.approved||0),'siku za kazi '+money(t.approvedDays||0)+' zimetolewa',{color:'ok',on:LEAVER.status==='approved',cta:'chuja ›',go:pick('approved')})
       +tile('Yamekataliwa',money(t.rejected||0),'',{on:LEAVER.status==='rejected',cta:'chuja ›',go:pick('rejected')})
@@ -4598,9 +4719,9 @@ function drawLeaveRep(m){
         }).join('')+'</tbody></table></div>'
         :'<div class="mut">Hakuna maombi kwenye kipindi hiki. / No requests in this period.</div>');
     wireTiles(m);
-    $('#lvrGo').onclick=function(){ LEAVER={from:$('#lvrFrom').value,to:$('#lvrTo').value,status:$('#lvrSt').value,explicit:true}; drawLeaveRep(m); };
-    $('#lvrClr').onclick=function(){ var r=monthRange_(); LEAVER={from:r.from,to:r.to,status:'',explicit:true}; drawLeaveRep(m); };
-    $('#lvrAll').onclick=function(){ LEAVER={from:'',to:'',status:'',explicit:true}; drawLeaveRep(m); };
+    $('#lvrGo').onclick=function(){ LEAVER={from:$('#lvrFrom').value,to:$('#lvrTo').value,status:$('#lvrSt').value,explicit:true}; if(TAB==='leaverep') drawLeaveRep(m); };
+    $('#lvrClr').onclick=function(){ var r=monthRange_(); LEAVER={from:r.from,to:r.to,status:'',explicit:true}; if(TAB==='leaverep') drawLeaveRep(m); };
+    $('#lvrAll').onclick=function(){ LEAVER={from:'',to:'',status:'',explicit:true}; if(TAB==='leaverep') drawLeaveRep(m); };
     [].slice.call(m.querySelectorAll('[data-lvv]')).forEach(function(b){
       b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-lvv'); })[0]; if(r) leaveDetailsDrawer(r); };
     });
@@ -5583,7 +5704,7 @@ function drawSettings(m){
          is the nudge. Several addresses may be separated by commas. Sending also needs
          RESEND_API_KEY on the deployment, which is a secret and therefore not a row here. */
       +'<b>IMPREST_ADMIN_EMAIL</b>: anayepokea maombi mapya ya imprest. <b>IMPREST_CEO_EMAIL</b>: nakala ya CEO ya kila imprest iliyoidhinishwa. '
-      +'<b>HR_EMAIL</b>: maombi mapya ya likizo. <b>EMAIL_FROM</b>: mtumaji (mfano <i>HOOPLOAN &lt;no-reply@hoop.co.tz&gt;</i>). '
+      +'<b>HR_EMAIL</b>: maombi mapya ya likizo. <b>EMAIL_FROM</b>: mtumaji kwenye domain iliyothibitishwa Resend (mfano <i>HOOPLOAN &lt;no-reply@hoop.co.tz&gt;</i>); ikiwa tupu Resend hutuma kwa anwani ya mmiliki wa akaunti ya Resend TU. '
       +'Anwani kadhaa: tenganisha kwa comma. Tupu = hakuna email; ombi bado linaingia kwenye pane. Kutuma kunahitaji RESEND_API_KEY kwenye Vercel. '
       +'/ Imprest and leave notices go to these addresses; blank means no email is sent and the request still lands in its pane. Sending needs RESEND_API_KEY set on the deployment.</div>'
       /* THE LOCK SCREEN IS WRITTEN HERE, so the shape it makes is drawn here. Nobody sees

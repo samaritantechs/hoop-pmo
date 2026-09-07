@@ -41,10 +41,13 @@ standing rule; a read-only `AUDITOR` code sees every pane and can change nothing
    with "ask the approver to add it".
 4. **Email, optional.** Settings → `IMPREST_ADMIN_EMAIL`, `IMPREST_CEO_EMAIL`, `HR_EMAIL`
    (several addresses separated by commas), and `EMAIL_FROM` (a verified sender such as
-   `HOOPLOAN <no-reply@hoop.co.tz>`; blank falls back to Resend's onboarding sender, which
-   lands in spam). Then set **`RESEND_API_KEY`** on Vercel — it is a secret, so it is an
+   `HOOPLOAN <no-reply@hoop.co.tz>` on a domain verified in Resend; blank falls back to
+   Resend's onboarding sender, which Resend delivers **only to the Resend account owner's own
+   address**, so it proves the wiring and nothing more). A recipient may be written as
+   `Name <addr>`. Then set **`RESEND_API_KEY`** on Vercel — it is a secret, so it is an
    environment variable, never a settings row. Same provider and the same two knobs as HOPE's
-   weekly report.
+   weekly report. Changing any of the email settings is audited with the new address, so a
+   redirected copy can always be traced.
 
 ## The imprest, start to finish
 
@@ -80,8 +83,12 @@ on the trip: actual fare, actual accommodation, actuals for each other line — 
 with what was asked, so only the lines that differed are edited — notes, and **up to three
 receipt photos**. The drawer shows the actual total and the balance as it is typed:
 positive means the traveller brings change back, negative means the company owes them. Filed
-once, ever; a second attempt is refused and the database's own unique key on `request_id`
-backs that up.
+once, ever: the request row itself is the lock, claimed before anything else is written, so
+two overlapping presses can never both file and a finished retirement is never touched. A
+filing that dies half-way (the phone lost signal after the claim) shows as *bila retirement*
+everywhere and can be filed again by the same person after two minutes; until then a retry is
+told the filing is still in progress. Receipts under 1KB are refused as not being pictures of
+anything.
 
 **The photos are shrunk on the phone before they are sent.** A phone camera writes 3–8MB a
 shot; three of those per trip would fill the table in a month. Each receipt is redrawn on a

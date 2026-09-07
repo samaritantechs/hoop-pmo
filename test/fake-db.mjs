@@ -44,9 +44,11 @@ export function setUnstableOrder(on) { UNSTABLE = !!on; FakeQuery._scan = 0; }
 class FakeQuery {
   static _seq = 0;
   static _scan = 0;
-  constructor(table, name, missingCols) {
+  constructor(table, name, missingCols, unique) {
     this.table = table;
     this.tableName = name;
+    // Column sets that must be unique, per table -- see fakeDb(). Empty means the fixture did not say.
+    this.unique = unique || [];
     // Columns this table has not got yet -- see select(). Empty for an up-to-date database.
     this.missingCols = missingCols || [];
     /* The URL the real client would be about to request. fetchAll reads the table name off
@@ -92,6 +94,9 @@ class FakeQuery {
   // PostgREST spells "everything with a value here" as .not(col, 'is', null) -- the idiom for
   // a delete-all, which needs a filter to be accepted at all.
   not(k, op, v) { this.filters.push(r => !(op === 'is' && v === null ? r[k] == null : String(r[k]) === String(v))); return this; }
+  // And its positive: .is(col, null) is "nothing here yet" -- the guard a first-writer-wins
+  // update needs, so a lock can be taken only while nobody holds it.
+  is(k, v) { this.filters.push(r => (v === null ? r[k] == null : String(r[k]) === String(v))); return this; }
   /* ORDER, AND WHY IT CANNOT ALWAYS BE STRING ORDER.
 
      These four used to compare String(a) against String(b) always, which is right for the
@@ -197,6 +202,20 @@ class FakeQuery {
       // then writes a child row keyed on the returned id depends on getting one back. Without
       // this the fake handed back an undefined id and that whole path was untestable.
       const made = this.payload.map(r => (r.id == null ? { ...r, id: 'gen-' + (++FakeQuery._seq) } : { ...r }));
+      /* A UNIQUE KEY REFUSES THE WHOLE INSERT, with Postgres's own words. The fake used to push
+         unconditionally, so code that relies on a unique index as its lock could never see the
+         error it depends on. Opt-in per table via fakeDb(tables, { unique }). */
+      for (const keys of this.unique) {
+        const seen = rows.map(x => keys.map(k => String(x[k])).join('\u0001'));
+        for (const r of made) {
+          const sig = keys.map(k => String(r[k])).join('\u0001');
+          if (seen.includes(sig)) {
+            return { data: null, error: { code: '23505',
+              message: 'duplicate key value violates unique constraint "' + this.tableName + '_' + keys.join('_') + '_key"' } };
+          }
+          seen.push(sig);
+        }
+      }
       for (const r of made) rows.push({ ...r });
       return { data: this.wantRows ? made.map(r => ({ ...r })) : null, error: null };
     }
@@ -316,7 +335,7 @@ export function fakeDb(tables, opts = {}) {
   const rpcs = opts.rpc || {};
   return {
     from(name) { if (!store[name]) store[name] = { rows: [] };
-      return new FakeQuery(store[name], name, (opts.missingColumns || {})[name]); },
+      return new FakeQuery(store[name], name, (opts.missingColumns || {})[name], (opts.unique || {})[name]); },
     rpc(name, args) {
       return new FakeRpc(async () => {
         if (!Object.prototype.hasOwnProperty.call(rpcs, name) || rpcs[name] == null) {

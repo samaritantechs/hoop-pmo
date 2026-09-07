@@ -90,6 +90,13 @@ export function subjectOf(args) {
     if (v == null || v === '' || typeof v === 'object') continue;
     bits.push(k + '=' + String(v).slice(0, 60));
   }
+  /* THE ONE PAYLOAD VALUE KEPT: where an email setting was pointed. Whoever holds Settings can
+     redirect the CEO's copy of every approved imprest, and a line reading only "IMPREST_CEO_EMAIL
+     changed" cannot answer "to where". An address is not payroll, so it is kept for those keys
+     and those keys alone. */
+  if (/EMAIL/.test(String(args.key || '')) && typeof args.value === 'string' && args.value.trim()) {
+    bits.push('value=' + args.value.trim().slice(0, 80));
+  }
   return bits.length ? bits.join(' ').slice(0, 240) : null;
 }
 

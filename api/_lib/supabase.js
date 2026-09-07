@@ -246,6 +246,10 @@ const PAGE_KEY = {
      Naming the real key here makes the first attempt the only attempt, and gives the paged
      read the stable tiebreaker this whole mechanism exists to provide. */
   devices: 'imei',
+  /* Same story as devices, found by a review rather than by a person: imprest_roles is keyed
+     by the role name and has no `id`, so the rate table's every read -- the request form's
+     load and the lookup inside every submitted request -- paid the doomed first trip. */
+  imprest_roles: 'role',
 };
 
 /** The table a built query points at, read off the URL PostgREST is about to be asked for.
