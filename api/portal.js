@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
-import { todayKey } from './_lib/time.js';
+import { todayKey, addDaysKey } from './_lib/time.js';
+import { sendMail, noticeHtml } from './_lib/mail.js';
 import { nudge } from './_lib/push.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES } from './_lib/call-core.js';
@@ -51,9 +52,25 @@ AUDITED.add('deviceSetState');
 AUDITED.add('deviceToken');
 /* An eraser. Once this runs the audit entry is the only record that phone was ever here. */
 AUDITED.add('deviceDelete');
+/* IMPREST AND LEAVE -- money and absence, so both ends of each are logged, the same way the
+   advance is: who asked, who decided, who filed the retirement, who changed a rate. As with
+   advances, KEEP in audit.js drops every amount and every free-text field on the way in, so the
+   log names the request (`id`) and the role (`role`) and never becomes a second copy of the
+   costing or of somebody's reason for leave. */
+AUDITED.add('impRequest');
+AUDITED.add('impDecide');
+AUDITED.add('impRetire');
+AUDITED.add('impRoleSave');
+AUDITED.add('impRoleDelete');
+AUDITED.add('leaveRequest');
+AUDITED.add('leaveDecide');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
+/* A whole-shilling figure with thousands separators, for the subject line of an email -- the
+   one place in this file a number is turned into words for a reader rather than sent as a
+   number for a screen to format. */
+const money0 = n => Math.round(num(n)).toLocaleString('en-US');
 
 /* IS THIS LOAN STILL ON THE BOOK, ON A GIVEN DAY. The 45-day window (WINDOW_DAYS carries the
    owner's 2 days of calendar grace on top), measured against the day being ASKED ABOUT rather
@@ -81,6 +98,10 @@ const EDITABLE_SETTINGS = [
   // The locked handset's four lines, plus how long silence is forgiven. See device-core.js.
   'DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE', 'DEVICE_LOCK_REASON',
   'DEVICE_OFFLINE_GRACE_HOURS',
+  /* WHO IS TOLD, by email, when somebody asks or something is decided. Blank means nobody --
+     the panes are the record and work without these; see api/_lib/mail.js. EMAIL_FROM is the
+     sender, and needs a domain verified with the provider before mail stops landing in spam. */
+  'IMPREST_ADMIN_EMAIL', 'IMPREST_GM_EMAIL', 'HR_EMAIL', 'EMAIL_FROM',
 ];
 
 /* =======================================================================================
@@ -155,7 +176,13 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    Adding them here grants them to no existing code: navsFor returns `chosen` for any role
    that has deliberately picked panes, so a role saved yesterday keeps exactly what it had
    until somebody ticks a new box. ADMIN and AUDITOR see every pane, as everywhere. */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'staff', 'codes', 'settings'];
+/* IMPREST AND LEAVE follow the advance rule exactly: five panes, five navs, nobody by default.
+     "since am using tabs as roles so request tab, approval tab and imprest reports tab"
+     "they want to be asking for leaves in app (another nav), and hr approves or rejects there
+      (another one)"
+   impreq asks, impappr decides (and keeps the per-role accommodation rates), imprep is the
+   GM's review copy -- logs, retirements, widgets. leavereq asks, leaveappr is HR's desk. */
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -225,6 +252,143 @@ const ADV_LEADER_NOT_READY = 'Kibali cha kiongozi hakijawekwa bado. Endesha '
    because that is the length of a bench session and the life of an enrol batch -- so the band
    empties itself by the next morning with nothing to switch off. */
 const FRESH_ENROL_MS = 24 * 60 * 60 * 1000;
+
+/* ---------- IMPREST AND LEAVE: the shapes all five panes agree on ---------- */
+const IMP_NOT_READY = 'Jedwali la imprest halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-07-imprest-leave.sql kwenye Supabase. '
+  + '/ The imprest tables have not been created yet — run that migration first.';
+const LEAVE_NOT_READY = 'Jedwali la likizo halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-07-imprest-leave.sql kwenye Supabase. '
+  + '/ The leave table has not been created yet — run that migration first.';
+/* THE MOST A RECEIPT MAY WEIGH. The phone shrinks each photo before sending (long side 1024px,
+   JPEG ~0.6, usually 60-120KB); this is the ceiling the server holds regardless of what the
+   client did, because a client is not entitled to fill a table with 8MB originals. */
+const IMP_PHOTO_MAX_BYTES = 200 * 1024;
+const IMP_PHOTO_MAX = 3;
+const IMP_COLS = 'id, requested_at, staff_code, staff_name, staff_role, full_name, mobile, '
+  + 'recipient_name, email, imprest_role, pay_mode, account_no, travel_date, destination, '
+  + 'fare_trips, fare_per_trip, fare_amount, accom_days, accom_rate, accom_amount, '
+  + 'other1_desc, other1_amount, other2_desc, other2_amount, other3_desc, other3_amount, '
+  + 'total_amount, purpose, status, approved_amount, comment, decided_by, decided_at, '
+  + 'retired_at, retire_total, retire_balance';
+const IMP_RET_COLS = 'request_id, filed_at, filed_by_name, fare_actual, accom_actual, '
+  + 'other1_actual, other2_actual, other3_actual, total_actual, notes, photo_count';
+const LEAVE_COLS = 'id, requested_at, staff_code, staff_name, staff_role, employee_id, department, '
+  + 'supervisor, leave_type, other_type, from_date, to_date, working_days, resume_date, reason, '
+  + 'contact, handed_to, declared, short_notice, status, comment, decided_by, decided_at';
+const LEAVE_TYPES = ['annual', 'sick', 'maternity', 'paternity', 'compassionate', 'other'];
+/* The form: "submitted at least ONE (1) WEEK before intended leave date (except emergency,
+   sudden illness, or bereavement)". These two are the exceptions; everything else filed under
+   a week ahead is marked, not refused -- HR weighs it. */
+const LEAVE_NO_NOTICE_TYPES = ['sick', 'compassionate'];
+
+const isUuid = s => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || ''));
+/* SHAPE AND THEN CALENDAR -- the same two-step check advRequest uses, for the same reason: a
+   regex says it looks like a date, and only a Date round-trip says it is one. */
+const isDay = s => {
+  const v = String(s || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(v + 'T00:00:00Z');
+  return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+};
+/* A NON-NEGATIVE WHOLE NUMBER, or nothing. Money and counts here are integers -- a fare is
+   never 12,500.75 -- and a value that is not one is refused rather than rounded, because a
+   silently rounded figure on a cash form is the argument the form exists to prevent. */
+const intNN = v => {
+  if (v === '' || v == null) return 0;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+};
+/* MONDAY TO FRIDAY, INCLUSIVE, on the calendar the dates are written in. */
+function workingDaysBetween(from, to) {
+  let n = 0;
+  for (let t = Date.parse(from + 'T00:00:00Z'); t <= Date.parse(to + 'T00:00:00Z'); t += 86400000) {
+    const wd = new Date(t).getUTCDay();
+    if (wd !== 0 && wd !== 6) n++;
+  }
+  return n;
+}
+/* THE FIRST WORKING DAY AFTER THE LEAVE ENDS. */
+function resumeDayAfter(to) {
+  let d = addDaysKey(to, 1);
+  for (let i = 0; i < 7; i++) {
+    const wd = new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay();
+    if (wd !== 0 && wd !== 6) return d;
+    d = addDaysKey(d, 1);
+  }
+  return d;
+}
+/* A DATA URL THAT IS A SMALL IMAGE, AND ITS WEIGHT IN BYTES. Refuses anything that is not an
+   image data URL outright; the caller compares bytes to the ceiling. */
+function photoBytes(s) {
+  const v = String(s || '');
+  const m = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(v);
+  if (!m) return null;
+  const b64 = m[2];
+  const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+  return Math.floor(b64.length * 3 / 4) - pad;
+}
+
+/* ONE SHAPE ON THE WIRE, and the access code never on it -- same rule as advRow. */
+const impRow = (r, me) => ({
+  id: String(r.id),
+  at: r.requested_at ? Date.parse(r.requested_at) : null,
+  mine: !!(me && r.staff_code && String(r.staff_code) === String(me)),
+  staffName: r.staff_name || '',
+  staffRole: r.staff_role || '',
+  fullName: r.full_name || '',
+  mobile: r.mobile || '',
+  recipientName: r.recipient_name || '',
+  email: r.email || '',
+  imprestRole: r.imprest_role || '',
+  payMode: r.pay_mode || '',
+  accountNo: r.account_no || '',
+  travelDate: r.travel_date ? String(r.travel_date).slice(0, 10) : '',
+  destination: r.destination || '',
+  fareTrips: num(r.fare_trips), farePerTrip: num(r.fare_per_trip), fareAmount: num(r.fare_amount),
+  accomDays: num(r.accom_days), accomRate: num(r.accom_rate), accomAmount: num(r.accom_amount),
+  other1Desc: r.other1_desc || '', other1Amount: num(r.other1_amount),
+  other2Desc: r.other2_desc || '', other2Amount: num(r.other2_amount),
+  other3Desc: r.other3_desc || '', other3Amount: num(r.other3_amount),
+  total: num(r.total_amount),
+  purpose: r.purpose || '',
+  status: r.status || 'pending',
+  approved: r.approved_amount == null ? null : Number(r.approved_amount),
+  comment: r.comment || '',
+  decidedBy: r.decided_by || '',
+  decidedAt: r.decided_at ? Date.parse(r.decided_at) : null,
+  retiredAt: r.retired_at ? Date.parse(r.retired_at) : null,
+  retireTotal: r.retire_total == null ? null : Number(r.retire_total),
+  retireBalance: r.retire_balance == null ? null : Number(r.retire_balance),
+});
+const leaveRow = (r, me) => ({
+  id: String(r.id),
+  at: r.requested_at ? Date.parse(r.requested_at) : null,
+  mine: !!(me && r.staff_code && String(r.staff_code) === String(me)),
+  staffName: r.staff_name || '',
+  staffRole: r.staff_role || '',
+  employeeId: r.employee_id || '',
+  department: r.department || '',
+  supervisor: r.supervisor || '',
+  type: r.leave_type || '',
+  otherType: r.other_type || '',
+  from: r.from_date ? String(r.from_date).slice(0, 10) : '',
+  to: r.to_date ? String(r.to_date).slice(0, 10) : '',
+  workingDays: num(r.working_days),
+  resume: r.resume_date ? String(r.resume_date).slice(0, 10) : '',
+  reason: r.reason || '',
+  contact: r.contact || '',
+  handedTo: r.handed_to || '',
+  declared: !!r.declared,
+  shortNotice: !!r.short_notice,
+  status: r.status || 'pending',
+  comment: r.comment || '',
+  decidedBy: r.decided_by || '',
+  decidedAt: r.decided_at ? Date.parse(r.decided_at) : null,
+});
+/* Pending first (a queue is a worklist), then newest. Shared by every queue and log here. */
+const pendingFirst = (x, y) => (x.status === 'pending' ? 0 : 1) - (y.status === 'pending' ? 0 : 1)
+  || (y.at || 0) - (x.at || 0);
 
 const SUSPEND_NOT_READY = 'Kusimamisha mtu hakujawekwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-08-31-access-suspend.sql kwenye Supabase, kisha rudi hapa. '
@@ -2537,6 +2701,527 @@ const FNS = {
         // which is the only reading of this number that is safe to hand a cashier.
         approved: inPeriod.reduce((s, r) => s + (r.status === 'approved' ? (r.approved || 0) : 0), 0),
       } };
+  },
+
+  /* =====================================================================================
+     IMPREST -- ask, decide, retire, review.
+     =====================================================================================
+       "they need to make imprest requests that will be approved by their admnistrator and a
+        copy stays for the gm review ... request tab, approval tab and imprest reports tab"
+
+     Five functions over one request table, gated by three navs and nothing else. NOBODY'S
+     ROLE IS EVER NAMED HERE: the owner ticks impreq on whoever may ask, impappr on whoever
+     decides (the "administrator"), imprep on whoever reviews (the GM). Unlike the advance,
+     the approver sees EVERY request -- an administrator is an administrator for the company,
+     not for a department -- so there is no leader switch and no role scoping.
+
+     WHO ASKED comes off the signed-in code and is stamped on the row. WHAT IT COSTS is computed
+     here from the parts the form sent, never taken as a total: fare = trips x per-trip,
+     accommodation = nights x THE ROLE'S RATE from imprest_roles (the figure the form shows for
+     that line is a preview, and ignored), others as given. The rate in force is stamped too. */
+
+  /** The rate table, readable by anyone holding any of the three panes: the requester's form
+      needs it to offer roles and preview the nightly rate; the other two panes show it. */
+  async impRoles(db, user) {
+    requireAnyNav(user, ['impreq', 'impappr', 'imprep']);
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('imprest_roles').select('role, accommodation_per_day, updated_by, updated_at'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, roles: [], notReady: true };
+    }
+    return { ok: true, roles: rows.map(r => ({ role: K(r.role), rate: num(r.accommodation_per_day),
+      by: r.updated_by || '', at: r.updated_at ? Date.parse(r.updated_at) : null }))
+      .sort((a, b) => a.role < b.role ? -1 : a.role > b.role ? 1 : 0) };
+  },
+
+  /** "administrator can add roles and their accommodation per day". Held by the approval nav,
+      because the person who decides the money is the person who owns the nightly figure. */
+  async impRoleSave(db, user, args) {
+    requireNav(user, 'impappr');
+    requireWrite(user);
+    const a = args || {};
+    const role = K(a.role).slice(0, 60);
+    if (!role) bad('Andika jina la wadhifa. / Enter a role name.');
+    const rate = intNN(a.rate);
+    if (rate === null) bad('Kiwango cha malazi lazima kiwe namba nzima. / The nightly rate must be a whole number.');
+    const { error } = await db.from('imprest_roles')
+      .upsert({ role, accommodation_per_day: rate, updated_at: new Date().toISOString(),
+        updated_by: user.name || '' }, { onConflict: 'role' });
+    if (error) {
+      if (tableMissing(error)) bad(IMP_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, role, rate };
+  },
+
+  async impRoleDelete(db, user, args) {
+    requireNav(user, 'impappr');
+    requireWrite(user);
+    const role = K(args && args.role);
+    if (!role) bad('Chagua wadhifa. / Choose a role.');
+    const { error } = await db.from('imprest_roles').delete().eq('role', role);
+    if (error) {
+      if (tableMissing(error)) bad(IMP_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, role };
+  },
+
+  async impRequest(db, user, args) {
+    requireNav(user, 'impreq');
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    const fullName = S(a.fullName, 120);
+    if (!fullName) bad('Andika jina kamili. / Enter your full name.');
+    const email = S(a.email, 160);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) bad('Andika barua pepe sahihi. / Enter a valid email.');
+    const imprestRole = K(a.imprestRole).slice(0, 60);
+    if (!imprestRole) bad('Chagua wadhifa. / Choose a role.');
+    const travelDate = S(a.travelDate, 10);
+    if (!isDay(travelDate)) bad('Weka tarehe ya safari. / Pick a travel date.');
+    const purpose = S(a.purpose, 2000);
+    if (!purpose) bad('Andika madhumuni ya safari. / Describe the purpose of the trip.');
+
+    /* THE RATE IS LOOKED UP, NOT TRUSTED. A form can send any number in the rate box; the
+       server multiplies by the table's figure for the chosen role and stamps that figure. */
+    let rateRows;
+    try {
+      rateRows = await fetchAll(() => db.from('imprest_roles').select('role, accommodation_per_day').eq('role', imprestRole));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(IMP_NOT_READY);
+    }
+    const rateRow = rateRows.find(r => K(r.role) === imprestRole);
+    if (!rateRow) bad('Wadhifa huo hauna kiwango bado — mwidhinishaji aweke kwanza. / That role has no rate yet; ask the approver to add it.');
+    const accomRate = num(rateRow.accommodation_per_day);
+
+    const fareTrips = intNN(a.fareTrips), farePerTrip = intNN(a.farePerTrip), accomDays = intNN(a.accomDays);
+    if (fareTrips === null || farePerTrip === null || accomDays === null) {
+      bad('Idadi na gharama lazima ziwe namba nzima. / Trips, fares and nights must be whole numbers.');
+    }
+    const others = [1, 2, 3].map(i => {
+      const desc = S(a['other' + i + 'Desc'], 120);
+      const amt = intNN(a['other' + i + 'Amount']);
+      if (amt === null) bad('Gharama nyingine lazima ziwe namba nzima. / Other amounts must be whole numbers.');
+      // A figure with no name is a figure nobody can retire against.
+      if (amt > 0 && !desc) bad('Eleza gharama nyingine ' + i + '. / Describe other expense ' + i + '.');
+      return { desc, amt };
+    });
+    const fareAmount = fareTrips * farePerTrip;
+    const accomAmount = accomDays * accomRate;
+    const total = fareAmount + accomAmount + others.reduce((s, o) => s + o.amt, 0);
+    if (total <= 0) bad('Ombi halina gharama yoyote. / The request has no costs on it.');
+
+    const at = new Date().toISOString();
+    const row = {
+      requested_at: at, updated_at: at,
+      staff_code: user.code || null, staff_name: user.name || '', staff_role: user.role || '',
+      full_name: fullName, mobile: S(a.mobile, 40), recipient_name: S(a.recipientName, 120) || fullName,
+      email, imprest_role: imprestRole, pay_mode: S(a.payMode, 40), account_no: S(a.accountNo, 80),
+      travel_date: travelDate, destination: S(a.destination, 120),
+      fare_trips: fareTrips, fare_per_trip: farePerTrip, fare_amount: fareAmount,
+      accom_days: accomDays, accom_rate: accomRate, accom_amount: accomAmount,
+      other1_desc: others[0].desc || null, other1_amount: others[0].amt,
+      other2_desc: others[1].desc || null, other2_amount: others[1].amt,
+      other3_desc: others[2].desc || null, other3_amount: others[2].amt,
+      total_amount: total, purpose, status: 'pending',
+    };
+    const { error } = await db.from('imprest_requests').insert([row]);
+    if (error) {
+      if (tableMissing(error)) bad(IMP_NOT_READY);
+      throw new Error(error.message);
+    }
+    /* THE NUDGE TO THE ADMINISTRATOR. Best effort and after the row exists -- a request is
+       never lost to a mail provider. The pane says whether the nudge went. */
+    const mail = await sendMail(db, { toKey: 'IMPREST_ADMIN_EMAIL',
+      subject: 'HOOPLOAN — ombi la imprest / imprest request: ' + fullName + ' · ' + money0(total) + ' TZS',
+      html: noticeHtml('Ombi jipya la imprest / New imprest request', [
+        ['Jina / Name', fullName], ['Wadhifa / Role', imprestRole], ['Safari / Travel', travelDate],
+        ['Mahali / Destination', row.destination || '—'], ['Jumla / Total', total],
+        ['Madhumuni / Purpose', purpose.slice(0, 300)],
+      ], 'Fungua Idhini ya imprest kuamua. / Open the imprest approval pane to decide.') });
+    return { ok: true, total, accomRate, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
+  },
+
+  /** A requester's own history, and only their own -- with the rate table so the form can
+      offer roles without a second trip. */
+  async impMine(db, user) {
+    requireNav(user, 'impreq');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('imprest_requests').select(IMP_COLS)
+        .eq('staff_code', user.code || '~none~'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], roles: [], notReady: true };
+    }
+    const roles = await FNS.impRoles(db, user);
+    return { ok: true, roles: roles.roles || [],
+      rows: rows.map(r => impRow(r, user.code)).sort((x, y) => (y.at || 0) - (x.at || 0)) };
+  },
+
+  /** THE ADMINISTRATOR'S QUEUE. Every request, pending first; the widgets above it are counts
+      over the whole table so the numbers do not move when the list is narrowed. */
+  async impQueue(db, user, args) {
+    requireNav(user, 'impappr');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('imprest_requests').select(IMP_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, counts: { pending: 0, approved: 0, rejected: 0, toRetire: 0 } };
+    }
+    const all = rows.map(r => impRow(r, user.code));
+    const want = String(a.state || '').trim();
+    const shown = want === 'pending' ? all.filter(r => r.status === 'pending')
+      : want === 'decided' ? all.filter(r => r.status !== 'pending')
+      : want === 'toRetire' ? all.filter(r => r.status === 'approved' && !r.retiredAt) : all;
+    return { ok: true,
+      counts: {
+        pending: all.filter(r => r.status === 'pending').length,
+        approved: all.filter(r => r.status === 'approved').length,
+        rejected: all.filter(r => r.status === 'rejected').length,
+        // Money out the door with no receipts back yet -- the number an administrator chases.
+        toRetire: all.filter(r => r.status === 'approved' && !r.retiredAt).length,
+      },
+      rows: shown.sort(pendingFirst) };
+  },
+
+  /** APPROVE (possibly for less) OR REJECT, with a comment either way; a rejection must say why.
+      Deciding your own request is allowed, and recorded, for the reason advDecide gives. */
+  async impDecide(db, user, args) {
+    requireNav(user, 'impappr');
+    requireWrite(user);
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    const approve = a.approve === true;
+    const comment = String(a.comment || '').trim().slice(0, 1000);
+    if (!approve && !comment) bad('Andika sababu ya kukataa. / A comment is required when rejecting.');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('imprest_requests').select(IMP_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(IMP_NOT_READY);
+    }
+    const row = rows.find(r => String(r.id) === id);
+    if (!row) bad('Ombi halipo. / That request no longer exists.');
+    if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
+    const asked = num(row.total_amount);
+    let granted = null;
+    if (approve) {
+      granted = a.approvedAmount == null || a.approvedAmount === '' ? asked : intNN(a.approvedAmount);
+      if (granted === null || granted <= 0) bad('Kiasi cha kuidhinisha lazima kiwe namba nzima. / The approved amount must be a whole number.');
+      // LESS THAN ASKED IS THE POINT; more than asked is not a decision anybody delegated.
+      if (granted > asked) bad('Huwezi kuidhinisha zaidi ya kilichoombwa. / You cannot approve more than was requested.');
+    }
+    const at = new Date().toISOString();
+    const patch = { status: approve ? 'approved' : 'rejected', approved_amount: approve ? granted : null,
+      comment: comment || null, decided_by: user.name || '', decided_at: at, updated_at: at };
+    // Guarded on status so two approvers pressing at once cannot both win.
+    const { data, error } = await db.from('imprest_requests')
+      .update(patch).eq('id', id).eq('status', 'pending').select('id');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) bad('Ombi hili limeamuliwa na mtu mwingine sasa hivi. / Somebody else just decided this one.');
+
+    /* THE COPIES. The GM's inbox copy on approval -- "a copy stays for the gm review" -- and the
+       requester told either way, at the address they wrote on the form. Both best effort. */
+    const facts = [['Jina / Name', row.full_name || row.staff_name], ['Wadhifa / Role', row.imprest_role || ''],
+      ['Safari / Travel', String(row.travel_date || '').slice(0, 10)], ['Mahali / Destination', row.destination || '—'],
+      ['Kiliombwa / Requested', asked], ['Uamuzi / Decision', approve ? 'APPROVED · ' + money0(granted) + ' TZS' : 'REJECTED'],
+      ['Maoni / Comment', comment || '—'], ['Aliyeamua / Decided by', user.name || '']];
+    const gm = approve ? await sendMail(db, { toKey: 'IMPREST_GM_EMAIL',
+      subject: 'HOOPLOAN — imprest imeidhinishwa / approved: ' + (row.full_name || row.staff_name) + ' · ' + money0(granted) + ' TZS',
+      html: noticeHtml('Nakala ya GM / GM copy — imprest approved', facts,
+        'Nakala hii ni ya kumbukumbu; fungua Ripoti ya imprest kuona kila kitu. / Filed for review; the imprest report pane has the full record.') })
+      : { sent: false, reason: 'rejected: GM not copied' };
+    const requester = await sendMail(db, { to: row.email,
+      subject: 'HOOPLOAN — ombi lako la imprest / your imprest request: ' + (approve ? 'imeidhinishwa / approved' : 'imekataliwa / rejected'),
+      html: noticeHtml('Ombi lako la imprest / Your imprest request', facts,
+        approve ? 'Ukifika, jaza retirement na picha 3 za risiti. / On arrival, file the retirement with 3 receipt photos.'
+                : 'Wasiliana na mwidhinishaji ukihitaji maelezo. / Speak to the approver if you need more.') });
+    return { ok: true, id, status: patch.status, granted,
+      emailed: { gm: gm.sent, requester: requester.sent },
+      emailNote: [gm.sent ? '' : 'GM: ' + gm.reason, requester.sent ? '' : 'mwombaji / requester: ' + requester.reason].filter(Boolean).join(' · ') };
+  },
+
+  /** THE RETIREMENT. "when someone gets where he was destinated for their tasks they fill
+      retirement with 3 pictures ... to keep reference of actual incurred costs". Own request,
+      approved, not yet retired; once, ever. The photos are checked for size here regardless of
+      what the phone did, and stored in their own table -- see the migration. */
+  async impRetire(db, user, args) {
+    requireNav(user, 'impreq');
+    requireWrite(user);
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('imprest_requests').select(IMP_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(IMP_NOT_READY);
+    }
+    const row = rows.find(r => String(r.id) === id);
+    /* NOT YOURS reads the same as NOT THERE, on purpose: the right to ask is not the right to
+       learn which requests exist. */
+    if (!row || String(row.staff_code || '') !== String(user.code || '')) bad('Ombi halipo. / That request no longer exists.');
+    if (String(row.status) !== 'approved') bad('Retirement ni ya ombi lililoidhinishwa tu. / Only an approved request can be retired.');
+    if (row.retired_at) bad('Ombi hili tayari lina retirement. / This request has already been retired.');
+
+    const fare = intNN(a.fareActual), accom = intNN(a.accomActual);
+    const o1 = intNN(a.other1Actual), o2 = intNN(a.other2Actual), o3 = intNN(a.other3Actual);
+    if ([fare, accom, o1, o2, o3].some(v => v === null)) {
+      bad('Gharama halisi lazima ziwe namba nzima. / Actual costs must be whole numbers.');
+    }
+    const photos = Array.isArray(a.photos) ? a.photos.filter(p => String(p || '').trim()) : [];
+    if (!photos.length) bad('Weka angalau picha moja ya risiti (bora 3). / Attach at least one receipt photo (ideally 3).');
+    if (photos.length > IMP_PHOTO_MAX) bad('Picha ni 3 zaidi. / At most 3 photos.');
+    const sized = photos.map(p => ({ data: String(p), bytes: photoBytes(p) }));
+    if (sized.some(p => p.bytes === null)) bad('Picha moja si picha halali (JPEG/PNG). / One photo is not a valid image.');
+    if (sized.some(p => p.bytes > IMP_PHOTO_MAX_BYTES)) {
+      bad('Picha moja ni kubwa mno (zaidi ya ' + Math.round(IMP_PHOTO_MAX_BYTES / 1024) + 'KB). Ipunguze kisha jaribu tena. '
+        + '/ One photo is too large; shrink it and try again.');
+    }
+    const total = fare + accom + o1 + o2 + o3;
+    const approved = num(row.approved_amount);
+    const balance = approved - total;
+    const at = new Date().toISOString();
+
+    /* ORDER OF WRITES. The retirement row first: its unique request_id is the lock that stops a
+       double press filing twice. Then the photos, then the summary onto the request. A failure
+       between the second and third leaves a retirement that the request does not yet summarise,
+       which the report shows as "retired, no summary" rather than losing the receipts. */
+    const { error: rErr } = await db.from('imprest_retirements').insert([{
+      request_id: id, filed_at: at, filed_by_code: user.code || null, filed_by_name: user.name || '',
+      fare_actual: fare, accom_actual: accom, other1_actual: o1, other2_actual: o2, other3_actual: o3,
+      total_actual: total, notes: String(a.notes || '').trim().slice(0, 1000) || null, photo_count: sized.length }]);
+    if (rErr) {
+      if (tableMissing(rErr)) bad(IMP_NOT_READY);
+      if (/duplicate|unique/i.test(String(rErr.message || ''))) bad('Ombi hili tayari lina retirement. / This request has already been retired.');
+      throw new Error(rErr.message);
+    }
+    const { error: pErr } = await db.from('imprest_photos').insert(
+      sized.map((p, i) => ({ request_id: id, seq: i + 1, data: p.data, bytes: p.bytes })));
+    if (pErr) throw new Error(pErr.message);
+    const { error: uErr } = await db.from('imprest_requests')
+      .update({ retired_at: at, retire_total: total, retire_balance: balance, updated_at: at }).eq('id', id);
+    if (uErr) throw new Error(uErr.message);
+    return { ok: true, id, total, approved, balance, photos: sized.length };
+  },
+
+  /** The receipts for ONE request, on demand. A requester sees only their own; an approver or
+      reviewer sees any. */
+  async impPhotos(db, user, args) {
+    requireAnyNav(user, ['impreq', 'impappr', 'imprep']);
+    const id = String((args && args.id) || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    const navs = navsFor(user);
+    const reviewer = navs.includes('impappr') || navs.includes('imprep');
+    if (!reviewer) {
+      const own = await fetchAll(() => db.from('imprest_requests').select('id, staff_code').eq('id', id));
+      const r = own.find(x => String(x.id) === id);
+      if (!r || String(r.staff_code || '') !== String(user.code || '')) bad('Ombi halipo. / That request no longer exists.');
+    }
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('imprest_photos').select('seq, data, bytes').eq('request_id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, photos: [] };
+    }
+    return { ok: true, photos: rows.map(p => ({ seq: num(p.seq), data: p.data, bytes: num(p.bytes) }))
+      .sort((x, y) => x.seq - y.seq) };
+  },
+
+  /** THE GM'S REVIEW COPY: every request in a period, with its retirement beside it, and the
+      widgets -- what is waiting, what was paid, what is out with no receipts back, and the net
+      balance the company is owed or owes. Filtered on TRAVEL DATE, like the advance is filtered
+      on its application date: a review reads by the trip, not by the click. */
+  async impReport(db, user, args) {
+    requireNav(user, 'imprep');
+    const a = args || {};
+    let rows, rets;
+    try {
+      [rows, rets] = await Promise.all([
+        fetchAll(() => db.from('imprest_requests').select(IMP_COLS)),
+        fetchAll(() => db.from('imprest_retirements').select(IMP_RET_COLS)),
+      ]);
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, totals: {} };
+    }
+    const from = isDay(a.from) ? String(a.from) : null;
+    const to = isDay(a.to) ? String(a.to) : null;
+    const want = String(a.status || '').trim();
+    const retBy = new Map(rets.map(r => [String(r.request_id), r]));
+    const inPeriod = rows.map(r => impRow(r, user.code))
+      .filter(r => !from || (r.travelDate && r.travelDate >= from))
+      .filter(r => !to || (r.travelDate && r.travelDate <= to))
+      .map(r => {
+        const t = retBy.get(r.id);
+        return Object.assign(r, { retirement: t ? {
+          at: t.filed_at ? Date.parse(t.filed_at) : null, by: t.filed_by_name || '',
+          fare: num(t.fare_actual), accom: num(t.accom_actual),
+          other1: num(t.other1_actual), other2: num(t.other2_actual), other3: num(t.other3_actual),
+          total: num(t.total_actual), notes: t.notes || '', photos: num(t.photo_count) } : null });
+      });
+    const shown = inPeriod.filter(r => {
+      if (want === 'retired') return !!r.retirement;
+      if (want === 'toRetire') return r.status === 'approved' && !r.retirement;
+      return !['pending', 'approved', 'rejected'].includes(want) || r.status === want;
+    }).sort((x, y) => (y.at || 0) - (x.at || 0));
+    const approvedRows = inPeriod.filter(r => r.status === 'approved');
+    return { ok: true, rows: shown,
+      totals: {
+        count: inPeriod.length,
+        pending: inPeriod.filter(r => r.status === 'pending').length,
+        rejected: inPeriod.filter(r => r.status === 'rejected').length,
+        approved: approvedRows.length,
+        // What the cashier paid out: approved rows only.
+        approvedAmount: approvedRows.reduce((s, r) => s + (r.approved || 0), 0),
+        retired: approvedRows.filter(r => r.retirement).length,
+        toRetire: approvedRows.filter(r => !r.retirement).length,
+        spent: approvedRows.reduce((s, r) => s + (r.retirement ? r.retirement.total : 0), 0),
+        // Positive balances: travellers who owe the company change back.
+        toRefund: approvedRows.reduce((s, r) => s + (r.retireBalance != null && r.retireBalance > 0 ? r.retireBalance : 0), 0),
+        // Negative balances: trips that cost more than was advanced; the company owes.
+        toReimburse: approvedRows.reduce((s, r) => s + (r.retireBalance != null && r.retireBalance < 0 ? -r.retireBalance : 0), 0),
+      } };
+  },
+
+  /* =====================================================================================
+     LEAVE -- the HR form, then HR's decision.
+     =====================================================================================
+       "they want to be asking for leaves in app (another nav), and hr approves or rejects
+        there (another one), hr gave me a sample"
+
+     Field for field from HOOP COMPANY LIMITED's Leave Request Form. The server counts the
+     working days (Monday-Friday) and the resumption date rather than trusting typed figures,
+     and marks -- never refuses -- a non-emergency request filed under a week ahead, because
+     the form's own words make that HR's call, not the system's. */
+  async leaveRequest(db, user, args) {
+    requireNav(user, 'leavereq');
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    const type = String(a.type || '').trim().toLowerCase();
+    if (!LEAVE_TYPES.includes(type)) bad('Chagua aina ya likizo. / Choose a leave type.');
+    const otherType = S(a.otherType, 120);
+    if (type === 'other' && !otherType) bad('Eleza aina ya likizo. / Say what kind of leave "Other" is.');
+    const from = S(a.from, 10), to = S(a.to, 10);
+    if (!isDay(from)) bad('Weka tarehe ya kuanza likizo. / Pick the leave start date.');
+    if (!isDay(to)) bad('Weka tarehe ya kumaliza likizo. / Pick the leave end date.');
+    if (to < from) bad('Tarehe ya kumaliza haiwezi kutangulia ya kuanza. / The end date cannot be before the start.');
+    const reason = S(a.reason, 2000);
+    if (!reason) bad('Andika sababu. / Give a reason.');
+    /* THE DECLARATION IS THE SIGNATURE. The paper form carries "I confirm ... I have arranged
+       for my duties to be covered"; here it is a tick, and it is required, not decorative. */
+    if (a.declared !== true) bad('Thibitisha tamko. / You must confirm the declaration.');
+    const workingDays = workingDaysBetween(from, to);
+    const resume = resumeDayAfter(to);
+    const today = todayKey();
+    const shortNotice = !LEAVE_NO_NOTICE_TYPES.includes(type) && from < addDaysKey(today, 7);
+    const at = new Date().toISOString();
+    const row = {
+      requested_at: at, updated_at: at,
+      staff_code: user.code || null, staff_name: user.name || '', staff_role: user.role || '',
+      employee_id: S(a.employeeId, 40) || null, department: S(a.department, 120) || null,
+      supervisor: S(a.supervisor, 120) || null,
+      leave_type: type, other_type: type === 'other' ? otherType : null,
+      from_date: from, to_date: to, working_days: workingDays, resume_date: resume,
+      reason, contact: S(a.contact, 40) || null, handed_to: S(a.handedTo, 120) || null,
+      declared: true, short_notice: shortNotice, status: 'pending',
+    };
+    const { error } = await db.from('leave_requests').insert([row]);
+    if (error) {
+      if (tableMissing(error)) bad(LEAVE_NOT_READY);
+      throw new Error(error.message);
+    }
+    const mail = await sendMail(db, { toKey: 'HR_EMAIL',
+      subject: 'HOOPLOAN — ombi la likizo / leave request: ' + (user.name || '') + ' · ' + from + ' → ' + to,
+      html: noticeHtml('Ombi jipya la likizo / New leave request', [
+        ['Jina / Name', user.name || ''], ['Idara / Department', row.department || '—'],
+        ['Aina / Type', type + (otherType ? ' (' + otherType + ')' : '')],
+        ['Kuanzia / From', from], ['Hadi / To', to], ['Siku za kazi / Working days', String(workingDays)],
+        ['Kurudi / Resumes', resume], ['Taarifa fupi / Short notice', shortNotice ? 'NDIYO / YES' : 'hapana / no'],
+        ['Sababu / Reason', reason.slice(0, 300)],
+      ], 'Fungua Idhini ya likizo kuamua. / Open the leave approval pane to decide.') });
+    return { ok: true, workingDays, resume, shortNotice, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
+  },
+
+  async leaveMine(db, user) {
+    requireNav(user, 'leavereq');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('leave_requests').select(LEAVE_COLS).eq('staff_code', user.code || '~none~'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true };
+    }
+    return { ok: true, rows: rows.map(r => leaveRow(r, user.code)).sort((x, y) => (y.at || 0) - (x.at || 0)) };
+  },
+
+  /** HR'S DESK. Everybody's requests, pending first, with counts over the whole table. */
+  async leaveQueue(db, user, args) {
+    requireNav(user, 'leaveappr');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('leave_requests').select(LEAVE_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, counts: { pending: 0, approved: 0, rejected: 0, shortNotice: 0, onLeaveToday: 0 } };
+    }
+    const all = rows.map(r => leaveRow(r, user.code));
+    const today = todayKey();
+    const want = String(a.state || '').trim();
+    const shown = want === 'pending' ? all.filter(r => r.status === 'pending')
+      : want === 'decided' ? all.filter(r => r.status !== 'pending')
+      : want === 'today' ? all.filter(r => r.status === 'approved' && r.from <= today && r.to >= today) : all;
+    return { ok: true,
+      counts: {
+        pending: all.filter(r => r.status === 'pending').length,
+        approved: all.filter(r => r.status === 'approved').length,
+        rejected: all.filter(r => r.status === 'rejected').length,
+        shortNotice: all.filter(r => r.status === 'pending' && r.shortNotice).length,
+        onLeaveToday: all.filter(r => r.status === 'approved' && r.from <= today && r.to >= today).length,
+      },
+      rows: shown.sort(pendingFirst) };
+  },
+
+  async leaveDecide(db, user, args) {
+    requireNav(user, 'leaveappr');
+    requireWrite(user);
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    const approve = a.approve === true;
+    const comment = String(a.comment || '').trim().slice(0, 1000);
+    if (!approve && !comment) bad('Andika sababu ya kukataa. / A comment is required when rejecting.');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('leave_requests').select(LEAVE_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(LEAVE_NOT_READY);
+    }
+    const row = rows.find(r => String(r.id) === id);
+    if (!row) bad('Ombi halipo. / That request no longer exists.');
+    if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
+    const at = new Date().toISOString();
+    const patch = { status: approve ? 'approved' : 'rejected', comment: comment || null,
+      decided_by: user.name || '', decided_at: at, updated_at: at };
+    const { data, error } = await db.from('leave_requests')
+      .update(patch).eq('id', id).eq('status', 'pending').select('id');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) bad('Ombi hili limeamuliwa na mtu mwingine sasa hivi. / Somebody else just decided this one.');
+    return { ok: true, id, status: patch.status };
   },
 
   async stockMovement(db, user, args) {

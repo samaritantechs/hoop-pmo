@@ -484,3 +484,33 @@ newest first. Everything below keeps exactly the order it always had.
 A day, because that is the length of a bench session and the life of an enrol batch — so by the
 next morning these are just phones again and the fleet's own priorities take over, with nothing
 to switch off and nothing to remember.
+
+## 13. SHIPPED 2026-09-07: imprest and leave — ask, decide, retire, review
+
+Five navs, two forms the office already prints. The full story is
+[`docs/IMPREST-LEAVE.md`](IMPREST-LEAVE.md); the short version:
+
+| nav | pane | who |
+|---|---|---|
+| `impreq` | Omba imprest / Imprest request | anybody who travels |
+| `impappr` | Idhini ya imprest / Imprest approval | the administrator — and the **Viwango** rate table |
+| `imprep` | Ripoti ya imprest / Imprest reports | the GM's review copy |
+| `leavereq` | Omba likizo / Leave request | everybody |
+| `leaveappr` | Idhini ya likizo / Leave approval | HR |
+
+**Do, in this order:**
+
+1. Run `db/migrations/RUN-ME-2026-09-07-imprest-leave.sql` in Supabase — every pane names it
+   until it is run.
+2. Tick the five navs on the right roles in Access codes.
+3. As the administrator, fill **Viwango vya malazi** on the approval pane: one row per role
+   with accommodation per day. The request form offers only roles that have a rate.
+4. Optional email: Settings → `IMPREST_ADMIN_EMAIL`, `IMPREST_GM_EMAIL`, `HR_EMAIL`,
+   `EMAIL_FROM`; then `RESEND_API_KEY` on Vercel. Blank means no email; the panes are the
+   record either way.
+
+The rate is looked up and **stamped** at request time, so a later rate change never reprices an
+old trip. Receipts are shrunk on the phone (1024px JPEG, ~60–120KB), refused above 200KB by the
+server, stored in their own table and fetched per request — no list ever carries a photo. The
+one-week rule on the leave form is **flagged** for HR, never enforced, because the form's own
+exceptions (illness, bereavement) make it HR's call.

@@ -1,0 +1,84 @@
+/* =========================================================================================
+   EMAIL, AS A COURTESY ON TOP OF THE PANES -- never as the thing they depend on.
+   =========================================================================================
+     "so the gm and administrator email get set in settings"
+
+   The imprest and leave panes are the system of record: a request exists the moment its row
+   does, and an approver sees it the moment they open their pane. Email is the nudge that says
+   "there is something in your pane" and the copy the GM keeps in their inbox. So it MUST NOT
+   be able to break the thing it is announcing: a request that failed because a mail provider
+   was down, or because nobody had set an address yet, would be a request lost to a courtesy.
+
+   Every function here therefore RESOLVES, always, with { sent, reason }. The caller records
+   the answer (the panes show "email haikutumwa" beside a request nobody was told about) and
+   carries on. Nothing here throws.
+
+   Same provider and the same two knobs as HOPE's weekly report, deliberately, so one deploy
+   variable serves both systems:
+     RESEND_API_KEY   environment variable on the deployment -- a secret, so never a settings row
+     EMAIL_FROM       Settings; blank falls back to Resend's own onboarding sender, which works
+                      for a first send but lands in spam and should be replaced with a verified
+                      domain before anybody relies on it
+   The recipient is a Settings KEY passed by the caller (IMPREST_ADMIN_EMAIL, IMPREST_GM_EMAIL,
+   HR_EMAIL) so the office can change who is told without a deploy. Several addresses may be
+   separated by commas or semicolons. */
+
+let fetchImpl = (...a) => globalThis.fetch(...a);
+/** Tests only: swap the transport so a send can be observed without a network. */
+export function _setFetch(f) { fetchImpl = f || ((...a) => globalThis.fetch(...a)); }
+
+const esc = s => String(s == null ? '' : s)
+  .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function setting(db, key) {
+  try {
+    const { data } = await db.from('settings').select('value').eq('key', key).maybeSingle();
+    return String((data && data.value) || '').trim();
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * Send one email. `toKey` names the Settings row holding the recipient(s); `to` may be given
+ * directly instead (the requester's own address off a form). Resolves with
+ *   { sent: true, to, id }            on success
+ *   { sent: false, reason: '...' }    on every kind of failure, including "not configured"
+ */
+export async function sendMail(db, { toKey, to, subject, html }) {
+  try {
+    const key = String(process.env.RESEND_API_KEY || '').trim();
+    if (!key) return { sent: false, reason: 'RESEND_API_KEY haijawekwa / not set on the deployment' };
+    let addr = String(to || '').trim();
+    if (!addr && toKey) addr = await setting(db, toKey);
+    const list = addr.split(/[;,]/).map(x => x.trim()).filter(x => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+    if (!list.length) {
+      return { sent: false, reason: (toKey ? toKey + ' ' : '') + 'haijawekwa kwenye Settings / no recipient set' };
+    }
+    const from = (await setting(db, 'EMAIL_FROM')) || 'HOOPLOAN <onboarding@resend.dev>';
+    const res = await fetchImpl('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to: list, subject: String(subject || 'HOOPLOAN'), html: String(html || '') }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { sent: false, reason: 'provider: ' + (body.message || res.status) };
+    return { sent: true, to: list.join(', '), id: body.id || null };
+  } catch (e) {
+    return { sent: false, reason: String((e && e.message) || e) };
+  }
+}
+
+/* ONE LOOK FOR EVERY NOTICE. A navy header, a table of the facts, and a line saying which pane
+   to open -- because the email is not the record, the pane is, and the reader should be sent
+   there rather than asked to reply to a message. */
+export function noticeHtml(title, rows, footer) {
+  const money = n => Math.round(Number(n) || 0).toLocaleString('en-US');
+  const cell = (k, v) => `<tr><td style="padding:5px 8px;color:#6b7280;white-space:nowrap">${esc(k)}</td>`
+    + `<td style="padding:5px 8px;font-weight:600">${typeof v === 'number' ? money(v) + ' TZS' : esc(v)}</td></tr>`;
+  return `<div style="font:14px system-ui;color:#111;max-width:640px">
+    <h2 style="margin:0 0 10px;color:#0B2A6B">${esc(title)}</h2>
+    <table style="border-collapse:collapse;font:13px system-ui">${rows.map(([k, v]) => cell(k, v)).join('')}</table>
+    <p style="color:#6b7280;font-size:12px;margin-top:14px">${esc(footer || 'Fungua HOOPLOAN portal kuona zaidi. / Open the HOOPLOAN portal for the full record.')}</p>
+  </div>`;
+}

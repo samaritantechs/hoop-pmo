@@ -1369,3 +1369,152 @@ test('portal.html: the enrol drawer answers the refusal that still prints ENROLL
   assert.match(note, /Soma[\s\S]{0,120}Accounts: 0/, 'Swahili sends them to the count');
   assert.match(note, /Read the count at the top/, 'and so does the English');
 });
+
+/* =========================================================================================
+   IMPREST AND LEAVE, on the page.
+
+     "request tab, approval tab and imprest reports tab ... retirement ... with 3 pictures
+      (optimize for storage as business operator does) ... asking for leaves in app (another
+      nav), and hr approves or rejects there (another one)"
+
+   The wiring test above already proves each of the five navs opens a defined pane that calls
+   functions the server has. These pin the parts of the page that the server cannot check for
+   it: what is NOT sent, what is shrunk before it is sent, and what the preview promises.
+   ========================================================================================= */
+const IMP_SRC = (name, html) => {
+  const m = new RegExp('\\nfunction ' + name + '\\([^)]*\\)\\{[\\s\\S]*?\\n\\}').exec(html);
+  assert.ok(m, name + '() is a top-level function on the page');
+  return m[0];
+};
+
+test('portal.html: the imprest and leave writes are never re-sent by the client', () => {
+  const html = read('portal.html');
+  const m = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  assert.ok(m, 'NO_RETRY is a literal');
+  for (const f of ['impRequest', 'impDecide', 'impRetire', 'impRoleSave', 'impRoleDelete', 'leaveRequest', 'leaveDecide']) {
+    assert.match(m[1], new RegExp('\\b' + f + ':1'), f + ' is a write; a dropped one is re-pressed by a person, not re-sent by a client');
+  }
+});
+
+test('portal.html: the role editor names the five new panes in words the owner can tick', () => {
+  const html = read('portal.html');
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  assert.ok(lbl, 'the label map is where it was');
+  for (const k of ['impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr']) {
+    assert.match(lbl[0], new RegExp("\\b" + k + ":'[^']+'"), k + ' has a label, not a bare key');
+  }
+  // And the sidebar has the two groups the five entries file under.
+  assert.match(html, /\{ g:'imp',\s*sw:'Imprest'/);
+  assert.match(html, /\{ g:'leave',\s*sw:'Likizo'/);
+});
+
+test('portal.html: the request form sends the parts and never a total, and the preview says so', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawImpReq', html);
+  const call = /srv\('impRequest',\{([\s\S]*?)\}\)\.then/.exec(fn);
+  assert.ok(call, 'the form submits through srv(impRequest)');
+  for (const k of ['fareTrips', 'farePerTrip', 'accomDays', 'imprestRole', 'other1Desc', 'other1Amount', 'purpose', 'email', 'travelDate']) {
+    assert.match(call[1], new RegExp('\\b' + k + ':'), k + ' is sent');
+  }
+  for (const k of ['fareAmount', 'accomAmount', 'accomRate', 'total']) {
+    assert.ok(!new RegExp('\\b' + k + ':').test(call[1]), k + ' is a preview, not an argument -- the server computes it');
+  }
+  // The computed boxes are read-only so nobody types into a figure the server will ignore.
+  for (const id of ['imFare', 'imRate', 'imAccom']) {
+    assert.match(fn, new RegExp('id="' + id + '" class="inp" readonly'), id + ' cannot be typed into');
+  }
+  assert.match(fn, /seva inahesabu upya/, 'and the form says the server recomputes');
+  // The role list comes from the server's rate table, with the rate shown beside each role.
+  assert.match(fn, /roles\.map\(function\(r\)\{ return '<option value="'\+esc\(r\.role\)\+'">'\+esc\(r\.role\)\+' · malazi '\+money\(r\.rate\)/);
+});
+
+test('portal.html: receipts are shrunk on the phone to the same ceiling the server holds', () => {
+  const html = read('portal.html');
+  const api = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  const server = /const IMP_PHOTO_MAX_BYTES = ([0-9 *]+);/.exec(api);
+  const page = /var IMP_PHOTO_MAX=([0-9 *]+);/.exec(html);
+  assert.ok(server && page, 'both sides state the ceiling as a literal');
+  assert.equal(eval(page[1]), eval(server[1]), 'the page shrinks to the size the server accepts');
+
+  const shrink = IMP_SRC('shrinkPhoto', html);
+  assert.match(shrink, /toDataURL\('image\/jpeg', q\)/, 'JPEG at a quality, not a PNG of the original');
+  assert.match(shrink, /maxPx\/Math\.max\(w,h,1\)/, 'scaled by the LONG side');
+  assert.match(shrink, /ctx\.fillStyle='#fff'; ctx\.fillRect/, 'a transparent PNG receipt does not go black');
+  const steps = IMP_SRC('shrinkForReceipt', html);
+  assert.match(steps, /\[\[1024,0\.6\],\[800,0\.5\]/, 'starts at 1024px and steps down');
+  assert.match(steps, /dataUrlBytes\(u\)<=IMP_PHOTO_MAX \? u : next\(\)/, 'and keeps going until it fits');
+
+  const drawerFn = IMP_SRC('impRetireDrawer', html);
+  // One slot per pass of a three-pass loop: the file input is written once, drawn three times.
+  assert.match(drawerFn, /\[1,2,3\]\.map\(function\(i\)\{[\s\S]*?type="file" accept="image\/\*"/,
+    'three photo slots, camera or gallery -- accept="image/*" with no capture= so the gallery is offered too');
+  assert.ok(!/capture=/.test(drawerFn), 'no capture= attribute: a receipt already in the gallery must be attachable');
+  assert.match(drawerFn, /var photos=\[null,null,null\]/, 'exactly three slots');
+  assert.match(drawerFn, /photos\.filter\(Boolean\)/, 'only the slots that were filled are sent');
+  assert.match(drawerFn, /srv\('impRetire',\{[\s\S]*photos:got/, 'as data URLs, already shrunk');
+  assert.match(drawerFn, /shrinkForReceipt\(f\)/, 'every chosen file goes through the shrink');
+
+  /* The page's byte count agrees with the server's for the same data URL, so a photo the page
+     thinks fits is a photo the server accepts. */
+  const bytesFn = new Function(IMP_SRC('dataUrlBytes', html) + '; return dataUrlBytes;')();
+  const buf = Buffer.alloc(150 * 1024 + 1, 9);
+  assert.equal(bytesFn('data:image/jpeg;base64,' + buf.toString('base64')), buf.length);
+  assert.equal(bytesFn('data:image/jpeg;base64,' + Buffer.alloc(2, 1).toString('base64')), 2, 'padding is subtracted');
+});
+
+test('portal.html: the leave preview counts the same working days the server will', () => {
+  const html = read('portal.html');
+  const days = new Function(IMP_SRC('leaveWorkingDays', html) + '; return leaveWorkingDays;')();
+  const resume = new Function(IMP_SRC('leaveResumeDay', html) + '; return leaveResumeDay;')();
+  assert.equal(days('2026-09-14', '2026-09-25'), 10, 'two Monday-to-Friday weeks');
+  assert.equal(days('2026-09-12', '2026-09-13'), 0, 'a weekend alone is no working days');
+  assert.equal(days('2026-10-07', '2026-10-07'), 1);
+  assert.equal(days('2026-09-25', '2026-09-14'), 0, 'reversed dates count nothing rather than crashing');
+  assert.equal(resume('2026-09-25'), '2026-09-28', 'a leave ending Friday resumes Monday');
+  assert.equal(resume('2026-10-07'), '2026-10-08');
+
+  const fn = IMP_SRC('drawLeaveReq', html);
+  assert.match(fn, /declared:\$\('#lvDecl'\)\.checked/, 'the declaration is a tick, sent as a boolean');
+  assert.match(fn, /WIKI MOJA kabla/, 'the one-week rule is on the form in Swahili');
+  assert.match(fn, /ONE WEEK ahead/, 'and in English');
+  assert.match(fn, /noNotice=type==='sick'\|\|type==='compassionate'/, 'with the form\'s own two exceptions');
+  for (const t of ['annual', 'sick', 'maternity', 'paternity', 'compassionate', 'other']) {
+    assert.match(html, new RegExp("\\['" + t + "','"), t + ' is on the type list');
+  }
+});
+
+test('portal.html: every imprest and leave list says which migration to run when the tables are missing', () => {
+  const html = read('portal.html');
+  for (const name of ['drawImpReq', 'drawImpAppr', 'drawImpRep']) {
+    assert.match(IMP_SRC(name, html), /if\(d\.notReady\)\{ m\.innerHTML=impNotReady\(\); return; \}/, name + ' handles notReady');
+  }
+  for (const name of ['drawLeaveReq', 'drawLeaveAppr']) {
+    assert.match(IMP_SRC(name, html), /if\(d\.notReady\)\{ m\.innerHTML=leaveNotReady\(\); return; \}/, name + ' handles notReady');
+  }
+  assert.match(IMP_SRC('impNotReady', html), /RUN-ME-2026-09-07-imprest-leave\.sql/);
+  assert.match(IMP_SRC('leaveNotReady', html), /RUN-ME-2026-09-07-imprest-leave\.sql/);
+  assert.ok(fs.existsSync(new URL('../db/migrations/RUN-ME-2026-09-07-imprest-leave.sql', import.meta.url)),
+    'and that file exists under the name the panes print');
+});
+
+test('portal.html: the approval pane owns the rate table and the GM report reads by travel date', () => {
+  const html = read('portal.html');
+  const appr = IMP_SRC('drawImpAppr', html);
+  assert.match(appr, /srv\('impRoleSave',\{role:role, rate:rate\}\)/, 'add or change a role\'s nightly rate');
+  assert.match(appr, /srv\('impRoleDelete',\{role:role\}\)/);
+  assert.match(appr, /confirm\('Futa wadhifa/, 'deleting a role asks first');
+  assert.match(appr, /impTable\(rows,\{decide:true,photos:true\}\)/, 'the approver decides and may see receipts');
+  const req = IMP_SRC('drawImpReq', html);
+  assert.match(req, /impTable\(rows,\{retire:true,photos:true\}\)/, 'the requester retires their own and sees their own receipts');
+  const table = IMP_SRC('impTable', html);
+  assert.match(table, /o\.retire&&r\.mine&&r\.status==='approved'&&!r\.retiredAt/, 'Retire only on an approved, un-retired trip of your own');
+  const rep = IMP_SRC('drawImpRep', html);
+  assert.match(rep, /Tarehe ya safari:/, 'the GM filters on the trip, not the click');
+  assert.match(rep, /monthRange_\(\)/, 'this month by default, like the advance report');
+  for (const k of ['toRefund', 'toReimburse', 'toRetire', 'spent', 'approvedAmount']) {
+    assert.match(rep, new RegExp('t\\.' + k), 'the ' + k + ' widget is drawn');
+  }
+  assert.match(rep, /PHOTOS \('\+ret\.photos\+'\)/, 'receipts open per row, never inline');
+  const decide = IMP_SRC('impDecideDrawer', html);
+  assert.match(decide, /max="'\+\(r\.total\|\|0\)\+'"/, 'the approve box is capped at what was asked');
+});
