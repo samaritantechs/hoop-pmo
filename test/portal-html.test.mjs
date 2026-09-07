@@ -1392,7 +1392,7 @@ test('portal.html: the role editor names the five new panes in words the owner c
   const html = read('portal.html');
   const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
   assert.ok(lbl, 'the label map is where it was');
-  for (const k of ['impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr']) {
+  for (const k of ['impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep']) {
     assert.match(lbl[0], new RegExp("\\b" + k + ":'[^']+'"), k + ' has a label, not a bare key');
   }
   // And the sidebar has the two groups the five entries file under.
@@ -1480,7 +1480,7 @@ test('portal.html: every imprest and leave list says which migration to run when
   for (const name of ['drawImpReq', 'drawImpAppr', 'drawImpRep']) {
     assert.match(IMP_SRC(name, html), /if\(d\.notReady\)\{ m\.innerHTML=impNotReady\(\); return; \}/, name + ' handles notReady');
   }
-  for (const name of ['drawLeaveReq', 'drawLeaveAppr']) {
+  for (const name of ['drawLeaveReq', 'drawLeaveAppr', 'drawLeaveRep']) {
     assert.match(IMP_SRC(name, html), /if\(d\.notReady\)\{ m\.innerHTML=leaveNotReady\(\); return; \}/, name + ' handles notReady');
   }
   assert.match(IMP_SRC('impNotReady', html), /RUN-ME-2026-09-07-imprest-leave\.sql/);

@@ -176,13 +176,14 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    Adding them here grants them to no existing code: navsFor returns `chosen` for any role
    that has deliberately picked panes, so a role saved yesterday keeps exactly what it had
    until somebody ticks a new box. ADMIN and AUDITOR see every pane, as everywhere. */
-/* IMPREST AND LEAVE follow the advance rule exactly: five panes, five navs, nobody by default.
+/* IMPREST AND LEAVE follow the advance rule exactly: six panes, six navs, nobody by default.
      "since am using tabs as roles so request tab, approval tab and imprest reports tab"
-     "they want to be asking for leaves in app (another nav), and hr approves or rejects there
-      (another one)"
+     "All staff can request leaves / HR can grant leave / REPORTS are seen by CEO, Admin, HR and
+      Finance ... so for leaves we should have requests, approval and reports"
    impreq asks, impappr decides (and keeps the per-role accommodation rates), imprep is the
-   CEO's review copy -- logs, retirements, widgets. leavereq asks, leaveappr is HR's desk. */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'staff', 'codes', 'settings'];
+   CEO's review copy -- logs, retirements, widgets. leavereq asks, leaveappr is HR's desk,
+   leaverep is the report the CEO, HR and Finance read. */
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -3211,6 +3212,51 @@ const FNS = {
     if (error) throw new Error(error.message);
     if (!data || !data.length) bad('Ombi hili limeamuliwa na mtu mwingine sasa hivi. / Somebody else just decided this one.');
     return { ok: true, id, status: patch.status };
+  },
+
+  /** THE LEAVE REPORT: every request in a period, company-wide, with the widgets the CEO, HR
+      and Finance ask across a desk -- how many asked, how many working days were granted, what
+      was filed late, who is away today. Read by the leave's START date, like the advance and
+      imprest reports read by the thing they are about rather than by the click.
+        "REPORTS are seen by CEO, Admin, HR and Finance ... so for leaves we should have
+         requests, approval and reports"
+      "Away today" is counted over the whole table, not the period: somebody whose leave began
+      last month is still away this morning, and that is the question being asked. */
+  async leaveReport(db, user, args) {
+    requireNav(user, 'leaverep');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('leave_requests').select(LEAVE_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, totals: {} };
+    }
+    const from = isDay(a.from) ? String(a.from) : null;
+    const to = isDay(a.to) ? String(a.to) : null;
+    const want = String(a.status || '').trim();
+    const today = todayKey();
+    const all = rows.map(r => leaveRow(r, user.code));
+    const away = r => r.status === 'approved' && r.from <= today && r.to >= today;
+    const inPeriod = all
+      .filter(r => !from || (r.from && r.from >= from))
+      .filter(r => !to || (r.from && r.from <= to));
+    const shown = (want === 'today' ? all.filter(away)
+      : want === 'shortNotice' ? inPeriod.filter(r => r.shortNotice)
+      : inPeriod.filter(r => !['pending', 'approved', 'rejected'].includes(want) || r.status === want))
+      .sort((x, y) => (y.at || 0) - (x.at || 0));
+    const approved = inPeriod.filter(r => r.status === 'approved');
+    return { ok: true, rows: shown,
+      totals: {
+        count: inPeriod.length,
+        pending: inPeriod.filter(r => r.status === 'pending').length,
+        approved: approved.length,
+        rejected: inPeriod.filter(r => r.status === 'rejected').length,
+        // Working days actually granted -- the figure payroll and cover planning start from.
+        approvedDays: approved.reduce((s, r) => s + (r.workingDays || 0), 0),
+        shortNotice: inPeriod.filter(r => r.shortNotice).length,
+        onLeaveToday: all.filter(away).length,
+      } };
   },
 
   async stockMovement(db, user, args) {

@@ -479,6 +479,7 @@ Five navs, two forms the office already prints. The full story is
 | `imprep` | Ripoti ya imprest / Imprest reports | the CEO's review copy |
 | `leavereq` | Omba likizo / Leave request | everybody |
 | `leaveappr` | Idhini ya likizo / Leave approval | HR |
+| `leaverep` | Ripoti ya likizo / Leave reports | the CEO, HR and Finance |
 
 **Do, in this order:**
 
