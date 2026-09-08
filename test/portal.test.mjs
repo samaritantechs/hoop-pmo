@@ -507,9 +507,11 @@ test('stockAccount judges every departure three ways and names the last holder o
     // S3 was sold. R2 is in Watu but never booked as a sale. A1 and A2 are in NEITHER.
     hoop_sales: [{ sale_key: 'K1', imei: 'S3', sale_date: today, commission_agent: 'AGENT X' }],
     watu_loans: [{ imei: 'R2', agent: 'RSM ONE' }],
+    /* AS THE REGISTER REALLY SPELLS THEM. Sipho's page writes Regional_Manager, not RSM, and
+       the store itself is not on the register at all -- the first fixture said 'RSM' and
+       'STORE' and so proved a pivot that was empty on live data. */
     hoop_agents: [
-      { name: 'SIPHO STORE', role: 'STORE', branch: 'Dar' },
-      { name: 'RSM ONE', role: 'RSM', branch: 'Dar' },
+      { name: 'RSM ONE', role: 'Regional_Manager', branch: 'Dar' },
       { name: 'AGENT X', role: 'Field_Officer', branch: 'Dar' },
     ],
   });
@@ -524,9 +526,10 @@ test('stockAccount judges every departure three ways and names the last holder o
   assert.equal(r.company.totals.watu, 1, 'R2 is financed but never booked -- paperwork, not theft');
   assert.equal(r.company.totals.unaccounted, 2, 'A1 and A2 are in neither -- the shrinkage line');
 
-  // PIVOTS classify from hoop_agents.role, so each altitude sees only its own kind.
-  assert.deepEqual(r.store.rows.map(x => x.holder), ['SIPHO STORE']);
-  assert.deepEqual(r.rsm.rows.map(x => x.holder), ['RSM ONE']);
+  // PIVOTS classify from hoop_agents.role -- the store from its NAME, since it has no register
+  // row -- so each altitude sees only its own kind.
+  assert.deepEqual(r.store.rows.map(x => x.holder), ['SIPHO STORE'], 'the store is known by name, not by a register row');
+  assert.deepEqual(r.rsm.rows.map(x => x.holder), ['RSM ONE'], 'Regional_Manager is an RSM, however the register spells it');
   assert.deepEqual(r.agent.rows.map(x => x.holder), ['AGENT X']);
   assert.equal(r.store.totals.unaccounted, 0, 'the store lost nothing it cannot explain');
   assert.equal(r.rsm.totals.unaccounted, 0, 'R2 is with Watu, so the RSM is not accused of it');
@@ -2031,4 +2034,40 @@ test('the roster ignores suspension entirely when the migration has not been run
   };
   const r = await rosterFull(d, day);
   assert.deepEqual(r.ids, ['U0'], 'the deal is exactly what it has always been');
+});
+
+test('stockAccount pivots managers by the register\'s own role labels, the store by name', async () => {
+  /* The SOP review found the RSM pivot empty on live data: the classifier matched the literal
+     word RSM while the register says Regional_Manager. Every label Sipho's page can write, and
+     the store with no register row at all, must land in the right pivot. */
+  const today = todayKey();
+  const prev = dayShift(today, -1);
+  const st = (serial, agent, as_of, age) => ({ serial, agent, item: 'A07', age_days: age, as_of,
+    received: dayShift(as_of, -(age || 0)) });
+  const d = fakeDb({
+    hoop_aged_stock: [
+      st('M1', 'MOSES REGIONAL', prev, 3), st('M1', 'MOSES REGIONAL', today, 4),
+      st('C1', 'CSM PERSON', prev, 3), st('C1', 'CSM PERSON', today, 4),
+      st('T1', 'TEAM LEAD', prev, 3), st('T1', 'TEAM LEAD', today, 4),
+      st('F1', 'FIELD PERSON', prev, 3), st('F1', 'FIELD PERSON', today, 4),
+      st('G1', 'GHALA KUU', prev, 3), st('G1', 'GHALA KUU', today, 4),
+      st('U1', 'UNKNOWN NAME', prev, 3), st('U1', 'UNKNOWN NAME', today, 4),
+    ],
+    hoop_sales: [], watu_loans: [],
+    hoop_agents: [
+      { name: 'MOSES REGIONAL', role: 'Regional_Manager', branch: 'Mwanza' },
+      { name: 'CSM PERSON', role: 'Country_Sales_Manager', branch: 'Dar' },
+      { name: 'TEAM LEAD', role: 'Team_Leader', branch: 'Dar' },
+      { name: 'FIELD PERSON', role: 'Field_Officer', branch: 'Dar' },
+    ],
+  });
+  /* A DIFFERENT SCOPE ON PURPOSE: stockAccount memoises per report dates and team scope, so an
+     ADMIN/ALL call here would be answered by the previous test's cached fixture. */
+  const r = await _FNS.stockAccount(d, { ...ADMIN, teams: ['PIVOT-LABELS'] }, {});
+  assert.deepEqual(r.rsm.rows.map(x => x.holder).sort(), ['CSM PERSON', 'MOSES REGIONAL'],
+    'regional and country sales managers are management custody -- the SOP charges both as an RSM');
+  assert.deepEqual(r.store.rows.map(x => x.holder), ['GHALA KUU'], 'the store by name, with no register row');
+  assert.deepEqual(r.agent.rows.map(x => x.holder).sort(), ['FIELD PERSON', 'TEAM LEAD', 'UNKNOWN NAME'],
+    'team leaders and field officers are the field; a name nobody registered is a field holder too');
+  assert.equal(r.company.totals.held, 6);
 });
