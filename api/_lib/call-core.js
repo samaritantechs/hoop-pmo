@@ -756,7 +756,26 @@ async function comments(db, [dev, ref]) {
     by: c.created_by || '', at: c.created_at ? eatStamp(Date.parse(c.created_at)) : '',
     fu: c.fu_status || '', comment: c.comment || '',
   }));
-  return { ok: true, items, complaints: [], capped: items.length >= COMMENT_LIMIT };
+  // The customer's issues (complaints, repairs, missing papers) live in the issues log since
+  // 2026-09-08; the card shows the newest ten so the officer on the phone knows what is open.
+  // Before the migration runs the table is absent and the card simply shows none.
+  let complaints = [];
+  try {
+    const { data: iss, error: iErr } = await db.from('issues')
+      .select('kind, title, department, status, staff_name, raised_at')
+      .eq('subject_type', 'imei').eq('subject', String(ref))
+      .order('raised_at', { ascending: false }).limit(10);
+    if (!iErr) {
+      complaints = (iss || []).map(i => ({
+        status: String(i.status || 'open').toUpperCase(),
+        at: i.raised_at ? eatStamp(Date.parse(i.raised_at)) : '',
+        who: i.staff_name || '',
+        what: (i.kind && i.kind !== 'complaint' ? '[' + i.kind + '] ' : '') + (i.title || '') +
+              (i.department ? ' · ' + i.department : ''),
+      }));
+    }
+  } catch (_) { complaints = []; }
+  return { ok: true, items, complaints, capped: items.length >= COMMENT_LIMIT };
 }
 async function addComment(db, [dev, p], nowMs) {
   const cu = await userByDeviceSoft(db, dev);

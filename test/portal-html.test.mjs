@@ -1557,3 +1557,91 @@ test('portal.html: the approval pane owns the rate table and the CEO report read
   const decide = IMP_SRC('impDecideDrawer', html);
   assert.match(decide, /max="'\+\(r\.total\|\|0\)\+'"/, 'the approve box is capped at what was asked');
 });
+
+/* =========================================================================================
+   ISSUES: one log, three panes -- raise, desk, report.
+     "the gaps of what we haven't implemented at all should be implemented I think"
+     "remember I implement tasks/roles by nav tabs not role based so just implement the
+      functionality"
+   The wiring test proves the three navs open defined panes that call functions the server
+   has. These pin what the server cannot see: what the form sends, who gets the controls that
+   move an issue, and that the desk is ONE queue with a department chip -- never a nav per
+   department.
+   ========================================================================================= */
+test('portal.html: the issue writes are never re-sent, and the role editor names the three panes', () => {
+  const html = read('portal.html');
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  assert.ok(nr, 'NO_RETRY is a literal');
+  for (const f of ['issueRaise', 'issueUpdate']) {
+    assert.match(nr[1], new RegExp('\\b' + f + ':1'), f + ' is a write; a dropped one is re-pressed by a person');
+  }
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  assert.ok(lbl, 'the label map is where it was');
+  for (const k of ['issuereq', 'issues', 'issuerep']) {
+    assert.match(lbl[0], new RegExp("\\b" + k + ":'[^']+'"), k + ' has a label, not a bare key');
+  }
+  assert.match(html, /\{ g:'issue',\s*sw:'Masuala'/, 'the sidebar group the three file under');
+  // Exactly three issue navs: the department is a chip on the desk, not a nav of its own.
+  const navs = [...html.matchAll(/\{ g:'issue', t:'([a-z]+)'/g)].map(m => m[1]);
+  assert.deepEqual(navs, ['issuereq', 'issues', 'issuerep']);
+});
+
+test('portal.html: the raise form sends the parts of an issue and never who raised it or where it stands', () => {
+  const html = read('portal.html');
+  const wire = IMP_SRC('issueRaiseWire', html);
+  const call = /srv\('issueRaise',\{([\s\S]*?)\}\)/.exec(wire);
+  assert.ok(call, 'the form submits through srv(issueRaise)');
+  for (const k of ['department', 'kind', 'subjectType', 'subject', 'title', 'details', 'contact']) {
+    assert.match(call[1], new RegExp('\\b' + k + ':'), k + ' is sent');
+  }
+  for (const k of ['status', 'staffName', 'staffCode', 'verified', 'assignedTo']) {
+    assert.ok(!new RegExp('\\b' + k + ':').test(call[1]), k + ' is the server\'s to stamp, never the form\'s to send');
+  }
+  // The subject box is enabled only for the kinds of subject that need one, as the server insists.
+  assert.match(wire, /needs=t==='imei'\|\|t==='agent'\|\|t==='receipt'/);
+  // Both panes build the same form: the desk logs on a caller's behalf (the complaints form).
+  assert.match(IMP_SRC('drawIssueReq', html), /issueRaiseHtml\(d,'is'\)/);
+  assert.match(IMP_SRC('drawIssues', html), /issueRaiseHtml\(d,'isn'\)/);
+  // And the desk's form is not offered to a view-only code.
+  assert.match(IMP_SRC('drawIssues', html), /BOOT\.readOnly\?'':'<button class="btn sm" id="isqNew"/);
+});
+
+test('portal.html: the drawer gives the controls that move an issue to the desk nav alone', () => {
+  const html = read('portal.html');
+  const dr = IMP_SRC('issueDrawer', html);
+  assert.match(dr, /var desk=hasNav\('issues'\)&&!BOOT\.readOnly;/, 'the desk is whoever holds the issues nav, nobody by role');
+  assert.match(dr, /var canNote=!BOOT\.readOnly&&\(desk\|\|\(r\.mine&&hasNav\('issuereq'\)\)\);/, 'a raiser may talk on their own');
+  // Status, assignment, references, the verified tick and the resolution are inside the desk branch only.
+  const deskBlock = /\(desk\?'<div class="row"[\s\S]*?<textarea id="isdRes"[\s\S]*?:''\)/.exec(dr);
+  assert.ok(deskBlock, 'the desk controls are one conditional block');
+  for (const id of ['isdSt', 'isdAsg', 'isdRef', 'isdXr', 'isdVer', 'isdRes']) {
+    assert.match(deskBlock[0], new RegExp('id="' + id + '"'), id + ' is a desk control');
+  }
+  assert.match(dr, /if\(desk\)\{ a\.status=\$\('#isdSt'\)\.value;/, 'and only the desk sends them');
+  assert.match(dr, /\[\['open',[^\]]*\],\['waiting',[^\]]*\],\['escalated',[^\]]*\],\['resolved'/, 'the four states, in the order they are lived');
+  assert.match(dr, /srv\('issueNotes',\{id:r\.id\}\)/, 'the conversation is loaded with the drawer');
+});
+
+test('portal.html: the desk is one queue with a department chip, and the report reads by the date raised', () => {
+  const html = read('portal.html');
+  const desk = IMP_SRC('drawIssues', html);
+  assert.match(desk, /srv\('issueQueue',ISSUEQ\)/);
+  assert.match(html, /var ISSUEQ=\{department:'',state:''\};/, 'unresolved, every department, by default');
+  assert.match(desk, /\(d\.departments\|\|\[\]\)\.map\(function\(k\)\{ return chip\(k,issueDept\(k\),byDept\[k\]\|\|0\); \}\)/, 'one chip per department, with its open count');
+  assert.match(desk, /ISSUEQ\.state=\(ISSUEQ\.state==='all'\?'':'all'\)/, 'resolved ones are a toggle away, not gone');
+  const rep = IMP_SRC('drawIssueRep', html);
+  assert.match(rep, /Tarehe ya kuletwa:/, 'the period is the date raised');
+  assert.match(rep, /monthRange_\(\)/, 'this month by default, like every other report here');
+  for (const k of ['count', 'open', 'waiting', 'escalated', 'resolved', 'avgDays', 'oldestOpenDays']) {
+    assert.match(rep, new RegExp('t\\.' + k + '\\b'), 'the ' + k + ' widget is drawn');
+  }
+  assert.match(rep, /byDept\.map\(function\(x\)/, 'and the per-department table');
+  // The settings pane explains the two new keys in the same breath as the other addresses.
+  assert.match(html, /<b>ISSUES_EMAIL<\/b>: mstari mmoja kwa kila idara/);
+  assert.match(html, /<b>GM_EMAIL<\/b>/);
+  // Every pane names the migration when the table is not there yet.
+  assert.match(IMP_SRC('issueNotReady', html), /RUN-ME-2026-09-08-issues\.sql/);
+  for (const fn of ['drawIssueReq', 'drawIssues', 'drawIssueRep']) {
+    assert.match(IMP_SRC(fn, html), /if\(d\.notReady\)\{ m\.innerHTML=issueNotReady\(\); return; \}/, fn + ' says which file to run');
+  }
+});
