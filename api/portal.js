@@ -1608,11 +1608,18 @@ const FNS = {
     // Role decides the pivot; hoop_agents is the roster, matched on the same token-sorted
     // name key the rest of the system uses so spelling drift cannot split a person in two.
     const regBy = new Map(agents.filter(x => x.name).map(x => [nameKey(x.name), x]));
+    /* THE ROLES AS THE REGISTER SPELLS THEM. This matched the literal word RSM, and the register
+       Sipho's page produces says Regional_Manager, Team_Leader, Field_Officer and
+       Country_Sales_Manager -- so on live data every manager fell into the agents pivot and the
+       RSM pivot was empty, while the tests passed on a fixture that spelt it RSM. Found by the
+       SOP review of 2026-09-08. The store is a holder NAME before it is a role: Sipho is not on
+       the agents register at all, so the name is what identifies the store. A Country Sales
+       Manager holding stock is a manager's custody, which the SOP charges as an RSM's. */
     const kindOf = (holder) => {
       const reg = regBy.get(nameKey(holder || ''));
       const role = K((reg && reg.role) || '');
-      if (/STORE|GHALA|SIPHO/.test(role)) return 'store';
-      if (/RSM/.test(role)) return 'rsm';
+      if (/STORE|GHALA|SIPHO/.test(K(holder || '')) || /STORE|GHALA/.test(role)) return 'store';
+      if (/RSM|REGIONAL|COUNTRY_SALES/.test(role)) return 'rsm';
       return 'agent';
     };
 
