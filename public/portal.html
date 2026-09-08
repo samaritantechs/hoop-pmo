@@ -1408,7 +1408,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   // Imprest and leave: the same two shapes again. A request or a retirement re-sent would
   // file twice; a decision re-sent would tell the decider somebody else beat them to it.
   impRequest:1, impDecide:1, impRetire:1, impRoleSave:1, impRoleDelete:1,
-  leaveRequest:1, leaveDecide:1};
+  leaveRequest:1, leaveDecide:1,
+  // Issues: a raise re-sent files twice; an update re-sent trips its own stale-row guard.
+  issueRaise:1, issueUpdate:1};
 function srv(fn,args,tries){
   tries=tries||0;
   busy(true);
@@ -1560,6 +1562,16 @@ var NAV=[
   { g:'leave', t:'leaverep', nav:'leaverep',   sw:'Ripoti ya likizo', en:'Leave reports',
     ic:'<path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/><path d="M14 6h5v5"/>' },
 
+  /* ISSUES -- one log for everything somebody has to chase (RSM SOP C, Credit SOP C, IT SOP C,
+     GD SOP B). Raise, work at one desk with a department filter, report. The department is a
+     label on the row, never a nav: one queue, one grant. */
+  { g:'issue', t:'issuereq', nav:'issuereq',   sw:'Toa taarifa ya suala', en:'Raise an issue',
+    ic:'<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>' },
+  { g:'issue', t:'issues',   nav:'issues',     sw:'Dawati la masuala',  en:'Issues desk',
+    ic:'<path d="M4 4h16v12H8l-4 4z"/><path d="M8 9h8M8 12h5"/>' },
+  { g:'issue', t:'issuerep', nav:'issuerep',   sw:'Ripoti ya masuala',  en:'Issues report',
+    ic:'<path d="M3 3v18h18"/><path d="M8 17v-6M12 17V8M16 17v-3"/>' },
+
   { g:'admin', t:'staff',    nav:'staff',      sw:'Wafanyakazi',      en:'Staff',
     ic:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
   { g:'admin', t:'codes',    nav:'codes',      sw:'Misimbo ya kuingia', en:'Access codes',
@@ -1574,6 +1586,7 @@ var GROUPS=[
   { g:'adv',   sw:'Advance',    en:'Salary advance' },
   { g:'imp',   sw:'Imprest',    en:'Imprest' },
   { g:'leave', sw:'Likizo',     en:'Leave' },
+  { g:'issue', sw:'Masuala',    en:'Issues' },
   { g:'admin', sw:'Usimamizi',  en:'Admin' },
 ];
 function navLabel(n){ return LANG==='en' ? n.en : n.sw; }
@@ -1691,6 +1704,9 @@ function draw(){
   if(TAB==='leavereq') return drawLeaveReq(m);
   if(TAB==='leaveappr') return drawLeaveAppr(m);
   if(TAB==='leaverep') return drawLeaveRep(m);
+  if(TAB==='issuereq') return drawIssueReq(m);
+  if(TAB==='issues') return drawIssues(m);
+  if(TAB==='issuerep') return drawIssueRep(m);
   if(TAB==='sales') return drawSalesPerf(m);
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='recovery') return drawRecovery(m);
@@ -4728,6 +4744,276 @@ function drawLeaveRep(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* ---------- issues ----------
+   ONE LOG for everything somebody has to chase. Four SOPs describe the same shape -- somebody
+   raises a thing, a department works it, it is resolved or escalated -- so it is one table and
+   three panes: RAISE (anybody), the DESK (one queue with a department filter, never one nav per
+   department), the REPORT (a period, by the date raised). A customer's complaint is an issue
+   whose subject is an IMEI; the call card shows those on the customer's history. The server
+   stamps the raiser from the code and guards every move on the row it read, so two desks cannot
+   silently overwrite each other. */
+function issueNotReady(){
+  return '<div class="note bad">Jedwali la masuala halijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-08-issues.sql</b> kwenye Supabase, kisha rudi hapa. '
+    +'/ The issues tables have not been created yet — run that migration, then come back.</div>';
+}
+var ISSUE_DEPT_LABEL={STORE:'Stoo / Store',FINANCE:'Fedha / Finance',IT:'IT',HR:'HR',CREDIT:'Mikopo / Credit',
+  SALES:'Mauzo / Sales',GENERAL_DUTY:'General duty',ADMIN:'Admin'};
+var ISSUE_KIND_LABEL={issue:'Suala / Issue',complaint:'Malalamiko ya mteja / Customer complaint',document:'Nyaraka inayodaiwa / Missing document',
+  performance:'Utendaji wa ajenti / Agent performance',system:'Mfumo · ukarabati / System · repair'};
+var ISSUE_SUBJECT_LABEL={'':'Hakuna / None',imei:'IMEI ya mteja / Customer IMEI',agent:'Ajenti / Agent',receipt:'Risiti / Receipt no.',
+  system:'Mfumo / System',other:'Nyingine / Other'};
+function issueDept(d){ return ISSUE_DEPT_LABEL[d]||d||'—'; }
+function issueKind(k){ return ISSUE_KIND_LABEL[k]||k||'—'; }
+function issueStatusChip(r){
+  if(r.status==='resolved') return '<span class="chip ok">Resolved</span>';
+  if(r.status==='escalated') return '<span class="chip bad">Escalated</span>';
+  if(r.status==='waiting') return '<span class="chip">Waiting</span>';
+  return '<span class="chip warn">Open</span>';
+}
+function issueAbout(r){
+  if(!r.subjectType&&!r.subject) return '—';
+  return (r.subjectType?'<span class="mut" style="font-size:10px">'+esc(r.subjectType)+'</span> ':'')+esc(r.subject||'');
+}
+/* The pane the drawer came from is the pane it redraws; the drawer never guesses. */
+function issueRedraw(m){
+  if(TAB==='issuereq') drawIssueReq(m); else if(TAB==='issues') drawIssues(m); else if(TAB==='issuerep') drawIssueRep(m);
+}
+function issueTable(rows, desk){
+  return '<div class="scroll"><table><thead><tr>'
+    +'<th>RAISED</th><th>TITLE</th><th>DEPARTMENT</th><th>ABOUT</th><th>RAISED BY</th><th>STATUS</th><th class="r">DAYS</th>'
+    +(desk?'<th>ASSIGNED</th><th>REFERRED</th>':'')+'<th class="noxl"></th></tr></thead><tbody>'
+    +rows.map(function(r){
+      var old=r.status!=='resolved'&&r.ageDays>=7;
+      return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
+        +'<td><b>'+esc(r.title||'—')+'</b><div class="mut" style="font-size:10px">'+esc(issueKind(r.kind))+(r.verified?' · verified':'')+'</div></td>'
+        +'<td>'+esc(issueDept(r.department))+'</td>'
+        +'<td>'+issueAbout(r)+'</td>'
+        +'<td>'+esc(r.staffName||'—')+'<div class="mut" style="font-size:10px">'+esc(r.staffRole||'')+'</div></td>'
+        +'<td>'+issueStatusChip(r)+'</td>'
+        +'<td class="r'+(old?' bad':'')+'">'+money(r.ageDays||0)+'</td>'
+        +(desk?'<td>'+esc(r.assignedTo||'—')+'</td><td style="font-size:11px">'+esc(r.referredTo||'')+(r.externalRef?' <span class="mut">'+esc(r.externalRef)+'</span>':'')+'</td>':'')
+        +'<td class="r noxl"><button class="btn sm ghost" data-isv="'+esc(r.id)+'">'+(desk?'Fanyia kazi':'Maelezo')+'</button></td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+/* THE RAISE FORM, shared by the request pane and the desk (the desk logs on a caller's behalf
+   -- that is what the complaints form is). The subject box changes with the subject type so the
+   person types the one thing that opens the record: an IMEI, an agent name, a receipt number. */
+function issueRaiseHtml(d, p){
+  p=p||'is';
+  var depts=d.departments||Object.keys(ISSUE_DEPT_LABEL), kinds=d.kinds||Object.keys(ISSUE_KIND_LABEL);
+  var subs=['','imei','agent','receipt','system','other'];
+  return '<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:160px"><label class="lbl">Idara inayohusika / Department *</label><select id="'+p+'Dept" class="inp">'
+    +'<option value="">— chagua / choose —</option>'+depts.map(function(k){ return '<option value="'+esc(k)+'">'+esc(issueDept(k))+'</option>'; }).join('')+'</select></div>'
+    +'<div style="flex:1;min-width:160px"><label class="lbl">Aina / Kind</label><select id="'+p+'Kind" class="inp">'
+    +kinds.map(function(k){ return '<option value="'+esc(k)+'">'+esc(issueKind(k))+'</option>'; }).join('')+'</select></div>'
+    +'</div>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:160px"><label class="lbl">Linahusu / About</label><select id="'+p+'SubT" class="inp">'
+    +subs.map(function(k){ return '<option value="'+k+'">'+esc(ISSUE_SUBJECT_LABEL[k])+'</option>'; }).join('')+'</select></div>'
+    +'<div style="flex:1;min-width:160px"><label class="lbl" id="'+p+'SubL">IMEI · jina · namba / IMEI · name · number</label><input id="'+p+'Sub" class="inp" disabled></div>'
+    +'</div>'
+    +'<label class="lbl">Kichwa / Title *</label><input id="'+p+'Title" class="inp" maxlength="160" placeholder="Kwa kifupi, suala ni nini / In a line, what is the issue">'
+    +'<label class="lbl">Maelezo / Details</label><textarea id="'+p+'Det" class="inp" rows="3" placeholder="Kilichotokea, lini, umefanya nini / What happened, when, what you did"></textarea>'
+    +'<label class="lbl">Simu ya kuwasiliana / Contact number</label><input id="'+p+'Con" class="inp" placeholder="07… (mteja au anayehusika / the customer or the person to call back)">'
+    +'<button class="btn w" id="'+p+'Send" style="margin-top:10px">Tuma / Log the issue</button>';
+}
+function issueRaiseWire(p, after){
+  p=p||'is';
+  var subT=$('#'+p+'SubT'), sub=$('#'+p+'Sub'), subL=$('#'+p+'SubL');
+  var onType=function(){
+    var t=subT.value, needs=t==='imei'||t==='agent'||t==='receipt';
+    sub.disabled=!needs; if(!needs) sub.value='';
+    subL.textContent=t==='imei'?'IMEI ya mteja / Customer IMEI *':t==='agent'?'Jina la ajenti / Agent name *':t==='receipt'?'Namba ya risiti / Receipt number *':'—';
+    sub.placeholder=t==='imei'?'35…':'';
+  };
+  subT.onchange=onType; onType();
+  $('#'+p+'Send').onclick=function(){
+    var b=this; b.disabled=true;
+    srv('issueRaise',{ department:$('#'+p+'Dept').value, kind:$('#'+p+'Kind').value, subjectType:subT.value, subject:sub.value,
+      title:$('#'+p+'Title').value, details:$('#'+p+'Det').value, contact:$('#'+p+'Con').value })
+    .then(function(d){
+      toast('Suala limeingizwa kwa '+issueDept(d.department)+(d.emailed?' · idara imeambiwa kwa email':' · email haikutumwa: '+(d.emailNote||'')), !d.emailed);
+      after();
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+/* THE DRAWER: the row, the conversation, and -- for the desk -- the controls that move it. A
+   raiser who is not the desk may only talk ("here is the document"); the report reads. */
+function issueDrawer(m, r){
+  var desk=hasNav('issues')&&!BOOT.readOnly;
+  var canNote=!BOOT.readOnly&&(desk||(r.mine&&hasNav('issuereq')));
+  drawer('<h3>'+esc(r.title||'—')+'</h3>'
+    +'<div class="sub">'+issueStatusChip(r)+' '+esc(issueKind(r.kind))+' · '+esc(issueDept(r.department))+' · siku '+money(r.ageDays||0)+'</div>'
+    +'<div style="margin:8px 0;font-size:12.5px">'
+    +'<div><b>Kuhusu / About:</b> '+issueAbout(r)+(r.contact?' · <b>simu:</b> '+esc(r.contact):'')+'</div>'
+    +'<div class="mut" style="font-size:11px;margin-top:2px">Ameleta / Raised by '+esc(r.staffName||'—')+(r.staffRole?' ('+esc(r.staffRole)+')':'')+' · '+esc(advWhen(r.at))+'</div>'
+    +(r.details?'<div style="white-space:pre-wrap;margin-top:6px">'+esc(r.details)+'</div>':'')
+    +(r.assignedTo||r.referredTo||r.externalRef||r.verified?'<div class="mut" style="font-size:11px;margin-top:6px">'
+      +(r.assignedTo?'Anayelifanyia kazi / Assigned: <b>'+esc(r.assignedTo)+'</b> · ':'')
+      +(r.referredTo?'Limepelekwa / Referred to: <b>'+esc(r.referredTo)+'</b>'+(r.externalRef?' ('+esc(r.externalRef)+')':'')+' · ':'')
+      +(r.verified?'Utambulisho umethibitishwa / Identity verified':'')+'</div>':'')
+    +(r.escalatedAt?'<div class="note bad" style="margin-top:6px;font-size:11.5px">Limepandishwa na '+esc(r.escalatedBy||'—')+' · '+esc(advWhen(r.escalatedAt))+' / Escalated to the GM.</div>':'')
+    +(r.resolution?'<div class="note" style="margin-top:6px;font-size:11.5px"><b>Utatuzi / Resolution:</b> '+esc(r.resolution)
+      +(r.resolvedAt?'<div class="mut" style="font-size:10.5px">'+esc(r.resolvedBy||'—')+' · '+esc(advWhen(r.resolvedAt))+'</div>':'')+'</div>':'')
+    +'</div>'
+    +'<h4 style="margin:10px 0 4px">Maelezo · hatua / Notes · moves</h4><div id="isNotes" class="mut" style="font-size:12px">…</div>'
+    +(canNote?'<label class="lbl" style="margin-top:10px">Ongeza maelezo / Add a note'+(desk?' (lazima ukibadilisha hali / required with a status change)':'')+'</label>'
+      +'<textarea id="isdNote" class="inp" rows="2"></textarea>':'')
+    +(desk?'<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px">'
+      +'<div style="flex:1;min-width:140px"><label class="lbl">Hali / Status</label><select id="isdSt" class="inp">'
+      +[['open','Open / Wazi'],['waiting','Waiting / Inasubiri jibu'],['escalated','Escalate to GM / Pandisha'],['resolved','Resolved / Limetatuliwa']].map(function(k){
+        return '<option value="'+k[0]+'"'+(r.status===k[0]?' selected':'')+'>'+k[1]+'</option>'; }).join('')+'</select></div>'
+      +'<div style="flex:1;min-width:140px"><label class="lbl">Anayelifanyia kazi / Assigned to</label><input id="isdAsg" class="inp" value="'+esc(r.assignedTo||'')+'"></div>'
+      +'</div>'
+      +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+      +'<div style="flex:1;min-width:140px"><label class="lbl">Limepelekwa / Referred to</label><input id="isdRef" class="inp" placeholder="WATU · SAMSUNG · …" value="'+esc(r.referredTo||'')+'"></div>'
+      +'<div style="flex:1;min-width:140px"><label class="lbl">Namba yao / Their reference</label><input id="isdXr" class="inp" value="'+esc(r.externalRef||'')+'"></div>'
+      +'</div>'
+      +'<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin:8px 0 0"><input type="checkbox" id="isdVer"'+(r.verified?' checked':'')+'> Utambulisho umethibitishwa / Identity verified (complaints)</label>'
+      +'<label class="lbl" style="margin-top:8px">Utatuzi / Resolution (lazima ukifunga / required to resolve)</label>'
+      +'<textarea id="isdRes" class="inp" rows="2">'+esc(r.resolution||'')+'</textarea>':'')
+    +(canNote?'<button class="btn w" id="isdSave" style="margin-top:10px">'+(desk?'Hifadhi / Save':'Ongeza / Add note')+'</button>':''));
+  srv('issueNotes',{id:r.id}).then(function(d){
+    var ns=d.notes||[], box=$('#isNotes'); if(!box) return;
+    box.innerHTML=ns.length?ns.map(function(n){
+      return '<div style="border-left:2px solid var(--line);padding:2px 8px;margin:4px 0"><span style="font-size:10.5px">'+esc(advWhen(n.at))+' · <b>'+esc(n.by||'—')+'</b>'
+        +(n.change?' <span class="chip">'+esc(n.change.replace('>',' → '))+'</span>':'')+'</span><div style="white-space:pre-wrap;color:var(--ink)">'+esc(n.note||'')+'</div></div>';
+    }).join(''):'Bado hakuna maelezo. / No notes yet.';
+  }).catch(function(){ var box=$('#isNotes'); if(box) box.textContent='Maelezo hayakupakia. / Notes did not load.'; });
+  var save=$('#isdSave');
+  if(save) save.onclick=function(){
+    var b=this; b.disabled=true;
+    var a={ id:r.id, note:$('#isdNote').value };
+    if(desk){ a.status=$('#isdSt').value; a.assignedTo=$('#isdAsg').value; a.referredTo=$('#isdRef').value; a.externalRef=$('#isdXr').value;
+      a.verified=$('#isdVer').checked; a.resolution=$('#isdRes').value; }
+    srv('issueUpdate',a).then(function(d){
+      toast(d.change?('Hali: '+d.change.replace('>',' → ')+(d.status==='escalated'?(d.emailed?' · GM ameambiwa kwa email':' · email haikutumwa: '+(d.emailNote||'')):'')):'Imehifadhiwa / Saved',
+        d.status==='escalated'&&!d.emailed);
+      closeDrawer(); issueRedraw(m);
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+function drawIssueReq(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('issueMine',{}).then(function(d){
+    if(d.notReady){ m.innerHTML=issueNotReady(); return; }
+    var rows=d.rows||[];
+    m.innerHTML='<div class="card" style="padding:14px;max-width:640px">'
+      +'<h3 style="margin:0 0 4px">Toa taarifa ya suala / Raise an issue</h3>'
+      +'<div class="sub">Suala la shambani, malalamiko ya mteja, nyaraka inayodaiwa, simu ya kukarabati — linakwenda kwa idara uliyochagua. '
+      +'/ A field issue, a customer complaint, a missing document, a repair — it goes to the department you choose.</div>'
+      +issueRaiseHtml(d,'is')
+      +'</div>'
+      +'<h3 style="margin:18px 0 6px">Masuala yangu / My issues</h3>'
+      +(rows.length?issueTable(rows,false):'<div class="mut">Bado hujaleta suala lolote. / Nothing raised yet.</div>');
+    issueRaiseWire('is', function(){ if(TAB==='issuereq') drawIssueReq(m); });
+    [].slice.call(m.querySelectorAll('[data-isv]')).forEach(function(b){
+      b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-isv'); })[0]; if(r) issueDrawer(m, r); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+/* THE DESK. Open first; the department chips carry their open counts so the person sees where
+   the work is before narrowing. Not-resolved is the default view -- a desk is a worklist. */
+var ISSUEQ={department:'',state:''};
+function drawIssues(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('issueQueue',ISSUEQ).then(function(d){
+    if(d.notReady){ m.innerHTML=issueNotReady(); return; }
+    var rows=d.rows||[], c=d.counts||{}, byDept=c.byDept||{};
+    var pick=function(k){ return function(){ ISSUEQ.state=(ISSUEQ.state===k?'':k); if(TAB==='issues') drawIssues(m); }; };
+    var chip=function(k,label,n){ return '<button class="btn sm'+(ISSUEQ.department===k?'':' ghost')+'" data-isq="'+esc(k)+'">'+esc(label)+(n?' <b>'+money(n)+'</b>':'')+'</button>'; };
+    m.innerHTML='<div class="tiles">'
+      +tile('Wazi',money(c.open||0),'hayajaanza kufanyiwa kazi',{color:c.open?'warn':'',on:ISSUEQ.state==='open',cta:'chuja ›',go:pick('open')})
+      +tile('Yanasubiri',money(c.waiting||0),'yanasubiri jibu la mtu mwingine',{on:ISSUEQ.state==='waiting',cta:'chuja ›',go:pick('waiting')})
+      +tile('Yamepandishwa',money(c.escalated||0),'kwa GM',{color:c.escalated?'bad':'',on:ISSUEQ.state==='escalated',cta:'chuja ›',go:pick('escalated')})
+      +tile('Yametatuliwa',money(c.resolved||0),'jumla',{color:'ok',on:ISSUEQ.state==='resolved',cta:'onyesha ›',go:pick('resolved')})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +chip('','Idara zote / All',0)+(d.departments||[]).map(function(k){ return chip(k,issueDept(k),byDept[k]||0); }).join('')
+      +'<span style="flex:1"></span>'
+      +'<button class="btn sm ghost" id="isqAll">'+(ISSUEQ.state==='all'?'Yasiyotatuliwa tu / Unresolved only':'Zote hata zilizotatuliwa / Include resolved')+'</button>'
+      +(BOOT.readOnly?'':'<button class="btn sm" id="isqNew">+ Ingiza suala / Log an issue</button>')
+      +'</div>'
+      +(rows.length?issueTable(rows,true):'<div class="mut">Hakuna suala hapa. / Nothing here.</div>');
+    wireTiles(m);
+    [].slice.call(m.querySelectorAll('[data-isq]')).forEach(function(b){
+      b.onclick=function(){ ISSUEQ.department=b.getAttribute('data-isq'); if(TAB==='issues') drawIssues(m); };
+    });
+    $('#isqAll').onclick=function(){ ISSUEQ.state=(ISSUEQ.state==='all'?'':'all'); if(TAB==='issues') drawIssues(m); };
+    var nw=$('#isqNew');
+    if(nw) nw.onclick=function(){
+      drawer('<h3>Ingiza suala / Log an issue</h3><div class="sub">Kwa niaba ya mteja au mtu aliyepiga simu. / On behalf of a customer or a caller.</div>'+issueRaiseHtml(d,'isn'));
+      issueRaiseWire('isn', function(){ closeDrawer(); if(TAB==='issues') drawIssues(m); });
+    };
+    [].slice.call(m.querySelectorAll('[data-isv]')).forEach(function(b){
+      b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-isv'); })[0]; if(r) issueDrawer(m, r); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+/* THE LOG BOOK (GD SOP B.3 "record the resolution and closing date"; IT SOP C.4 "register the
+   log book of the resolved matter"). A period by the date raised, this month by default, with
+   the numbers asked across a desk: how many, how many still open, how long they take, and the
+   oldest thing still waiting. */
+var ISSUER={from:'',to:'',department:'',status:''};
+function drawIssueRep(m){
+  if(!ISSUER.from&&!ISSUER.to&&!ISSUER.explicit){ var mr=monthRange_(); ISSUER.from=mr.from; ISSUER.to=mr.to; }
+  m.innerHTML='<div class="sk"></div>';
+  srv('issueReport',ISSUER).then(function(d){
+    if(d.notReady){ m.innerHTML=issueNotReady(); return; }
+    var rows=d.rows||[], t=d.totals||{}, byDept=t.byDept||[];
+    var pick=function(k){ return function(){ ISSUER.status=(ISSUER.status===k?'':k); if(TAB==='issuerep') drawIssueRep(m); }; };
+    m.innerHTML='<div class="tiles">'
+      +tile('Masuala',money(t.count||0),'yaliyoletwa kwenye kipindi hiki',{on:ISSUER.status==='',cta:ISSUER.status===''?'yote':'onyesha yote ›',go:function(){ ISSUER.status=''; if(TAB==='issuerep') drawIssueRep(m); }})
+      +tile('Wazi',money(t.open||0),'hayajaanza',{color:t.open?'warn':'',on:ISSUER.status==='open',cta:'chuja ›',go:pick('open')})
+      +tile('Yanasubiri',money(t.waiting||0),'jibu la mtu mwingine',{on:ISSUER.status==='waiting',cta:'chuja ›',go:pick('waiting')})
+      +tile('Yamepandishwa',money(t.escalated||0),'kwa GM',{color:t.escalated?'bad':'',on:ISSUER.status==='escalated',cta:'chuja ›',go:pick('escalated')})
+      +tile('Yametatuliwa',money(t.resolved||0),'wastani siku '+money(t.avgDays||0)+' kutatua',{color:'ok',on:ISSUER.status==='resolved',cta:'chuja ›',go:pick('resolved')})
+      +tile('Kongwe zaidi',money(t.oldestOpenDays||0),'siku — suala la zamani zaidi bado wazi',{color:(t.oldestOpenDays||0)>=7?'bad':''})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<span class="mut" style="font-size:12px">Tarehe ya kuletwa:</span>'
+      +'<input id="isrFrom" class="inp" type="date" style="width:auto" value="'+esc(ISSUER.from||'')+'">'
+      +'<input id="isrTo" class="inp" type="date" style="width:auto" value="'+esc(ISSUER.to||'')+'">'
+      +'<select id="isrDept" class="inp" style="width:auto"><option value="">Idara zote / All departments</option>'
+      +(d.departments||[]).map(function(k){ return '<option value="'+esc(k)+'"'+(ISSUER.department===k?' selected':'')+'>'+esc(issueDept(k))+'</option>'; }).join('')+'</select>'
+      +'<select id="isrSt" class="inp" style="width:auto">'
+      +[['','Hali zote / All'],['open','Wazi / Open'],['waiting','Yanasubiri / Waiting'],['escalated','Yamepandishwa / Escalated'],['resolved','Yametatuliwa / Resolved']].map(function(k){
+        return '<option value="'+k[0]+'"'+(ISSUER.status===k[0]?' selected':'')+'>'+k[1]+'</option>'; }).join('')+'</select>'
+      +'<button class="btn sm" id="isrGo">Chuja / Filter</button>'
+      +'<button class="btn sm ghost" id="isrClr">Mwezi huu / This month</button>'
+      +'<button class="btn sm ghost" id="isrAll">Tarehe zote / All dates</button>'
+      +'</div>'
+      +(byDept.length?'<div class="scroll" style="margin-bottom:10px"><table><thead><tr><th>DEPARTMENT</th><th class="r">RAISED</th><th class="r">STILL OPEN</th><th class="r">RESOLVED</th></tr></thead><tbody>'
+        +byDept.map(function(x){ return '<tr><td>'+esc(issueDept(x.department))+'</td><td class="r">'+money(x.count)+'</td><td class="r'+(x.open?' bad':'')+'">'+money(x.open)+'</td><td class="r">'+money(x.resolved)+'</td></tr>'; }).join('')
+        +'</tbody></table></div>':'')
+      +(rows.length?'<div class="scroll"><table><thead><tr>'
+        +'<th>RAISED</th><th>TITLE</th><th>KIND</th><th>DEPARTMENT</th><th>ABOUT</th><th>RAISED BY</th><th>STATUS</th><th class="r">DAYS</th>'
+        +'<th>ASSIGNED</th><th>REFERRED</th><th>RESOLVED BY</th><th>RESOLUTION</th><th class="noxl"></th></tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
+            +'<td><b>'+esc(r.title||'—')+'</b></td><td>'+esc(issueKind(r.kind))+'</td>'
+            +'<td>'+esc(issueDept(r.department))+'</td><td>'+issueAbout(r)+'</td>'
+            +'<td>'+esc(r.staffName||'—')+'<div class="mut" style="font-size:10px">'+esc(r.staffRole||'')+'</div></td>'
+            +'<td>'+issueStatusChip(r)+'</td><td class="r">'+money(r.ageDays||0)+'</td>'
+            +'<td>'+esc(r.assignedTo||'—')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.referredTo||'')+(r.externalRef?' <span class="mut">'+esc(r.externalRef)+'</span>':'')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.resolvedBy||'—')+(r.resolvedAt?'<div class="mut" style="font-size:10px">'+esc(advWhen(r.resolvedAt))+'</div>':'')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.resolution||'')+'</td>'
+            +'<td class="r noxl"><button class="btn sm ghost" data-isv="'+esc(r.id)+'">Maelezo</button></td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">Hakuna suala kwenye kipindi hiki. / No issues in this period.</div>');
+    wireTiles(m);
+    $('#isrGo').onclick=function(){ ISSUER={from:$('#isrFrom').value,to:$('#isrTo').value,department:$('#isrDept').value,status:$('#isrSt').value,explicit:true}; if(TAB==='issuerep') drawIssueRep(m); };
+    $('#isrClr').onclick=function(){ var r=monthRange_(); ISSUER={from:r.from,to:r.to,department:'',status:'',explicit:true}; if(TAB==='issuerep') drawIssueRep(m); };
+    $('#isrAll').onclick=function(){ ISSUER={from:'',to:'',department:'',status:'',explicit:true}; if(TAB==='issuerep') drawIssueRep(m); };
+    [].slice.call(m.querySelectorAll('[data-isv]')).forEach(function(b){
+      b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-isv'); })[0]; if(r) issueDrawer(m, r); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 /* ---------- stock accountability ----------
    "the stock is too large and hoop agents are stealing stock"
 
@@ -5515,6 +5801,7 @@ function drawCodes(m){
             fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',movement:'Stock movement',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
+            issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
             +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';
@@ -5706,7 +5993,12 @@ function drawSettings(m){
       +'<b>IMPREST_ADMIN_EMAIL</b>: anayepokea maombi mapya ya imprest. <b>IMPREST_CEO_EMAIL</b>: nakala ya CEO ya kila imprest iliyoidhinishwa. '
       +'<b>HR_EMAIL</b>: maombi mapya ya likizo. <b>EMAIL_FROM</b>: mtumaji kwenye domain iliyothibitishwa Resend (mfano <i>HOOPLOAN &lt;no-reply@hoop.co.tz&gt;</i>); ikiwa tupu Resend hutuma kwa anwani ya mmiliki wa akaunti ya Resend TU. '
       +'Anwani kadhaa: tenganisha kwa comma. Tupu = hakuna email; ombi bado linaingia kwenye pane. Kutuma kunahitaji RESEND_API_KEY kwenye Vercel. '
-      +'/ Imprest and leave notices go to these addresses; blank means no email is sent and the request still lands in its pane. Sending needs RESEND_API_KEY set on the deployment.</div>'
+      +'/ Imprest and leave notices go to these addresses; blank means no email is sent and the request still lands in its pane. Sending needs RESEND_API_KEY set on the deployment. '
+      /* ISSUES route by department, so the one setting is several lines. A line that does not
+         parse is ignored, never refused: a typo here must not stop an issue being filed. */
+      +'<b>ISSUES_EMAIL</b>: mstari mmoja kwa kila idara, <i>IDARA=anwani,anwani</i> (IT=it@…, STORE=stoo@…, FINANCE=…, HR=…, CREDIT=…, SALES=…, GENERAL_DUTY=…, ADMIN=…); idara isiyo na mstari haipati email. '
+      +'<b>GM_EMAIL</b>: anayeambiwa suala likipandishwa (escalated). '
+      +'/ ISSUES_EMAIL is one line per department, DEPARTMENT=address,address; GM_EMAIL hears about escalations.</div>'
       /* THE LOCK SCREEN IS WRITTEN HERE, so the shape it makes is drawn here. Nobody sees
          that screen in the course of ordinary work -- it takes a provisioned handset and a
          lock order to appear at all -- so somebody editing DEVICE_LOCK_MESSAGE is otherwise

@@ -497,3 +497,27 @@ old trip. Receipts are shrunk on the phone (1024px JPEG, ~60–120KB), refused a
 server, stored in their own table and fetched per request — no list ever carries a photo. The
 one-week rule on the leave form is **flagged** for HR, never enforced, because the form's own
 exceptions (illness, bereavement) make it HR's call.
+
+## 14. SHIPPED 2026-09-08: issues — one log for everything somebody has to chase
+
+Four SOPs (RSM C, Credit C, IT C, General Duty B) describe the same shape, so it is one table
+and three navs. The full story is [`docs/ISSUES.md`](ISSUES.md); the short version:
+
+| nav | pane | who |
+|---|---|---|
+| `issuereq` | Toa taarifa ya suala / Raise an issue | everybody |
+| `issues` | Dawati la masuala / Issues desk | whoever works issues — ONE grant, a department chip to narrow |
+| `issuerep` | Ripoti ya masuala / Issues report | the CEO and department heads |
+
+**Do, in this order:**
+
+1. Run `db/migrations/RUN-ME-2026-09-08-issues.sql` in Supabase — every pane names it until
+   it is run.
+2. Tick the three navs on the right roles in Access codes.
+3. Optional email: Settings → `ISSUES_EMAIL` (one line per department, `IT=addr,addr`) and
+   `GM_EMAIL` for escalations. Blank means no email; the desk is the record either way.
+
+The department is a **label on the row**, never a nav: the rule since the advance was
+simplified is one queue, one grant. A customer's complaint is an issue whose subject is an
+IMEI, and the call card lists those above the customer's history so the officer sees an open
+complaint before dialling.

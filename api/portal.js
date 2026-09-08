@@ -64,6 +64,10 @@ AUDITED.add('impRoleSave');
 AUDITED.add('impRoleDelete');
 AUDITED.add('leaveRequest');
 AUDITED.add('leaveDecide');
+/* ISSUES -- who raised what, and who moved it. `id` and `department` ride along (KEEP carries
+   id; the department is not a payload). The text of the issue never reaches the log. */
+AUDITED.add('issueRaise');
+AUDITED.add('issueUpdate');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -102,6 +106,9 @@ const EDITABLE_SETTINGS = [
      the panes are the record and work without these; see api/_lib/mail.js. EMAIL_FROM is the
      sender, and needs a domain verified with the provider before mail stops landing in spam. */
   'IMPREST_ADMIN_EMAIL', 'IMPREST_CEO_EMAIL', 'HR_EMAIL', 'EMAIL_FROM',
+  /* ISSUES_EMAIL is several lines of DEPARTMENT=address so each department hears about its
+     own issues; GM_EMAIL hears about escalations. See the issues migration. */
+  'ISSUES_EMAIL', 'GM_EMAIL',
 ];
 
 /* =======================================================================================
@@ -183,7 +190,12 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    impreq asks, impappr decides (and keeps the per-role accommodation rates), imprep is the
    CEO's review copy -- logs, retirements, widgets. leavereq asks, leaveappr is HR's desk,
    leaverep is the report the CEO, HR and Finance read. */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'staff', 'codes', 'settings'];
+/* ISSUES: raise, work, report -- the same three-nav shape. issuereq is anybody who may raise
+   one (an RSM, an officer); issues is the DESK, one nav for whoever works them, with the
+   department as a filter rather than a nav each; issuerep is the log book the CEO reads.
+     "Log every issue raised by an agent or team leader using the designated complaint
+      link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -403,6 +415,54 @@ const leaveRow = (r, me) => ({
 });
 /* Pending first (a queue is a worklist), then newest. Shared by every queue and log here. */
 const pendingFirst = (x, y) => (x.status === 'pending' ? 0 : 1) - (y.status === 'pending' ? 0 : 1)
+  || (y.at || 0) - (x.at || 0);
+
+/* ---------- ISSUES: the shapes the three panes agree on ---------- */
+const ISSUE_NOT_READY = 'Jedwali la masuala halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-08-issues.sql kwenye Supabase. '
+  + '/ The issues table has not been created yet — run that migration first.';
+/* The departments the SOPs name, as labels a desk filters on. ADMIN is for the things only
+   the owner decides. Held here and mirrored in the migration's CHECK, so a label the server
+   would refuse is never offered on the form. */
+const ISSUE_DEPTS = ['STORE', 'FINANCE', 'IT', 'HR', 'CREDIT', 'SALES', 'GENERAL_DUTY', 'ADMIN'];
+const ISSUE_KINDS = ['issue', 'complaint', 'document', 'performance', 'system'];
+const ISSUE_SUBJECTS = ['imei', 'agent', 'receipt', 'system', 'other'];
+const ISSUE_STATES = ['open', 'waiting', 'escalated', 'resolved'];
+const ISSUE_COLS = 'id, raised_at, staff_code, staff_name, staff_role, department, kind, subject_type, '
+  + 'subject, title, details, contact, verified, referred_to, external_ref, status, assigned_to, '
+  + 'resolution, escalated_by, escalated_at, resolved_by, resolved_at, updated_by, updated_at';
+const issueRow = (r, me, nowMs) => {
+  const at = r.raised_at ? Date.parse(r.raised_at) : null;
+  const closed = r.resolved_at ? Date.parse(r.resolved_at) : null;
+  return {
+    id: String(r.id),
+    at,
+    mine: !!(me && r.staff_code && String(r.staff_code) === String(me)),
+    staffName: r.staff_name || '', staffRole: r.staff_role || '',
+    department: r.department || '', kind: r.kind || 'issue',
+    subjectType: r.subject_type || '', subject: r.subject || '',
+    title: r.title || '', details: r.details || '', contact: r.contact || '',
+    verified: !!r.verified, referredTo: r.referred_to || '', externalRef: r.external_ref || '',
+    status: r.status || 'open', assignedTo: r.assigned_to || '', resolution: r.resolution || '',
+    escalatedBy: r.escalated_by || '', escalatedAt: r.escalated_at ? Date.parse(r.escalated_at) : null,
+    resolvedBy: r.resolved_by || '', resolvedAt: closed,
+    updatedBy: r.updated_by || '', updatedAt: r.updated_at ? Date.parse(r.updated_at) : null,
+    // How long it has been open, or was open: the number a desk sorts by.
+    ageDays: at ? Math.max(0, Math.round(((closed || nowMs || Date.now()) - at) / 86400000)) : 0,
+  };
+};
+/* ISSUES_EMAIL is lines (or semicolons) of DEPARTMENT=address,address. Anything that does not
+   parse is ignored rather than refused: this is a courtesy setting, and a typo in it must
+   never stop an issue being filed. */
+function issueDeptEmails(value, dept) {
+  const want = K(dept);
+  for (const line of String(value || '').split(/[\n;]/)) {
+    const m = /^\s*([A-Za-z_ ]+)\s*[=:]\s*(.+)$/.exec(line);
+    if (m && K(m[1]).replace(/ /g, '_') === want) return m[2].trim();
+  }
+  return '';
+}
+const issueOpenFirst = (x, y) => (x.status === 'resolved' ? 1 : 0) - (y.status === 'resolved' ? 1 : 0)
   || (y.at || 0) - (x.at || 0);
 
 const SUSPEND_NOT_READY = 'Kusimamisha mtu hakujawekwa bado. Endesha '
@@ -3317,6 +3377,266 @@ const FNS = {
         approvedDays: approved.reduce((s, r) => s + (r.workingDays || 0), 0),
         shortNotice: inPeriod.filter(r => r.shortNotice).length,
         onLeaveToday: all.filter(away).length,
+      } };
+  },
+
+  /* =====================================================================================
+     ISSUES -- raise, work, report.
+     =====================================================================================
+       RSM SOP C  "Log every issue raised by an agent or team leader ... which routes the issue
+                   to the appropriate department ... Escalate unresolved or complex issues to
+                   the General Manager"
+       Credit C   "Register the complaint on the complaints form ... refer the matter to the
+                   WATU Credit Department where applicable"
+       IT C       "log them with the WATU support system and Samsung shop ... Register the log
+                   book of the resolved matter"
+       GD B       "Maintain a log of all pending tasks, documents, and system entries ...
+                   Record the resolution and closing date"
+
+     One table, three navs. The DEPARTMENT is a label the desk filters on, never a nav of its
+     own -- the owner's rule since the advance was simplified: one queue, one grant. */
+
+  /** Anybody who may raise, or anybody who works the desk (a desk logs on a caller's behalf --
+      that is what the complaints form is). */
+  async issueRaise(db, user, args) {
+    requireAnyNav(user, ['issuereq', 'issues']);
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    const department = K(a.department).replace(/ /g, '_');
+    if (!ISSUE_DEPTS.includes(department)) bad('Chagua idara. / Choose a department.');
+    const kind = String(a.kind || 'issue').trim().toLowerCase();
+    if (!ISSUE_KINDS.includes(kind)) bad('Aina ya suala si sahihi. / Unknown kind of issue.');
+    const subjectType = String(a.subjectType || '').trim().toLowerCase();
+    if (subjectType && !ISSUE_SUBJECTS.includes(subjectType)) bad('Aina ya kitu si sahihi. / Unknown subject type.');
+    const subject = S(a.subject, 120);
+    if (subjectType && subjectType !== 'other' && subjectType !== 'system' && !subject) {
+      bad('Andika IMEI, jina la ajenti au namba ya risiti. / Give the IMEI, agent or receipt number.');
+    }
+    const title = S(a.title, 160);
+    if (!title) bad('Andika kichwa cha suala. / Give the issue a title.');
+    const at = new Date().toISOString();
+    const row = {
+      raised_at: at, updated_at: at,
+      staff_code: user.code || null, staff_name: user.name || '', staff_role: user.role || '',
+      department, kind, subject_type: subjectType || null, subject: subject || null,
+      title, details: S(a.details, 4000) || null, contact: S(a.contact, 60) || null,
+      status: 'open', updated_by: user.name || '',
+    };
+    const { data, error } = await db.from('issues').insert([row]).select('id');
+    if (error) {
+      if (tableMissing(error)) bad(ISSUE_NOT_READY);
+      throw new Error(error.message);
+    }
+    const id = data && data[0] ? String(data[0].id) : null;
+    /* THE NUDGE to the department, best effort, after the row exists. */
+    let to = '';
+    try {
+      const { data: s } = await db.from('settings').select('value').eq('key', 'ISSUES_EMAIL').maybeSingle();
+      to = issueDeptEmails(s && s.value, department);
+    } catch (e) { to = ''; }
+    const mail = to ? await sendMail(db, { to,
+      subject: 'HOOPLOAN — suala jipya / new issue (' + department + '): ' + title,
+      html: noticeHtml('Suala jipya / New issue — ' + department, [
+        ['Kichwa / Title', title], ['Aina / Kind', kind],
+        ['Kuhusu / About', (subjectType ? subjectType + ' ' : '') + (subject || '—')],
+        ['Ameleta / Raised by', user.name || ''], ['Maelezo / Details', String(row.details || '').slice(0, 400)],
+      ], 'Fungua Dawati la masuala kulifanyia kazi. / Open the issues desk to work it.') })
+      : { sent: false, reason: 'ISSUES_EMAIL haina ' + department + ' / no address set for ' + department };
+    return { ok: true, id, department, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
+  },
+
+  /** The raiser's own issues, and only their own. */
+  async issueMine(db, user) {
+    requireNav(user, 'issuereq');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('issues').select(ISSUE_COLS).eq('staff_code', user.code || '~none~'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, departments: ISSUE_DEPTS, kinds: ISSUE_KINDS, subjects: ISSUE_SUBJECTS };
+    }
+    return { ok: true, departments: ISSUE_DEPTS, kinds: ISSUE_KINDS, subjects: ISSUE_SUBJECTS,
+      rows: rows.map(r => issueRow(r, user.code)).sort(issueOpenFirst) };
+  },
+
+  /** THE DESK. Every issue, open first; counts over the whole table and per department so the
+      chips say where the work is before the list is narrowed. */
+  async issueQueue(db, user, args) {
+    requireNav(user, 'issues');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('issues').select(ISSUE_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, departments: ISSUE_DEPTS, kinds: ISSUE_KINDS, subjects: ISSUE_SUBJECTS,
+        counts: { open: 0, waiting: 0, escalated: 0, resolved: 0, byDept: {} } };
+    }
+    const all = rows.map(r => issueRow(r, user.code));
+    const dept = K(a.department).replace(/ /g, '_');
+    const want = String(a.state || '').trim();
+    const shown = all
+      .filter(r => !dept || r.department === dept)
+      .filter(r => want === 'all' ? true : want ? r.status === want : r.status !== 'resolved')
+      .sort(issueOpenFirst);
+    const byDept = {};
+    for (const d of ISSUE_DEPTS) byDept[d] = all.filter(r => r.department === d && r.status !== 'resolved').length;
+    return { ok: true, departments: ISSUE_DEPTS, kinds: ISSUE_KINDS, subjects: ISSUE_SUBJECTS,
+      counts: {
+        open: all.filter(r => r.status === 'open').length,
+        waiting: all.filter(r => r.status === 'waiting').length,
+        escalated: all.filter(r => r.status === 'escalated').length,
+        resolved: all.filter(r => r.status === 'resolved').length,
+        byDept,
+      },
+      rows: shown };
+  },
+
+  /** The conversation on one issue. A raiser sees only their own; the desk and the report see any. */
+  async issueNotes(db, user, args) {
+    requireAnyNav(user, ['issuereq', 'issues', 'issuerep']);
+    const id = String((args && args.id) || '').trim();
+    if (!isUuid(id)) bad('Suala halijachaguliwa. / No issue chosen.');
+    const navs = navsFor(user);
+    if (!navs.includes('issues') && !navs.includes('issuerep')) {
+      let own;
+      try {
+        own = await fetchAll(() => db.from('issues').select('id, staff_code').eq('id', id));
+      } catch (e) {
+        if (!tableMissing(e)) throw e;
+        return { ok: true, notes: [], notReady: true };
+      }
+      const r = own.find(x => String(x.id) === id);
+      if (!r || String(r.staff_code || '') !== String(user.code || '')) bad('Suala halipo. / That issue no longer exists.');
+    }
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('issue_notes').select('at, by_name, note, change').eq('issue_id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, notes: [] };
+    }
+    return { ok: true, notes: rows.map(n => ({ at: n.at ? Date.parse(n.at) : null, by: n.by_name || '',
+      note: n.note || '', change: n.change || '' })).sort((x, y) => (x.at || 0) - (y.at || 0)) };
+  },
+
+  /** MOVE IT. The desk changes status, assignment, references and the verified tick, and
+      writes the note that explains the move; a raiser may only add a note to their own issue
+      ("here is the document"). Resolving needs a resolution; escalating tells the GM. */
+  async issueUpdate(db, user, args) {
+    requireAnyNav(user, ['issuereq', 'issues']);
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Suala halijachaguliwa. / No issue chosen.');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('issues').select(ISSUE_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(ISSUE_NOT_READY);
+    }
+    const row = rows.find(r => String(r.id) === id);
+    const desk = navsFor(user).includes('issues');
+    /* NOT YOURS reads as NOT THERE, and a raiser who is not the desk may only talk. */
+    if (!row || (!desk && String(row.staff_code || '') !== String(user.code || ''))) bad('Suala halipo. / That issue no longer exists.');
+    const note = S(a.note, 2000);
+    const at = new Date().toISOString();
+    const patch = { updated_by: user.name || '', updated_at: at };
+    let change = null;
+    if (desk) {
+      if (a.status != null && a.status !== '') {
+        const status = String(a.status).trim().toLowerCase();
+        if (!ISSUE_STATES.includes(status)) bad('Hali si sahihi. / Unknown status.');
+        if (status !== row.status) {
+          change = row.status + '>' + status;
+          patch.status = status;
+          if (status === 'resolved') {
+            const resolution = S(a.resolution, 2000) || String(row.resolution || '');
+            if (!resolution) bad('Andika jinsi lilivyotatuliwa. / Say how it was resolved.');
+            patch.resolution = resolution; patch.resolved_by = user.name || ''; patch.resolved_at = at;
+          } else if (row.status === 'resolved') {
+            // Reopened: the closing stamps go, the resolution text stays as history.
+            patch.resolved_by = null; patch.resolved_at = null;
+          }
+          if (status === 'escalated') { patch.escalated_by = user.name || ''; patch.escalated_at = at; }
+        }
+      }
+      if (a.resolution != null && !patch.resolution && S(a.resolution, 2000)) patch.resolution = S(a.resolution, 2000);
+      if (a.assignedTo != null) patch.assigned_to = S(a.assignedTo, 80) || null;
+      if (a.referredTo != null) patch.referred_to = S(a.referredTo, 60) || null;
+      if (a.externalRef != null) patch.external_ref = S(a.externalRef, 80) || null;
+      if (a.verified != null) patch.verified = a.verified === true;
+    }
+    if (!note && !change && Object.keys(patch).length === 2) bad('Hakuna kilichobadilika. / Nothing to save.');
+    /* GUARDED on what was read, so two desks cannot silently overwrite each other's move. */
+    const { data, error } = await db.from('issues').update(patch).eq('id', id).eq('updated_at', row.updated_at).select('id');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) bad('Suala hili limebadilishwa na mtu mwingine sasa hivi — lifungue upya. / Somebody else just changed this issue; reopen it.');
+    if (note || change) {
+      const { error: nErr } = await db.from('issue_notes').insert([{ issue_id: id, at, by_code: user.code || null,
+        by_name: user.name || '', note: note || (change ? change.replace('>', ' → ') : ''), change }]);
+      if (nErr) throw new Error(nErr.message);
+    }
+    let mail = { sent: false, reason: '' };
+    if (patch.status === 'escalated') {
+      mail = await sendMail(db, { toKey: 'GM_EMAIL',
+        subject: 'HOOPLOAN — suala limepandishwa / issue escalated (' + row.department + '): ' + (row.title || ''),
+        html: noticeHtml('Suala limepandishwa / Issue escalated', [
+          ['Kichwa / Title', row.title || ''], ['Idara / Department', row.department || ''],
+          ['Kuhusu / About', (row.subject_type ? row.subject_type + ' ' : '') + (row.subject || '—')],
+          ['Ameleta / Raised by', row.staff_name || ''], ['Amepandisha / Escalated by', user.name || ''],
+          ['Maelezo / Note', note || '—'],
+        ], 'Fungua Dawati la masuala. / Open the issues desk.') });
+    }
+    return { ok: true, id, status: patch.status || row.status, change, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
+  },
+
+  /** THE LOG BOOK. A period by the date raised, every department, with the widgets the CEO
+      and a department head ask across a desk: how many, how many still open, how long they
+      take, and where the oldest open one sits. */
+  async issueReport(db, user, args) {
+    requireNav(user, 'issuerep');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('issues').select(ISSUE_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, totals: {}, departments: ISSUE_DEPTS };
+    }
+    const from = isDay(a.from) ? String(a.from) : null;
+    const to = isDay(a.to) ? String(a.to) : null;
+    const dept = K(a.department).replace(/ /g, '_');
+    const want = String(a.status || '').trim();
+    const all = rows.map(r => issueRow(r, user.code));
+    const day = ms => new Date(ms).toISOString().slice(0, 10);
+    const inPeriod = all
+      .filter(r => !from || (r.at && day(r.at) >= from))
+      .filter(r => !to || (r.at && day(r.at) <= to))
+      .filter(r => !dept || r.department === dept);
+    const shown = inPeriod.filter(r => !ISSUE_STATES.includes(want) || r.status === want)
+      .sort((x, y) => (y.at || 0) - (x.at || 0));
+    const resolved = inPeriod.filter(r => r.status === 'resolved');
+    const open = inPeriod.filter(r => r.status !== 'resolved');
+    const byDept = ISSUE_DEPTS.map(d => ({ department: d,
+      count: inPeriod.filter(r => r.department === d).length,
+      open: inPeriod.filter(r => r.department === d && r.status !== 'resolved').length,
+      resolved: inPeriod.filter(r => r.department === d && r.status === 'resolved').length,
+    })).filter(x => x.count);
+    return { ok: true, rows: shown, departments: ISSUE_DEPTS,
+      totals: {
+        count: inPeriod.length,
+        open: open.filter(r => r.status === 'open').length,
+        waiting: open.filter(r => r.status === 'waiting').length,
+        escalated: open.filter(r => r.status === 'escalated').length,
+        resolved: resolved.length,
+        // Mean days from raised to resolved, for what was resolved in the period.
+        avgDays: resolved.length ? Math.round(resolved.reduce((s, r) => s + r.ageDays, 0) / resolved.length) : 0,
+        oldestOpenDays: open.reduce((m, r) => Math.max(m, r.ageDays), 0),
+        byDept,
       } };
   },
 
