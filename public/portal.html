@@ -1419,7 +1419,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   targetSave:1, targetDelete:1, staffManager:1,
   // Commission: a re-sent build would rewrite a sheet somebody is reading; a re-sent PAY is
   // the one thing SOP A.6 exists to prevent.
-  commBuild:1, commDecide:1, commPay:1, commRateSave:1, commRateDelete:1};
+  commBuild:1, commDecide:1, commPay:1, commRateSave:1, commRateDelete:1,
+  // The advance rules: paying twice and deducting twice are exactly what the stamps prevent.
+  advPay:1, advDeduct:1, salarySave:1, salaryDelete:1};
 function srv(fn,args,tries){
   tries=tries||0;
   busy(true);
@@ -3757,11 +3759,25 @@ function drawAdvReq(m){
       +'<label class="lbl">Namba ya akaunti / Account number</label>'
       +'<input id="avAcct" class="inp" placeholder="0000000000">'
       +'<button class="btn w" id="avSend" style="margin-top:10px">Tuma ombi / Send request</button>'
+      +'<div id="avRule" class="mut" style="font-size:11.5px;margin-top:8px"></div>'
       +'<div class="mut" style="font-size:11px;margin-top:8px">Ombi likishatumwa linakwenda kwa '
       +'anayeidhinisha. Hutaweza kulibadilisha. / Once sent it goes to an approver and cannot be edited.</div>'
       +'</div>'
       +'<h3 style="margin:18px 0 6px">Maombi yangu / My requests</h3>'
       +(rows.length?advTable(rows,false):'<div class="mut">Bado hujaomba advance. / No requests yet.</div>');
+    /* FINANCE SOP G.4 SAID OUT LOUD, BEFORE THE BUTTON. The server flags a late request rather
+       than refusing it, so the only fair thing the form can do is tell the person what the
+       flag will say. The deadline day comes from the server, never a 15 written in here. */
+    var ruleLine=function(){
+      var el=$('#avRule'); if(!el) return;
+      var day=Number(String($('#avDate').value||'').slice(8,10));
+      var dd=d.deadlineDay||15;
+      el.innerHTML=(day&&day>dd)
+        ? '<span style="color:var(--bad)">Tarehe hii ni baada ya tarehe '+money(dd)+' — ombi litawekwa alama ya kuchelewa (SOP G.4). '
+          +'Bado unaweza kutuma. / After the '+money(dd)+'th, so this will be flagged late. You can still send it.</span>'
+        : 'Maombi yanatakiwa kufika kabla ya tarehe '+money(dd)+' ya mwezi (SOP G.4). / Requests are due by the '+money(dd)+'th.';
+    };
+    $('#avDate').onchange=ruleLine; $('#avDate').oninput=ruleLine; ruleLine();
     $('#avSend').onclick=function(){
       var b=this; b.disabled=true;
       srv('advRequest',{
@@ -3780,25 +3796,82 @@ function drawAdvReq(m){
 /* The requester's own list and the approver's queue share a table: the same request, and the
    same words for what happened to it. `act` adds the decide column, which only the approval
    pane passes. */
+/* THE TWO RULES THAT RIDE ON A ROW (Finance SOP G.4 and G.5), as chips.
+   `late` is NULL on every request filed before the rules shipped, and null is not "in time" --
+   nothing was being measured then -- so it draws nothing at all rather than a green tick
+   nobody earned. The cap is the ceiling FROZEN when the request was filed. */
+function advRules(r){
+  var out=[];
+  if(r.late===true) out.push('<span class="chip bad">Late</span>');
+  if(r.capAmount!=null) out.push('<span class="chip">Cap '+money(r.capAmount)+'</span>');
+  else if(r.status==='approved') out.push('<span class="chip warn">Hakuna mshahara / uncapped</span>');
+  return out.join(' ');
+}
+/* `act` is 'decide' on the approval queue and 'pay' on HR's report -- two different jobs on
+   the same table, and neither pane is handed the other's buttons. */
 function advTable(rows, act){
+  var pay=act==='pay';
   return '<div class="scroll"><table><thead><tr>'
     +'<th>Muda / Timestamp</th><th>Jina / Staff</th><th>Wadhifa / Role</th>'
     +'<th>Tarehe / Applied for</th><th class="r">Kiasi / Requested</th>'
-    +'<th>Hali / Status</th><th class="r">Kimekubaliwa / Approved</th><th>Maoni / Comment</th>'
+    +'<th>Hali / Status</th><th class="r">Kimekubaliwa / Approved</th><th>Kanuni / Rules</th>'
+    +(pay?'<th>Malipo / Paid</th><th>Makato / Deducted</th>':'')
+    +'<th>Maoni / Comment</th>'
     +(act?'<th class="noxl"></th>':'')+'</tr></thead><tbody>'
     +rows.map(function(r){
+      var acts='';
+      if(act==='decide'&&r.status==='pending') acts='<button class="btn sm" data-avd="'+esc(r.id)+'">Amua / Decide</button>';
+      if(pay&&!BOOT.readOnly&&r.status==='approved'&&!r.paidAt) acts='<button class="btn sm" data-avp="'+esc(r.id)+'">Lipa / Pay</button>';
+      if(pay&&!BOOT.readOnly&&r.paidAt&&!r.deductedAt) acts='<button class="btn sm ghost" data-avk="'+esc(r.id)+'">Kata / Deduct</button>';
       return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
         +'<td>'+esc(r.staffName||'—')+'</td><td>'+esc(r.staffRole||'—')+'</td>'
         +'<td>'+esc(r.applyDate||'—')+'</td>'
         +'<td class="r">'+money(r.amount||0)+'</td>'
         +'<td>'+advChip(r)+'</td>'
         +'<td class="r">'+(r.approved==null?'—':money(r.approved))+'</td>'
+        +'<td style="font-size:11px">'+advRules(r)+'</td>'
+        +(pay?'<td style="font-size:11px">'+(r.paidAt?esc(advWhen(r.paidAt))+'<div class="mut" style="font-size:10px">'+esc(r.paymentRef||'')+'</div>':'—')+'</td>'
+            +'<td style="font-size:11px">'+(r.deductedAt?esc(r.deductPeriod||'')+'<div class="mut" style="font-size:10px">'+esc(r.deductedBy||'')+'</div>':'—')+'</td>':'')
         +'<td style="font-size:11px">'+esc(r.comment||'')
           +(r.decidedBy?'<div class="mut" style="font-size:10px">'+esc(r.decidedBy)+'</div>':'')+'</td>'
-        +(act?'<td class="r noxl">'+(r.status==='pending'
-          ? '<button class="btn sm" data-avd="'+esc(r.id)+'">Amua / Decide</button>' : '')+'</td>':'')
+        +(act?'<td class="r noxl">'+acts+'</td>':'')
         +'</tr>';
     }).join('')+'</tbody></table></div>';
+}
+/* HR's two stamps (SOP G.6). Wired wherever the report draws the table. */
+function advWirePay(m, redraw){
+  [].slice.call(m.querySelectorAll('[data-avp]')).forEach(function(b){
+    b.onclick=function(){
+      var id=b.getAttribute('data-avp');
+      drawer('<h3>Lipa advance / Record the payment</h3>'
+        +'<div class="sub">Fedha imetoka lini na kwa kumbukumbu gani. / The money going out, and its reference.</div>'
+        +'<label class="lbl">Kumbukumbu ya malipo / Payment reference *</label>'
+        +'<input id="avpRef" class="inp" placeholder="Namba ya muamala">'
+        +'<button class="btn w" id="avpOk" style="margin-top:10px">Rekodi / Record</button>');
+      $('#avpOk').onclick=function(){
+        var sb=this; sb.disabled=true;
+        srv('advPay',{id:id, paymentRef:$('#avpRef').value})
+        .then(function(){ toast('Imelipwa / Paid'); closeDrawer(); redraw(); })
+        .catch(function(e){ sb.disabled=false; toast(safeErr(e), true); });
+      };
+    };
+  });
+  [].slice.call(m.querySelectorAll('[data-avk]')).forEach(function(b){
+    b.onclick=function(){
+      var id=b.getAttribute('data-avk');
+      drawer('<h3>Kata kwenye mshahara / Record the deduction</h3>'
+        +'<div class="sub">Mwezi wa mshahara ambao advance hii imekatwa (SOP G.6). / The payroll month it came off.</div>'
+        +'<label class="lbl">Mwezi wa mshahara / Payroll month *</label>'
+        +'<input id="avkP" class="inp" type="month" value="'+esc(thisMonth_())+'">'
+        +'<button class="btn w" id="avkOk" style="margin-top:10px">Rekodi / Record</button>');
+      $('#avkOk').onclick=function(){
+        var sb=this; sb.disabled=true;
+        srv('advDeduct',{id:id, period:$('#avkP').value})
+        .then(function(){ toast('Imekatwa / Deducted'); closeDrawer(); redraw(); })
+        .catch(function(e){ sb.disabled=false; toast(safeErr(e), true); });
+      };
+    };
+  });
 }
 
 /* THE APPROVAL PANE. Pending first, because the queue is a worklist. */
@@ -3817,7 +3890,7 @@ function drawAdvAppr(m){
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
       +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')
       +'</div>'
-      +(rows.length?advTable(rows,true)
+      +(rows.length?advTable(rows,'decide')
         :'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
     wireTiles(m);
     [].slice.call(m.querySelectorAll('[data-avq]')).forEach(function(b){
@@ -3934,7 +4007,16 @@ function drawAdvRep(m){
         { color:'ok', on:ADVR.status==='approved',
           cta:ADVR.status==='approved'?'imechujwa':'chuja ›',
           go:function(){ ADVR.status=(ADVR.status==='approved'?'':'approved'); drawAdvRep(m); } })
+      /* SOP G.6 IS TWO QUESTIONS, NOT ONE: what has been approved and not yet paid, and what
+         has been paid and not yet taken back by payroll. Each is somebody's job this week. */
+      +tile('Hazijalipwa',money(t.toPay||0),'zimeidhinishwa · TZS '+money(t.toPayAmount||0),
+        {color:t.toPay?'bad':''})
+      +tile('Hazijakatwa',money(t.toDeduct||0),'zimelipwa, hazijarudi kwenye mshahara · TZS '+money(t.toDeductAmount||0),
+        {color:t.toDeduct?'warn':''})
+      +tile('Zilizochelewa',money(t.late||0),'baada ya tarehe ya mwisho (SOP G.4)',{color:t.late?'warn':''})
       +'</div>'
+      +((t.uncapped||0)?'<div class="note warn">Maombi '+money(t.uncapped)+' yaliidhinishwa bila kikomo cha asilimia 40 kwa sababu mshahara haujawekwa (SOP G.5). '
+        +'Weka mishahara kwenye Wafanyakazi ili kanuni itumike. / Approved without the 40% cap because no salary is on file — enter salaries on the Staff pane.</div>':'')
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
       +'<span class="mut" style="font-size:12px">Tarehe ya maombi:</span>'
       +'<input id="avrFrom" class="inp" type="date" style="width:auto" value="'+esc(ADVR.from||'')+'">'
@@ -3955,8 +4037,12 @@ function drawAdvRep(m){
            the pair is the whole point of the sheet: the approver may grant less than was
            asked, and a reader who cannot see both cannot tell that they did. APPROVED AMOUNT
            is the column the bank pays from. */
-        +'<th class="r">REQUESTED AMOUNT</th><th>STATUS</th><th class="r">APPROVED AMOUNT</th><th>COMMENT</th>'
-        +'<th>BANK/CARRIER NAME</th><th>ACCOUNTS NO.</th></tr></thead><tbody>'
+        +'<th class="r">REQUESTED AMOUNT</th><th>STATUS</th><th class="r">APPROVED AMOUNT</th>'
+        /* THE RULES, AND THE TWO STAMPS EITHER SIDE OF THE MONEY (Finance SOP G.4-G.6). A row
+           filed before the rules shipped shows nothing here, which is honest: nothing was
+           being measured then. */
+        +'<th>RULES</th><th>PAID</th><th>DEDUCTED</th><th>COMMENT</th>'
+        +'<th>BANK/CARRIER NAME</th><th>ACCOUNTS NO.</th><th class="noxl"></th></tr></thead><tbody>'
         +rows.map(function(r){
           return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
             +'<td>'+esc(r.staffRole||'—')+'</td><td>'+esc(r.staffName||'—')+'</td>'
@@ -3968,9 +4054,15 @@ function drawAdvRep(m){
                column reads as "pay nothing", which is a different instruction from "there is
                nothing to pay here yet". */
             +'<td class="r">'+(r.status==='approved'?money(r.approved||0):'—')+'</td>'
+            +'<td style="font-size:11px">'+advRules(r)+'</td>'
+            +'<td style="font-size:11px">'+(r.paidAt?esc(advWhen(r.paidAt))+'<div class="mut" style="font-size:10px">'+esc(r.paymentRef||'')+'</div>':'—')+'</td>'
+            +'<td style="font-size:11px">'+(r.deductedAt?esc(r.deductPeriod||'')+'<div class="mut" style="font-size:10px">'+esc(r.deductedBy||'')+'</div>':'—')+'</td>'
             +'<td style="font-size:11px">'+esc(r.comment||'')
               +(r.decidedBy?'<div class="mut" style="font-size:10px">'+esc(r.decidedBy)+'</div>':'')+'</td>'
-            +'<td>'+esc(r.bank||'—')+'</td><td>'+esc(r.account||'—')+'</td></tr>';
+            +'<td>'+esc(r.bank||'—')+'</td><td>'+esc(r.account||'—')+'</td>'
+            +'<td class="r noxl">'+(BOOT.readOnly?''
+              :(r.status==='approved'&&!r.paidAt)?'<button class="btn sm" data-avp="'+esc(r.id)+'">Lipa</button>'
+              :(r.paidAt&&!r.deductedAt)?'<button class="btn sm ghost" data-avk="'+esc(r.id)+'">Kata</button>':'')+'</td></tr>';
         }).join('')+'</tbody></table></div>'
         :'<div class="mut">Hakuna maombi kwenye kipindi hiki. / No requests in this period.</div>');
     wireTiles(m);
@@ -3988,6 +4080,7 @@ function drawAdvRep(m){
     /* `explicit` marks "the user asked for no dates", which is a different state from "not
        filled in yet" -- without it the redraw below would helpfully put this month back. */
     $('#avrAll').onclick=function(){ ADVR={from:'',to:'',status:'',explicit:true}; drawAdvRep(m); };
+    advWirePay(m, function(){ drawAdvRep(m); });
   }).catch(function(e){ paneFailed(m,e); });
 }
 /* THE MONTH IS RESOLVED WHEN THE PANE OPENS, NOT WHEN THE SCRIPT LOADS. Seeding this at load
@@ -6512,6 +6605,57 @@ function drawMove(m){
 }
 
 /* ---------- staff: THE OFFICE, from Sipho's register ---------- */
+/* THE SALARIES BLOCK on the Staff pane (Finance SOP G.5). Its own read and its own box, so a
+   pane that already draws a thousand agents does not carry a salary column nobody asked for --
+   and so a code that holds `staff` sees exactly the figures the 40% cap needs and nothing else.
+   Keyed by ACCESS CODE, because that is what an advance stamps on itself. */
+function drawSalaries(){
+  var box=$('#salaryBox'); if(!box) return;
+  box.innerHTML='<div class="card"><h2>Mishahara / Salaries</h2><div class="sk"></div></div>';
+  srv('salaryList',{}).then(function(d){
+    var rows=d.rows||[], canW=!BOOT.readOnly;
+    box.innerHTML='<div class="card"><h2>Mishahara / Salaries</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Kwa kanuni moja tu: kikomo cha advance ni asilimia '+money(d.maxPct||40)
+      +' ya mshahara wa mwezi (Finance SOP G.5). Bila mshahara, advance inaidhinishwa bila kikomo na ripoti inasema hivyo. '
+      +'/ Read by exactly one rule: the '+money(d.maxPct||40)+'% salary-advance cap. No salary means no cap, and the report says so.</div>'
+      +(d.notReady?'<div class="note bad">Jedwali la mishahara halijatengenezwa bado. Endesha '
+        +'<b>db/migrations/RUN-ME-2026-09-09-advance-rules.sql</b> kwenye Supabase. '
+        +'/ Run that migration first.</div>':'')
+      +(rows.length?'<div class="scroll"><table><thead><tr><th>JINA</th><th>MSIMBO</th><th class="r">MSHAHARA (TZS)</th>'
+        +'<th class="r">KIKOMO CHA ADVANCE</th><th>IMEWEKWA NA</th><th class="noxl"></th></tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr><td><b>'+esc(r.name||'—')+'</b></td><td style="font-size:11px">'+esc(r.code)+'</td>'
+            +'<td class="r">'+money(r.salary)+'</td><td class="r">'+money(r.cap)+'</td>'
+            +'<td style="font-size:11px">'+esc(r.updatedBy||'—')+'</td>'
+            +'<td class="r noxl">'+(canW?'<button class="btn sm ghost" data-sald="'+esc(r.code)+'">Futa</button>':'')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">Hakuna mshahara uliowekwa. / No salaries on file yet.</div>')
+      +(canW?'<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">'
+        +'<input id="salCode" class="inp" style="width:auto" placeholder="Msimbo / Access code">'
+        +'<input id="salName" class="inp" style="width:auto" placeholder="Jina / Name">'
+        +'<input id="salAmt" class="inp" style="width:auto" type="number" min="0" step="1000" placeholder="Mshahara TZS">'
+        +'<button class="btn sm" id="salSave">Hifadhi / Save</button></div>':'')
+      +'</div>';
+    var sb=$('#salSave');
+    if(sb) sb.onclick=function(){
+      var b=this; b.disabled=true;
+      srv('salarySave',{code:$('#salCode').value, name:$('#salName').value, salary:$('#salAmt').value})
+      .then(function(){ toast('Imehifadhiwa / Saved'); drawSalaries(); })
+      .catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+    [].slice.call(box.querySelectorAll('[data-sald]')).forEach(function(b){
+      b.onclick=function(){
+        if(!confirm('Futa mshahara wa msimbo huu? / Remove this salary?')) return;
+        srv('salaryDelete',{code:b.getAttribute('data-sald')})
+        .then(function(){ toast('Umefutwa / Removed'); drawSalaries(); })
+        .catch(function(e){ toast(safeErr(e), true); });
+      };
+    });
+  }).catch(function(e){
+    var b=$('#salaryBox'); if(b) b.innerHTML='<div class="card"><div class="msg bad">'+esc(safeErr(e))+'</div></div>';
+  });
+}
+
 function drawStaff(m){
   m.innerHTML='<div class="card"><h2>Staff</h2><div class="sk"></div></div>';
   srv('staffDirectory').then(function(d){
@@ -6534,7 +6678,8 @@ function drawStaff(m){
           +(canKin?'<td class="mut" style="font-size:11px">'+esc(o.kin||'—')+(o.kinPhone?' · '+esc(o.kinPhone):'')+'</td>':'')
           +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td></tr>';
       }).join(''):'<tr><td colspan="7" class="mut">No staff yet — upload the Agents Register page (saved HTML) at /upload.</td></tr>')
-      +'</tbody></table></div></div><div id="staffCust"></div>';
+      +'</tbody></table></div></div><div id="salaryBox"></div><div id="staffCust"></div>';
+    drawSalaries();
     var rsmNames=(d.staff||[]).filter(function(x){ return /REGIONAL|COUNTRY_SALES/.test(String(x.role||'').toUpperCase().replace(/\s+/g,'_')); })
       .map(function(x){ return x.name; }).filter(Boolean).sort();
     [].slice.call(m.querySelectorAll('[data-mgr]')).forEach(function(b){

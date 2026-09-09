@@ -1909,3 +1909,56 @@ test('portal.html: building a cycle switches the period control between a month 
   const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
   for (const k of ['commission', 'commappr']) assert.match(lbl[0], new RegExp('\\b' + k + ":'[^']+'"));
 });
+
+/* =========================================================================================
+   THE ADVANCE RULES. Finance SOP G.4 the deadline flag, G.5 the 40% cap, G.6 the two stamps.
+   These pin what the server cannot: that a request filed before the rules shipped draws NO
+   chip rather than a green one it never earned, that the form says what the flag will say
+   before the button is pressed, and that HR's two stamps are offered in order.
+   ========================================================================================= */
+test('portal.html: the rules chips never claim more than the row knows', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('advRules', html);
+  // late === true, not truthiness: null means nothing was being measured, which is not "in time".
+  assert.match(fn, /if\(r\.late===true\)/, 'only an actually-late row is chipped late');
+  assert.ok(!/r\.late\?/.test(fn), 'never a bare truthiness test on a tri-state field');
+  assert.match(fn, /r\.capAmount!=null/);
+  assert.match(fn, /r\.status==='approved'\) out\.push\('<span class="chip warn">Hakuna mshahara/,
+    'an approval with no salary on file is named uncapped rather than left blank');
+});
+
+test('portal.html: the request form says what the deadline flag will say, from the server\'s day', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawAdvReq', html);
+  assert.match(fn, /var dd=d\.deadlineDay\|\|15;/, 'the deadline comes from the server, not a 15 typed here');
+  assert.match(fn, /SOP G\.4/);
+  assert.match(fn, /Bado unaweza kutuma|You can still send it/, 'and it is a warning, never a block');
+  assert.match(fn, /\$\('#avDate'\)\.onchange=ruleLine/);
+});
+
+test('portal.html: HR gets Pay then Deduct, in that order, and only where each is legal', () => {
+  const html = read('portal.html');
+  const t = IMP_SRC('advTable', html);
+  assert.match(t, /pay&&!BOOT\.readOnly&&r\.status==='approved'&&!r\.paidAt/, 'Pay: approved and not yet paid');
+  assert.match(t, /pay&&!BOOT\.readOnly&&r\.paidAt&&!r\.deductedAt/, 'Deduct: paid and not yet deducted');
+  assert.match(t, /act==='decide'&&r\.status==='pending'/, 'and the approval queue gets its own button only');
+  const w = IMP_SRC('advWirePay', html);
+  assert.match(w, /srv\('advPay',\{id:id, paymentRef:\$\('#avpRef'\)\.value\}\)/);
+  assert.match(w, /srv\('advDeduct',\{id:id, period:\$\('#avkP'\)\.value\}\)/);
+  assert.match(w, /type="month"/, 'the deduction records a payroll MONTH');
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  for (const f of ['advPay', 'advDeduct', 'salarySave', 'salaryDelete']) {
+    assert.match(nr[1], new RegExp('\\b' + f + ':1'), f + ' is a write');
+  }
+});
+
+test('portal.html: salaries sit behind the staff nav and say what they are for', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawSalaries', html);
+  assert.match(fn, /srv\('salaryList',\{\}\)/);
+  assert.match(fn, /Finance SOP G\.5/, 'the block says the one rule that reads it');
+  assert.match(fn, /d\.maxPct\|\|40/, 'and takes the percentage from the server');
+  assert.match(fn, /RUN-ME-2026-09-09-advance-rules\.sql/);
+  assert.match(fn, /canW=!BOOT\.readOnly/);
+  assert.match(IMP_SRC('drawStaff', html), /drawSalaries\(\);/, 'drawn as part of the staff pane');
+});
