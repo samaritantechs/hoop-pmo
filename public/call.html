@@ -170,6 +170,12 @@ main.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 1
 .factrow{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .factrow:last-child{border-bottom:0}
 .factrow span:first-child{color:var(--mut)}
+/* The company script (CALL_SCRIPT): folded shut, opened by the officer, and wide enough to
+   read a paragraph off. pre-wrap so the lines the office typed are the lines that show. */
+.script-box{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--bg)}
+.script-box summary{cursor:pointer;font-size:13px;font-weight:600;list-style:none}
+.script-box summary::-webkit-details-marker{display:none}
+.script-body{white-space:pre-wrap;font-size:13.5px;line-height:1.5;margin-top:8px}
 .callrow{display:flex;align-items:center;gap:10px;margin-top:8px}
 .callrow .btn{width:auto;flex:1;padding:11px}
 .hist-item{padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px}
@@ -2018,6 +2024,15 @@ function sheetSkeleton(r){
     + '<div class="factrow"><span>Mdhamini / Guarantor</span><span>' + (r.gName ? esc(r.gName)
         + (r.gContact ? ' \u00B7 ' + (telHref(r.gContact)!=='#' ? '<a href="tel:'+telHref(r.gContact)+'">'+esc(r.gContact)+'</a>' : esc(r.gContact)) : '')
         : (r.gContact && telHref(r.gContact)!=='#' ? '<a href="tel:'+telHref(r.gContact)+'">'+esc(r.gContact)+'</a>' : '\u2014')) + '</span></div>'
+    /* THE COMPANY SCRIPT, on the card, above the call buttons.
+         Credit SOP A.3 "Call clients ... using the company script"
+         Credit SOP E.5 "Use the company script when calling clients"
+       Folded shut so it never pushes the customer's facts off a small screen, and absent
+       entirely when CALL_SCRIPT is blank -- an empty box would just teach people to ignore it. */
+    + (S.boot && S.boot.callScript
+        ? '<details class="script-box"><summary>\uD83D\uDDE3 Maneno ya kampuni / Company script</summary>'
+          + '<div class="script-body">' + esc(S.boot.callScript) + '</div></details>'
+        : '')
     + '<div class="callrow">'
     + (cHref!=='#' ? '<a class="btn btn-pri" href="tel:'+cHref+'" data-ref="' + esc(r.ref) + '">\uD83D\uDCDE Mteja \u00B7 ' + esc(r.contact) + '</a>' : '<span class="btn btn-ghost">Hana namba</span>')
     + (r.agentPhone && telHref(r.agentPhone)!=='#' ? '<a class="btn btn-ghost" href="tel:'+telHref(r.agentPhone)+'" data-ref="' + esc(r.ref) + '">\uD83D\uDCDE Agent</a>' : '')
