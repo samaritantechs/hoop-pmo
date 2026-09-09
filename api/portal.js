@@ -91,6 +91,13 @@ AUDITED.add('commDecide');
 AUDITED.add('commPay');
 AUDITED.add('commRateSave');
 AUDITED.add('commRateDelete');
+/* THE ADVANCE RULES (Finance SOP G.6): the money going out and payroll taking it back are two
+   acts on two days, so both are logged. A salary is what the 40% cap is computed from, so who
+   set one is kept too -- KEEP drops the figure itself. */
+AUDITED.add('advPay');
+AUDITED.add('advDeduct');
+AUDITED.add('salarySave');
+AUDITED.add('salaryDelete');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -139,6 +146,7 @@ const EDITABLE_SETTINGS = [
   /* ISSUES_EMAIL is several lines of DEPARTMENT=address so each department hears about its
      own issues; GM_EMAIL hears about escalations. See the issues migration. */
   'ISSUES_EMAIL', 'GM_EMAIL', 'STOCK_EMAIL', 'STOCK_AGING_DAYS', 'STOCK_LOW_ALERT', 'COMMISSION_EMAIL',
+  'ADVANCE_DEADLINE_DAY', 'ADVANCE_MAX_PCT',
 ];
 
 /* =======================================================================================
@@ -277,6 +285,50 @@ function navsFor(user) {
 const ADV_AMOUNTS = [50000, 100000, 150000, 200000];
 const ADV_COLS = 'id, requested_at, staff_code, staff_name, staff_role, apply_date, amount, '
   + 'status, approved_amount, comment, decided_by, decided_at, bank_name, account_no';
+/* THE SAME COLUMNS PLUS THE THREE SOP G RULES. Kept as a separate string, and every read that
+   uses it falls back to the plain one, because these columns arrive with a migration that is
+   run by hand: between the deploy and the paste, a pane that insisted on them would be down. */
+const ADV_COLS_RULES = ADV_COLS + ', late, salary_at_request, cap_amount, paid_at, paid_by, '
+  + 'payment_ref, deducted_at, deducted_by, deduct_period';
+const ADV_QUEUE_COLS_RULES = 'id, requested_at, staff_code, staff_name, staff_role, apply_date, '
+  + 'amount, status, approved_amount, comment, decided_by, decided_at, late, salary_at_request, cap_amount';
+const ADV_RULES_NOT_READY = 'Kanuni za advance hazijawekwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-09-advance-rules.sql kwenye Supabase. '
+  + '/ The advance rule columns do not exist yet — run that migration first.';
+/* A read that wants the rule columns and settles for the row without them. Returns the rows
+   and whether the rules were actually there, so a caller can say so on screen. */
+async function advSelect(db, build, wide, narrow) {
+  try {
+    return { rows: await fetchAll(() => build(wide)), rules: true };
+  } catch (e) {
+    if (!/late|salary_at_request|cap_amount|paid_at|deducted_at|deduct_period|payment_ref/i.test(String(e && e.message))) throw e;
+    return { rows: await fetchAll(() => build(narrow)), rules: false };
+  }
+}
+/* THE TWO NUMBERS SOP G FIXES, as settings with the SOP's own values as the fallback, so an
+   unset key is never a disabled rule. */
+async function advPolicy(db) {
+  const out = { deadlineDay: 15, maxPct: 40 };
+  try {
+    const rows = await fetchAll(() => db.from('settings').select('key, value')
+      .in('key', ['ADVANCE_DEADLINE_DAY', 'ADVANCE_MAX_PCT']));
+    for (const r of rows) {
+      const v = parseInt(String(r.value == null ? '' : r.value).replace(/[^0-9]/g, ''), 10);
+      if (!Number.isFinite(v)) continue;
+      if (r.key === 'ADVANCE_DEADLINE_DAY' && v >= 1 && v <= 31) out.deadlineDay = v;
+      if (r.key === 'ADVANCE_MAX_PCT' && v >= 1 && v <= 100) out.maxPct = v;
+    }
+  } catch (e) { /* the SOP's own numbers stand */ }
+  return out;
+}
+/** The monthly salary on file for one access code, or null when HR has not entered one. */
+async function salaryOf(db, code) {
+  if (!code) return null;
+  try {
+    const { data } = await db.from('staff_salaries').select('monthly_salary').eq('staff_code', code).maybeSingle();
+    return data && data.monthly_salary != null ? num(data.monthly_salary) : null;
+  } catch (e) { return null; }
+}
 /* THE APPROVER'S QUEUE ASKS FOR LESS, because it is answering a smaller question.
    ---------------------------------------------------------------------------------------------
    Deciding an advance needs to know who asked, for how much, and against which date. It does
@@ -688,7 +740,14 @@ const TARGET_NOT_READY = 'Jedwali la malengo halijatengenezwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-09-09-targets.sql kwenye Supabase. '
   + '/ The targets table has not been created yet — run that migration first.';
 const TARGET_SCOPES = ['agent', 'rsm', 'branch', 'company'];
-const isMonth = s => /^\d{4}-\d{2}$/.test(String(s || ''));
+/* A REAL MONTH, not merely something month-shaped. '2026-13' passes a bare \d{2} and there is
+   no date column to catch it afterwards -- period is stored as TEXT in sales_targets, in the
+   commission runs and on a deducted advance -- so a nonsense month would sit in a table for
+   ever and quietly match nothing. Checked here once, for all three. */
+const isMonth = s => {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(s || ''));
+  return !!m && Number(m[2]) >= 1 && Number(m[2]) <= 12;
+};
 /** First and last day of a 'YYYY-MM'. Pure string arithmetic; no timezone is involved in a month. */
 function monthDays(period) {
   const from = period + '-01';
@@ -890,6 +949,18 @@ const advRow = (r, me) => ({
   decidedAt: r.decided_at ? Date.parse(r.decided_at) : null,
   bank: r.bank_name || '',
   account: r.account_no || '',
+  /* THE THREE RULES (Finance SOP G.4-G.6), added 2026-09-09. Every one of these is null on a
+     row filed before the migration, and every screen reads null as "not known" rather than as
+     "no" -- an old request is not a late one just because nobody was stamping lateness yet. */
+  late: r.late == null ? null : !!r.late,
+  salaryAtRequest: r.salary_at_request == null ? null : Number(r.salary_at_request),
+  capAmount: r.cap_amount == null ? null : Number(r.cap_amount),
+  paidAt: r.paid_at ? Date.parse(r.paid_at) : null,
+  paidBy: r.paid_by || '',
+  paymentRef: r.payment_ref || '',
+  deductedAt: r.deducted_at ? Date.parse(r.deducted_at) : null,
+  deductedBy: r.deducted_by || '',
+  deductPeriod: r.deduct_period || '',
 });
 
 function requireNav(user, k) {
@@ -3051,12 +3122,34 @@ const FNS = {
       bank_name: bank.slice(0, 120),
       account_no: account.slice(0, 60),
     };
-    const { error } = await db.from('staff_advances').insert([row]);
+    /* THE TWO RULES THAT ARE DECIDED AT THE ASK (Finance SOP G.4 and G.5).
+       G.4 is a FLAG, never a refusal: a deadline that blocks the form leaves somebody with an
+       emergency and nowhere to go, and the SOP gives the judgement to the approver. Measured
+       against the applicant's OWN date, so a request for the 20th reads as late for ever.
+       G.5's ceiling is frozen here from the salary as it stands today, so a raise next month
+       cannot retroactively justify this approval. Both columns arrive with a hand-run
+       migration, so a failed insert is retried without them rather than refusing the request:
+       an office that cannot ask for an advance because a rule column is missing is worse off
+       than one whose lateness is not yet being recorded. */
+    const policy = await advPolicy(db);
+    const salary = await salaryOf(db, user.code);
+    row.late = Number(applyDate.slice(8, 10)) > policy.deadlineDay;
+    row.salary_at_request = salary;
+    row.cap_amount = salary == null ? null : Math.floor(salary * policy.maxPct / 100);
+    let { error } = await db.from('staff_advances').insert([row]);
+    if (error && /late|salary_at_request|cap_amount/i.test(String(error.message))) {
+      // The rules migration has not been run yet. File the request anyway, unflagged.
+      const bare = { ...row };
+      delete bare.late; delete bare.salary_at_request; delete bare.cap_amount;
+      ({ error } = await db.from('staff_advances').insert([bare]));
+    }
     if (error) {
       if (tableMissing(error)) bad(ADV_NOT_READY);
       throw new Error(error.message);
     }
-    return { ok: true, amount, applyDate };
+    return { ok: true, amount, applyDate, late: !!row.late,
+      salary: salary, cap: row.cap_amount == null ? null : num(row.cap_amount),
+      deadlineDay: policy.deadlineDay, maxPct: policy.maxPct };
   },
 
   /** A requester's own history, and only their own: this pane grants the right to ASK, which
@@ -3064,15 +3157,23 @@ const FNS = {
       signed in with rather than their name, because two people can share a name. */
   async advMine(db, user) {
     requireNav(user, 'advreq');
+    const policy = await advPolicy(db);
     let rows;
     try {
-      rows = await fetchAll(() => db.from('staff_advances').select(ADV_COLS)
-        .eq('staff_code', user.code || '~none~'));
+      rows = (await advSelect(db, cols => db.from('staff_advances').select(cols)
+        .eq('staff_code', user.code || '~none~'), ADV_COLS_RULES, ADV_COLS)).rows;
     } catch (e) {
       if (!tableMissing(e)) throw e;
-      return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS };
+      return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS,
+        deadlineDay: policy.deadlineDay, maxPct: policy.maxPct };
     }
+    /* THE DEADLINE AND THE CEILING TRAVEL WITH THE FORM (Finance SOP G.4, G.5), so the page can
+       say what will happen before somebody presses the button rather than after. The salary
+       itself never goes out: the person is told their ceiling, not what anybody earns. */
+    const salary = await salaryOf(db, user.code);
     return { ok: true, amounts: ADV_AMOUNTS,
+      deadlineDay: policy.deadlineDay, maxPct: policy.maxPct,
+      cap: salary == null ? null : Math.floor(salary * policy.maxPct / 100),
       rows: rows.map(r => advRow(r, user.code)).sort((x, y) => (y.at || 0) - (x.at || 0)) };
   },
 
@@ -3083,7 +3184,8 @@ const FNS = {
     const a = args || {};
     let rows;
     try {
-      rows = await fetchAll(() => db.from('staff_advances').select(ADV_QUEUE_COLS));
+      rows = (await advSelect(db, cols => db.from('staff_advances').select(cols),
+        ADV_QUEUE_COLS_RULES, ADV_QUEUE_COLS)).rows;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS, pending: 0 };
@@ -3126,7 +3228,7 @@ const FNS = {
 
     let rows;
     try {
-      rows = await fetchAll(() => db.from('staff_advances').select(ADV_COLS).eq('id', id));
+      rows = (await advSelect(db, cols => db.from('staff_advances').select(cols).eq('id', id), ADV_COLS_RULES, ADV_COLS)).rows;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       bad(ADV_NOT_READY);
@@ -3167,6 +3269,23 @@ const FNS = {
       if (granted > asked) {
         bad('Huwezi kuidhinisha zaidi ya kilichoombwa. / You cannot approve more than was requested.');
       }
+      /* FINANCE SOP G.5: "The approved advance amount must not exceed 40% of the employee's
+         monthly salary." A LOCK, not a flag -- "must not exceed" is not a suggestion, and this
+         is the one place a number can be checked against it.
+
+         The cap is the one FROZEN on the request when it was filed, not one recomputed now: a
+         raise between the ask and the decision must not quietly widen what was allowed. Where
+         no salary was on file the cap is null and the approval goes through -- the rule cannot
+         be applied to a figure nobody has entered, and refusing every advance until HR fills in
+         a salary table would stop the office rather than protect it. The report says which
+         approvals went through uncapped, so that is a prompt and not a silent pass. */
+      const cap = dev.cap_amount == null ? null : num(dev.cap_amount);
+      if (cap != null && granted > cap) {
+        const policy = await advPolicy(db);
+        bad('Kiasi kinazidi asilimia ' + policy.maxPct + ' ya mshahara (SOP G.5): kikomo ni TZS '
+          + money0(cap) + '. / That exceeds the ' + policy.maxPct + '% salary cap; the ceiling is TZS '
+          + money0(cap) + '.');
+      }
     }
 
     const at = new Date().toISOString();
@@ -3194,9 +3313,10 @@ const FNS = {
   async advReport(db, user, args) {
     requireNav(user, 'advrep');
     const a = args || {};
-    let rows;
+    let rows, hasRules = false;
     try {
-      rows = await fetchAll(() => db.from('staff_advances').select(ADV_COLS));
+      const got = await advSelect(db, cols => db.from('staff_advances').select(cols), ADV_COLS_RULES, ADV_COLS);
+      rows = got.rows; hasRules = got.rules;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, totals: { approved: 0, count: 0 } };
@@ -3220,13 +3340,152 @@ const FNS = {
     const out = inPeriod
       .filter(r => !['pending', 'approved', 'declined'].includes(want) || r.status === want)
       .sort((x, y) => (y.at || 0) - (x.at || 0));
-    return { ok: true, rows: out,
+    /* THE THREE SOP G RULES, AS NUMBERS HR CAN CHASE (G.4, G.5, G.6). Each one counts only
+       what it can honestly count: `late` is null on rows filed before the rules shipped, and an
+       approval with no salary on file is `uncapped` rather than quietly compliant. */
+    const approvedRows = inPeriod.filter(r => r.status === 'approved');
+    return { ok: true, rows: out, hasRules,
       totals: {
         count: inPeriod.length,
         // What the bank run actually comes to. Declined and pending rows contribute nothing,
         // which is the only reading of this number that is safe to hand a cashier.
         approved: inPeriod.reduce((s, r) => s + (r.status === 'approved' ? (r.approved || 0) : 0), 0),
+        late: inPeriod.filter(r => r.late === true).length,
+        uncapped: approvedRows.filter(r => r.capAmount == null).length,
+        // G.6: approved, but the money has not gone out yet.
+        toPay: approvedRows.filter(r => !r.paidAt).length,
+        toPayAmount: approvedRows.filter(r => !r.paidAt).reduce((s, r) => s + (r.approved || 0), 0),
+        // G.6 again: paid, and payroll has not taken it back.
+        toDeduct: approvedRows.filter(r => r.paidAt && !r.deductedAt).length,
+        toDeductAmount: approvedRows.filter(r => r.paidAt && !r.deductedAt).reduce((s, r) => s + (r.approved || 0), 0),
+        deducted: approvedRows.filter(r => r.deductedAt).length,
       } };
+  },
+
+  /** THE MONEY GOING OUT (Finance SOP G.6, first half). Separate from the approval because
+      they happen on different days and by different hands, and a report that cannot tell
+      "approved" from "paid" can chase neither. */
+  async advPay(db, user, args) {
+    requireNav(user, 'advrep');
+    requireWrite(user);
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    const ref = String(a.paymentRef == null ? '' : a.paymentRef).trim().slice(0, 120);
+    if (!ref) bad('Andika kumbukumbu ya malipo. / Give the payment reference.');
+    let rows;
+    try {
+      rows = (await advSelect(db, cols => db.from('staff_advances').select(cols).eq('id', id),
+        ADV_COLS_RULES, ADV_COLS)).rows;
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(ADV_NOT_READY);
+    }
+    const r = rows.find(x => String(x.id) === id);
+    if (!r) bad('Ombi halipo. / That request no longer exists.');
+    if (String(r.status) !== 'approved') bad('Ombi hili halijaidhinishwa. / That request is not approved.');
+    if (r.paid_at) bad('Advance hii tayari imelipwa. / That advance has already been paid.');
+    const at = new Date().toISOString();
+    const { data, error } = await db.from('staff_advances')
+      .update({ paid_at: at, paid_by: user.name || '', payment_ref: ref, updated_at: at })
+      .eq('id', id).eq('status', 'approved').is('paid_at', null).select('id');
+    if (error) {
+      if (/paid_at|payment_ref/i.test(String(error.message))) bad(ADV_RULES_NOT_READY);
+      throw new Error(error.message);
+    }
+    if (!data || !data.length) bad('Advance hii imelipwa na mtu mwingine sasa hivi. / Somebody else just paid this one.');
+    return { ok: true, id, paidAt: Date.parse(at), paymentRef: ref };
+  },
+
+  /** PAYROLL TAKING IT BACK (Finance SOP G.6, second half): "records it for deduction against
+      the employee's next payroll". The month it came off is the fact worth keeping. */
+  async advDeduct(db, user, args) {
+    requireNav(user, 'advrep');
+    requireWrite(user);
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    const period = isMonth(a.period) ? String(a.period) : '';
+    if (!period) bad('Chagua mwezi wa mshahara (YYYY-MM). / Choose the payroll month.');
+    let rows;
+    try {
+      rows = (await advSelect(db, cols => db.from('staff_advances').select(cols).eq('id', id),
+        ADV_COLS_RULES, ADV_COLS)).rows;
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(ADV_NOT_READY);
+    }
+    const r = rows.find(x => String(x.id) === id);
+    if (!r) bad('Ombi halipo. / That request no longer exists.');
+    if (!r.paid_at) bad('Haiwezi kukatwa kabla haijalipwa. / It cannot be deducted before it has been paid.');
+    if (r.deducted_at) bad('Advance hii tayari imekatwa kwenye mshahara. / That advance has already been deducted.');
+    const at = new Date().toISOString();
+    const { data, error } = await db.from('staff_advances')
+      .update({ deducted_at: at, deducted_by: user.name || '', deduct_period: period, updated_at: at })
+      .eq('id', id).is('deducted_at', null).select('id');
+    if (error) {
+      if (/deducted_at|deduct_period/i.test(String(error.message))) bad(ADV_RULES_NOT_READY);
+      throw new Error(error.message);
+    }
+    if (!data || !data.length) bad('Advance hii imekatwa na mtu mwingine sasa hivi. / Somebody else just deducted this one.');
+    return { ok: true, id, deductPeriod: period, deductedAt: Date.parse(at) };
+  },
+
+  /** WHAT PEOPLE EARN, for the one rule that needs it (SOP G.5). Its own pane behind the staff
+      nav, so holding any other pane never means seeing what a colleague is paid. */
+  async salaryList(db, user) {
+    requireNav(user, 'staff');
+    const policy = await advPolicy(db);
+    let rows = [];
+    let notReady = false;
+    try {
+      rows = await fetchAll(() => db.from('staff_salaries')
+        .select('staff_code, staff_name, monthly_salary, updated_by, updated_at'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      notReady = true;
+    }
+    return { ok: true, notReady, maxPct: policy.maxPct, deadlineDay: policy.deadlineDay,
+      /* THE ACCESS CODE IS THE KEY AND NEVER THE ANSWER. It is the credential somebody signs in
+         with, so the list is keyed by it on the way in and identified by NAME on the way out. */
+      rows: rows.map(r => ({ code: String(r.staff_code || ''), name: r.staff_name || '',
+        salary: num(r.monthly_salary), cap: Math.floor(num(r.monthly_salary) * policy.maxPct / 100),
+        updatedBy: r.updated_by || '', updatedAt: r.updated_at ? Date.parse(r.updated_at) : null }))
+        .sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0)) };
+  },
+
+  async salarySave(db, user, args) {
+    requireNav(user, 'staff');
+    requireWrite(user);
+    const a = args || {};
+    const code = String(a.code == null ? '' : a.code).trim();
+    if (!code) bad('Chagua msimbo wa mfanyakazi. / Choose the staff access code.');
+    if (a.salary == null || String(a.salary).trim() === '') bad('Weka mshahara wa mwezi. / Enter the monthly salary.');
+    const salary = Math.round(num(a.salary));
+    if (!(salary >= 0) || salary > 1e9) bad('Mshahara si sahihi. / That is not a salary.');
+    const { error } = await db.from('staff_salaries').upsert([{ staff_code: code,
+      staff_name: String(a.name == null ? '' : a.name).trim().slice(0, 120) || null,
+      monthly_salary: salary, updated_by: user.name || '', updated_at: new Date().toISOString() }],
+      { onConflict: 'staff_code' });
+    if (error) {
+      if (tableMissing(error)) bad(ADV_RULES_NOT_READY);
+      throw new Error(error.message);
+    }
+    const policy = await advPolicy(db);
+    return { ok: true, code, salary, cap: Math.floor(salary * policy.maxPct / 100) };
+  },
+
+  async salaryDelete(db, user, args) {
+    requireNav(user, 'staff');
+    requireWrite(user);
+    const code = String((args && args.code) || '').trim();
+    if (!code) bad('Chagua msimbo wa mfanyakazi. / Choose the staff access code.');
+    const { error } = await db.from('staff_salaries').delete().eq('staff_code', code);
+    if (error) {
+      if (tableMissing(error)) bad(ADV_RULES_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, code };
   },
 
   /* =====================================================================================

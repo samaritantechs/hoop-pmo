@@ -625,3 +625,28 @@ agent than Watu does) and unpriced ones. A draft can be rebuilt; a signed sheet 
 Also here: the test fake now fills a missing `id` with a real UUID instead of "gen-1", which is
 what `gen_random_uuid()` does. Any path that inserts a row and then reads it back by id was
 previously untestable — the caller's own isUuid guard rejected the fake's id.
+
+## 19. SHIPPED 2026-09-09: the salary advance rules (SOP G.4, G.5, G.6)
+
+No new navs — the three advance panes gain the rules the SOP always had. The full story is
+[`docs/ADVANCE-RULES.md`](ADVANCE-RULES.md); the short version:
+
+**Do:**
+
+1. Run `db/migrations/RUN-ME-2026-09-09-advance-rules.sql`. Everything keeps working before it
+   is run; requests are simply not flagged yet.
+2. Enter salaries on Staff → Mishahara, keyed by access code. Without them the 40% cap cannot
+   be applied and the report says so.
+3. Optional Settings: `ADVANCE_DEADLINE_DAY` (15), `ADVANCE_MAX_PCT` (40).
+
+G.4 is a FLAG, measured against the applicant's own date — a deadline that blocks the form
+leaves an emergency nowhere to go. G.5 is a LOCK, with the ceiling frozen at the ask so a later
+raise cannot re-justify an approval; no salary on file means no cap, counted and named rather
+than silently passed. G.6 is two stamps: Pay records the money and its reference, Deduct records
+which payroll month took it back, each once and in that order.
+
+Not built, deliberately: SOP G.2/G.3's HR-then-Finance routing. The owner replaced that with a
+single approval nav on 2026-09-07 and that decision stands.
+
+Also here: `isMonth` now rejects month 13. Three features store a period as TEXT, so there is no
+date column to catch a nonsense month afterwards.
