@@ -98,6 +98,12 @@ AUDITED.add('advPay');
 AUDITED.add('advDeduct');
 AUDITED.add('salarySave');
 AUDITED.add('salaryDelete');
+/* LOSS AND DAMAGE: opening a case names somebody as liable for the price of a phone, and every
+   move after it decides what they owe. KEEP carries the id and the name; the money does not. */
+AUDITED.add('lossRaise');
+AUDITED.add('lossUpdate');
+AUDITED.add('priceSave');
+AUDITED.add('priceDelete');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -146,7 +152,7 @@ const EDITABLE_SETTINGS = [
   /* ISSUES_EMAIL is several lines of DEPARTMENT=address so each department hears about its
      own issues; GM_EMAIL hears about escalations. See the issues migration. */
   'ISSUES_EMAIL', 'GM_EMAIL', 'STOCK_EMAIL', 'STOCK_AGING_DAYS', 'STOCK_LOW_ALERT', 'COMMISSION_EMAIL',
-  'ADVANCE_DEADLINE_DAY', 'ADVANCE_MAX_PCT',
+  'ADVANCE_DEADLINE_DAY', 'ADVANCE_MAX_PCT', 'LOSS_EMAIL',
 ];
 
 /* =======================================================================================
@@ -242,7 +248,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -684,6 +690,46 @@ async function stockAgingIndex(db) {
       .sort((x, y) => y.aging - x.aging || y.oldest - x.oldest || y.pieces - x.pieces),
   };
 }
+
+/* ---------- LOSS AND DAMAGE (Finance SOP H; opened by Store SOP C.7) ---------- */
+const LOSS_NOT_READY = 'Jedwali la upotevu halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-09-loss-damage.sql kwenye Supabase. '
+  + '/ The loss and damage tables have not been created yet — run that migration first.';
+/* SOP H.1's four root causes. THEFT is the one that needs a police report, and the server
+   refuses the case without one -- that is the whole reason the SOP names it separately. */
+const LOSS_CAUSES = ['negligence', 'unresolved_sale', 'incident', 'theft'];
+const LOSS_METHODS = ['lump_sum', 'salary_deduction', 'commission_deduction'];
+const LOSS_STATES = ['open', 'valued', 'acknowledged', 'recovering', 'settled', 'written_off'];
+const LOSS_COLS = 'id, opened_at, staff_code, staff_name, staff_role, custodian, imei, item, '
+  + 'cause, police_ref, details, value_amount, value_source, recovery_method, recovery_note, '
+  + 'approved_by, approved_at, acknowledged_by, acknowledged_at, status, recovered, settled_at, '
+  + 'updated_by, updated_at';
+const lossRow = (r, me) => {
+  const value = r.value_amount == null ? null : num(r.value_amount);
+  const recovered = num(r.recovered);
+  return {
+    id: String(r.id),
+    at: r.opened_at ? Date.parse(r.opened_at) : null,
+    mine: !!(me && r.staff_code && String(r.staff_code) === String(me)),
+    staffName: r.staff_name || '', staffRole: r.staff_role || '',
+    custodian: r.custodian || '', imei: r.imei || '', item: r.item || '',
+    cause: r.cause || '', policeRef: r.police_ref || '', details: r.details || '',
+    value, valueSource: r.value_source || '',
+    recoveryMethod: r.recovery_method || '', recoveryNote: r.recovery_note || '',
+    approvedBy: r.approved_by || '', approvedAt: r.approved_at ? Date.parse(r.approved_at) : null,
+    acknowledgedBy: r.acknowledged_by || '', acknowledgedAt: r.acknowledged_at ? Date.parse(r.acknowledged_at) : null,
+    status: r.status || 'open', recovered,
+    // What the custodian still owes. Null while nobody has valued it -- not zero, which would
+    // read as "nothing outstanding" on the one screen that exists to chase it.
+    outstanding: value == null ? null : Math.max(0, value - recovered),
+    settledAt: r.settled_at ? Date.parse(r.settled_at) : null,
+    updatedAt: r.updated_at ? Date.parse(r.updated_at) : null,
+  };
+};
+/* Work first: what nobody has valued, then what nobody has signed for, then what is being
+   recovered, and only then what is finished. */
+const LOSS_RANK = { open: 0, valued: 1, acknowledged: 2, recovering: 3, written_off: 4, settled: 5 };
+const lossWorkFirst = (x, y) => (LOSS_RANK[x.status] - LOSS_RANK[y.status]) || (y.at || 0) - (x.at || 0);
 
 /* ---------- COMMISSION (Finance SOP A) ---------- */
 const COMM_NOT_READY = 'Jedwali la kamisheni halijatengenezwa bado. Endesha '
@@ -4366,6 +4412,300 @@ const FNS = {
         oldestOpenDays: open.reduce((m, r) => Math.max(m, r.ageDays), 0),
         byDept,
       } };
+  },
+
+  /* =====================================================================================
+     LOSS AND DAMAGE -- the price list, the case, and the acknowledgement of liability.
+     =====================================================================================
+       Finance SOP H     valuation, liability and recovery, handled centrally by Finance
+       Finance SOP H.1   the root cause; "a police report is REQUIRED for suspected theft"
+       Finance SOP H.2   "The Finance Officer values the missing/damaged device using the
+                          CURRENT PRICE LIST"
+       Finance SOP H.3   the custodian is liable and must reimburse at the assessed value
+       Finance SOP H.4   the recovery method, approved by the GM and Finance
+       Finance SOP H.5   "The custodian SIGNS an acknowledgment of liability and repayment plan"
+       Store SOP C.7     the store's verification opens the case
+       RSM SOP F, CSM SOP G   the custodian named, at the device's prevailing value
+
+     FOUR SOPs POINT AT THIS ONE PROCESS and none of them could open a case, because there was
+     nowhere to open one. The store finds a phone missing; the RSM is liable; the CSM enforces;
+     Finance values and recovers. One table, one price list, one trail.
+
+     THE VALUE IS COPIED, NOT LOOKED UP LATER. H.2 says "the current price list", which means
+     it moves -- and a price change next month must not re-price a debt somebody has already
+     signed for. Two navs: `lossreq` opens and reads own, `loss` is Finance's desk. */
+
+  /** The current price list (SOP H.2). Read by both navs; written only by the desk. */
+  async priceList(db, user) {
+    requireAnyNav(user, ['loss', 'lossreq']);
+    let rows = [];
+    let notReady = false;
+    try {
+      rows = await fetchAll(() => db.from('device_prices').select('item, amount, note, updated_by, updated_at'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      notReady = true;
+    }
+    let items = [];
+    try {
+      const models = await fetchAll(() => db.from('watu_loans').select('model'));
+      items = [...new Set(models.map(m => K(m.model || '')).filter(Boolean))].sort();
+    } catch (e) { items = []; }
+    return { ok: true, notReady, items,
+      prices: rows.map(r => ({ item: r.item, amount: num(r.amount), note: r.note || '',
+        updatedBy: r.updated_by || '', updatedAt: r.updated_at ? Date.parse(r.updated_at) : null }))
+        .sort((x, y) => (x.item < y.item ? -1 : 1)) };
+  },
+
+  async priceSave(db, user, args) {
+    requireNav(user, 'loss');
+    requireWrite(user);
+    const a = args || {};
+    const item = K(a.item);
+    if (!item) bad('Chagua modeli. / Choose the model.');
+    if (a.amount == null || String(a.amount).trim() === '') bad('Weka bei. / Set the price.');
+    const amount = Math.round(num(a.amount));
+    if (!(amount >= 0) || amount > 1e9) bad('Bei si sahihi. / That is not a price.');
+    const { error } = await db.from('device_prices').upsert([{ item, amount,
+      note: String(a.note == null ? '' : a.note).trim().slice(0, 500) || null,
+      updated_by: user.name || '', updated_at: new Date().toISOString() }], { onConflict: 'item' });
+    if (error) {
+      if (tableMissing(error)) bad(LOSS_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, item, amount };
+  },
+
+  async priceDelete(db, user, args) {
+    requireNav(user, 'loss');
+    requireWrite(user);
+    const item = K((args && args.item) || '');
+    if (!item) bad('Chagua modeli. / Choose the model.');
+    const { error } = await db.from('device_prices').delete().eq('item', item);
+    if (error) {
+      if (tableMissing(error)) bad(LOSS_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, item };
+  },
+
+  /** OPEN A CASE (Store SOP C.7). The store keeper who finds the shortage opens it; so does
+      anybody else who holds the nav. Valued straight away from the price list where the model
+      is on it, because a case with no number attached is a conversation, not a liability. */
+  async lossRaise(db, user, args) {
+    requireAnyNav(user, ['loss', 'lossreq']);
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    const custodian = S(a.custodian, 120);
+    if (!custodian) bad('Andika aliyekuwa na simu. / Name the custodian who held it.');
+    const cause = String(a.cause || '').trim().toLowerCase();
+    if (!LOSS_CAUSES.includes(cause)) bad('Chagua chanzo. / Choose the root cause.');
+    /* SOP H.1: "A police report is required for suspected theft or robbery." The one place the
+       SOP names a document outright, so it is the one the server insists on. */
+    const policeRef = S(a.policeRef, 120);
+    if (cause === 'theft' && !policeRef) {
+      bad('Wizi unahitaji namba ya ripoti ya polisi (SOP H.1). / Theft needs a police report reference.');
+    }
+    const imei = String(a.imei == null ? '' : a.imei).replace(/\D/g, '').slice(0, 17);
+    if (imei && (imei.length < 14 || imei.length > 17)) bad('IMEI si sahihi. / That IMEI is not a valid length.');
+    const item = K(a.item).slice(0, 120);
+    /* SOP H.2: valued from the CURRENT list, and the figure is copied onto the case. */
+    let value = null, source = '';
+    if (item) {
+      try {
+        const { data } = await db.from('device_prices').select('amount').eq('item', item).maybeSingle();
+        if (data && data.amount != null) { value = num(data.amount); source = 'price list ' + item; }
+      } catch (e) { value = null; }
+    }
+    const at = new Date().toISOString();
+    const row = {
+      opened_at: at, updated_at: at,
+      staff_code: user.code || null, staff_name: user.name || '', staff_role: user.role || '',
+      custodian, imei: imei || null, item: item || null,
+      cause, police_ref: policeRef || null, details: S(a.details, 4000) || null,
+      value_amount: value, value_source: source || null,
+      status: value == null ? 'open' : 'valued', recovered: 0, updated_by: user.name || '',
+    };
+    const { data, error } = await db.from('loss_cases').insert([row]).select('id');
+    if (error) {
+      if (tableMissing(error)) bad(LOSS_NOT_READY);
+      throw new Error(error.message);
+    }
+    const id = data && data[0] ? String(data[0].id) : null;
+    const mail = await sendMail(db, { toKey: 'LOSS_EMAIL',
+      subject: 'HOOPLOAN — simu imepotea au imeharibika / loss or damage: ' + custodian
+        + (item ? ' (' + item + ')' : ''),
+      html: noticeHtml('Kesi mpya ya upotevu / New loss or damage case', [
+        ['Aliyekuwa nayo / Custodian', custodian], ['IMEI', imei || '—'], ['Modeli / Model', item || '—'],
+        ['Chanzo / Cause', cause], ['Ripoti ya polisi / Police report', policeRef || '—'],
+        ['Thamani / Assessed value', value == null ? 'haijathaminiwa / not valued yet' : 'TZS ' + money0(value)],
+        ['Amefungua / Opened by', user.name || ''], ['Maelezo / Details', String(row.details || '').slice(0, 400)],
+      ], 'Fungua Upotevu na uharibifu kwenye portal. / Open the loss and damage pane.') });
+    return { ok: true, id, value, status: row.status, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
+  },
+
+  /** The desk sees every case; a raiser sees only their own. */
+  async lossList(db, user, args) {
+    requireAnyNav(user, ['loss', 'lossreq']);
+    const a = args || {};
+    const desk = navsFor(user).includes('loss');
+    let rows;
+    try {
+      rows = await fetchAll(() => {
+        const q = db.from('loss_cases').select(LOSS_COLS);
+        return desk ? q : q.eq('staff_code', user.code || '~none~');
+      });
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, desk,
+        counts: { open: 0, acknowledged: 0, recovering: 0, settled: 0 },
+        totals: { value: 0, recovered: 0, outstanding: 0 } };
+    }
+    const all = rows.map(r => lossRow(r, user.code));
+    const want = String(a.state || '').trim();
+    const shown = all
+      .filter(r => want === 'all' ? true : want ? r.status === want
+        : (r.status !== 'settled' && r.status !== 'written_off'))
+      .sort(lossWorkFirst);
+    const live = all.filter(r => r.status !== 'settled' && r.status !== 'written_off');
+    return { ok: true, rows: shown, desk, causes: LOSS_CAUSES, methods: LOSS_METHODS, states: LOSS_STATES,
+      counts: {
+        open: all.filter(r => r.status === 'open').length,
+        valued: all.filter(r => r.status === 'valued').length,
+        acknowledged: all.filter(r => r.status === 'acknowledged').length,
+        recovering: all.filter(r => r.status === 'recovering').length,
+        settled: all.filter(r => r.status === 'settled').length,
+      },
+      totals: {
+        value: live.reduce((s, r) => s + (r.value || 0), 0),
+        recovered: all.reduce((s, r) => s + r.recovered, 0),
+        outstanding: live.reduce((s, r) => s + (r.outstanding || 0), 0),
+        unvalued: all.filter(r => r.value == null && r.status !== 'written_off').length,
+      } };
+  },
+
+  async lossNotes(db, user, args) {
+    requireAnyNav(user, ['loss', 'lossreq']);
+    const id = String((args && args.id) || '').trim();
+    if (!isUuid(id)) bad('Kesi haijachaguliwa. / No case chosen.');
+    if (!navsFor(user).includes('loss')) {
+      let own;
+      try {
+        own = await fetchAll(() => db.from('loss_cases').select('id, staff_code').eq('id', id));
+      } catch (e) {
+        if (!tableMissing(e)) throw e;
+        return { ok: true, notes: [], notReady: true };
+      }
+      const r = own.find(x => String(x.id) === id);
+      if (!r || String(r.staff_code || '') !== String(user.code || '')) bad('Kesi haipo. / That case no longer exists.');
+    }
+    let rows = [];
+    try {
+      rows = await fetchAll(() => db.from('loss_case_notes').select('at, by_name, note, change').eq('case_id', id));
+    } catch (e) { rows = []; }
+    return { ok: true, notes: rows.map(n => ({ at: n.at ? Date.parse(n.at) : null, by: n.by_name || '',
+      note: n.note || '', change: n.change || '' })).sort((x, y) => (x.at || 0) - (y.at || 0)) };
+  },
+
+  /** MOVE A CASE (SOP H.2-H.5). Valuing, agreeing the recovery, taking the custodian's
+      acknowledgement, recording money in, and settling. The desk's grant; a raiser may only
+      add a note to their own case. */
+  async lossUpdate(db, user, args) {
+    requireAnyNav(user, ['loss', 'lossreq']);
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Kesi haijachaguliwa. / No case chosen.');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('loss_cases').select(LOSS_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(LOSS_NOT_READY);
+    }
+    const row = rows.find(r => String(r.id) === id);
+    const desk = navsFor(user).includes('loss');
+    if (!row || (!desk && String(row.staff_code || '') !== String(user.code || ''))) {
+      bad('Kesi haipo. / That case no longer exists.');
+    }
+    const note = S(a.note, 2000);
+    const at = new Date().toISOString();
+    const patch = { updated_by: user.name || '', updated_at: at };
+    let change = null;
+    if (desk) {
+      // SOP H.2: the valuation, whether from the list or assessed by hand.
+      if (a.value != null && String(a.value).trim() !== '') {
+        const v = Math.round(num(a.value));
+        if (!(v >= 0) || v > 1e9) bad('Thamani si sahihi. / That is not a value.');
+        patch.value_amount = v;
+        patch.value_source = S(a.valueSource, 200) || 'assessed by ' + (user.name || '');
+        if (row.status === 'open') { patch.status = 'valued'; change = 'open>valued'; }
+      }
+      // SOP H.4: the recovery method, and who approved it.
+      if (a.recoveryMethod != null && String(a.recoveryMethod).trim() !== '') {
+        const meth = String(a.recoveryMethod).trim().toLowerCase();
+        if (!LOSS_METHODS.includes(meth)) bad('Njia ya kurejesha si sahihi. / Unknown recovery method.');
+        patch.recovery_method = meth;
+        patch.recovery_note = S(a.recoveryNote, 2000) || null;
+        patch.approved_by = user.name || ''; patch.approved_at = at;
+      }
+      /* SOP H.5: the custodian signs. A case cannot be acknowledged before it has a value --
+         nobody signs for a number nobody has worked out. */
+      if (a.acknowledgedBy != null && String(a.acknowledgedBy).trim() !== '') {
+        const value = patch.value_amount != null ? patch.value_amount
+          : (row.value_amount == null ? null : num(row.value_amount));
+        if (value == null) {
+          bad('Thamini kwanza kabla ya saini ya mdaiwa (SOP H.2 kabla ya H.5). '
+            + '/ Value the device before the custodian acknowledges it.');
+        }
+        patch.acknowledged_by = S(a.acknowledgedBy, 120);
+        patch.acknowledged_at = at;
+        if (row.status !== 'settled') { change = row.status + '>acknowledged'; patch.status = 'acknowledged'; }
+      }
+      // Money in. Never more than the case is worth, and reaching the value settles it.
+      if (a.recovered != null && String(a.recovered).trim() !== '') {
+        const got = Math.round(num(a.recovered));
+        if (!(got >= 0)) bad('Kiasi kilichorejeshwa si sahihi. / That is not an amount recovered.');
+        const value = patch.value_amount != null ? patch.value_amount
+          : (row.value_amount == null ? null : num(row.value_amount));
+        if (value != null && got > value) {
+          bad('Huwezi kurejesha zaidi ya thamani ya simu (TZS ' + money0(value) + '). '
+            + '/ You cannot recover more than the device was valued at.');
+        }
+        patch.recovered = got;
+        if (value != null && got >= value) {
+          patch.status = 'settled'; patch.settled_at = at; change = (row.status || 'open') + '>settled';
+        } else if (got > 0 && row.status !== 'settled') {
+          patch.status = 'recovering'; change = change || ((row.status || 'open') + '>recovering');
+        }
+      }
+      // An explicit status, last, so it wins over anything inferred above.
+      if (a.status != null && String(a.status).trim() !== '') {
+        const st = String(a.status).trim().toLowerCase();
+        if (!LOSS_STATES.includes(st)) bad('Hali si sahihi. / Unknown status.');
+        if (st !== row.status) {
+          change = row.status + '>' + st;
+          patch.status = st;
+          if (st === 'settled') patch.settled_at = at;
+          if (st === 'written_off' && !note) bad('Andika sababu ya kufuta deni. / Say why it is being written off.');
+        }
+      }
+    }
+    if (!note && !change && Object.keys(patch).length === 2) bad('Hakuna kilichobadilika. / Nothing to save.');
+    /* GUARDED on what was read, so two people cannot silently overwrite each other. */
+    const { data, error } = await db.from('loss_cases').update(patch)
+      .eq('id', id).eq('updated_at', row.updated_at).select('id');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) bad('Kesi hii imebadilishwa na mtu mwingine sasa hivi — ifungue upya. / Somebody else just changed this case; reopen it.');
+    if (note || change) {
+      const { error: nErr } = await db.from('loss_case_notes').insert([{ case_id: id, at,
+        by_code: user.code || null, by_name: user.name || '',
+        note: note || (change ? change.replace('>', ' \u2192 ') : ''), change }]);
+      if (nErr) throw new Error(nErr.message);
+    }
+    return { ok: true, id, status: patch.status || row.status, change };
   },
 
   /* =====================================================================================

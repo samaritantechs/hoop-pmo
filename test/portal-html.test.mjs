@@ -1962,3 +1962,58 @@ test('portal.html: salaries sit behind the staff nav and say what they are for',
   assert.match(fn, /canW=!BOOT\.readOnly/);
   assert.match(IMP_SRC('drawStaff', html), /drawSalaries\(\);/, 'drawn as part of the staff pane');
 });
+
+/* =========================================================================================
+   LOSS AND DAMAGE. Finance SOP H.1 the police report, H.2 the price list, H.5 the signature.
+   These pin what the server cannot: that the form asks for the police report the moment theft
+   is chosen, that an unvalued case shows a dash rather than a zero, and that the desk's
+   controls are not handed to whoever merely reported the loss.
+   ========================================================================================= */
+test('portal.html: the loss form asks for the police report as soon as theft is chosen', () => {
+  const html = read('portal.html');
+  const wire = IMP_SRC('lossRaiseWire', html);
+  assert.match(wire, /cause\.value==='theft'\?'':'none'/,
+    'SOP H.1 is asked for on the form, not discovered from a server error');
+  const call = /srv\('lossRaise',\{([\s\S]*?)\}\)/.exec(wire);
+  for (const k of ['custodian', 'item', 'imei', 'cause', 'policeRef', 'details']) {
+    assert.match(call[1], new RegExp('\\b' + k + ':'), k + ' is sent');
+  }
+  for (const k of ['value', 'status', 'recovered', 'acknowledgedBy']) {
+    assert.ok(!new RegExp('\\b' + k + ':').test(call[1]), k + ' is the desk\'s, never the reporter\'s');
+  }
+  assert.match(IMP_SRC('lossNotReady', html), /RUN-ME-2026-09-09-loss-damage\.sql/);
+});
+
+test('portal.html: an unvalued case shows a dash, and the desk controls stay with the desk', () => {
+  const html = read('portal.html');
+  const t = IMP_SRC('lossTable', html);
+  // A zero in a debt column reads as "nothing owed", which is a different claim from "not priced".
+  assert.match(t, /r\.value==null\?'<span class="mut">—<\/span>':money\(r\.value\)/);
+  assert.match(t, /r\.outstanding==null\?'—':money\(r\.outstanding\)/);
+  const dr = IMP_SRC('lossDrawer', html);
+  assert.match(dr, /var canNote=!BOOT\.readOnly&&\(desk\|\|r\.mine\);/,
+    'a reporter may talk on their own case');
+  assert.match(dr, /desk&&!BOOT\.readOnly\?'<div class="row"[\s\S]*?id="lsdSt"/,
+    'valuing, the recovery method, the signature and the status are one desk-only block');
+  assert.match(dr, /if\(desk&&\$\('#lsdVal'\)\)\{/, 'and only the desk sends them');
+  assert.match(dr, /SOP H\.5/);
+  // The two panes open the same drawer with different powers.
+  assert.match(IMP_SRC('drawLossReq', html), /lossWire\(m, rows, false\)/);
+  assert.match(IMP_SRC('drawLoss', html), /lossWire\(m, rows, true\)/);
+});
+
+test('portal.html: the price list says why changing it does not re-price an open case', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawLoss', html);
+  assert.match(fn, /SOP H\.2/);
+  assert.match(fn, /never re-prices a debt already acknowledged/);
+  assert.match(fn, /srv\('priceSave'/); assert.match(fn, /srv\('priceDelete'/);
+  assert.match(fn, /confirm\('Futa bei/, 'and removing a price asks first');
+  assert.match(fn, /t\.unvalued/, 'the tile that chases SOP H.2');
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  for (const f of ['lossRaise', 'lossUpdate', 'priceSave', 'priceDelete']) {
+    assert.match(nr[1], new RegExp('\\b' + f + ':1'), f + ' is a write');
+  }
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  for (const k of ['lossreq', 'loss']) assert.match(lbl[0], new RegExp('\\b' + k + ":'[^']+'"));
+});

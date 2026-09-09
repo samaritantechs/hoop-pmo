@@ -1421,7 +1421,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   // the one thing SOP A.6 exists to prevent.
   commBuild:1, commDecide:1, commPay:1, commRateSave:1, commRateDelete:1,
   // The advance rules: paying twice and deducting twice are exactly what the stamps prevent.
-  advPay:1, advDeduct:1, salarySave:1, salaryDelete:1};
+  advPay:1, advDeduct:1, salarySave:1, salaryDelete:1,
+  // Loss: a re-sent case opens two; a re-sent update trips its own stale-row guard.
+  lossRaise:1, lossUpdate:1, priceSave:1, priceDelete:1};
 function srv(fn,args,tries){
   tries=tries||0;
   busy(true);
@@ -1557,6 +1559,14 @@ var NAV=[
     ic:'<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>' },
   { g:'stock', t:'strep',    nav:'stockrep',   sw:'Ripoti ya stoo',   en:'Stock reports',
     ic:'<path d="M3 3v18h18"/><path d="M8 17v-5M12 17V7M16 17v-9"/>' },
+
+  /* LOSS AND DAMAGE: four SOPs point at one process (Finance H, Store C.7, RSM F, CSM G) and
+     none of them could open a case. `lossreq` opens one and reads its own; `loss` is Finance's
+     desk, where the price list lives and the money is chased. */
+  { g:'adv',   t:'lossreq',  nav:'lossreq',    sw:'Toa taarifa ya upotevu', en:'Report a loss',
+    ic:'<path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>' },
+  { g:'adv',   t:'loss',     nav:'loss',       sw:'Upotevu na uharibifu', en:'Loss and damage',
+    ic:'<path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/><path d="M19 3v4M21 5h-4"/>' },
 
   /* COMMISSION: Finance builds and pays, the Administration approval group signs off.
      Two navs because Finance SOP A.4 puts the sign-off in somebody else's hands, and nobody
@@ -1731,6 +1741,8 @@ function draw(){
   if(TAB==='move') return drawMove(m);
   if(TAB==='acct') return drawStockAccount(m);
   if(TAB==='targets') return drawTargets(m);
+  if(TAB==='lossreq') return drawLossReq(m);
+  if(TAB==='loss') return drawLoss(m);
   if(TAB==='comm') return drawComm(m);
   if(TAB==='commappr') return drawCommAppr(m);
   if(TAB==='streq') return drawStockReq(m);
@@ -4997,6 +5009,246 @@ function drawLeaveRep(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* ---------- loss and damage ----------
+     Finance SOP H (valuation, liability, recovery), opened by Store SOP C.7, the custodian
+     named by RSM SOP F and CSM SOP G.
+
+   Two panes: report one, and Finance's desk where the price list lives and the money is
+   chased. The value is COPIED onto the case when it is opened -- a price change next month
+   must not re-price a debt somebody has already signed for. */
+function lossNotReady(){
+  return '<div class="note bad">Jedwali la upotevu halijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-09-loss-damage.sql</b> kwenye Supabase, kisha rudi hapa. '
+    +'/ The loss and damage tables have not been created yet — run that migration, then come back.</div>';
+}
+var LOSS_CAUSE_LABEL={negligence:'Uzembe / Negligence',unresolved_sale:'Mauzo hayajakamilika / Unresolved sale',
+  incident:'Ajali au tukio / Genuine incident',theft:'Wizi / Theft or robbery'};
+var LOSS_METHOD_LABEL={lump_sum:'Malipo ya mkupuo / Lump sum',salary_deduction:'Kukatwa mshahara / Salary deduction',
+  commission_deduction:'Kukatwa kamisheni / Commission deduction'};
+var LOSSQ='';
+function lossChip(r){
+  if(r.status==='settled') return '<span class="chip ok">Settled</span>';
+  if(r.status==='written_off') return '<span class="chip">Written off</span>';
+  if(r.status==='recovering') return '<span class="chip warn">Recovering</span>';
+  if(r.status==='acknowledged') return '<span class="chip">Acknowledged</span>';
+  if(r.status==='valued') return '<span class="chip warn">Valued</span>';
+  return '<span class="chip bad">Open</span>';
+}
+function lossTable(rows, desk){
+  return '<div class="scroll"><table><thead><tr>'
+    +'<th>ILIFUNGULIWA</th><th>ALIYEKUWA NAYO</th><th>SIMU</th><th>CHANZO</th><th>HALI</th>'
+    +'<th class="r">THAMANI</th><th class="r">IMEREJESHWA</th><th class="r">DENI</th>'
+    +'<th>SAINI YA MDAIWA</th><th class="noxl"></th></tr></thead><tbody>'
+    +rows.map(function(r){
+      return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'<div class="mut" style="font-size:10px">'+esc(r.staffName||'')+'</div></td>'
+        +'<td><b>'+esc(r.custodian||'—')+'</b></td>'
+        +'<td style="font-size:11px">'+esc(r.item||'—')+(r.imei?'<div class="mut" style="font-size:10px">'+esc(r.imei)+'</div>':'')+'</td>'
+        +'<td style="font-size:11.5px">'+esc((LOSS_CAUSE_LABEL[r.cause]||r.cause||'').split(' / ')[0])
+          +(r.cause==='theft'?'<div class="mut" style="font-size:10px">'+esc(r.policeRef||'')+'</div>':'')+'</td>'
+        +'<td>'+lossChip(r)+'</td>'
+        +'<td class="r">'+(r.value==null?'<span class="mut">—</span>':money(r.value))+'</td>'
+        +'<td class="r">'+money(r.recovered)+'</td>'
+        +'<td class="r'+(r.outstanding?' bad':'')+'">'+(r.outstanding==null?'—':money(r.outstanding))+'</td>'
+        +'<td style="font-size:11px">'+esc(r.acknowledgedBy||'—')+(r.acknowledgedAt?'<div class="mut" style="font-size:10px">'+esc(advWhen(r.acknowledgedAt))+'</div>':'')+'</td>'
+        +'<td class="r noxl"><button class="btn sm ghost" data-lsv="'+esc(r.id)+'">'+(desk?'Fanyia kazi':'Maelezo')+'</button></td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+/* THE RAISE FORM, shared by both panes: the store keeper who finds the shortage and the desk
+   that logs one on somebody's behalf fill in the same six things. */
+function lossRaiseHtml(d, p){
+  p=p||'ls';
+  return '<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:160px"><label class="lbl">Aliyekuwa na simu / Custodian *</label>'
+    +'<input id="'+p+'Cust" class="inp" placeholder="Jina la RSM au ajenti"></div>'
+    +'<div style="flex:1;min-width:140px"><label class="lbl">Modeli / Model</label>'
+    +'<input id="'+p+'Item" class="inp" list="'+p+'Items" placeholder="A07">'
+    +'<datalist id="'+p+'Items">'+(d.items||[]).map(function(x){ return '<option value="'+esc(x)+'">'; }).join('')+'</datalist></div>'
+    +'</div>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:160px"><label class="lbl">IMEI</label><input id="'+p+'Imei" class="inp" placeholder="35…"></div>'
+    +'<div style="flex:1;min-width:160px"><label class="lbl">Chanzo / Root cause *</label>'
+    +'<select id="'+p+'Cause" class="inp"><option value="">— chagua / choose —</option>'
+    +Object.keys(LOSS_CAUSE_LABEL).map(function(k){ return '<option value="'+k+'">'+esc(LOSS_CAUSE_LABEL[k])+'</option>'; }).join('')
+    +'</select></div>'
+    +'</div>'
+    +'<div id="'+p+'PolWrap" style="display:none"><label class="lbl">Namba ya ripoti ya polisi / Police report reference *</label>'
+    +'<input id="'+p+'Pol" class="inp" placeholder="Wizi unahitaji ripoti ya polisi (SOP H.1)"></div>'
+    +'<label class="lbl">Maelezo / Details</label><textarea id="'+p+'Det" class="inp" rows="3" placeholder="Kilichotokea, lini, na nini kimefanyika"></textarea>'
+    +'<button class="btn w" id="'+p+'Send" style="margin-top:10px">Fungua kesi / Open the case</button>';
+}
+function lossRaiseWire(p, after){
+  p=p||'ls';
+  var cause=$('#'+p+'Cause');
+  /* SOP H.1 names one document outright, so the form asks for it the moment theft is chosen
+     rather than letting somebody discover the rule from a server error. */
+  var onCause=function(){ $('#'+p+'PolWrap').style.display=cause.value==='theft'?'':'none'; };
+  cause.onchange=onCause; onCause();
+  $('#'+p+'Send').onclick=function(){
+    var b=this; b.disabled=true;
+    srv('lossRaise',{ custodian:$('#'+p+'Cust').value, item:$('#'+p+'Item').value, imei:$('#'+p+'Imei').value,
+      cause:cause.value, policeRef:$('#'+p+'Pol').value, details:$('#'+p+'Det').value })
+    .then(function(r){
+      toast('Kesi imefunguliwa'+(r.value!=null?' · thamani TZS '+money(r.value):' · haijathaminiwa')
+        +(r.emailed?' · taarifa imetumwa':''), r.value==null);
+      after();
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+function lossDrawer(m, r, desk){
+  var canNote=!BOOT.readOnly&&(desk||r.mine);
+  drawer('<h3>'+esc(r.custodian||'—')+' — '+esc(r.item||'simu')+'</h3>'
+    +'<div class="sub">'+lossChip(r)+' '+esc(LOSS_CAUSE_LABEL[r.cause]||r.cause||'')+' · '+esc(advWhen(r.at))+'</div>'
+    +'<div style="margin:8px 0;font-size:12.5px">'
+    +(r.imei?'<div>IMEI: <b>'+esc(r.imei)+'</b></div>':'')
+    +(r.policeRef?'<div>Ripoti ya polisi / Police report: <b>'+esc(r.policeRef)+'</b></div>':'')
+    +'<div class="mut" style="font-size:11px;margin-top:2px">Imefunguliwa na '+esc(r.staffName||'—')+'</div>'
+    +(r.details?'<div style="white-space:pre-wrap;margin-top:6px">'+esc(r.details)+'</div>':'')
+    +'<div style="margin-top:8px">Thamani / Value: <b>'+(r.value==null?'haijathaminiwa / not valued':money(r.value))+'</b>'
+      +(r.valueSource?' <span class="mut" style="font-size:11px">('+esc(r.valueSource)+')</span>':'')
+      +' · imerejeshwa '+money(r.recovered)
+      +(r.outstanding!=null?' · <b'+(r.outstanding?' style="color:var(--bad)"':'')+'>deni '+money(r.outstanding)+'</b>':'')+'</div>'
+    +(r.recoveryMethod?'<div style="margin-top:4px">Njia / Recovery: <b>'+esc(LOSS_METHOD_LABEL[r.recoveryMethod]||r.recoveryMethod)+'</b>'
+      +(r.approvedBy?' <span class="mut" style="font-size:11px">— '+esc(r.approvedBy)+'</span>':'')
+      +(r.recoveryNote?'<div style="white-space:pre-wrap">'+esc(r.recoveryNote)+'</div>':'')+'</div>':'')
+    +(r.acknowledgedBy?'<div class="note ok" style="margin-top:8px;font-size:11.5px">Amekiri madeni: <b>'+esc(r.acknowledgedBy)
+      +'</b> · '+esc(advWhen(r.acknowledgedAt))+' (SOP H.5)</div>':'')
+    +'</div>'
+    +'<h4 style="margin:10px 0 4px">Hatua / Trail</h4><div id="lsNotes" class="mut" style="font-size:12px">…</div>'
+    +(canNote?'<label class="lbl" style="margin-top:10px">Maelezo / Note</label><textarea id="lsdNote" class="inp" rows="2"></textarea>':'')
+    +(desk&&!BOOT.readOnly?'<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px">'
+      +'<div style="flex:1;min-width:130px"><label class="lbl">Thamani / Value (SOP H.2)</label>'
+      +'<input id="lsdVal" class="inp" type="number" min="0" step="1000" value="'+esc(r.value==null?'':String(r.value))+'"></div>'
+      +'<div style="flex:1;min-width:130px"><label class="lbl">Imerejeshwa / Recovered</label>'
+      +'<input id="lsdRec" class="inp" type="number" min="0" step="1000" value="'+esc(String(r.recovered||0))+'"></div>'
+      +'</div>'
+      +'<label class="lbl">Njia ya kurejesha / Recovery method (SOP H.4)</label>'
+      +'<select id="lsdMeth" class="inp"><option value="">— hakuna / none —</option>'
+      +Object.keys(LOSS_METHOD_LABEL).map(function(k){
+        return '<option value="'+k+'"'+(r.recoveryMethod===k?' selected':'')+'>'+esc(LOSS_METHOD_LABEL[k])+'</option>'; }).join('')
+      +'</select>'
+      +'<label class="lbl">Makubaliano / Repayment plan</label><textarea id="lsdRnote" class="inp" rows="2">'+esc(r.recoveryNote||'')+'</textarea>'
+      +'<label class="lbl">Saini ya mdaiwa / Custodian acknowledges (SOP H.5)</label>'
+      +'<input id="lsdAck" class="inp" placeholder="Jina la aliyekiri" value="'+esc(r.acknowledgedBy||'')+'">'
+      +'<label class="lbl" style="margin-top:8px">Hali / Status</label>'
+      +'<select id="lsdSt" class="inp">'
+      +['open','valued','acknowledged','recovering','settled','written_off'].map(function(k){
+        return '<option value="'+k+'"'+(r.status===k?' selected':'')+'>'+k+'</option>'; }).join('')+'</select>':'')
+    +(canNote?'<button class="btn w" id="lsdSave" style="margin-top:10px">Hifadhi / Save</button>':''));
+  srv('lossNotes',{id:r.id}).then(function(d){
+    var ns=d.notes||[], box=$('#lsNotes'); if(!box) return;
+    box.innerHTML=ns.length?ns.map(function(n){
+      return '<div style="border-left:2px solid var(--line);padding:2px 8px;margin:4px 0"><span style="font-size:10.5px">'
+        +esc(advWhen(n.at))+' · <b>'+esc(n.by||'—')+'</b>'
+        +(n.change?' <span class="chip">'+esc(n.change.replace('>',' → '))+'</span>':'')+'</span>'
+        +'<div style="white-space:pre-wrap;color:var(--ink)">'+esc(n.note||'')+'</div></div>';
+    }).join(''):'Bado hakuna hatua. / Nothing recorded yet.';
+  }).catch(function(){ var b=$('#lsNotes'); if(b) b.textContent='Hatua hazikupakia. / The trail did not load.'; });
+  var sv=$('#lsdSave');
+  if(sv) sv.onclick=function(){
+    var b=this; b.disabled=true;
+    var a={ id:r.id, note:$('#lsdNote').value };
+    if(desk&&$('#lsdVal')){
+      a.value=$('#lsdVal').value; a.recovered=$('#lsdRec').value;
+      a.recoveryMethod=$('#lsdMeth').value; a.recoveryNote=$('#lsdRnote').value;
+      a.acknowledgedBy=$('#lsdAck').value; a.status=$('#lsdSt').value;
+    }
+    srv('lossUpdate',a).then(function(d){
+      toast(d.change?('Hali: '+d.change.replace('>',' → ')):'Imehifadhiwa / Saved');
+      closeDrawer(); if(TAB==='loss') drawLoss(m); else if(TAB==='lossreq') drawLossReq(m);
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+function lossWire(m, rows, desk){
+  [].slice.call(m.querySelectorAll('[data-lsv]')).forEach(function(b){
+    b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-lsv'); })[0];
+      if(r) lossDrawer(m, r, desk); };
+  });
+}
+function drawLossReq(m){
+  m.innerHTML='<div class="sk"></div>';
+  Promise.all([srv('lossList',{}), srv('priceList',{})]).then(function(res){
+    var d=res[0], pl=res[1];
+    if(d.notReady){ m.innerHTML=lossNotReady(); return; }
+    var rows=d.rows||[];
+    m.innerHTML='<div class="card" style="padding:14px;max-width:640px">'
+      +'<h3 style="margin:0 0 4px">Toa taarifa ya upotevu au uharibifu / Report a loss or damage</h3>'
+      +'<div class="sub">Simu ya mkopo iliyopotea au kuharibika ikiwa kwa mtu (Store SOP C.7). Fedha inashughulikiwa na Finance (SOP H). '
+      +'/ A consignment phone missing or damaged in somebody\'s custody; Finance values and recovers it.</div>'
+      +lossRaiseHtml(pl,'ls')
+      +'</div>'
+      +'<h3 style="margin:18px 0 6px">Kesi zangu / My cases</h3>'
+      +(rows.length?lossTable(rows,false):'<div class="mut">Bado hujafungua kesi. / Nothing reported yet.</div>');
+    lossRaiseWire('ls', function(){ if(TAB==='lossreq') drawLossReq(m); });
+    lossWire(m, rows, false);
+  }).catch(function(e){ paneFailed(m,e); });
+}
+function drawLoss(m){
+  m.innerHTML='<div class="sk"></div>';
+  Promise.all([srv('lossList',{state:LOSSQ}), srv('priceList',{})]).then(function(res){
+    var d=res[0], pl=res[1];
+    if(d.notReady){ m.innerHTML=lossNotReady(); return; }
+    var rows=d.rows||[], c=d.counts||{}, t=d.totals||{}, prices=pl.prices||[], canW=!BOOT.readOnly;
+    var pick=function(k){ return function(){ LOSSQ=(LOSSQ===k?'':k); if(TAB==='loss') drawLoss(m); }; };
+    m.innerHTML='<div class="tiles">'
+      +tile('Hazijathaminiwa',money(t.unvalued||0),'zinasubiri bei (SOP H.2)',{color:t.unvalued?'bad':'',on:LOSSQ==='open',cta:'chuja ›',go:pick('open')})
+      +tile('Zimekiriwa',money(c.acknowledged||0),'mdaiwa amesaini (SOP H.5)',{on:LOSSQ==='acknowledged',cta:'chuja ›',go:pick('acknowledged')})
+      +tile('Zinarejeshwa',money(c.recovering||0),'malipo yanaendelea',{color:c.recovering?'warn':'',on:LOSSQ==='recovering',cta:'chuja ›',go:pick('recovering')})
+      +tile('Deni lililobaki',money(t.outstanding||0),'TZS · zimerejeshwa '+money(t.recovered||0),{color:t.outstanding?'bad':'ok'})
+      +tile('Zimefungwa',money(c.settled||0),'zimelipwa kikamilifu',{color:'ok',on:LOSSQ==='settled',cta:'chuja ›',go:pick('settled')})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<button class="btn sm'+(LOSSQ===''?'':' ghost')+'" data-lsq="">Zinazoendelea / Live</button>'
+      +'<button class="btn sm'+(LOSSQ==='all'?'':' ghost')+'" data-lsq="all">Zote / All</button>'
+      +'<span style="flex:1"></span>'
+      +(canW?'<button class="btn sm" id="lsNew">+ Fungua kesi / Open a case</button>':'')
+      +'</div>'
+      +(rows.length?lossTable(rows,true):'<div class="mut">Hakuna kesi hapa. / Nothing here.</div>')
+      +'<h3 style="margin:18px 0 6px">Orodha ya bei / Price list <span class="mut" style="font-size:11.5px">— SOP H.2</span></h3>'
+      +'<div class="mut" style="font-size:11.5px;margin-bottom:6px">Thamani hunakiliwa kwenye kesi wakati inafunguliwa; kubadilisha bei hapa hakubadilishi deni lililokwisha saini. '
+      +'/ A case copies the price when it is opened, so changing it here never re-prices a debt already acknowledged.</div>'
+      +(prices.length?'<div class="scroll"><table><thead><tr><th>MODELI</th><th class="r">BEI (TZS)</th><th>MAELEZO</th><th>IMEWEKWA NA</th><th class="noxl"></th></tr></thead><tbody>'
+        +prices.map(function(x){
+          return '<tr><td>'+esc(x.item)+'</td><td class="r">'+money(x.amount)+'</td>'
+            +'<td style="font-size:11px">'+esc(x.note||'')+'</td>'
+            +'<td style="font-size:11px">'+esc(x.updatedBy||'—')+'</td>'
+            +'<td class="r noxl">'+(canW?'<button class="btn sm ghost" data-lspd="'+esc(x.item)+'">Futa</button>':'')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">Hakuna bei bado — kesi mpya haitathaminiwa yenyewe. / No prices yet, so a new case opens unvalued.</div>')
+      +(canW?'<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">'
+        +'<input id="lspItem" class="inp" style="width:auto" list="lspItems" placeholder="Modeli / Model">'
+        +'<datalist id="lspItems">'+(pl.items||[]).map(function(x){ return '<option value="'+esc(x)+'">'; }).join('')+'</datalist>'
+        +'<input id="lspAmt" class="inp" style="width:auto" type="number" min="0" step="1000" placeholder="Bei TZS">'
+        +'<input id="lspNote" class="inp" style="width:auto" placeholder="Maelezo">'
+        +'<button class="btn sm" id="lspSave">Hifadhi bei</button></div>':'');
+    wireTiles(m);
+    [].slice.call(m.querySelectorAll('[data-lsq]')).forEach(function(b){
+      b.onclick=function(){ LOSSQ=b.getAttribute('data-lsq'); if(TAB==='loss') drawLoss(m); };
+    });
+    var nw=$('#lsNew');
+    if(nw) nw.onclick=function(){
+      drawer('<h3>Fungua kesi / Open a case</h3>'
+        +'<div class="sub">Kwa niaba ya stoo au RSM. / On behalf of the store or an RSM.</div>'+lossRaiseHtml(pl,'lsn'));
+      lossRaiseWire('lsn', function(){ closeDrawer(); if(TAB==='loss') drawLoss(m); });
+    };
+    var ps=$('#lspSave');
+    if(ps) ps.onclick=function(){
+      var b=this; b.disabled=true;
+      srv('priceSave',{item:$('#lspItem').value, amount:$('#lspAmt').value, note:$('#lspNote').value})
+      .then(function(){ toast('Bei imehifadhiwa / Price saved'); if(TAB==='loss') drawLoss(m); })
+      .catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+    [].slice.call(m.querySelectorAll('[data-lspd]')).forEach(function(b){
+      b.onclick=function(){
+        if(!confirm('Futa bei ya '+b.getAttribute('data-lspd')+'?')) return;
+        srv('priceDelete',{item:b.getAttribute('data-lspd')})
+        .then(function(){ toast('Imefutwa / Removed'); if(TAB==='loss') drawLoss(m); })
+        .catch(function(e){ toast(safeErr(e), true); });
+      };
+    });
+    lossWire(m, rows, true);
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 /* ---------- commission ----------
      Finance SOP A.1 the daily 9:00 AM and monthly schedules, A.3 the phone-to-agent check,
      A.4 the payment sheet and its sign-off, A.6 the CLEARED stamp, plus the audit checklist.
@@ -6783,7 +7035,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',
