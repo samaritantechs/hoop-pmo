@@ -521,3 +521,29 @@ The department is a **label on the row**, never a nav: the rule since the advanc
 simplified is one queue, one grant. A customer's complaint is an issue whose subject is an
 IMEI, and the call card lists those above the customer's history so the officer sees an open
 complaint before dialling.
+
+## 15. SHIPPED 2026-09-09: credit follow-up — the script, the six-outcome report, the KPI
+
+Ripoti za simu counts calls; it could never say what came of them. The full story is
+[`docs/CREDIT-FOLLOWUP.md`](CREDIT-FOLLOWUP.md); the short version:
+
+| nav | pane | who |
+|---|---|---|
+| `furep` | Ripoti ya ufuatiliaji / Follow-up report | credit officers, and whoever reads their day |
+
+**Nothing to run — no migration.** The report is a read over tables this system already keeps.
+
+**Do:**
+
+1. Tick `furep` on the right roles in Access codes.
+2. Settings → `CALL_SCRIPT` (the company script, shown on the customer card in the app;
+   blank = no script panel), `KPI_DEFAULT_RATE` (the ceiling in percent, 5 if unset),
+   and `GM_EMAIL` if the **Tuma kwa GM** button should actually send.
+
+Two follow-up statuses were added: `MATENGENEZO` and `IMEPELEKWA KWA RSM`, both requiring a
+comment. Adding words takes nothing away from handsets already in the field.
+
+Six buckets that **partition** the customer (paid, unpaid, not available, stolen, maintenance,
+unresponded) plus an honest seventh, "not called". A promise is unpaid. The bucket is read from
+the WORDS of the status, so a status the office invents still counts. The default-rate KPI sits
+on the Recovery pane and says plainly that it is this system's proxy, not WATU's own figure.

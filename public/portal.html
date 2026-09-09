@@ -1410,7 +1410,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   impRequest:1, impDecide:1, impRetire:1, impRoleSave:1, impRoleDelete:1,
   leaveRequest:1, leaveDecide:1,
   // Issues: a raise re-sent files twice; an update re-sent trips its own stale-row guard.
-  issueRaise:1, issueUpdate:1};
+  issueRaise:1, issueUpdate:1,
+  // Sending the GM his copy: pressed again by a person who can see it went, never re-sent.
+  fuOutcomesSend:1};
 function srv(fn,args,tries){
   tries=tries||0;
   busy(true);
@@ -1511,6 +1513,10 @@ var NAV=[
     ic:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/>' },
   { g:'siku',  t:'ripoti',   nav:'reports',    sw:'Ripoti za simu',   en:'Call reports',
     ic:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.22a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>' },
+  /* Ripoti za simu counts CALLS. This one counts what came OF them -- the six buckets the
+     Credit SOP owes the GM every day (A.5), and the button that sends them (A.6). */
+  { g:'siku',  t:'furep',    nav:'furep',      sw:'Ripoti ya ufuatiliaji', en:'Follow-up report',
+    ic:'<path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/>' },
   { g:'siku',  t:'recovery', nav:'recovery',   sw:'Marejesho',        en:'Recovery',
     ic:'<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>' },
 
@@ -1709,6 +1715,7 @@ function draw(){
   if(TAB==='issuerep') return drawIssueRep(m);
   if(TAB==='sales') return drawSalesPerf(m);
   if(TAB==='ripoti') return drawRipoti(m);
+  if(TAB==='furep') return drawFuRep(m);
   if(TAB==='recovery') return drawRecovery(m);
   if(TAB==='staff') return drawStaff(m);
   if(TAB==='codes') return drawCodes(m);
@@ -2432,16 +2439,135 @@ function recChip(r){
   if(r.kind==='left') return '<span class="chip warn">ametoka kwenye orodha</span>';
   return '<span class="chip">—</span>';
 }
+/* ===================================================================================
+   THE FOLLOW-UP REPORT — the credit department's day, in the six words the SOP asks for.
+     Credit SOP A.5 "Generate a report covering: stolen devices, maintenance, not available,
+                     paid, unpaid, and unresponded calls"
+     Credit SOP A.6 "Send the report to the General Manager"
+
+   Ripoti za simu counts calls; this counts what came of them. One row per CUSTOMER in six
+   buckets that partition, so the tiles add up to the book and a tile can be tapped to filter
+   the table under it. Today by default, because this is a daily report.
+   =================================================================================== */
+var FUR={from:'',to:'',team:'',kind:''};
+var FU_KIND_COLOR={paid:'ok',unpaid:'warn',notAvailable:'',stolen:'bad',maintenance:'',unresponded:'bad',notCalled:'warn'};
+var FU_KIND_SUB={
+  paid:'wamelipa au wanalipa leo', unpaid:'wamefikiwa, hakuna malipo — ahadi ni deni',
+  notAvailable:'hawapatikani kwenye simu', stolen:'simu zimeibiwa au zimepotea',
+  maintenance:'simu ziko matengenezo', unresponded:'tumepiga, hawakujibu wala hakuna maelezo',
+  notCalled:'hawajapigiwa kabisa kwenye kipindi hiki'
+};
+function fuChip(kind,labels){
+  var lab=(labels&&labels[kind])||kind;
+  var c=FU_KIND_COLOR[kind];
+  return '<span class="chip'+(c?' '+c:'')+'">'+esc(String(lab).split(' / ')[0])+'</span>';
+}
+function drawFuRep(m){
+  if(!FUR.from&&!FUR.to&&!FUR.explicit){ FUR.from=isoToday(0); FUR.to=isoToday(0); }
+  m.innerHTML='<div class="sk"></div>';
+  srv('fuOutcomes',{from:FUR.from,to:FUR.to,team:FUR.team}).then(function(d){
+    var t=d.totals||{}, labels=d.labels||{}, kinds=d.kinds||[], rows=d.rows||[];
+    var pick=function(k){ return function(){ FUR.kind=(FUR.kind===k?'':k); if(TAB==='furep') drawFuRep(m); }; };
+    var shown=FUR.kind?rows.filter(function(r){ return r.kind===FUR.kind; }):rows;
+    var pct=function(n){ return t.customers?Math.round((n/t.customers)*100)+'%':'—'; };
+    m.innerHTML='<div class="card" style="padding:12px 14px">'
+      +'<h2 style="margin:0 0 2px">Ripoti ya ufuatiliaji / Follow-up report</h2>'
+      +'<div class="mut" style="font-size:12px">Mteja mmoja, kikapu kimoja — hivyo namba zinajumlisha kitabu. '
+      +'Ahadi ni "hawajalipa" mpaka deki iseme vinginevyo. / One customer, one bucket, so the numbers add to the book.</div></div>'
+      +'<div class="tiles">'
+      +kinds.map(function(k){
+        return tile(String(labels[k]||k).split(' / ')[0],money(t[k]||0),(FU_KIND_SUB[k]||'')+' · '+pct(t[k]||0),
+          {color:(t[k]?FU_KIND_COLOR[k]:''),on:FUR.kind===k,cta:'chuja ›',go:pick(k)});
+      }).join('')
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<span class="mut" style="font-size:12px">Kipindi:</span>'
+      +'<input id="furFrom" class="inp" type="date" style="width:auto" value="'+esc(FUR.from||'')+'">'
+      +'<input id="furTo" class="inp" type="date" style="width:auto" value="'+esc(FUR.to||'')+'">'
+      +'<button class="btn sm" id="furGo">Chuja / Filter</button>'
+      +'<button class="btn sm ghost" id="furToday">Leo / Today</button>'
+      +'<button class="btn sm ghost" id="furWeek">Siku 7 / Last 7 days</button>'
+      +(FUR.kind?'<button class="btn sm ghost" id="furAllK">Vikapu vyote / All buckets</button>':'')
+      +'<span style="flex:1"></span>'
+      +(BOOT.readOnly?'':'<button class="btn sm" id="furSend">Tuma kwa GM / Send to the GM</button>')
+      +'</div>'
+      +'<div class="mut" style="font-size:12px;margin-bottom:8px">Wateja '+money(t.customers||0)
+      +' · wamefuatiliwa '+money(t.logged||0)+' · simu zilizopigwa '+money(t.calls||0)
+      +(d.deckDate?' · deki ya '+esc(d.deckDate):'')+'</div>'
+      +((d.byOfficer||[]).length?'<div class="scroll" style="margin-bottom:12px"><table><thead><tr><th>AFISA</th><th class="r">WAMEFUATILIWA</th>'
+        +'<th class="r">WALIOPIGIWA</th><th class="r">PAID</th><th class="r">UNPAID</th><th class="r">N/A</th><th class="r">STOLEN</th><th class="r">MAINT.</th></tr></thead><tbody>'
+        +d.byOfficer.map(function(o){
+          return '<tr><td>'+esc(o.officer||'—')+'</td><td class="r">'+money(o.logged||0)+'</td><td class="r">'+money(o.dialled||0)+'</td>'
+            +'<td class="r">'+money(o.paid||0)+'</td><td class="r">'+money(o.unpaid||0)+'</td><td class="r">'+money(o.notAvailable||0)+'</td>'
+            +'<td class="r">'+money(o.stolen||0)+'</td><td class="r">'+money(o.maintenance||0)+'</td></tr>';
+        }).join('')+'</tbody></table></div>':'')
+      +(d.notListed?'<div class="note">'+money(d.notListed)+' hawakuorodheshwa hapa (orodha ni ndefu mno). '
+        +'/ rows beyond the listing cap — the tiles above are complete, this table is not.</div>':'')
+      +(shown.length?'<div class="scroll"><table><thead><tr><th>MTEJA</th><th>IMEI</th><th>KIKAPU</th><th>HALI ILIYOANDIKWA</th>'
+        +'<th>MAELEZO</th><th>AFISA</th><th class="r">SIMU</th><th class="r">OFF</th><th>LINI</th></tr></thead><tbody>'
+        +shown.map(function(r){
+          return '<tr><td>'+esc(r.name||'—')+(r.contact?'<div class="mut" style="font-size:10px">'+esc(r.contact)+'</div>':'')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.imei)+'</td>'
+            +'<td>'+fuChip(r.kind,labels)+'</td>'
+            +'<td style="font-size:11px">'+esc(r.status||'—')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.comment||'')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.by||'—')+'</td>'
+            +'<td class="r">'+money(r.callsMade||0)+'</td>'
+            +'<td class="r">'+(r.daysOffline==null?'—':money(r.daysOffline))+'</td>'
+            +'<td style="font-size:11px">'+esc(r.at?advWhen(r.at):'')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">Hakuna mstari wa aina hii kwenye kipindi hiki. / Nothing in this slice.</div>');
+    wireTiles(m);
+    var go=function(from,to){ FUR={from:from,to:to,team:FUR.team,kind:FUR.kind,explicit:true}; if(TAB==='furep') drawFuRep(m); };
+    $('#furGo').onclick=function(){ go($('#furFrom').value,$('#furTo').value); };
+    $('#furToday').onclick=function(){ go(isoToday(0),isoToday(0)); };
+    // isoToday() counts FORWARD, so a week back is a negative offset -- today included makes 7.
+    $('#furWeek').onclick=function(){ go(isoToday(-6),isoToday(0)); };
+    var ak=$('#furAllK'); if(ak) ak.onclick=function(){ FUR.kind=''; if(TAB==='furep') drawFuRep(m); };
+    var sb=$('#furSend');
+    if(sb) sb.onclick=function(){
+      var b=this; b.disabled=true;
+      srv('fuOutcomesSend',{from:FUR.from,to:FUR.to,team:FUR.team}).then(function(r){
+        toast(r.emailed?'Ripoti imetumwa kwa GM / Sent to the GM':'Email haikutumwa: '+(r.emailNote||''), !r.emailed);
+        b.disabled=false;
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
+/* THE DEPARTMENT'S ONE KPI, drawn where the recovery work is done.
+     Credit SOP D: "The credit department's default rate on the WATU system must not exceed 5%."
+   Hoop cannot read Watu's own default figure, so the card SAYS what it is measuring -- the
+   share of loans still inside the 45-day window that Watu marks 7+ days offline -- rather than
+   printing a number that looks like Watu's and is not. The ceiling is KPI_DEFAULT_RATE. */
+function kpiCard(k){
+  if(!k||!k.book) return '';
+  var pct=k.pct==null?null:Math.round(k.pct*10)/10;
+  var over=pct!=null&&k.target!=null&&pct>k.target;
+  return '<div class="card" style="border-left:4px solid var(--'+(over?'bad':'ok')+')">'
+    +'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">'
+    +'<div><div class="mut" style="font-size:12px">Kiwango cha wasiolipa / Default rate — KPI</div>'
+    +'<div style="font-size:26px;font-weight:700;color:var(--'+(over?'bad':'ok')+')">'+(pct==null?'—':pct+'%')+'</div></div>'
+    +'<div class="mut" style="font-size:12px;text-align:right">Lengo / target: <b>&le; '+money(k.target)+'%</b>'
+    +'<div>'+money(k.locked)+' kati ya '+money(k.book)+' ndani ya siku 45 · deki ya '+esc(k.asOf||'')+'</div></div></div>'
+    +'<div class="mut" style="font-size:11px;margin-top:6px">Hii ni sehemu ya mikopo iliyo ndani ya dirisha la siku 45 ambayo Watu imeiweka 7+ siku bila mtandao — '
+    +'ndiyo kipimo cha karibu zaidi tulichonacho na default rate ya Watu, si namba ya Watu yenyewe. '
+    +'/ Share of in-window loans Watu marks 7+ days offline: this system\'s closest proxy for the WATU default rate, not WATU\'s own figure.</div>'
+    +(over?'<div class="note bad" style="margin-top:8px">Iko juu ya lengo la '+money(k.target)+'%. / Above the KPI ceiling.</div>':'')
+    +'</div>';
+}
 function drawRecovery(m){
   m.innerHTML='<div class="card"><h2>Recovery</h2><div class="sk"></div></div>';
   srv('recovery').then(function(d){
     if(!d.prev){
-      m.innerHTML='<div class="card"><h2>Recovery</h2><div class="mut">'+esc(d.note||'Hakuna data bado — pakia orodha ya kwanza.')+'</div></div>';
+      m.innerHTML=kpiCard(d.kpi)
+        +'<div class="card"><h2>Recovery</h2><div class="mut">'+esc(d.note||'Hakuna data bado — pakia orodha ya kwanza.')+'</div></div>';
       return;
     }
     var c=d.counts||{};
     m.innerHTML=
-      '<div class="card"><h2>Recovery — '+esc(d.prev)+' → '+esc(d.latest)+'</h2>'
+      kpiCard(d.kpi)
+      +'<div class="card"><h2>Recovery — '+esc(d.prev)+' → '+esc(d.latest)+'</h2>'
       +'<div class="mut" style="margin-bottom:10px">Nani amerudi baada ya simu zetu: tunalinganisha upload mbili za mwisho, mteja kwa mteja (IMEI).</div>'
       /* Four of the five filter the table below; "wamelinganishwa" is the denominator --
          everybody on both decks -- which is the whole book, and the whole book already has
@@ -5797,7 +5923,7 @@ function drawCodes(m){
       +'<button class="btn sm" id="rlSave">Save role</button></div>'
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
-          var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',recovery:'Recovery',
+          var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
             fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',movement:'Stock movement',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
@@ -5986,6 +6112,10 @@ function drawSettings(m){
       }).join('')
       +'<div class="mut">SYSTEM_OPEN=YES hufungua mfumo. CALL_BRAND ni jina kwenye app. FU_STATUSES: hali za ufuatiliaji — tenganisha kwa comma (au mstari mpya). '
       +'<b>SALES_DAILY_TARGET</b>: lengo la mauzo kwa siku (TZS) — linaonekana kama mstari kwenye chati ya Sales performance. / daily sales target in TZS, drawn as the target line on the Sales performance chart. '
+      /* THE SCRIPT AND THE CEILING -- the two settings the Credit SOP names outright. */
+      +'<b>CALL_SCRIPT</b>: maneno ya kampuni ambayo afisa anasoma akipiga simu — yanaonekana kwenye kadi ya mteja kwenye app. Ukiacha wazi hakuna kisanduku cha script. '
+      +'<b>KPI_DEFAULT_RATE</b>: kikomo cha default rate kwa asilimia (chaguo-msingi 5) — kinachopimwa kwenye Marejesho ni sehemu ya mikopo iliyo ndani ya siku 45 ambayo Watu imeiweka 7+ siku bila mtandao. '
+      +'/ CALL_SCRIPT is the company script shown on the customer card; KPI_DEFAULT_RATE is the default-rate ceiling in percent the Recovery pane measures against. '
       /* WHERE THE COPIES GO. "so the gm and administrator email get set in settings". Blank
          means nobody is emailed and the panes still work -- the pane is the record, the mail
          is the nudge. Several addresses may be separated by commas. Sending also needs

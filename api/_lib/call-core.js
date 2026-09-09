@@ -35,14 +35,45 @@ export const APP = { BRAND: 'HOOPLOAN', MOTTO: 'WATU SIMU' };
    behaviour wiring as Hope -- a promise opens a date, a new number opens a number box,
    OTHERS demands a comment -- and the list is editable in Settings (FU_STATUSES), where a
    new word is always a plain comment. */
+/* MATENGENEZO and IMEPELEKWA KWA RSM were added 2026-09-09 for the Credit SOP:
+     A.5 "Generate a report covering: stolen devices, MAINTENANCE, not available, paid,
+          unpaid, and unresponded calls"
+     B.5 "Follow up with the agent and guarantor if the client does not respond, ESCALATING
+          TO THE RSM as a last resort"
+   A phone in the shop is not a customer refusing to pay, and neither is one the RSM has been
+   handed -- without the two words both were being logged as OTHERS, which is where a report
+   goes to die. ADDING to this list is safe for handsets already in the field: an old app
+   simply does not offer the new words, and every list here is overridable in Settings. */
 export const FU_STATUSES = [
   'AMETOA AHADI', 'ANALIPA LEO', 'HAPATIKANI', 'HANA USHIRIKIANO',
-  'SIMU IPO KWA MTU MWINGINE', 'SIMU IMEIBIWA / IMEPOTEA', 'ANA NAMBA NYINGINE', 'OTHERS',
+  'SIMU IPO KWA MTU MWINGINE', 'SIMU IMEIBIWA / IMEPOTEA', 'MATENGENEZO',
+  'ANA NAMBA NYINGINE', 'IMEPELEKWA KWA RSM', 'OTHERS',
 ];
 export const FU_NEED_DATE = ['AMETOA AHADI'];
-export const FU_NEED_COMMENT = ['SIMU IMEIBIWA / IMEPOTEA', 'OTHERS'];
+export const FU_NEED_COMMENT = ['SIMU IMEIBIWA / IMEPOTEA', 'MATENGENEZO', 'IMEPELEKWA KWA RSM', 'OTHERS'];
 export const FU_NEED_NUMBER = ['ANA NAMBA NYINGINE'];
 export const FU_STATUS_KEY = 'FU_STATUSES';
+
+/* THE SIX BUCKETS THE GM IS SENT (Credit SOP A.5), as a rule over the WORDS rather than a
+   list of statuses -- because FU_STATUSES is editable in Settings, so a report keyed to the
+   exact built-in strings would silently stop counting the day somebody added a word of their
+   own. Anything reached that is not a payment, a repair or a theft is "unpaid": a promise is
+   not money. Order matters -- the first match wins. */
+const FU_BUCKET_RULES = [
+  ['stolen', /IMEIBIWA|IMEPOTEA|WIZI|STOLEN|LOST/],
+  ['maintenance', /MATENGENEZO|UKARABATI|MAINTEN|REPAIR|SERVICE/],
+  ['notAvailable', /HAPATIKANI|HAJAPATIKANA|NOT *AVAILABLE|UNREACHABLE|NO *ANSWER/],
+  ['paid', /ANALIPA|AMELIPA|KALIPA|AMEMALIZA|PAID|PAYING/],
+];
+/** Which of the GM's six buckets a follow-up status falls in. Blank status → null (nothing
+    was logged, which is the "unresponded" question and is counted from the calls instead). */
+export function fuBucketOf(status) {
+  const s = K(status);
+  if (!s) return null;
+  for (const [bucket, re] of FU_BUCKET_RULES) if (re.test(s)) return bucket;
+  return 'unpaid';
+}
+export const FU_BUCKETS = ['paid', 'unpaid', 'notAvailable', 'stolen', 'maintenance'];
 
 export function parseFuStatuses(raw) {
   // Newlines OR commas: the Settings box is a one-line input, so a comma-separated
@@ -136,8 +167,11 @@ async function teamList(db) {
 
 /* ---------- boot / register ---------- */
 async function boot(db, [dev], nowMs) {
+  /* CALL_SCRIPT rides along on the boot read that already happens: Credit SOP A.3 "Call
+     clients ... using the company script" and E.5 "Use the company script when calling
+     clients". It is one more key on a read of several, so the script costs no round trip. */
   const BOOT_KEYS = ['CALL_BRAND', 'CALL_LOGO_URL', 'CALL_SYNC_SECONDS', 'CALL_LOGOUT_ENABLED',
-    FU_STATUS_KEY, 'DATA_VERSION', 'OFFLINE_PACK'];
+    FU_STATUS_KEY, 'DATA_VERSION', 'OFFLINE_PACK', 'CALL_SCRIPT'];
   let cu = null, accountOff = false;
   const [setting] = await Promise.all([
     settingsMany(db, BOOT_KEYS),
@@ -167,6 +201,8 @@ async function boot(db, [dev], nowMs) {
     teams: [],               // never handed to a handset; kept for shape compatibility
     watermark: num(cu.last_ts),
     ...fuStatusShape(parseFuStatuses(setting(FU_STATUS_KEY))),
+    // What to SAY. Blank means the card shows no script panel at all.
+    callScript: String(setting('CALL_SCRIPT') || '').trim(),
     brand, motto: APP.MOTTO, logo,
     dataVersion: setting('DATA_VERSION') || '',
     offlinePack: ['YES', 'TRUE', '1', 'ON'].includes(K(setting('OFFLINE_PACK'))),

@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
-import { todayKey, addDaysKey } from './_lib/time.js';
+import { todayKey, addDaysKey, TZ_OFFSET_MS } from './_lib/time.js';
 import { sendMail, noticeHtml } from './_lib/mail.js';
 import { nudge } from './_lib/push.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
-  agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES } from './_lib/call-core.js';
+  agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -68,6 +68,10 @@ AUDITED.add('leaveDecide');
    id; the department is not a payload). The text of the issue never reaches the log. */
 AUDITED.add('issueRaise');
 AUDITED.add('issueUpdate');
+/* The follow-up report LEAVING the building (Credit SOP A.6 "Send the report to the General
+   Manager"). The report itself is a read; sending a copy of the department's day to somebody
+   outside the pane is an act, so who sent which period is kept. */
+AUDITED.add('fuOutcomesSend');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -95,9 +99,16 @@ const inWinOn = (r, day) => {
    them and settingSet refused to write them. The number a stranded customer is told to
    call could not be set by anybody, from anywhere, and the doc said it could.
 
-   The keys are also the pane's ORDER, top to bottom, so device settings sit together. */
+   The keys are also the pane's ORDER, top to bottom, so device settings sit together.
+
+   CALL_SCRIPT is what the officer READS to the customer (Credit SOP A.3 "using the company
+   script", E.5 "Use the company script when calling clients"); it appears on the customer card
+   in the app, and blank means the card shows no script panel at all. KPI_DEFAULT_RATE is the
+   department's ceiling in percent (SOP D: "must not exceed 5%"), which the Recovery pane
+   measures its locked-7 share against. */
 const EDITABLE_SETTINGS = [
   'SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
+  'CALL_SCRIPT', 'KPI_DEFAULT_RATE',
   'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET',
   // The locked handset's four lines, plus how long silence is forgiven. See device-core.js.
   'DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE', 'DEVICE_LOCK_REASON',
@@ -195,7 +206,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -464,6 +475,165 @@ function issueDeptEmails(value, dept) {
 }
 const issueOpenFirst = (x, y) => (x.status === 'resolved' ? 1 : 0) - (y.status === 'resolved' ? 1 : 0)
   || (y.at || 0) - (x.at || 0);
+
+/* ---------- THE CREDIT DEPARTMENT'S DAY, in the words the SOP asks for ----------
+     Credit SOP A.5 "Generate a report covering: stolen devices, maintenance, not available,
+                     paid, unpaid, and unresponded calls"
+     Credit SOP A.6 "Send the report to the General Manager"
+
+   SIX BUCKETS THAT PARTITION THE CUSTOMER, not the call -- so the numbers add up and a GM can
+   read them as shares of the book. A customer counted twice is worse than a customer missed:
+   the follow-up that was logged decides the bucket, and only where nothing was logged does the
+   dialling decide it. In order:
+
+     something logged  -> paid / unpaid / notAvailable / stolen / maintenance, by the WORDS of
+                          the status (fuBucketOf), because FU_STATUSES is editable and a report
+                          keyed to exact strings stops counting the day somebody adds a word
+     nothing logged, dialled     -> unresponded   ("we rang, nothing came back")
+     nothing logged, never dialled -> notCalled   (not one of the six; the honest denominator,
+                          the number that says how much of the book was never touched)
+
+   A promise is NOT money: AMETOA AHADI is unpaid until the deck says otherwise. */
+const FU_BUCKET_LABEL = {
+  paid: 'Wamelipa / Paid',
+  unpaid: 'Hawajalipa / Unpaid',
+  notAvailable: 'Hawapatikani / Not available',
+  stolen: 'Simu zimeibiwa au zimepotea / Stolen or lost',
+  maintenance: 'Matengenezo / Maintenance',
+  unresponded: 'Hawakujibu / Unresponded calls',
+  notCalled: 'Hawajapigiwa / Not called in this period',
+};
+const FU_REPORT_KINDS = FU_BUCKETS.concat(['unresponded', 'notCalled']);
+/* The EAT day a timestamp falls on. followup_comments stamps `created_at` as a timestamptz, so
+   the day it belongs to is the day in Dar es Salaam, not the day in UTC -- otherwise every
+   follow-up logged before 03:00 lands in yesterday's report. */
+const eatDayOf = ts => {
+  const ms = Date.parse(String(ts || ''));
+  return Number.isFinite(ms) ? new Date(ms + TZ_OFFSET_MS).toISOString().slice(0, 10) : '';
+};
+
+/** The report both the pane and the email are built from, so the screen and the GM's copy can
+    never disagree. Defaults to TODAY alone: this is a daily report. */
+async function fuOutcomesCore(db, user, args, nowMs) {
+  const a = args || {};
+  const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null;
+  const to = day(a.to) || todayKey(nowMs);
+  const from = day(a.from) || to;
+  /* The window is EAT days; the comment column is a timestamptz. Convert once, here, rather
+     than reading a wider window and hoping -- an off-by-three-hours report is worse than none. */
+  const fromTs = new Date(Date.parse(from + 'T00:00:00Z') - TZ_OFFSET_MS).toISOString();
+  const toTs = new Date(Date.parse(to + 'T00:00:00Z') - TZ_OFFSET_MS + 86400000).toISOString();
+  // A team may be narrowed WITHIN this code's own scope, exactly as Ripoti does it.
+  const want = K(a.team);
+  const inTeam = r => !want || K(r.team) === want;
+
+  const [notes, logs] = await Promise.all([
+    fetchAll(() => scopeQ(user, db.from('followup_comments')
+      .select('imei, team, client_name, fu_status, comment, created_at, created_by')
+      .gte('created_at', fromTs).lt('created_at', toTs))),
+    fetchAll(() => scopeQ(user, db.from('call_logs')
+      .select('ref, outcome, portfolio, call_date, officer, team')
+      .gte('call_date', from).lte('call_date', to))),
+  ]);
+
+  /* THE BOOK, for the one number that needs a denominator. Quietly optional: a report that
+     refuses to open because the deck has not been uploaded is not a better report. */
+  let deck = [], deckDate = null;
+  try {
+    const one = await db.from('followup_status').select('deck_date').not('deck_date', 'is', null)
+      .order('deck_date', { ascending: false }).limit(1);
+    deckDate = one.data && one.data[0] ? String(one.data[0].deck_date).slice(0, 10) : null;
+    if (deckDate) {
+      deck = await fetchAll(() => scopeQ(user, db.from('followup_status')
+        .select('imei, client_name, team, contact, days_offline').eq('deck_date', deckDate)));
+    }
+  } catch (e) { deck = []; deckDate = null; }
+
+  /* THE LATEST WORD WINS. An officer who rings twice and logs twice has one outcome, and it is
+     the last one -- "hapatikani" at nine and "analipa leo" at four is a customer who paid. */
+  const latest = new Map();
+  for (const n of notes) {
+    if (!inTeam(n)) continue;
+    const k = String(n.imei || '');
+    if (!k) continue;
+    const had = latest.get(k);
+    if (!had || String(n.created_at || '') > String(had.created_at || '')) latest.set(k, n);
+  }
+  const dialled = new Map();
+  let calls = 0;
+  for (const r of logs) {
+    if (!inTeam(r)) continue;
+    calls++;
+    const k = String(r.ref || '');
+    if (!k) continue;                       // a call to somebody off the book is not a customer
+    if (!dialled.has(k)) dialled.set(k, { officer: r.officer || '', n: 0 });
+    dialled.get(k).n++;
+  }
+
+  const known = new Map();                  // imei -> a name and a team, from wherever we have one
+  const remember = (imei, name, team, extra) => {
+    const k = String(imei || '');
+    if (!k) return;
+    const had = known.get(k) || { imei: k, name: '', team: '', contact: '', daysOffline: null };
+    if (!had.name && name) had.name = String(name);
+    if (!had.team && team) had.team = String(team);
+    if (extra && extra.contact && !had.contact) had.contact = String(extra.contact);
+    if (extra && extra.daysOffline != null && had.daysOffline == null) had.daysOffline = num(extra.daysOffline);
+    known.set(k, had);
+  };
+  for (const d of deck) if (inTeam(d)) remember(d.imei, d.client_name, d.team, { contact: d.contact, daysOffline: d.days_offline });
+  for (const [k, n] of latest) remember(k, n.client_name, n.team);
+  for (const k of dialled.keys()) remember(k, '', '');
+
+  const rows = [];
+  const totals = { customers: 0, logged: 0, calls, dialled: dialled.size };
+  for (const k of FU_REPORT_KINDS) totals[k] = 0;
+  const byOfficer = new Map();
+  const officer = name => {
+    const key = String(name || '—');
+    if (!byOfficer.has(key)) {
+      const o = { officer: key, logged: 0, dialled: 0 };
+      for (const b of FU_BUCKETS) o[b] = 0;
+      byOfficer.set(key, o);
+    }
+    return byOfficer.get(key);
+  };
+  for (const [k, who] of dialled) officer(who.officer).dialled++;
+
+  for (const [imei, c] of known) {
+    const n = latest.get(imei);
+    /* A note with no status at all is contact that produced nothing -- an officer wrote a
+       sentence and did not say what came of it. It counts as unpaid, never as paid. */
+    const kind = n ? (fuBucketOf(n.fu_status) || 'unpaid')
+      : (dialled.has(imei) ? 'unresponded' : 'notCalled');
+    totals.customers++;
+    totals[kind]++;
+    if (n) {
+      totals.logged++;
+      const o = officer(n.created_by);
+      o.logged++;
+      if (o[kind] != null) o[kind]++;
+    }
+    rows.push({ imei, kind, name: c.name || '', team: c.team || '', contact: c.contact || '',
+      daysOffline: c.daysOffline, status: n ? (n.fu_status || '') : '',
+      comment: n ? String(n.comment || '').slice(0, 300) : '',
+      by: n ? (n.created_by || '') : (dialled.get(imei) ? dialled.get(imei).officer : ''),
+      at: n ? (Date.parse(n.created_at) || null) : null,
+      day: n ? eatDayOf(n.created_at) : '',
+      callsMade: dialled.has(imei) ? dialled.get(imei).n : 0 });
+  }
+  /* Worst first: the buckets somebody has to act on before the ones already settled. */
+  const RANK = { stolen: 0, maintenance: 1, unresponded: 2, notCalled: 3, unpaid: 4, notAvailable: 5, paid: 6 };
+  rows.sort((x, y) => (RANK[x.kind] - RANK[y.kind]) || (y.at || 0) - (x.at || 0)
+    || (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+  const CAP = 800;
+  return { ok: true, from, to, team: want || '', deckDate,
+    kinds: FU_REPORT_KINDS, labels: FU_BUCKET_LABEL,
+    totals,
+    byOfficer: [...byOfficer.values()].sort((x, y) => y.logged - x.logged || (x.officer < y.officer ? -1 : 1)),
+    notListed: Math.max(0, rows.length - CAP),
+    rows: rows.slice(0, CAP) };
+}
 
 const SUSPEND_NOT_READY = 'Kusimamisha mtu hakujawekwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-08-31-access-suspend.sql kwenye Supabase, kisha rudi hapa. '
@@ -954,6 +1124,57 @@ const FNS = {
   },
 
   /* =====================================================================================
+     THE FOLLOW-UP REPORT the credit department owes the GM every day.
+     =====================================================================================
+       Credit SOP A.4 "Log the outcome of every call."
+       Credit SOP A.5 "Generate a report covering: stolen devices, maintenance, not
+                       available, paid, unpaid, and unresponded calls."
+       Credit SOP A.6 "Send the report to the General Manager."
+
+     Ripoti (the `reports` nav) counts CALLS -- how many, how long, who made them. It cannot
+     answer this, because a call is not an outcome: two hundred calls and no idea how many
+     phones turned out to be stolen is exactly the report this SOP was written against.
+
+     ONE ROW PER CUSTOMER, in six buckets that partition (see FU_BUCKET_LABEL above), so the
+     numbers add to the book and a GM can read them as shares. Whoever holds `furep` reads
+     it; sending the copy is the same grant plus write, and audited.
+
+     Budget: 2 window reads, both date-bounded AND team-scoped at the database
+     (followup_comments by its EAT-corrected timestamp, call_logs by call_date), plus the
+     deck: 1 tiny indexed lookup for the newest deck_date and 1 scoped read of that day --
+     the same pair `customers` does. The deck is allowed to fail quietly: without it the six
+     buckets still stand and only "not called" is unknown. */
+  async fuOutcomes(db, user, args) {
+    requireNav(user, 'furep');
+    return fuOutcomesCore(db, user, args, Date.now());
+  },
+
+  /** SOP A.6, as a button. The pane is the report; this is the copy that leaves the building,
+      so it is a write in every sense that matters and lands in the audit log. */
+  async fuOutcomesSend(db, user, args) {
+    requireNav(user, 'furep');
+    requireWrite(user);
+    const out = await fuOutcomesCore(db, user, args, Date.now());
+    const t = out.totals;
+    const period = out.from === out.to ? out.from : (out.from + ' → ' + out.to);
+    const pct = n => (t.customers ? Math.round((n / t.customers) * 100) + '%' : '—');
+    const mail = await sendMail(db, { toKey: 'GM_EMAIL',
+      subject: 'HOOPLOAN — ripoti ya ufuatiliaji / credit follow-up report ' + period
+        + (out.team ? ' (' + out.team + ')' : ''),
+      html: noticeHtml('Ripoti ya ufuatiliaji / Credit follow-up report — ' + period,
+        FU_REPORT_KINDS.map(k => [FU_BUCKET_LABEL[k], String(out.totals[k]) + ' · ' + pct(out.totals[k])])
+          .concat([
+            ['Wateja kwenye ripoti / Customers in the report', String(t.customers)],
+            ['Wamefuatiliwa / Followed up', String(t.logged)],
+            ['Simu zilizopigwa / Calls placed', String(t.calls)],
+          ]),
+        'Imetumwa na ' + (user.name || '—') + '. Fungua Ripoti ya ufuatiliaji kwenye portal kwa orodha kamili. '
+        + '/ Open the follow-up report in the portal for the customer list.') });
+    return { ok: true, from: out.from, to: out.to, totals: out.totals,
+      emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
+  },
+
+  /* =====================================================================================
      DAILY SALES PERFORMANCE -- one week, pivoted four ways, against a target.
      =====================================================================================
        "Pivot for all: for General duty person, RSMs, Commission agents and company grand
@@ -1096,14 +1317,51 @@ const FNS = {
       .order('snapshot_date', { ascending: false }).limit(1);
     if (one.error) throw new Error(one.error.message);
     const latest = one.data && one.data[0] && String(one.data[0].snapshot_date).slice(0, 10);
-    if (!latest) return { ok: true, latest: null, prev: null, rows: [], counts: null };
+    if (!latest) return { ok: true, latest: null, prev: null, rows: [], counts: null, kpi: null };
     const two = await db.from('watu_snapshots').select('snapshot_date')
       .lt('snapshot_date', latest).order('snapshot_date', { ascending: false }).limit(1);
     const prev = two.data && two.data[0] && String(two.data[0].snapshot_date).slice(0, 10);
-    if (!prev) return { ok: true, latest, prev: null, rows: [], counts: null,
-      note: 'Upload mbili zinahitajika kupima recovery — hii ni ya kwanza. / Recovery needs two uploads; this is the first.' };
     // client_mobile, NOT contact -- snapshots carry the importer's own column names.
-    const COLS = 'imei, client_name, client_mobile, team, days_offline, has_ever_paid, price, created_at';
+    // locked7 and disbursed_date ride along for the KPI below: two more columns on a read
+    // that already happens, never a second read.
+    const COLS = 'imei, client_name, client_mobile, team, days_offline, has_ever_paid, price, created_at, locked7, disbursed_date';
+    /* =====================================================================================
+       THE DEPARTMENT'S ONE KPI (Credit SOP D): "The credit department's default rate on the
+       WATU system must not exceed 5%."
+
+       Hoop does not hold Watu's own default figure, so this is stated as what this system CAN
+       see and is labelled as such on the pane: of the loans still inside the 45-day window on
+       today's deck, the share Watu marks 7+ days offline. That is the same locked-7 arithmetic
+       every other screen here uses, so the KPI moves with the charts beside it rather than
+       being a number of its own.
+
+       KPI_DEFAULT_RATE is the ceiling in percent, 5 unless the owner sets otherwise. */
+    const kpiOf = async rowsIn => {
+      const seen = new Map();
+      for (const r of rowsIn) {
+        const k = String(r.imei);
+        const had = seen.get(k);
+        if (!had || String(r.created_at) > String(had.created_at)) seen.set(k, r);
+      }
+      let book = 0, bad = 0;
+      for (const r of seen.values()) {
+        if (!inWinOn(r, latest)) continue;
+        book++;
+        if (r.locked7 === true) bad++;
+      }
+      let target = 5;
+      try {
+        const { data: s } = await db.from('settings').select('value').eq('key', 'KPI_DEFAULT_RATE').maybeSingle();
+        const v = parseFloat(String((s && s.value) || '').replace('%', '').trim());
+        if (Number.isFinite(v) && v >= 0 && v <= 100) target = v;
+      } catch (e) { target = 5; }
+      return { book, locked: bad, pct: book ? (bad / book) * 100 : null, target, asOf: latest };
+    };
+    if (!prev) {
+      const cur1 = await fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', latest)));
+      return { ok: true, latest, prev: null, rows: [], counts: null, kpi: await kpiOf(cur1),
+        note: 'Upload mbili zinahitajika kupima recovery — hii ni ya kwanza. / Recovery needs two uploads; this is the first.' };
+    }
     /* THE BRANCH IS THE LOCATION, HERE TOO. watu_snapshots carries only the shop-derived
        `team` -- teamFromShop() turns "Hoop Limited, Kinondoni" into KINONDONI, so every row
        of this table reads KINONDONI and the Recovery board looked like one branch owned the
@@ -1176,6 +1434,7 @@ const FNS = {
     return { ok: true, latest, prev,
       counts: { compared: [...curM.keys()].filter(k => oldM.has(k)).length,
         paidNew, reconnected, deeper, leftList: off },
+      kpi: await kpiOf(cur),
       notListed: Math.max(0, rows.length - CAP),
       rows: rows.slice(0, CAP) };
   },

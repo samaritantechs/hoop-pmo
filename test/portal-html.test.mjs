@@ -1645,3 +1645,57 @@ test('portal.html: the desk is one queue with a department chip, and the report 
     assert.match(IMP_SRC(fn, html), /if\(d\.notReady\)\{ m\.innerHTML=issueNotReady\(\); return; \}/, fn + ' says which file to run');
   }
 });
+
+/* =========================================================================================
+   THE FOLLOW-UP REPORT, the company script and the KPI card.
+     Credit SOP A.5 six buckets, A.6 send to the GM, A.3/E.5 the company script, D the 5% KPI.
+   The wiring test above proves the nav opens a defined pane calling functions the server has.
+   These pin what the server cannot see: that the tiles ARE the buckets the server sent, that
+   the send button is not offered to a code that may not write, and that the KPI card says what
+   it is measuring rather than passing itself off as WATU's own figure.
+   ========================================================================================= */
+test('portal.html: the follow-up report draws the server\'s own buckets and each tile filters the table', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawFuRep', html);
+  assert.match(fn, /srv\('fuOutcomes',\{from:FUR\.from,to:FUR\.to,team:FUR\.team\}\)/);
+  // The tiles are built from d.kinds, so a bucket added on the server appears here with no
+  // second edit -- the failure mode this replaces is a screen quietly missing a category.
+  assert.match(fn, /kinds\.map\(function\(k\)\{/);
+  assert.match(fn, /labels\[k\]\|\|k/, 'and labelled with the server\'s own words');
+  assert.match(fn, /FUR\.kind\?rows\.filter\(function\(r\)\{ return r\.kind===FUR\.kind; \}\):rows/,
+    'tapping a tile filters the table under it');
+  assert.match(html, /var FUR=\{from:'',to:'',team:'',kind:''\};/);
+  assert.match(fn, /FUR\.from=isoToday\(0\); FUR\.to=isoToday\(0\);/, 'today by default: this is a daily report');
+  assert.match(fn, /go\(isoToday\(-6\),isoToday\(0\)\)/, 'and a week back is a NEGATIVE offset');
+  // Sending the GM his copy: a write, so not offered to a view-only code, and never re-sent.
+  assert.match(fn, /BOOT\.readOnly\?'':'<button class="btn sm" id="furSend"/);
+  assert.match(fn, /srv\('fuOutcomesSend'/);
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  assert.match(nr[1], /\bfuOutcomesSend:1/, 'a dropped send is re-pressed by a person who can see it');
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  assert.match(lbl[0], /\bfurep:'[^']+'/, 'the owner ticks it by a name, not a key');
+});
+
+test('portal.html: the KPI card names its own proxy and only shouts when it is over the line', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('kpiCard', html);
+  assert.match(fn, /if\(!k\|\|!k\.book\) return '';/, 'no book, no card -- never a bare 0%');
+  assert.match(fn, /pct>k\.target/, 'red is measured against the setting, not a hard-coded 5');
+  assert.match(fn, /closest proxy for the WATU default rate, not WATU/, 'the card says what it is and what it is not');
+  // Drawn on the recovery pane in BOTH states: with two decks, and on the very first upload.
+  const rec = IMP_SRC('drawRecovery', html);
+  assert.equal((rec.match(/kpiCard\(d\.kpi\)/g) || []).length, 2,
+    'the first upload has no recovery to show and still has a KPI');
+  assert.match(html, /<b>KPI_DEFAULT_RATE<\/b>/, 'and Settings explains the key');
+  assert.match(html, /<b>CALL_SCRIPT<\/b>/);
+});
+
+test('call.html: the company script is on the card, folded, and absent when nobody set one', () => {
+  const html = read('call.html');
+  assert.match(html, /S\.boot && S\.boot\.callScript/, 'the script comes off the boot the app already makes');
+  assert.match(html, /<details class="script-box"><summary>[^<]*Maneno ya kampuni \/ Company script<\/summary>/);
+  assert.match(html, /esc\(S\.boot\.callScript\)/, 'escaped: the office types prose, not markup');
+  assert.match(html, /\.script-body\{white-space:pre-wrap/, 'the office\'s own line breaks survive');
+  // The empty case is a MISSING panel, not an empty one.
+  assert.match(html, /\? '<details class="script-box">[\s\S]*?: ''\)/);
+});
