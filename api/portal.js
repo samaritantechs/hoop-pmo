@@ -78,6 +78,11 @@ AUDITED.add('fuOutcomesSend');
 AUDITED.add('stockRequest');
 AUDITED.add('stockDecide');
 AUDITED.add('stockIssue');
+/* TARGETS: who set what a person is expected to sell, and who moved an agent to another RSM.
+   The numbers themselves stay out of the log; KEEP carries the name and the scope. */
+AUDITED.add('targetSave');
+AUDITED.add('targetDelete');
+AUDITED.add('staffManager');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -147,10 +152,19 @@ function bad(msg) {
 /* A table that has not been created yet. PostgREST says so in a few different ways depending
    on version, so this matches on what they all share rather than on one code. Used to let a
    pane whose migration has not been run read as EMPTY instead of throwing a 500 at somebody
-   who has done nothing wrong except open it early. */
+   who has done nothing wrong except open it early.
+
+   PGRST204 -- "Could not find the 'x' column of 'y' in the schema cache" -- is on this list
+   because of what it means HERE. Migrations in this repository are run by hand, so every
+   deployment spends time between the deploy and somebody pasting the SQL; in that window a
+   write names a column the schema has not got, and PostgREST answers 204 rather than 42P01.
+   That is the same fact as a missing table from the caller's point of view -- run the
+   migration -- and the callers that pass this to bad() name the file to run. Without it the
+   read path said "run the migration" and the write path 500'd on the identical cause. */
 function tableMissing(err) {
   const s = String((err && (err.message || err.code)) || err || '');
-  return /does not exist|Could not find the table|42P01|PGRST205/i.test(s);
+  return /does not exist|Could not find the table|42P01|PGRST205/i.test(s)
+    || (/PGRST204/i.test(s) || /Could not find the '.*' column of/i.test(s));
 }
 
 function requireWrite(user) {
@@ -212,7 +226,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -608,6 +622,45 @@ async function stockAgingIndex(db) {
     holders: [...by.values()].map(g => ({ holder: g.holder, pieces: g.pieces, aging: g.aging, oldest: g.oldest,
       items: [...g.items.entries()].sort((x, y) => y[1] - x[1]).slice(0, 4).map(e => e[0] + ' ×' + e[1]).join(', ') }))
       .sort((x, y) => y.aging - x.aging || y.oldest - x.oldest || y.pieces - x.pieces),
+  };
+}
+
+/* ---------- SALES TARGETS (CSM SOP B.3, RSM SOP B.1/B.3) ---------- */
+const TARGET_NOT_READY = 'Jedwali la malengo halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-09-targets.sql kwenye Supabase. '
+  + '/ The targets table has not been created yet — run that migration first.';
+const TARGET_SCOPES = ['agent', 'rsm', 'branch', 'company'];
+const isMonth = s => /^\d{4}-\d{2}$/.test(String(s || ''));
+/** First and last day of a 'YYYY-MM'. Pure string arithmetic; no timezone is involved in a month. */
+function monthDays(period) {
+  const from = period + '-01';
+  const [y, m] = period.split('-').map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();   // day 0 of next month = last of this
+  return { from, to: period + '-' + String(last).padStart(2, '0') };
+}
+/* WHICH RSM AN AGENT BELONGS TO. The register's own `manager` if somebody set one, else the
+   Regional_Manager standing in the same branch -- which is right for almost everybody and
+   means the roll-up works on day one instead of after a thousand edits. */
+function managerIndex(agents) {
+  const rsmOfBranch = new Map();
+  for (const a of agents) {
+    const role = K(a.role || '').replace(/\s+/g, '_');
+    if (!/REGIONAL|COUNTRY_SALES/.test(role)) continue;
+    const b = K(a.branch || '');
+    if (!b || rsmOfBranch.has(b)) continue;
+    rsmOfBranch.set(b, a.name || '');
+  }
+  const byAgent = new Map();
+  for (const a of agents) {
+    const own = String(a.manager || '').trim();
+    byAgent.set(nameKey(a.name), own || rsmOfBranch.get(K(a.branch || '')) || '');
+  }
+  return {
+    of: name => byAgent.get(nameKey(name)) || '',
+    branchOf: (() => {
+      const m = new Map(agents.map(a => [nameKey(a.name), a.branch || '']));
+      return name => m.get(nameKey(name)) || '';
+    })(),
   };
 }
 
@@ -3999,6 +4052,200 @@ const FNS = {
   },
 
   /* =====================================================================================
+     SALES TARGETS -- set them, then measure the month against them.
+     =====================================================================================
+       CSM SOP B.3  "Set regional targets for each RSM and monitor performance against them"
+       CSM SOP A.2  "Hold RSMs accountable for the performance of their respective regions"
+       RSM SOP B.1  "Set and monitor sales targets for each agent/team leader"
+       RSM SOP B.3  "Review performance data weekly and monthly, and identify reasons for
+                     any decline"
+
+     The Sales performance board answers "how much did we sell". It could never answer
+     "against what", because nothing here held a target for a PERSON -- only
+     SALES_DAILY_TARGET, one company-wide number per day. A regional target and an agent's
+     target are different numbers set by different people, and the SOP asks for both.
+
+     FOUR SCOPES OFF ONE READ. agent, rsm, branch and company are the same rows counted by a
+     different key -- that is what a pivot is -- so this must never be four reads. The RSM
+     line comes from the register: an agent's own `manager` if somebody set one, else the
+     Regional_Manager in the same branch.
+
+     A ROW WITH NO SALES IS THE POINT. An agent who sold nothing against a target of thirty
+     is exactly who this report exists to name, so every target appears whether or not it has
+     a sale behind it.
+
+     Budget: 1 date-bounded, team-scoped read of watu_loans + 1 bounded register read + 1
+     read of the month's targets. */
+  async targetsView(db, user, args) {
+    requireNav(user, 'targets');
+    const a = args || {};
+    const period = isMonth(a.period) ? String(a.period) : todayKey().slice(0, 7);
+    const { from, to } = monthDays(period);
+    /* The register's `branch` column post-dates some deployments, exactly as salesWeek found. */
+    const FULL = 'imei, disbursed_date, price, agent, team, branch';
+    const BARE = 'imei, disbursed_date, price, agent, team';
+    let sales = [];
+    try {
+      sales = await fetchAll(() => scopeQ(user, db.from('watu_loans').select(FULL)
+        .gte('disbursed_date', from).lte('disbursed_date', to)));
+    } catch (e) {
+      if (!/branch/i.test(String(e && e.message))) throw e;
+      sales = await fetchAll(() => scopeQ(user, db.from('watu_loans').select(BARE)
+        .gte('disbursed_date', from).lte('disbursed_date', to)));
+    }
+    let agents = [];
+    try {
+      agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager, active'));
+    } catch (e) {
+      // Before the migration the register has no `manager`; the branch fallback still works.
+      if (!/manager/i.test(String(e && e.message))) throw e;
+      agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, active'));
+    }
+    let targets = [];
+    let notReady = false;
+    try {
+      targets = await fetchAll(() => db.from('sales_targets')
+        .select('period, scope, name, target_qty, target_amount, note, set_by, set_at').eq('period', period));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      notReady = true;
+    }
+    const idx = managerIndex(agents);
+    /* ONE PASS, FOUR KEYS. A sale with no agent named is still a company sale, and saying so
+       is better than dropping it: a total that does not match the board is a total nobody
+       trusts. */
+    const buckets = { agent: new Map(), rsm: new Map(), branch: new Map(), company: new Map() };
+    const add = (scope, name, price) => {
+      const key = nameKey(name) || '?';
+      let g = buckets[scope].get(key);
+      if (!g) { g = { name: String(name || '—'), qty: 0, amount: 0 }; buckets[scope].set(key, g); }
+      g.qty++; g.amount += num(price);
+    };
+    for (const s of sales) {
+      const who = String(s.agent || '').trim();
+      add('agent', who || '(hakuna ajenti / no agent)', s.price);
+      const rsm = who ? idx.of(who) : '';
+      add('rsm', rsm || '(hakuna RSM / no manager)', s.price);
+      add('branch', String(s.branch || idx.branchOf(who) || s.team || '—'), s.price);
+      add('company', 'ALL', s.price);
+    }
+    const tBy = new Map();
+    for (const t of targets) tBy.set(String(t.scope) + '|' + nameKey(t.name), t);
+    const pct = (got, want) => (want == null || !(num(want) > 0)) ? null : Math.round((num(got) / num(want)) * 100);
+    const rowsFor = scope => {
+      const seen = new Map();
+      for (const [k, g] of buckets[scope]) seen.set(k, { ...g, scope });
+      // Every target appears, sales or none: the empty row is the one worth reading.
+      for (const t of targets) {
+        if (String(t.scope) !== scope) continue;
+        const k = nameKey(t.name);
+        if (!seen.has(k)) seen.set(k, { name: t.name, qty: 0, amount: 0, scope });
+      }
+      return [...seen.entries()].map(([k, g]) => {
+        const t = tBy.get(scope + '|' + k) || null;
+        const targetQty = t && t.target_qty != null ? num(t.target_qty) : null;
+        const targetAmount = t && t.target_amount != null ? num(t.target_amount) : null;
+        return { scope, name: g.name, qty: g.qty, amount: g.amount,
+          targetQty, targetAmount,
+          pctQty: pct(g.qty, targetQty), pctAmount: pct(g.amount, targetAmount),
+          hasTarget: !!(targetQty != null || targetAmount != null),
+          note: t ? (t.note || '') : '', setBy: t ? (t.set_by || '') : '',
+          setAt: t && t.set_at ? Date.parse(t.set_at) : null,
+          // Named because somebody set a target and nothing came of it.
+          missed: !!((targetQty != null && g.qty < targetQty) || (targetAmount != null && g.amount < targetAmount)),
+          manager: scope === 'agent' ? idx.of(g.name) : '' };
+      }).sort((x, y) => (y.amount - x.amount) || (x.name < y.name ? -1 : 1));
+    };
+    const rows = { agent: rowsFor('agent'), rsm: rowsFor('rsm'), branch: rowsFor('branch'), company: rowsFor('company') };
+    const co = rows.company[0] || { qty: 0, amount: 0, targetQty: null, targetAmount: null };
+    return { ok: true, period, from, to, notReady, scopes: TARGET_SCOPES, rows,
+      // The names the form offers, so nobody types a target against a spelling nothing matches.
+      names: {
+        agent: [...new Set(agents.filter(x => x.active !== false).map(x => String(x.name || '').trim()).filter(Boolean))].sort(),
+        rsm: [...new Set(agents.filter(x => /REGIONAL|COUNTRY_SALES/.test(K(x.role || '').replace(/\s+/g, '_')))
+          .map(x => String(x.name || '').trim()).filter(Boolean))].sort(),
+        branch: [...new Set(agents.map(x => String(x.branch || '').trim()).filter(Boolean))].sort(),
+      },
+      totals: { sales: sales.length, amount: sales.reduce((s, r) => s + num(r.price), 0),
+        targetQty: co.targetQty, targetAmount: co.targetAmount,
+        pctQty: pct(co.qty, co.targetQty), pctAmount: pct(co.amount, co.targetAmount),
+        withTarget: TARGET_SCOPES.reduce((s, k) => s + rows[k].filter(r => r.hasTarget).length, 0),
+        missed: TARGET_SCOPES.reduce((s, k) => s + rows[k].filter(r => r.hasTarget && r.missed).length, 0) } };
+  },
+
+  /** SET ONE. Upserted on (period, scope, name), so re-setting a target corrects it rather
+      than filing a second one beside it. */
+  async targetSave(db, user, args) {
+    requireNav(user, 'targets');
+    requireWrite(user);
+    const a = args || {};
+    const period = isMonth(a.period) ? String(a.period) : '';
+    if (!period) bad('Chagua mwezi (YYYY-MM). / Choose a month.');
+    const scope = String(a.scope || '').trim().toLowerCase();
+    if (!TARGET_SCOPES.includes(scope)) bad('Aina ya lengo si sahihi. / Unknown target scope.');
+    const name = scope === 'company' ? 'ALL' : String(a.name == null ? '' : a.name).trim().slice(0, 120);
+    if (!name) bad('Andika jina. / Give the name the target is for.');
+    /* A TARGET OF NOTHING IS NOT A TARGET. Zero is allowed and meaningful (a month off); both
+       fields empty is somebody pressing Save on a blank form. */
+    const has = v => v != null && String(v).trim() !== '';
+    const qty = has(a.qty) ? Math.floor(num(a.qty)) : null;
+    const amount = has(a.amount) ? Math.round(num(a.amount)) : null;
+    if (qty == null && amount == null) bad('Weka idadi au kiasi. / Set a quantity or an amount.');
+    if (qty != null && (qty < 0 || qty > 1000000)) bad('Idadi si sahihi. / That quantity is not a target.');
+    if (amount != null && (amount < 0 || amount > 1e12)) bad('Kiasi si sahihi. / That amount is not a target.');
+    const now = new Date().toISOString();
+    const row = { period, scope, name, target_qty: qty, target_amount: amount,
+      note: String(a.note == null ? '' : a.note).trim().slice(0, 2000) || null,
+      set_by: user.name || '', set_at: now, updated_at: now };
+    const { error } = await db.from('sales_targets').upsert([row], { onConflict: 'period,scope,name' });
+    if (error) {
+      if (tableMissing(error)) bad(TARGET_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, period, scope, name, targetQty: qty, targetAmount: amount };
+  },
+
+  /** REMOVE ONE. Setting a target to zero and deleting it are different facts: zero is "sell
+      nothing this month", gone is "nobody has said". */
+  async targetDelete(db, user, args) {
+    requireNav(user, 'targets');
+    requireWrite(user);
+    const a = args || {};
+    const period = isMonth(a.period) ? String(a.period) : '';
+    const scope = String(a.scope || '').trim().toLowerCase();
+    const name = String(a.name == null ? '' : a.name).trim();
+    if (!period || !TARGET_SCOPES.includes(scope) || !name) bad('Lengo halijachaguliwa. / No target chosen.');
+    const { error } = await db.from('sales_targets').delete()
+      .eq('period', period).eq('scope', scope).eq('name', name);
+    if (error) {
+      if (tableMissing(error)) bad(TARGET_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, period, scope, name };
+  },
+
+  /** WHO AN AGENT REPORTS TO (RSM SOP D, CSM SOP J). The one field of the register the office
+      maintains by hand; everything else about an agent comes from the SyscoPos upload. Blank
+      clears the override and the branch fallback takes over again. */
+  async staffManager(db, user, args) {
+    requireNav(user, 'staff');
+    requireWrite(user);
+    const a = args || {};
+    const phone = String(a.phone == null ? '' : a.phone).trim();
+    if (!phone) bad('Mfanyakazi hajachaguliwa. / No staff member chosen.');
+    const manager = String(a.manager == null ? '' : a.manager).trim().slice(0, 120);
+    const { data, error } = await db.from('hoop_agents')
+      .update({ manager: manager || null, updated_at: new Date().toISOString() })
+      .eq('phone', phone).select('phone');
+    if (error) {
+      if (/manager/i.test(String(error.message))) bad(TARGET_NOT_READY);
+      throw new Error(error.message);
+    }
+    if (!data || !data.length) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    return { ok: true, phone, manager };
+  },
+
+  /* =====================================================================================
      STOCK REQUESTS -- ask, decide against the aging gate, hand over.
      =====================================================================================
        Store SOP B.1  "Receive the stock request from the RSM in the system"
@@ -4568,14 +4815,26 @@ const FNS = {
       Budget: 1 bounded read (~1k rows). */
   async staffDirectory(db, user) {
     requireNav(user, 'staff');
-    const rows = await fetchAll(() => db.from('hoop_agents')
-      .select('name, phone, role, branch, active, joined_date, kin_name, kin_phone'));
+    /* `manager` post-dates this table (the targets migration adds it). A directory that 500s
+       because one column is not there yet would take the whole staff pane down for the time
+       between the deploy and somebody running the migration by hand. */
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('hoop_agents')
+        .select('name, phone, role, branch, manager, active, joined_date, kin_name, kin_phone'));
+    } catch (e) {
+      if (!/manager/i.test(String(e && e.message))) throw e;
+      rows = await fetchAll(() => db.from('hoop_agents')
+        .select('name, phone, role, branch, active, joined_date, kin_name, kin_phone'));
+    }
     const RANK = { COUNTRY_SALES_MANAGER: 0, REGIONAL_MANAGER: 1, TEAM_LEADER: 2, FIELD_OFFICER: 3, FIELD_OFFICERS: 3 };
     const showKin = isAdminRole(user) || (user.tabs || []).includes('settings');
     const rank = r => { const k = K(r).replace(/\s+/g, '_'); return RANK[k] === undefined ? 9 : RANK[k]; };
     const staff = rows.map(r => {
       const o = { name: r.name || '', phone: r.phone || '', role: r.role || '',
         branch: r.branch || '', active: r.active !== false,
+        // Who they report to, where somebody has said. Blank means the branch decides.
+        manager: r.manager || '',
         joined: r.joined_date ? String(r.joined_date).slice(0, 10) : '' };
       if (showKin) { o.kin = r.kin_name || ''; o.kinPhone = r.kin_phone || ''; }
       return o;

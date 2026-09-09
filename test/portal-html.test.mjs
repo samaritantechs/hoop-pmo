@@ -1791,3 +1791,67 @@ test('portal.html: the stock report is the aging tracker and the distribution bo
   assert.match(html, /<b>STOCK_AGING_DAYS<\/b>/, 'Settings explains the threshold');
   assert.match(html, /<b>STOCK_LOW_ALERT<\/b>/);
 });
+
+/* =========================================================================================
+   SALES TARGETS. CSM SOP B.3 sets regional targets, RSM SOP B.1 sets each agent's.
+   The board next door says how much we sold; this says against what. These pin the two things
+   the server cannot: that a missing target draws NOTHING rather than a zero bar, and that the
+   scope buttons and the table come from the server's own answer.
+   ========================================================================================= */
+test('portal.html: the targets pane draws four scopes and never invents a percentage', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawTargets', html);
+  assert.match(fn, /srv\('targetsView',\{period:TGT\.period\}\)/);
+  assert.match(html, /var TGT=\{period:'',scope:'agent'\};/);
+  assert.match(fn, /TGT\.period=thisMonth_\(\)/, 'this month by default');
+  // The scope buttons come from the server's list, so a scope added there appears here.
+  assert.match(fn, /\(d\.scopes\|\|\['agent','rsm','branch','company'\]\)\.map/);
+  assert.match(fn, /rows=\(d\.rows&&d\.rows\[TGT\.scope\]\)\|\|\[\]/);
+  // NO TARGET, NO BAR. An empty bar reads as zero attainment, which is a different claim.
+  const bar = IMP_SRC('tgtBar', html);
+  assert.match(bar, /if\(pct==null\) return '<span class="mut">—<\/span>';/);
+  assert.match(bar, /pct>=100\?'ok':\(pct>=70\?'warn':'bad'\)/);
+  // The RSM column only exists on the agent scope, where it means something.
+  assert.match(fn, /TGT\.scope==='agent'\?'<th>RSM<\/th>':''/);
+  assert.match(fn, /r\.targetQty==null\?'—':money\(r\.targetQty\)/, 'and an unset target reads as unset');
+  // A view-only code gets no Set button and no per-row edit.
+  assert.match(fn, /var canW=!BOOT\.readOnly;/);
+  assert.match(fn, /canW\?'<button class="btn sm" id="tgNew"/);
+});
+
+test('portal.html: the target drawer sends the parts, and removing is not the same as zero', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('targetDrawer', html);
+  const call = /srv\('targetSave',\{([\s\S]*?)\}\)/.exec(fn);
+  for (const k of ['period', 'scope', 'name', 'qty', 'amount', 'note']) {
+    assert.match(call[1], new RegExp('\\b' + k + ':'), k + ' is sent');
+  }
+  assert.match(fn, /Sifuri ni lengo halali/, 'the form says zero is a real target and blank is none');
+  assert.match(fn, /r\.hasTarget\?'<button class="btn w danger ghost" id="tgDel"/,
+    'remove is offered only where a target exists');
+  assert.match(fn, /confirm\('Futa lengo/, 'and removing asks first');
+  assert.match(fn, /srv\('targetDelete'/);
+  // The company scope names itself; nobody types a name for it.
+  assert.match(fn, /isCo\?'<input id="tgName" class="inp" value="ALL" readonly>'/);
+  // Writes are never re-sent by the client.
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  for (const f of ['targetSave', 'targetDelete', 'staffManager']) {
+    assert.match(nr[1], new RegExp('\\b' + f + ':1'), f + ' is a write');
+  }
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  assert.match(lbl[0], /\btargets:'[^']+'/);
+  assert.match(IMP_SRC('targetNotReady', html), /RUN-ME-2026-09-09-targets\.sql/);
+});
+
+test('portal.html: the staff register shows who each agent reports to, and says blank means the branch', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawStaff', html);
+  assert.match(fn, /<th>Reports to<\/th>/);
+  assert.match(fn, /o\.manager\?esc\(o\.manager\):'<span class="mut">kwa tawi \/ by branch<\/span>'/,
+    'blank is a stated fallback, not an empty cell');
+  assert.match(fn, /srv\('staffManager',\{phone:phone, manager:\$\('#mgrV'\)\.value\}\)/);
+  assert.match(fn, /BOOT\.readOnly\?'':' <button class="btn sm ghost" data-mgr=/,
+    'a view-only code gets no pencil');
+  // The picker offers the RSMs the register knows, so nobody types a name nothing matches.
+  assert.match(fn, /REGIONAL\|COUNTRY_SALES/);
+});
