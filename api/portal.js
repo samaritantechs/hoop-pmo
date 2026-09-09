@@ -111,6 +111,10 @@ AUDITED.add('topupRequest');
 AUDITED.add('topupUpdate');
 /* THE DOOR (IT SOP D): who decided a run of refusals had been dealt with, and who sent the
    window out of the building. KEEP drops the note itself -- what was done is on the row. */
+/* ENROLMENT: who entered somebody's details, and who ACTIVATED the account. A.3 makes the
+   second one the consequential act on this desk, so it is the one that must be traceable. */
+AUDITED.add('enrolSave');
+AUDITED.add('enrolUpdate');
 AUDITED.add('signinReview');
 AUDITED.add('signinSend');
 
@@ -166,6 +170,10 @@ const EDITABLE_SETTINGS = [
      window stop being a typo and start being somebody working at it; SECURITY_EMAIL is
      who hears about it. Both blank-safe: 5, and nobody. */
   'SIGNIN_ALERT_FAILS', 'SECURITY_EMAIL',
+  /* ENROLMENT (IT SOP A.4, "notify the RSM/General Manager"). Either plain addresses or one
+     BRANCH=address per line, so each region's RSM hears about their own people; a branch with
+     no line falls back to any plain address here and then to GM_EMAIL. */
+  'ENROL_EMAIL',
 ];
 
 /* =======================================================================================
@@ -261,7 +269,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'security', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -750,6 +758,99 @@ const topupRow = (r, me, nowMs) => {
    a rule that says "must never be delayed" can be served by. */
 const TOPUP_RANK = { requested: 0, verified: 1, paid: 2, unlocked: 3, rejected: 4 };
 const topupWaitFirst = (x, y) => (TOPUP_RANK[x.status] - TOPUP_RANK[y.status]) || (x.at || 0) - (y.at || 0);
+
+/* ---------- ENROLMENT (IT SOP A; asked for again by RSM SOP E.1 and CSM SOP H.1) ---------- */
+const ENROL_NOT_READY = 'Safu za usajili hazipo bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-10-enrolment.sql kwenye Supabase. '
+  + '/ The enrolment columns do not exist yet — run that migration first.';
+/* SOP A.1's LIST, in one place the form, the gate and the report all read.
+
+   It is a list here rather than a set of NOT NULLs in the schema for one reason: the register
+   is ALSO filled by uploading Sipho's SyscoPos page, and a constraint would make that upload
+   fail on somebody else's missing field rather than showing it as a gap. A required field with
+   nowhere to show the gap is a required field that stops the day's work.
+
+   EMAIL IS NOT ON THE LIST. "Contact information" is satisfied by the phone number, which is
+   the register's own key and therefore always present; insisting on an address as well would
+   mark half the field officers incomplete for a thing the SOP does not ask for. It is on the
+   form, where somebody can fill it in. */
+const ENROL_FIELDS = [
+  ['name', 'name', 'Jina kamili / Full name'],
+  ['nationalId', 'national_id', 'Namba ya kitambulisho / ID number'],
+  ['phone', 'phone', 'Namba ya simu / Contact number'],
+  ['role', 'role', 'Wadhifa / Role'],
+  ['branch', 'branch', 'Tawi / Branch'],
+  ['kinName', 'kin_name', 'Mdhamini wa kwanza / First referee'],
+  ['kinPhone', 'kin_phone', 'Namba ya mdhamini / First referee’s number'],
+  /* "REFEREES", PLURAL, in the SOP. The register had one slot. */
+  ['kin2Name', 'kin2_name', 'Mdhamini wa pili / Second referee'],
+  ['kin2Phone', 'kin2_phone', 'Namba ya mdhamini wa pili / Second referee’s number'],
+];
+const ENROL_COLS_WIDE = 'phone, name, national_id, email, role, branch, manager, active, '
+  + 'joined_date, kin_name, kin_phone, kin_relationship, kin2_name, kin2_phone, '
+  + 'kin2_relationship, enrolled_by, enrolled_at, verified_by, verified_at, notified_at, '
+  + 'notified_to, enrol_note, updated_at';
+/* The register as it is BEFORE either hand-run migration. `manager` arrives with the targets
+   file and the rest with this one, so a desk opened between a deploy and a paste still lists
+   everybody -- it simply cannot verify anybody yet, and says so. */
+const ENROL_COLS_NARROW = 'phone, name, national_id, email, role, branch, active, joined_date, '
+  + 'kin_name, kin_phone, kin_relationship, updated_at';
+const ENROL_NEW_COLS = /kin2_|enrolled_by|enrolled_at|verified_by|verified_at|notified_at|notified_to|enrol_note|manager/i;
+
+/** THE REGISTER'S OWN PHONE FORMAT: 0-leading, as SyscoPos writes it, because `phone` is the
+    primary key and two spellings of one number are two people. Returns '' for anything that is
+    not a Tanzanian mobile number, so the caller can refuse rather than create a second row for
+    somebody who already exists. */
+function phone0(v) {
+  const d = pnorm(v);                       // the last nine digits, however it was typed
+  return d.length === 9 ? '0' + d : '';
+}
+/* AN ID THAT IS PRESENT BUT LOOKS WRONG. A.2 asks for the details "accurately", and the
+   national ID is the one field where a slip is invisible -- every other field is a name a
+   person would notice. Tanzanian NIDA numbers are twenty digits; the register holds a few of
+   nineteen and a few written with dashes, all of them real. So this FLAGS and never refuses:
+   a rule that threw out real rows in the name of accuracy would cost more than it found. */
+const idLooksOdd = v => {
+  const d = String(v == null ? '' : v).replace(/\D/g, '');
+  return !!d && (d.length < 19 || d.length > 21);
+};
+/** SOP A.1's fields that are not filled in, by key. The one function the form, the gate and
+    the report all ask -- three copies of a completeness rule is how two screens come to
+    disagree about whether somebody is enrolled. */
+function enrolGaps(row) {
+  const out = [];
+  for (const [key, col] of ENROL_FIELDS) {
+    if (!String((row && row[col]) == null ? '' : row[col]).trim()) out.push(key);
+  }
+  return out;
+}
+const enrolRow = (r, inApp) => {
+  const gaps = enrolGaps(r);
+  return {
+    phone: r.phone || '', name: r.name || '', nationalId: r.national_id || '',
+    email: r.email || '', role: r.role || '', branch: r.branch || '',
+    manager: r.manager || '', active: r.active !== false,
+    joined: r.joined_date ? String(r.joined_date).slice(0, 10) : '',
+    kinName: r.kin_name || '', kinPhone: r.kin_phone || '', kinRel: r.kin_relationship || '',
+    kin2Name: r.kin2_name || '', kin2Phone: r.kin2_phone || '', kin2Rel: r.kin2_relationship || '',
+    enrolledBy: r.enrolled_by || '', enrolledAt: r.enrolled_at ? Date.parse(r.enrolled_at) : null,
+    verifiedBy: r.verified_by || '', verifiedAt: r.verified_at ? Date.parse(r.verified_at) : null,
+    notifiedAt: r.notified_at ? Date.parse(r.notified_at) : null, notifiedTo: r.notified_to || '',
+    note: r.enrol_note || '',
+    gaps, complete: gaps.length === 0,
+    idOdd: idLooksOdd(r.national_id),
+    /* ON THE REGISTER IS NOT THE SAME AS USING THE SYSTEM. RSM SOP E.1 asks whether agents are
+       "enrolled", and the honest answer has two halves: their row exists, and they have
+       actually signed a handset on. Only the second one proves the details reached them. */
+    inApp: !!inApp,
+  };
+};
+/* WORST FIRST, so the desk opens on the work rather than on the alphabet: missing fields, then
+   never checked, then checked but nobody told, then everybody else. */
+function enrolWorstFirst(x, y) {
+  const rank = r => (r.gaps.length ? 0 : (!r.verifiedAt ? 1 : (!r.notifiedAt ? 2 : 3)));
+  return (rank(x) - rank(y)) || (x.name < y.name ? -1 : 1);
+}
 
 /* ---------- THE DOOR'S OWN LOG (IT SOP D "monitor for unauthorized access") ---------- */
 const SIGNIN_NOT_READY = 'Kumbukumbu ya kuingia haijatengenezwa bado. Endesha '
@@ -6454,6 +6555,252 @@ const FNS = {
       .upsert({ key, value: String((args && args.value) || '') }, { onConflict: 'key' });
     if (error) throw new Error(error.message);
     return { ok: true, key };
+  },
+
+  /* =====================================================================================
+     ENROLMENT -- the required details, the completeness check, and the RSM being told.
+     =====================================================================================
+       IT SOP A.1   "Collect the required details: FULL NAME, ID NUMBER, CONTACT INFORMATION,
+                     and REFEREES, from the RSM/team leader."
+       IT SOP A.2   "Enter the details into the system accurately and completely."
+       IT SOP A.3   "VERIFY DATA COMPLETENESS BEFORE ACTIVATING THE ACCOUNT."
+       IT SOP A.4   "Notify the RSM/General Manager once enrollment is complete."
+       RSM SOP E.1  "Confirm with the IT Officer that all agents/team leaders are enrolled with
+                     correct, complete details."
+       CSM SOP H.1  the same question again, at national level.
+
+     THREE SOPs ASK ONE QUESTION AND NOTHING COULD ANSWER IT. The register arrives by uploading
+     Sipho's SyscoPos page: a list, with no notion of a missing field, no notion of a record
+     having been CHECKED, and no way to tell an RSM their person is on it. "Are all your agents
+     enrolled with complete details" was answered by scrolling.
+
+     A.3 IS THE ONLY GATE HERE. It says completeness is verified BEFORE the account is
+     activated, which means activation has to be an ACT rather than a column that arrives set
+     to true -- so there is exactly one way to switch an account on, and it counts the missing
+     fields first and refuses.
+
+     WHAT THE GATE DOES NOT DO is reach back and switch off two hundred people who were on the
+     register before it existed. Their rows are shown as unverified, and the desk has a tile
+     counting exactly them; deactivating a working company to satisfy a checklist is not what
+     A.3 means. The gate governs activation from here on. */
+
+  /** The desk. Everybody on the register, worst first, with what is missing from each. */
+  async enrolQueue(db, user, args) {
+    requireNav(user, 'enrol');
+    const a = args || {};
+    let raw;
+    let columnsReady = true;
+    try {
+      raw = await fetchAll(() => db.from('hoop_agents').select(ENROL_COLS_WIDE));
+    } catch (e) {
+      if (!ENROL_NEW_COLS.test(String(e && e.message))) throw e;
+      columnsReady = false;
+      raw = await fetchAll(() => db.from('hoop_agents').select(ENROL_COLS_NARROW));
+    }
+    /* WHO HAS ACTUALLY SIGNED A HANDSET ON. One read of the phone roster, keyed the way the
+       app keys it (last nine digits), because the two tables describe the same humans with no
+       foreign key between them. */
+    let inApp = new Set();
+    try {
+      const users = await fetchAll(() => db.from('call_users').select('phone'));
+      inApp = new Set(users.map(u => pnorm(u.phone)).filter(Boolean));
+    } catch (e) { /* the roster is a nicety here; the register is the answer */ }
+    const all = raw.map(r => enrolRow(r, inApp.has(pnorm(r.phone))));
+
+    const branch = String(a.branch || '').trim();
+    const state = String(a.state || '').trim();
+    const q = String(a.q || '').trim().toUpperCase();
+    const shown = all.filter(r => {
+      if (branch && K(r.branch) !== K(branch)) return false;
+      if (state === 'gaps' && r.complete) return false;
+      if (state === 'unverified' && r.verifiedAt) return false;
+      if (state === 'live' && (r.verifiedAt || !r.active)) return false;
+      if (state === 'unnotified' && (!r.verifiedAt || r.notifiedAt)) return false;
+      if (state === 'off' && r.active) return false;
+      if (state === 'noapp' && r.inApp) return false;
+      if (q && !((r.name + ' ' + r.phone + ' ' + r.branch + ' ' + r.role).toUpperCase().includes(q))) return false;
+      return true;
+    }).sort(enrolWorstFirst);
+
+    /* PER BRANCH, because that is the shape RSM SOP E.1 asks the question in: an RSM wants
+       their own region's answer, not the company's. */
+    const byBranch = {};
+    for (const r of all) {
+      const k = r.branch || '—';
+      const b = byBranch[k] || (byBranch[k] = { branch: k, total: 0, gaps: 0, unverified: 0, inApp: 0 });
+      b.total++;
+      if (!r.complete) b.gaps++;
+      if (!r.verifiedAt) b.unverified++;
+      if (r.inApp) b.inApp++;
+    }
+    return { ok: true,
+      columnsReady,
+      notReadyNote: columnsReady ? '' : ENROL_NOT_READY,
+      fields: ENROL_FIELDS.map(([key, , label]) => ({ key, label })),
+      branches: [...new Set(all.map(r => r.branch).filter(Boolean))].sort(),
+      rows: shown.slice(0, 1500),
+      shown: shown.length,
+      byBranch: Object.values(byBranch).sort((x, y) => (y.gaps - x.gaps) || (y.total - x.total)),
+      counts: {
+        total: all.length,
+        active: all.filter(r => r.active).length,
+        gaps: all.filter(r => !r.complete).length,
+        unverified: all.filter(r => !r.verifiedAt).length,
+        // The state that should not exist and does: switched on, never checked. A.3 in one number.
+        liveUnverified: all.filter(r => r.active && !r.verifiedAt).length,
+        unnotified: all.filter(r => r.verifiedAt && !r.notifiedAt).length,
+        inApp: all.filter(r => r.inApp).length,
+        idOdd: all.filter(r => r.idOdd).length,
+      } };
+  },
+
+  /** A.1 and A.2: the details, entered against the phone number the register is keyed on.
+      NEVER touches active, verified or notified -- those are A.3 and A.4 and are their own
+      acts, for the same reason registration must not be a way to re-enable an account. */
+  async enrolSave(db, user, args) {
+    requireNav(user, 'enrol');
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 160);
+    const phone = phone0(a.phone);
+    if (!phone) bad('Namba ya simu si sahihi. / That is not a Tanzanian mobile number.');
+    /* PostgREST reports an unknown column by RESOLVING with an error rather than by throwing,
+       so this has to LOOK at it: reading only `data` turned "run the migration" into "that
+       person is not in the register", which sends somebody hunting for a row that is there. */
+    let before = null;
+    try {
+      const { data, error } = await db.from('hoop_agents').select(ENROL_COLS_WIDE).eq('phone', phone).maybeSingle();
+      if (error) throw error;
+      before = data || null;
+    } catch (e) {
+      if (!ENROL_NEW_COLS.test(String((e && (e.message || e.details)) || '')) && !tableMissing(e)) throw e;
+      bad(ENROL_NOT_READY);
+    }
+    const at = new Date().toISOString();
+    const row = {
+      phone,
+      name: S(a.name, 160), national_id: S(a.nationalId, 60), email: S(a.email, 160),
+      role: S(a.role, 80), branch: S(a.branch, 80),
+      kin_name: S(a.kinName, 160), kin_phone: S(a.kinPhone, 60), kin_relationship: S(a.kinRel, 60),
+      kin2_name: S(a.kin2Name, 160), kin2_phone: S(a.kin2Phone, 60), kin2_relationship: S(a.kin2Rel, 60),
+      updated_at: at,
+    };
+    if (a.manager != null) row.manager = S(a.manager, 120);
+    if (!row.name) bad('Andika jina kamili. / A full name is required (SOP A.1).');
+    if (before) {
+      /* AN EDIT THAT EMPTIES A REQUIRED FIELD UNDOES THE CHECK. Verification is about the
+         details as they stood when somebody looked at them, so a row that loses one is a row
+         nobody has checked. The account is NOT switched off by this -- a typo must not cost
+         somebody their day -- and the desk counts "live but never checked" separately. */
+      const after = { ...before, ...row };
+      if (enrolGaps(after).length && before.verified_at) {
+        row.verified_by = null; row.verified_at = null;
+      }
+    } else {
+      /* A.3: A NEW ENROLMENT IS NOT LIVE UNTIL IT IS CHECKED. The column's own default is
+         true, so this has to say so out loud -- and it is the whole reason activation is an
+         act rather than a flag somebody remembers to set. */
+      row.active = false;
+      row.enrolled_by = user.name || '';
+      row.enrolled_at = at;
+      row.joined_date = /^\d{4}-\d{2}-\d{2}$/.test(String(a.joined || '')) ? String(a.joined) : at.slice(0, 10);
+    }
+    const { error } = await db.from('hoop_agents').upsert(row, { onConflict: 'phone' });
+    if (error) {
+      if (tableMissing(error)) bad(ENROL_NOT_READY);
+      throw new Error(error.message);
+    }
+    const gaps = enrolGaps({ ...(before || {}), ...row });
+    return { ok: true, phone, created: !before, gaps,
+      complete: gaps.length === 0,
+      /* Said back rather than left for somebody to notice: an ID of the wrong length is the
+         one slip on this form that no human eye catches. */
+      idOdd: idLooksOdd(row.national_id) };
+  },
+
+  /** A.3 and A.4, and the switch-off that keeps the register honest. Three different acts by
+      possibly three different days, so each is its own step with its own stamp. */
+  async enrolUpdate(db, user, args) {
+    requireNav(user, 'enrol');
+    requireWrite(user);
+    const a = args || {};
+    const phone = phone0(a.phone);
+    if (!phone) bad('Mfanyakazi hajachaguliwa. / No staff member chosen.');
+    let row;
+    try {
+      const { data, error } = await db.from('hoop_agents').select(ENROL_COLS_WIDE).eq('phone', phone).maybeSingle();
+      if (error) throw error;
+      row = data || null;
+    } catch (e) {
+      if (!ENROL_NEW_COLS.test(String((e && (e.message || e.details)) || '')) && !tableMissing(e)) throw e;
+      bad(ENROL_NOT_READY);
+    }
+    if (!row) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    const step = String(a.step || '').trim().toLowerCase();
+    const at = new Date().toISOString();
+    const patch = { updated_at: at };
+    let mail = null;
+
+    if (step === 'verify') {
+      /* THE GATE. Counted from the row as it is stored, not from anything the client sends --
+         a completeness check the caller can assert is not a check. */
+      const gaps = enrolGaps(row);
+      if (gaps.length) {
+        const labels = ENROL_FIELDS.filter(([k]) => gaps.includes(k)).map(([, , l]) => l.split(' / ')[0]);
+        bad('Bado hakijakamilika (SOP A.3): ' + labels.join(', ')
+          + '. / Not complete yet — the account cannot be activated until these are filled in: '
+          + ENROL_FIELDS.filter(([k]) => gaps.includes(k)).map(([, , l]) => l.split(' / ')[1] || l).join(', '));
+      }
+      patch.verified_by = user.name || '';
+      patch.verified_at = at;
+      // A.3 in one line: the check and the activation are the same act.
+      patch.active = true;
+    } else if (step === 'notify') {
+      if (!row.verified_at) bad('Thibitisha kwanza kabla ya kutoa taarifa (SOP A.3 kabla ya A.4). '
+        + '/ Verify it before announcing it — A.4 says "once enrollment is complete".');
+      let to = '';
+      try {
+        const { data: s } = await db.from('settings').select('value').eq('key', 'ENROL_EMAIL').maybeSingle();
+        to = issueDeptEmails(s && s.value, row.branch || '')
+          || String((s && s.value) || '').split(/[\n;]/).map(x => x.trim()).find(x => x && !/[=:]/.test(x)) || '';
+      } catch (e) { to = ''; }
+      /* The GM is the standing fallback: A.4 names "the RSM/General Manager", so an office that
+         has set only one address has still named somebody. */
+      mail = to
+        ? await sendMail(db, { to, subject: 'HOOPLOAN — usajili umekamilika / enrolment complete: ' + (row.name || phone),
+          html: noticeHtml('Usajili umekamilika / Enrolment complete', [
+            ['Jina / Name', row.name || ''], ['Simu / Phone', phone],
+            ['Wadhifa / Role', row.role || '—'], ['Tawi / Branch', row.branch || '—'],
+            ['Kitambulisho / ID', row.national_id || '—'],
+            ['Amethibitishwa na / Verified by', row.verified_by || user.name || ''],
+          ], 'IT SOP A.4: taarifa kwa RSM/GM baada ya usajili kukamilika. '
+           + '/ IT SOP A.4: the RSM and General Manager are told once enrolment is complete.') })
+        : await sendMail(db, { toKey: 'GM_EMAIL', subject: 'HOOPLOAN — usajili umekamilika / enrolment complete: ' + (row.name || phone),
+          html: noticeHtml('Usajili umekamilika / Enrolment complete', [
+            ['Jina / Name', row.name || ''], ['Simu / Phone', phone],
+            ['Wadhifa / Role', row.role || '—'], ['Tawi / Branch', row.branch || '—'],
+          ], 'IT SOP A.4. ENROL_EMAIL haijawekwa kwa tawi hili. / No ENROL_EMAIL line for this branch.') });
+      if (!mail.sent) bad('Barua pepe haikutumwa: ' + mail.reason
+        + ' / The email was not sent: ' + mail.reason);
+      patch.notified_at = at;
+      patch.notified_to = String(mail.to || '').slice(0, 200);
+    } else if (step === 'off') {
+      const note = String(a.note == null ? '' : a.note).trim().slice(0, 300);
+      if (!note) bad('Andika sababu ya kuzima akaunti. / A reason is required to switch an account off.');
+      patch.active = false;
+      patch.enrol_note = note;
+    } else {
+      bad('Hatua si sahihi. / Unknown step.');
+    }
+    const { data, error } = await db.from('hoop_agents').update(patch).eq('phone', phone).select('phone');
+    if (error) {
+      if (tableMissing(error)) bad(ENROL_NOT_READY);
+      throw new Error(error.message);
+    }
+    if (!data || !data.length) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    return { ok: true, phone, step,
+      verified: !!patch.verified_at, active: patch.active,
+      emailed: !!(mail && mail.sent), to: (mail && mail.to) || '' };
   },
 
   /* =====================================================================================
