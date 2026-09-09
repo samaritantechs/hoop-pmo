@@ -2,6 +2,7 @@ import { fetchAll } from './supabase.js';
 import { teamAllowed, suspendedOn, isAdminRole } from './auth.js';
 import { TZ_OFFSET_MS, todayKey, addDaysKey, weekMondayKey } from './time.js';
 import { isSystemOpen } from './system-gate.js';
+import { noteSignin, outcomeOf } from './signin.js';
 
 /* =====================================================================================
    THE HOOP CALLS BACKEND -- Hope's call-core, translated to the Watu book.
@@ -216,14 +217,25 @@ async function boot(db, [dev], nowMs) {
   };
 }
 
+/* WHY THE PHONE DOOR SAID NO, carried on the throw rather than read off its wording later.
+   The door's log (IT SOP D, api/_lib/signin.js) has to be able to tell "somebody is guessing
+   team codes" from "somebody left their name blank", and a regex over a bilingual sentence is
+   a classification that breaks the day the English half of it is improved. */
+function doorNo(msg, reason) {
+  const e = new Error(msg);
+  e.status = 401;
+  e.reason = reason || 'refused';
+  return e;
+}
+
 /** Identity keyed by PHONE; the team code decides WHICH team -- verbatim Hope flow,
     including the live (uncached) teams read so a rotated code cuts instantly. */
 async function register(db, [dev, name, team, accessCode, phone, passcode, location], nowMs) {
   dev = String(dev == null ? '' : dev).trim();
-  if (!dev) throw new Error('Missing device id.');
+  if (!dev) throw doorNo('Missing device id.', 'refused');
   name = String(name == null ? '' : name).trim();
   const phoneD = pnorm(phone);
-  if (!phoneD) throw new Error('Enter your phone number.');
+  if (!phoneD) throw doorNo('Enter your phone number.', 'refused');
   team = String(team == null ? '' : team).trim();
   const loc = String(location == null ? '' : location).trim();
   const code = String(accessCode == null ? '' : accessCode).trim();
@@ -231,10 +243,10 @@ async function register(db, [dev, name, team, accessCode, phone, passcode, locat
   const teams = await teamList(db);
   if (code) {
     const { data: u } = await db.from('access_codes').select('*').eq('code', code).maybeSingle();
-    if (!u) throw new Error('Invalid access code.');
+    if (!u) throw doorNo('Invalid access code.', 'invalid');
     if (['AUDITOR', 'READONLY', 'READ ONLY', 'READ-ONLY'].includes(K(u.role || ''))) {
-      throw new Error('Msimbo huu ni wa kuangalia tu — tumia mfumo (portal). '
-        + '/ This is a view-only code: use the portal, where every screen is open.');
+      throw doorNo('Msimbo huu ni wa kuangalia tu — tumia mfumo (portal). '
+        + '/ This is a view-only code: use the portal, where every screen is open.', 'view_only');
     }
     leader = true;
     role = u.role || 'LEADER';
@@ -243,14 +255,14 @@ async function register(db, [dev, name, team, accessCode, phone, passcode, locat
     team = teams.find(t => K(t) === K(home)) || null;
     name = u.name || name;
     const { data: off } = await db.from('call_users').select('active').eq('phone', phoneD).maybeSingle();
-    if (off && off.active === false) throw new Error('Akaunti yako imezimwa. / Your account has been switched off. Ask your admin.');
+    if (off && off.active === false) throw doorNo('Akaunti yako imezimwa. / Your account has been switched off. Ask your admin.', 'switched_off');
   } else {
     const pass = String(passcode == null ? '' : passcode).trim();
-    if (!pass) throw new Error('Weka msimbo wa timu yako. / Enter your team code.');
+    if (!pass) throw doorNo('Weka msimbo wa timu yako. / Enter your team code.', 'refused');
     const codeKey = K(pass).replace(/[^0-9A-Z]/g, '');
     const teamRows = await fetchAll(() => db.from('teams').select('*'));
     const match = teamRows.find(t => K(t.team_code || '').replace(/[^0-9A-Z]/g, '') === codeKey && codeKey);
-    if (!match) throw new Error('Msimbo wa timu si sahihi. / That team code is not correct. Ask your admin.');
+    if (!match) throw doorNo('Msimbo wa timu si sahihi. / That team code is not correct. Ask your admin.', 'invalid');
     team = match.team;
     role = 'OFFICER';
     /* AGENTS SIGN IN WITH PHONE + THE SHARED CODE, NOTHING ELSE (the owner: "their
@@ -263,15 +275,15 @@ async function register(db, [dev, name, team, accessCode, phone, passcode, locat
       role = 'AGENT';
       const agents = await agentIndex(db, nowMs);
       const known = agents.byPhone[phoneD] || null;
-      if (!known) throw new Error('Namba yako haipo kwenye rejista ya mawakala. '
-        + '/ Your phone number is not on the agents register yet — ask the office to add you, then sign in again.');
+      if (!known) throw doorNo('Namba yako haipo kwenye rejista ya mawakala. '
+        + '/ Your phone number is not on the agents register yet — ask the office to add you, then sign in again.', 'unknown_phone');
       name = known.name || name || 'Agent';
       team = known.branch || loc || 'AGENT';
-    } else if (!name) throw new Error('Andika jina lako. / Enter your name.');
+    } else if (!name) throw doorNo('Andika jina lako. / Enter your name.', 'refused');
     const { data: acct } = await db.from('call_users').select('active').eq('phone', phoneD).maybeSingle();
-    if (acct && acct.active === false) throw new Error('Akaunti yako imezimwa. / Your account has been switched off. Ask your admin.');
+    if (acct && acct.active === false) throw doorNo('Akaunti yako imezimwa. / Your account has been switched off. Ask your admin.', 'switched_off');
   }
-  if (!name) throw new Error('Could not find a name on file for that access code.');
+  if (!name) throw doorNo('Could not find a name on file for that access code.', 'refused');
   const uid = 'U' + h36(phoneD);
   const now = new Date(nowMs).toISOString();
   const { data: existing } = await db.from('call_users').select('user_id, registered_at, last_sync, last_ts').eq('phone', phoneD).maybeSingle();
@@ -1279,8 +1291,33 @@ const HANDLERS = {
   api_callNotifications: callNotifications,
   api_callNotifSeen: callNotifSeen,
 };
-export async function callApi(db, fn, args, nowMs = Date.now()) {
+/* THE PHONE'S DOOR IS REGISTRATION, and nothing else here. Every other handler is reached by
+   possession of a device id already granted, so watching them would record two hundred
+   officers working rather than anybody trying to get in (IT SOP D, and rule 3 in signin.js).
+
+   The app door identifies by PHONE NUMBER, which is why the log masks phones from the back:
+   the leading digits of a Tanzanian number are the network and are shared by millions, so
+   masking from the front would hide nothing at all. */
+const REG_ARG = { device: 0, code: 3, phone: 4, passcode: 5 };
+
+export async function callApi(db, fn, args, nowMs = Date.now(), meta = null) {
   const h = HANDLERS[fn];
   if (!h) { const e = new Error('Unknown call API: ' + fn); e.status = 400; throw e; }
-  return h(db, args || [], nowMs);
+  const a = args || [];
+  if (fn !== 'api_callRegister') return h(db, a, nowMs);
+  /* The secret tried is whichever one was offered: a leader gives an access code, an officer
+     or an agent gives the shared team code. */
+  const secret = String(a[REG_ARG.code] || '').trim() || String(a[REG_ARG.passcode] || '').trim();
+  const base = { door: 'app', nowMs, code: secret, phone: a[REG_ARG.phone],
+    device: a[REG_ARG.device], ip: meta && meta.ip, ua: meta && meta.ua };
+  let out;
+  try {
+    out = await h(db, a, nowMs);
+  } catch (e) {
+    await noteSignin(db, { ...base, ok: false, outcome: outcomeOf(e), detail: e && e.message });
+    throw e;
+  }
+  await noteSignin(db, { ...base, ok: true,
+    who: { name: out && out.name, role: (out && out.leader) ? 'LEADER' : 'OFFICER' } });
+  return out;
 }

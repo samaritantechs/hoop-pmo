@@ -51,7 +51,7 @@ async function downTheTiers(ask, from = 0) {
 }
 
 export async function authCode(code, db = supabase) {
-  if (!code) throw new AuthError('Access code required.');
+  if (!code) throw new AuthError('Access code required.', 'invalid');
   // Sign-in is the one request EVERYTHING else waits behind, so it is the one that most needs
   // to survive a momentary blip rather than turn the whole company away at the door.
   /* tier tells us what this database HAS been told about. suspendKnown=false means "not told
@@ -75,7 +75,7 @@ export async function authCode(code, db = supabase) {
      match more rows than itself. */
   const found = await caseInsensitiveCode(code, db, first.tier);
   const data = exact || found.row;
-  if (!data) throw new AuthError('Invalid access code.');
+  if (!data) throw new AuthError('Invalid access code.', 'invalid');
   const knowSuspend = suspendKnown && found.suspendKnown;
   /* AWAY TODAY, AND THEREFORE NOT AT THE DOOR EITHER.
      -------------------------------------------------------------------------------------
@@ -97,7 +97,7 @@ export async function authCode(code, db = supabase) {
      un-migrated database cannot say "yes", so it says nothing and the door works exactly as it
      did before the migration. A missing column must never be able to lock the company out. */
   if (knowSuspend && !isAdminRole({ role: data.role }) && suspendedOn(data, todayKey())) {
-    throw new AuthError(suspendMessage(data));
+    throw new AuthError(suspendMessage(data), 'suspended', { name: data.name, role: data.role });
   }
   return {
     code: data.code,
@@ -266,8 +266,19 @@ export async function gatedUser(code) {
   return user;
 }
 
+/* `reason` IS SET AT THE THROW, NOT READ OFF THE MESSAGE. The door's log (api/_lib/signin.js,
+   IT SOP D) has to say WHY somebody was turned away, and the only other way to know is a regex
+   over a bilingual sentence -- a classification that quietly breaks the day somebody improves
+   the English half of it. One of SIGNIN_OUTCOMES; 'refused' when nothing more precise is known.
+   `who` rides along on the one refusal where the code was real and the person is known. */
 export class AuthError extends Error {
-  constructor(message) { super(message); this.name = 'AuthError'; this.status = 401; }
+  constructor(message, reason, who) {
+    super(message);
+    this.name = 'AuthError';
+    this.status = 401;
+    this.reason = reason || 'refused';
+    if (who) this.who = who;
+  }
 }
 
 /** Wraps a Vercel API handler so AuthError/any thrown error becomes a clean JSON error
