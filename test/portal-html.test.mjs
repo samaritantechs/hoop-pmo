@@ -542,7 +542,12 @@ test('every pane the page can open is wired end to end', () => {
     'these sidebar entries need a permission no role can ever be granted');
 
   // 3. Every sidebar entry reaches a draw function that is actually defined.
-  const dispatch = html.slice(html.indexOf('function draw()'), html.indexOf('function draw()') + 2000);
+  /* THE WHOLE DISPATCH, not a fixed slice of it. This used to take the first 2000 characters
+     after `function draw()`, which quietly stopped covering the last few tabs as panes were
+     added -- a guard that shrinks as the thing it guards grows is a guard that will one day
+     pass on a pane nobody wired. */
+  const draw0 = html.indexOf('function draw()');
+  const dispatch = html.slice(draw0, html.indexOf('\n}', draw0));
   for (const e of entries) {
     const m = new RegExp("TAB==='" + e.t + "'\\) return (\\w+)\\(").exec(dispatch);
     assert.ok(m, 'the ' + e.t + ' tab is in the sidebar but draw() does nothing with it');
@@ -2157,4 +2162,42 @@ test('portal.html: the enrolment form asks for both referees and sends only the 
   for (const f of ['enrolSave', 'enrolUpdate']) assert.match(nr[1], new RegExp('\\b' + f + ':1'));
   const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
   assert.match(lbl[0], /\benrol:'[^']+'/);
+});
+
+/* =========================================================================================
+   THE WEEKLY IT REPORT -- IT SOP E. Three sections because the SOP names three, in the SOP's
+   own order, and the pane's headline is the one fact that cannot be recomputed: was it sent.
+   ========================================================================================= */
+test('portal.html: the IT report draws the SOP’s three sections in the SOP’s order', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawItRep', html);
+  const order = ['Utendaji wa mfumo / System performance', 'Hali ya usajili / Enrolment status',
+    'Masuala yaliyotatuliwa / Technical issues resolved', 'Uzingatiaji / Compliance'];
+  let at = -1;
+  for (const title of order) {
+    const i = fn.indexOf(title);
+    assert.ok(i > at, title + ' is present and in the SOP’s own order');
+    at = i;
+  }
+  assert.match(fn, /d\.submitted\?'ripoti imeshatumwa/,
+    'whether this week went is the headline, not a footnote');
+  assert.match(fn, /SOP E: kila wiki/, 'and it says weekly, because that is the rule being kept');
+  assert.match(IMP_SRC('itrepNotReady', html), /RUN-ME-2026-09-10-it-report\.sql/);
+});
+
+test('portal.html: a module with no file that day reads as a cross, per day', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawItRep', html);
+  assert.match(fn, /itrepTick\(by\[x\]>0\)/, 'one mark per file per day (SOP C.2 is daily)');
+  assert.match(IMP_SRC('itrepTick', html), /var\(--bad\)/, 'and a missing day is red, not blank');
+  assert.match(fn, /p\.missingDays/);
+  // Submitting is a confirmed act, and never something the client repeats on its own.
+  assert.match(fn, /srv\('itWeeklySend',\{from:d\.from,to:d\.to\}\)/);
+  assert.match(fn, /confirm\('Tuma ripoti ya wiki/);
+  assert.match(fn, /x\.recorded\?'':' — lakini haijaandikwa/,
+    'a report that went while its record did not is two different facts');
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  assert.match(nr[1], /\bitWeeklySend:1/);
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  assert.match(lbl[0], /\bitrep:'[^']+'/);
 });
