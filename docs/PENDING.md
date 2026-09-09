@@ -767,3 +767,41 @@ off: a typo must not cost somebody their working day.
 Also here: on the register is not the same as using the system. The desk shows, per person and
 per branch, whether that phone has actually signed a handset on — which is the half of RSM E.1
 that proves the details reached them.
+
+## 24. SHIPPED 2026-09-10: the weekly IT report (IT SOP E)
+
+The last of the IT SOP gaps. Three sections because the SOP names three — system performance,
+enrolment status, technical issues resolved — in the SOP's own order, plus the compliance clause
+it ends on. The full story is [`docs/IT-REPORT.md`](IT-REPORT.md); the short version:
+
+| nav | pane | who |
+|---|---|---|
+| `itrep` | Ripoti ya IT / Weekly IT report | IT, and the GM if they want to read it themselves |
+
+**Do:**
+
+1. Run `db/migrations/RUN-ME-2026-09-10-it-report.sql`.
+2. Tick the `itrep` nav.
+3. Optional: `IT_REPORT_EMAIL` — blank falls back to `GM_EMAIL`, which is who SOP E names.
+
+Every number in the report already exists somewhere: the door's log, the staff register, the
+issues log, the daily uploads, the handsets' heartbeats. The pane composes and keeps no copy —
+with one exception. SOP E's verb is SUBMIT, and "did last week's go?" is a fact about the past
+that cannot be recomputed, so that alone is a table, and the summary is COPIED onto the row so
+an old submission shows what was sent rather than what the data looks like now.
+
+SOP C.2's daily check is the heart of the performance section: for each of the three modules it
+names, did that file arrive on each of the seven days? Asked with a HEAD request per file per
+day — twenty-one counts and no rows — and a missing day is named, not just counted. The date is
+the day the file is FOR, because a Tuesday deck pasted on Wednesday still left Tuesday's phones
+on Monday's book.
+
+Enrolment status is computed by the same function the enrolment desk uses, and a test asserts
+the two agree exactly: two copies of "what counts as complete" is how a report and a desk come
+to disagree about one register in one week. Issues count the RESOLVING and the raising over
+different windows, and the resolved ones are named — a GM reading "7" learns less than a GM
+reading seven titles.
+
+Also here: the wiring test that checks every sidebar tab reaches a draw function was reading a
+fixed 2,000 characters after `function draw()`, so it had quietly stopped covering the last few
+tabs as panes were added. It now reads the whole dispatch.

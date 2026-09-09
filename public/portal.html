@@ -1418,6 +1418,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   // Enrolment: a save re-sent would overwrite an edit somebody made in between, and a
   // verify or a notify re-sent is a second activation or a second email.
   enrolSave:1, enrolUpdate:1,
+  // Submitting the week: pressed again by a person who can see it went, never re-sent by
+  // the client -- a second copy in the GM's inbox is a second week that never happened.
+  itWeeklySend:1,
   signinReview:1, signinSend:1,
   // Stock: a request re-sent files twice; a decision or a handover re-sent trips its own guard.
   stockRequest:1, stockDecide:1, stockIssue:1,
@@ -1645,6 +1648,11 @@ var NAV=[
   { g:'admin', t:'security', nav:'security',   sw:'Usalama wa kuingia', en:'Sign-in security',
     ic:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 11v4"/><path d="M12 8h.01"/>' },
 
+  /* THE WEEKLY IT REPORT (IT SOP E). Three sections because the SOP names three -- system
+     performance, enrolment status, technical issues resolved -- in the SOP's own order. */
+  { g:'admin', t:'itrep',    nav:'itrep',      sw:'Ripoti ya IT',     en:'Weekly IT report',
+    ic:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/>' },
+
   { g:'admin', t:'staff',    nav:'staff',      sw:'Wafanyakazi',      en:'Staff',
     ic:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
   { g:'admin', t:'codes',    nav:'codes',      sw:'Misimbo ya kuingia', en:'Access codes',
@@ -1796,6 +1804,7 @@ function draw(){
   if(TAB==='recovery') return drawRecovery(m);
   if(TAB==='enrol') return drawEnrol(m);
   if(TAB==='security') return drawSecurity(m);
+  if(TAB==='itrep') return drawItRep(m);
   if(TAB==='staff') return drawStaff(m);
   if(TAB==='codes') return drawCodes(m);
   if(TAB==='settings') return drawSettings(m);
@@ -7346,6 +7355,155 @@ function drawEnrol(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* ---------- the weekly IT report (IT SOP E) ----------
+     "Prepare and SUBMIT regular IT reports to the General Manager on SYSTEM PERFORMANCE,
+      ENROLLMENT STATUS, and TECHNICAL ISSUES RESOLVED, and ensure all system activities comply
+      with company policy and data protection regulations. REPORTS ARE DUE ON A WEEKLY BASIS."
+
+   Three sections because the SOP names three, in the SOP's own order, and nothing else is
+   added to them. A report that answers a different question from the one it was asked is a
+   report nobody trusts the second week.
+
+   The pane's own headline is whether THIS week has been submitted -- the one fact here that
+   cannot be recomputed from the data, and the thing the SOP's word "submit" is about. */
+var ITREPQ={from:'',to:''};
+function itrepNotReady(){
+  return '<div class="note bad">Jedwali la ripoti za IT halijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-10-it-report.sql</b> kwenye Supabase. Ripoti hapa chini '
+    +'inasomeka; kilichokosekana ni kumbukumbu ya kwamba ilitumwa. '
+    +'/ The report below still reads — what is missing is the record that it was sent.</div>';
+}
+function itrepTick(ok){
+  return ok?'<span style="color:var(--ok)">&#10003;</span>':'<span style="color:var(--bad)">&#10007;</span>';
+}
+function itrepSection(title, sop){
+  return '<h3 style="margin:18px 0 6px">'+esc(title)
+    +' <span class="mut" style="font-size:11px;font-weight:400">'+esc(sop)+'</span></h3>';
+}
+function drawItRep(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('itWeekly',ITREPQ).then(function(d){
+    var p=d.performance||{}, en=d.enrolment||{}, is=d.issues||{}, co=d.compliance||{};
+    var days=d.days||[], feeds=p.feeds||[], door=p.door, dev=p.devices||{}, app=p.app||{};
+    m.innerHTML=(d.sentNotReady?itrepNotReady():'')
+      +'<div class="note'+(d.submitted?' ok':' bad')+'">'
+      +'Wiki ya <b>'+esc(d.from)+'</b> hadi <b>'+esc(d.to)+'</b> — '
+      +(d.submitted?'ripoti imeshatumwa kwa GM. / already submitted.'
+        :'ripoti bado haijatumwa kwa GM (SOP E: kila wiki). / not submitted yet — SOP E says weekly.')
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<input id="irFrom" class="inp" type="date" style="width:auto" value="'+esc(d.from||'')+'">'
+      +'<input id="irTo" class="inp" type="date" style="width:auto" value="'+esc(d.to||'')+'">'
+      +'<button class="btn sm" id="irGo">Onyesha / Show</button>'
+      +'<button class="btn sm ghost" id="irThis">Wiki hii / This week</button>'
+      +'<button class="btn sm ghost" id="irLast">Wiki iliyopita / Last week</button>'
+      +'<span style="flex:1"></span>'
+      +(BOOT.readOnly?'':'<button class="btn sm" id="irSend">Tuma kwa GM / Submit</button>')
+      +'</div>'
+
+      /* 1. SYSTEM PERFORMANCE -- SOP C.2's three modules, day by day. */
+      +itrepSection('1. Utendaji wa mfumo / System performance','— SOP E, kutoka ukaguzi wa kila siku SOP C.2')
+      +'<div class="tiles">'
+      +tile('Siku bila faili',money(p.missingDays||0),'moduli haikupata faili siku hiyo',{color:p.missingDays?'bad':'ok'})
+      +tile('Simu zilizoripoti',money(dev.seen||0)+'/'+money(dev.total||0),'zilizopiga ripoti wiki hii',{color:(dev.dark||0)?'warn':'ok'})
+      +tile('Simu kimya',money(dev.dark||0),'hazijasema neno tangu wiki ianze',{color:dev.dark?'bad':'ok'})
+      +tile('Wamesync',money(app.syncedThisWeek||0),'akaunti za simu zilizosync',{})
+      +tile('Simu zilizopigwa',money(app.calls||0),'kwenye kipindi hiki',{})
+      +(door?tile('Wamekataliwa mlangoni',money(door.fails||0),'ya kuangaliwa '+money(door.alarming||0),{color:door.alarming?'bad':'ok'}):'')
+      +'</div>'
+      +'<div class="scroll" style="margin-top:8px"><table><thead><tr><th>FAILI</th>'
+      +days.map(function(x){ return '<th class="r" style="font-size:10px">'+esc(x.slice(5))+'</th>'; }).join('')
+      +'<th class="r">JUMLA</th></tr></thead><tbody>'
+      +feeds.map(function(f){
+        var by={}; (f.byDay||[]).forEach(function(x){ by[x.day]=x.rows; });
+        return '<tr><td style="font-size:11.5px">'+esc(f.label)+'</td>'
+          +days.map(function(x){ return '<td class="r">'+itrepTick(by[x]>0)+'</td>'; }).join('')
+          +'<td class="r'+(f.missing&&f.missing.length?' bad':'')+'">'+money(f.arrived||0)+'/'+money(days.length)+'</td></tr>';
+      }).join('')+'</tbody></table></div>'
+      +(door?'':'<div class="mut" style="font-size:11.5px;margin-top:6px">Kumbukumbu ya mlango haipo bado — '
+        +'endesha <b>RUN-ME-2026-09-10-signin-watch.sql</b>. / The door has no log yet.</div>')
+
+      /* 2. ENROLMENT STATUS -- SOP A, and the question RSM E.1 asks. */
+      +itrepSection('2. Hali ya usajili / Enrolment status','— SOP E, kutoka SOP A')
+      +'<div class="tiles">'
+      +tile('Kwenye rejista',money(en.total||0),'hai '+money(en.active||0),{})
+      +tile('Hazijakamilika',money(en.gaps||0),'zinakosa kitu kati ya vitu SOP A.1',{color:en.gaps?'bad':'ok'})
+      +tile('Hai bila kukaguliwa',money(en.liveUnverified||0),'A.3: uthibitisho unatangulia kuwasha',{color:en.liveUnverified?'bad':'ok'})
+      +tile('Wamesajiliwa wiki hii',money(en.newThisWeek||0),'wamethibitishwa '+money(en.verifiedThisWeek||0),{})
+      +tile('RSM hawajaambiwa',money(en.unnotified||0),'A.4 bado haijafanyika',{color:en.unnotified?'warn':'ok'})
+      +tile('Wapo kwenye app',money(en.inApp||0),'wameshaingia kwenye simu',{})
+      +'</div>'
+      +(en.columnsReady?'':'<div class="mut" style="font-size:11.5px;margin-top:6px">Safu za usajili hazipo bado — '
+        +'endesha <b>RUN-ME-2026-09-10-enrolment.sql</b>. / Nothing can be verified until that migration is run.</div>')
+
+      /* 3. TECHNICAL ISSUES RESOLVED -- a list before it is a number. */
+      +itrepSection('3. Masuala yaliyotatuliwa / Technical issues resolved','— SOP E, kutoka SOP C')
+      +(is.notReady?'<div class="mut">Jedwali la masuala halipo bado — endesha <b>RUN-ME-2026-09-08-issues.sql</b>.</div>'
+        :'<div class="tiles">'
+        +tile('Yameletwa',money(is.raised||0),'kwenye kipindi hiki',{})
+        +tile('Yametatuliwa',money(is.resolved||0),'wastani siku '+money(is.avgDays||0),{color:'ok'})
+        +tile('Bado wazi',money(is.open||0),'kongwe siku '+money(is.oldestOpenDays||0),{color:is.open?'warn':'ok'})
+        +tile('Yamepandishwa',money(is.escalated||0),'kwa GM',{color:is.escalated?'bad':'ok'})
+        +'</div>'
+        +((is.byDept||[]).length?'<div class="scroll" style="margin-top:8px"><table><thead><tr>'
+          +'<th>IDARA</th><th class="r">YAMELETWA</th><th class="r">YAMETATULIWA</th><th class="r">BADO WAZI</th>'
+          +'</tr></thead><tbody>'
+          +is.byDept.map(function(x){
+            return '<tr><td>'+esc(x.department)+'</td><td class="r">'+money(x.raised)+'</td>'
+              +'<td class="r">'+money(x.resolved)+'</td>'
+              +'<td class="r'+(x.open?' bad':'')+'">'+money(x.open)+'</td></tr>';
+          }).join('')+'</tbody></table></div>':'')
+        +((is.resolvedRows||[]).length?'<div class="scroll" style="margin-top:8px"><table><thead><tr>'
+          +'<th>LILILOTATULIWA</th><th>IDARA</th><th>NANI</th><th class="r">SIKU</th><th>LINI</th>'
+          +'</tr></thead><tbody>'
+          +is.resolvedRows.map(function(r){
+            return '<tr><td>'+esc(r.title||'—')+'</td><td style="font-size:11px">'+esc(r.department||'')+'</td>'
+              +'<td style="font-size:11px">'+esc(r.resolvedBy||'—')+'</td>'
+              +'<td class="r">'+money(r.days||0)+'</td>'
+              +'<td style="font-size:11px">'+esc(advWhen(r.at))+'</td></tr>';
+          }).join('')+'</tbody></table></div>'
+          :'<div class="mut" style="margin-top:8px">Hakuna suala lililotatuliwa kwenye kipindi hiki. / Nothing was resolved in this period.</div>'))
+
+      /* 4. COMPLIANCE -- the SOP's last clause, answered with facts rather than a promise. */
+      +itrepSection('4. Uzingatiaji / Compliance','— SOP E: sera ya kampuni na ulinzi wa taarifa')
+      +'<div class="scroll"><table><tbody>'
+      +'<tr><td>Matukio kwenye kumbukumbu / Audit entries this week</td><td class="r"><b>'+money(co.audited||0)+'</b></td></tr>'
+      +'<tr><td>Misimbo yote / Access codes</td><td class="r">'+money(co.codes||0)+'</td></tr>'
+      +'<tr><td>Ya kuangalia tu / Read-only codes</td><td class="r">'+money(co.readOnlyCodes||0)+'</td></tr>'
+      +'<tr><td>Iliyosimamishwa leo / Suspended today</td><td class="r">'+money(co.suspendedCodes||0)+'</td></tr>'
+      +'<tr><td>Misimbo haihifadhiwi kwenye kumbukumbu ya mlango / The door log stores no code</td><td class="r">'+itrepTick(true)+'</td></tr>'
+      +'<tr><td>Kumbukumbu haibebi maudhui ya maombi / The audit log carries no payload</td><td class="r">'+itrepTick(true)+'</td></tr>'
+      +'</tbody></table></div>'
+
+      /* WAS IT SENT. The one fact here that cannot be recomputed. */
+      +((d.sent||[]).length?itrepSection('Ripoti zilizotumwa / Submitted','— SOP E: "prepare and submit"')
+        +'<div class="scroll"><table><thead><tr><th>WIKI</th><th>ILITUMWA</th><th>NA NANI</th><th>KWENDA</th><th>MUHTASARI</th></tr></thead><tbody>'
+        +d.sent.map(function(r){
+          return '<tr><td>'+esc(r.from)+' → '+esc(r.to)+'</td>'
+            +'<td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
+            +'<td style="font-size:11px">'+esc(r.by||'')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.to_||'')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.summary||'')+'</td></tr>';
+        }).join('')+'</tbody></table></div>':'');
+    wireTiles(m);
+    $('#irGo').onclick=function(){ ITREPQ={from:$('#irFrom').value,to:$('#irTo').value}; if(TAB==='itrep') drawItRep(m); };
+    $('#irThis').onclick=function(){ ITREPQ={from:'',to:''}; if(TAB==='itrep') drawItRep(m); };
+    $('#irLast').onclick=function(){
+      var back=function(k,n){ var t=new Date(Date.parse(k+'T00:00:00Z')+n*86400000); return t.toISOString().slice(0,10); };
+      ITREPQ={from:back(d.from,-7),to:back(d.from,-1)}; if(TAB==='itrep') drawItRep(m);
+    };
+    var sn=$('#irSend');
+    if(sn) sn.onclick=function(){
+      if(!confirm('Tuma ripoti ya wiki '+d.from+' → '+d.to+' kwa GM? / Submit this week to the GM?')) return;
+      var b=this; b.disabled=true;
+      srv('itWeeklySend',{from:d.from,to:d.to}).then(function(x){
+        toast('Imetumwa kwa '+(x.to||'')+(x.recorded?'':' — lakini haijaandikwa kwenye kumbukumbu'), !x.recorded);
+        if(TAB==='itrep') drawItRep(m);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 /* ---------- the door (IT SOP D) ----------
      "Monitoring: monitor for unauthorized access and act immediately on any breach,
       including changing the affected password."
@@ -7627,6 +7785,7 @@ function drawCodes(m){
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',
             enrol:'Enrolment (IT: the details, the check, the RSM being told)',
             security:'Sign-in security (IT: who was turned away at the door)',
+            itrep:'Weekly IT report (IT \u2192 GM)',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
             +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';

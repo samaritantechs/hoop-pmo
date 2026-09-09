@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
-import { todayKey, addDaysKey, TZ_OFFSET_MS } from './_lib/time.js';
+import { todayKey, addDaysKey, weekMondayKey, TZ_OFFSET_MS } from './_lib/time.js';
 import { sendMail, noticeHtml } from './_lib/mail.js';
 import { nudge } from './_lib/push.js';
 import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signin.js';
@@ -115,6 +115,8 @@ AUDITED.add('topupUpdate');
    second one the consequential act on this desk, so it is the one that must be traceable. */
 AUDITED.add('enrolSave');
 AUDITED.add('enrolUpdate');
+/* SOP E's verb is SUBMIT, so who sent which week out of the building is kept. */
+AUDITED.add('itWeeklySend');
 AUDITED.add('signinReview');
 AUDITED.add('signinSend');
 
@@ -174,6 +176,9 @@ const EDITABLE_SETTINGS = [
      BRANCH=address per line, so each region's RSM hears about their own people; a branch with
      no line falls back to any plain address here and then to GM_EMAIL. */
   'ENROL_EMAIL',
+  /* THE WEEKLY IT REPORT (IT SOP E, "to the General Manager"). Blank falls back to
+     GM_EMAIL; this key exists for an office that wants the CEO or the auditor copied. */
+  'IT_REPORT_EMAIL',
 ];
 
 /* =======================================================================================
@@ -269,7 +274,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -759,6 +764,29 @@ const topupRow = (r, me, nowMs) => {
 const TOPUP_RANK = { requested: 0, verified: 1, paid: 2, unlocked: 3, rejected: 4 };
 const topupWaitFirst = (x, y) => (TOPUP_RANK[x.status] - TOPUP_RANK[y.status]) || (x.at || 0) - (y.at || 0);
 
+/** ONE READ, TWO READERS: the security pane and the weekly IT report both need the window,
+    and two copies of "which rows count" is how two screens come to report different numbers
+    for the same week. Never throws for a missing table -- that is a migration, not a fault. */
+async function signinWindow(db, from, to) {
+  try {
+    const raw = await fetchAll(() => db.from('signin_attempts').select(SIGNIN_COLS)
+      .gte('day', from).lte('day', to).order('at', { ascending: false }).limit(4000));
+    return { rows: raw.map(signinRow), notReady: false };
+  } catch (e) {
+    if (!tableMissing(e)) throw e;
+    return { rows: [], notReady: true };
+  }
+}
+/** How many refusals against one code stop being a typo. A setting, because the SOP names no
+    number; an unreadable or nonsense value falls back to the judgement in code. */
+async function signinAlertFails(db) {
+  try {
+    const { data } = await db.from('settings').select('value').eq('key', 'SIGNIN_ALERT_FAILS').maybeSingle();
+    const n = parseInt(String((data && data.value) || '').replace(/[^0-9]/g, ''), 10);
+    return (Number.isFinite(n) && n >= 1 && n <= 500) ? n : SIGNIN_ALERT_DEFAULT;
+  } catch (e) { return SIGNIN_ALERT_DEFAULT; }
+}
+
 /* ---------- ENROLMENT (IT SOP A; asked for again by RSM SOP E.1 and CSM SOP H.1) ---------- */
 const ENROL_NOT_READY = 'Safu za usajili hazipo bado. Endesha '
   + 'db/migrations/RUN-ME-2026-09-10-enrolment.sql kwenye Supabase. '
@@ -850,6 +878,43 @@ const enrolRow = (r, inApp) => {
 function enrolWorstFirst(x, y) {
   const rank = r => (r.gaps.length ? 0 : (!r.verifiedAt ? 1 : (!r.notifiedAt ? 2 : 3)));
   return (rank(x) - rank(y)) || (x.name < y.name ? -1 : 1);
+}
+
+/* ---------- THE WEEKLY IT REPORT (IT SOP E; made of IT SOP C.2's daily check) ---------- */
+const ITREP_NOT_READY = 'Jedwali la ripoti za IT halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-10-it-report.sql kwenye Supabase. '
+  + '/ The IT report table has not been created yet — run that migration first.';
+/* THE THREE MODULES SOP C.2 NAMES, and the file that feeds each. "Monitor system uptime and
+   performance across INVENTORY, SALES and FINANCE modules, on a daily basis" -- in this
+   deployment a module is up on a given day if its file arrived that day, because everything
+   downstream reads yesterday's upload. The date column is the day the file is FOR, not the day
+   somebody pressed upload, which is the honest reading: a Tuesday deck pasted on Wednesday
+   still leaves Tuesday's phones working from Monday. */
+const ITREP_FEEDS = [
+  ['finance', 'watu_snapshots', 'snapshot_date', 'Deki ya Watu / The Watu loan book'],
+  ['sales', 'hoop_sales', 'sale_date', 'Mauzo / The sales file'],
+  ['inventory', 'hoop_aged_stock', 'as_of', 'Stoo iliyokaa / The aged stock report'],
+];
+const ITREP_ISSUE_COLS = 'id, raised_at, department, kind, title, status, assigned_to, '
+  + 'resolved_by, resolved_at';
+/** Every EAT day from `from` to `to`, inclusive. The report is a week, so this is seven. */
+function daysBetween(from, to) {
+  const out = [];
+  for (let d = from; d <= to && out.length < 62; d = dayShift(d, 1)) out.push(d);
+  return out;
+}
+/** "Did that file arrive for that day", asked the cheapest way there is: a HEAD request that
+    returns a count and no rows at all. Three files x seven days = 21 tiny indexed lookups,
+    which is the price of an honest answer; reading the rows themselves would be tens of
+    thousands of rows to learn twenty-one yes-or-nos. Never throws: a table that is not there
+    is reported as "no file", which is what it is. */
+async function feedDay(db, table, col, day) {
+  try {
+    const { count, error } = await db.from(table)
+      .select(col, { count: 'exact', head: true }).eq(col, day);
+    if (error) return 0;
+    return num(count);
+  } catch (e) { return 0; }
 }
 
 /* ---------- THE DOOR'S OWN LOG (IT SOP D "monitor for unauthorized access") ---------- */
@@ -6804,6 +6869,286 @@ const FNS = {
   },
 
   /* =====================================================================================
+     THE WEEKLY IT REPORT (IT SOP E).
+     =====================================================================================
+       IT SOP E    "Prepare and SUBMIT regular IT reports to the General Manager on SYSTEM
+                    PERFORMANCE, ENROLLMENT STATUS, and TECHNICAL ISSUES RESOLVED, and ensure
+                    all system activities comply with company policy and data protection
+                    regulations. REPORTS ARE DUE ON A WEEKLY BASIS."
+       IT SOP C.2  "Monitor system uptime and performance across inventory, sales and finance
+                    modules, on a DAILY basis" -- the daily check this weekly report is made of.
+
+     THREE SECTIONS, BECAUSE THE SOP NAMES THREE, and nothing else is added to them. A report
+     that answers a different question from the one it was asked is a report nobody trusts the
+     second week.
+
+     EVERY NUMBER IS ALREADY SOMEWHERE. This composes; it does not keep its own copy of
+     anything. The door's log (SOP D), the staff register (SOP A), the issues log (SOP C), the
+     daily uploads, the handsets' own heartbeats.
+
+     THE POSTGRES BUDGET, warm, per call: 21 HEAD requests (three files x seven days, counts
+     and no rows) + 1 door read + 1 register read + 1 roster read + 3 bounded issues reads
+     + 1 device read + 2 head counts. A weekly report read by one person; the head requests
+     are what keeps "did Tuesday's file arrive" from costing tens of thousands of rows. */
+
+  async itWeekly(db, user, args) {
+    requireNav(user, 'itrep');
+    const a = args || {};
+    const isDay = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+    /* THE WEEK, MONDAY TO SUNDAY, on the EAT clock. Somebody opening this on a Friday means
+       this week; somebody writing up Monday morning means last week, which is one button. */
+    let from = isDay(a.from) ? String(a.from) : weekMondayKey();
+    let to = isDay(a.to) ? String(a.to) : dayShift(from, 6);
+    if (from > to) { const t = from; from = to; to = t; }
+    const days = daysBetween(from, to);
+    const fromISO = from + 'T00:00:00.000Z';
+    const toISO = to + 'T23:59:59.999Z';
+
+    /* ---- 1. SYSTEM PERFORMANCE (SOP C.2's three modules, and the door) ---- */
+    const feeds = [];
+    for (const [key, table, col, label] of ITREP_FEEDS) {
+      const byDay = [];
+      for (const d of days) byDay.push({ day: d, rows: await feedDay(db, table, col, d) });
+      feeds.push({ key, label, byDay,
+        arrived: byDay.filter(x => x.rows > 0).length,
+        missing: byDay.filter(x => x.rows === 0).map(x => x.day) });
+    }
+    const door = await signinWindow(db, from, to);
+    const doorGroups = signinGroups(door.rows);
+    const alertFails = await signinAlertFails(db);
+
+    let devices = { total: 0, seen: 0, dark: 0, locked: 0, released: 0 };
+    try {
+      const rows = await fetchAll(() => db.from('devices').select('imei, state, last_seen'));
+      const fromMs = Date.parse(fromISO);
+      devices = {
+        total: rows.length,
+        seen: rows.filter(r => r.last_seen && Date.parse(r.last_seen) >= fromMs).length,
+        // Never spoke, or has not spoken since before this week began.
+        dark: rows.filter(r => !r.last_seen || Date.parse(r.last_seen) < fromMs).length,
+        locked: rows.filter(r => r.state === 'locked').length,
+        released: rows.filter(r => r.state === 'released').length,
+      };
+    } catch (e) { /* the device registry is a later migration; its absence is not a failure */ }
+
+    let calls = 0;
+    try {
+      const { count } = await db.from('call_logs')
+        .select('id', { count: 'exact', head: true }).gte('call_date', from).lte('call_date', to);
+      calls = num(count);
+    } catch (e) { calls = 0; }
+
+    /* ---- 2. ENROLMENT STATUS (SOP A, and the question RSM E.1 asks) ---- */
+    let agents = [];
+    let columnsReady = true;
+    try {
+      agents = await fetchAll(() => db.from('hoop_agents').select(ENROL_COLS_WIDE));
+    } catch (e) {
+      if (!ENROL_NEW_COLS.test(String(e && e.message))) throw e;
+      columnsReady = false;
+      agents = await fetchAll(() => db.from('hoop_agents').select(ENROL_COLS_NARROW));
+    }
+    let roster = [];
+    try { roster = await fetchAll(() => db.from('call_users').select('phone, last_sync, active')); }
+    catch (e) { roster = []; }
+    const inApp = new Set(roster.map(u => pnorm(u.phone)).filter(Boolean));
+    const staff = agents.map(r => enrolRow(r, inApp.has(pnorm(r.phone))));
+    const enrolment = {
+      total: staff.length,
+      active: staff.filter(r => r.active).length,
+      gaps: staff.filter(r => !r.complete).length,
+      unverified: staff.filter(r => !r.verifiedAt).length,
+      liveUnverified: staff.filter(r => r.active && !r.verifiedAt).length,
+      unnotified: staff.filter(r => r.verifiedAt && !r.notifiedAt).length,
+      inApp: staff.filter(r => r.inApp).length,
+      // Enrolled THIS WEEK -- the number that says whether the desk did any work.
+      newThisWeek: staff.filter(r => r.enrolledAt && r.enrolledAt >= Date.parse(fromISO)
+        && r.enrolledAt <= Date.parse(toISO)).length,
+      verifiedThisWeek: staff.filter(r => r.verifiedAt && r.verifiedAt >= Date.parse(fromISO)
+        && r.verifiedAt <= Date.parse(toISO)).length,
+      columnsReady,
+    };
+    const syncedMs = Date.parse(fromISO);
+    const app = {
+      accounts: roster.length,
+      activeAccounts: roster.filter(u => u.active !== false).length,
+      syncedThisWeek: roster.filter(u => u.last_sync && Date.parse(u.last_sync) >= syncedMs).length,
+      calls,
+    };
+
+    /* ---- 3. TECHNICAL ISSUES RESOLVED (SOP C, filed by the issues log) ---- */
+    const issues = { raised: 0, resolved: 0, open: 0, escalated: 0, avgDays: 0,
+      oldestOpenDays: 0, byDept: [], notReady: false, resolvedRows: [] };
+    try {
+      const [raised, closed, live] = await Promise.all([
+        fetchAll(() => db.from('issues').select(ITREP_ISSUE_COLS).gte('raised_at', fromISO).lte('raised_at', toISO)),
+        fetchAll(() => db.from('issues').select(ITREP_ISSUE_COLS).gte('resolved_at', fromISO).lte('resolved_at', toISO)),
+        fetchAll(() => db.from('issues').select(ITREP_ISSUE_COLS).neq('status', 'resolved')),
+      ]);
+      issues.raised = raised.length;
+      issues.resolved = closed.length;
+      issues.open = live.length;
+      issues.escalated = live.filter(r => r.status === 'escalated').length;
+      const spans = closed.map(r => (Date.parse(r.resolved_at) - Date.parse(r.raised_at)) / 86400000)
+        .filter(n => Number.isFinite(n) && n >= 0);
+      issues.avgDays = spans.length ? Math.round((spans.reduce((s, n) => s + n, 0) / spans.length) * 10) / 10 : 0;
+      const now = Date.now();
+      issues.oldestOpenDays = live.reduce((mx, r) => {
+        const d = (now - Date.parse(r.raised_at)) / 86400000;
+        return Number.isFinite(d) ? Math.max(mx, Math.floor(d)) : mx;
+      }, 0);
+      const by = {};
+      for (const r of raised) (by[r.department || '—'] = by[r.department || '—'] || { department: r.department || '—', raised: 0, resolved: 0, open: 0 }).raised++;
+      for (const r of closed) (by[r.department || '—'] = by[r.department || '—'] || { department: r.department || '—', raised: 0, resolved: 0, open: 0 }).resolved++;
+      for (const r of live) (by[r.department || '—'] = by[r.department || '—'] || { department: r.department || '—', raised: 0, resolved: 0, open: 0 }).open++;
+      issues.byDept = Object.values(by).sort((x, y) => (y.open - x.open) || (y.raised - x.raised));
+      /* WHAT WAS ACTUALLY FIXED, by name. "Technical issues resolved" is a list before it is a
+         number -- a GM reading "7" learns less than a GM reading seven titles. */
+      issues.resolvedRows = closed.slice(0, 40).map(r => ({
+        id: String(r.id), title: r.title || '', department: r.department || '',
+        kind: r.kind || '', resolvedBy: r.resolved_by || '',
+        at: r.resolved_at ? Date.parse(r.resolved_at) : null,
+        days: Math.max(0, Math.round((Date.parse(r.resolved_at) - Date.parse(r.raised_at)) / 86400000)),
+      })).sort((x, y) => (y.at || 0) - (x.at || 0));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      issues.notReady = true;
+    }
+
+    /* ---- 4. COMPLIANCE. The SOP's last clause, answered with facts rather than a promise ---- */
+    const compliance = { audited: 0, readOnlyCodes: 0, suspendedCodes: 0, codes: 0,
+      maskedCodes: true, auditPayloads: false };
+    try {
+      const { count } = await db.from('audit_log')
+        .select('id', { count: 'exact', head: true }).gte('at', fromISO).lte('at', toISO);
+      compliance.audited = num(count);
+    } catch (e) { /* the audit table is its own migration */ }
+    try {
+      /* ROLE AND WINDOW ONLY. This is a compliance count, and a report that quietly carried
+         the access codes themselves would be the exact failure its own last clause names. */
+      const rows = await fetchAll(() => db.from('access_codes').select('role, suspend_from, suspend_to'));
+      const day = todayKey();
+      compliance.codes = rows.length;
+      compliance.readOnlyCodes = rows.filter(r => isReadOnly({ role: r.role })).length;
+      compliance.suspendedCodes = rows.filter(r => suspendedOn(r, day)).length;
+    } catch (e) { /* the narrower list is a later migration; the count simply is not offered */ }
+
+    /* ---- WAS LAST WEEK'S ACTUALLY SENT? The one thing that cannot be recomputed ---- */
+    let sent = [];
+    let sentNotReady = false;
+    try {
+      sent = await fetchAll(() => db.from('it_reports')
+        .select('id, week_from, week_to, sent_at, sent_by, sent_to, summary')
+        .order('sent_at', { ascending: false }).limit(20));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      sentNotReady = true;
+    }
+    const sentRows = sent.map(r => ({ id: String(r.id), from: r.week_from, to: r.week_to,
+      at: r.sent_at ? Date.parse(r.sent_at) : null, by: r.sent_by || '', to_: r.sent_to || '',
+      summary: r.summary || '' }));
+
+    return { ok: true, from, to, days,
+      sentNotReady, notReadyNote: sentNotReady ? ITREP_NOT_READY : '',
+      performance: {
+        feeds,
+        // The number SOP C.2 exists to keep at zero: days a module had no file at all.
+        missingDays: feeds.reduce((s, f) => s + f.missing.length, 0),
+        devices, app,
+        door: door.notReady ? null : {
+          ok: door.rows.filter(r => r.ok).length,
+          people: new Set(door.rows.filter(r => r.ok).map(r => r.codeKey).filter(Boolean)).size,
+          fails: door.rows.filter(r => !r.ok).length,
+          alarming: door.rows.filter(r => !r.ok && SIGNIN_ALARMING.includes(r.outcome)).length,
+          watch: doorGroups.filter(g => g.tries >= alertFails && !g.reviewed).length,
+        },
+      },
+      enrolment, issues, compliance,
+      sent: sentRows,
+      // Whether THIS period has been submitted, which is the pane's own headline.
+      submitted: sentRows.some(r => r.from === from && r.to === to),
+    };
+  },
+
+  /** SOP E's verb is SUBMIT. Sends the week to the GM and records that it went -- because
+      "did last week's go?" is a fact about the past and cannot be recomputed from this week's
+      numbers. The summary is COPIED onto the row for the same reason. */
+  async itWeeklySend(db, user, args) {
+    requireNav(user, 'itrep');
+    requireWrite(user);
+    const d = await FNS.itWeekly(db, user, args);
+    const p = d.performance;
+    const rows = [
+      ['Kipindi / Week', d.from + ' → ' + d.to],
+      ['— Utendaji wa mfumo / SYSTEM PERFORMANCE', ''],
+      ['Siku bila faili / Days a file did not arrive', String(p.missingDays)],
+    ].concat(p.feeds.map(f => [f.label, f.arrived + '/' + d.days.length
+      + (f.missing.length ? ' — ' + f.missing.join(', ') : '')]))
+      .concat([
+        ['Simu zilizoripoti / Handsets that checked in', p.devices.seen + '/' + p.devices.total
+          + (p.devices.dark ? ' (kimya ' + p.devices.dark + ')' : '')],
+        ['Simu za kazi zilizosync / App accounts that synced', String(p.app.syncedThisWeek)],
+        ['Simu zilizopigwa / Calls logged', String(p.app.calls)],
+      ])
+      .concat(p.door ? [
+        ['Waliokataliwa mlangoni / Refused at the door', String(p.door.fails)
+          + (p.door.alarming ? ' (ya kuangaliwa ' + p.door.alarming + ')' : '')],
+        ['Misimbo inayosubiri uamuzi / Codes awaiting a decision', String(p.door.watch)],
+      ] : [])
+      .concat([
+        ['— Hali ya usajili / ENROLMENT STATUS', ''],
+        ['Kwenye rejista / On the register', String(d.enrolment.total)],
+        ['Hazijakamilika / Incomplete', String(d.enrolment.gaps)],
+        ['Hai bila kukaguliwa / Live but never checked', String(d.enrolment.liveUnverified)],
+        ['Wamesajiliwa wiki hii / Enrolled this week', String(d.enrolment.newThisWeek)],
+        ['Hakuna aliyeambiwa / RSM not yet told', String(d.enrolment.unnotified)],
+        ['— Masuala / TECHNICAL ISSUES', ''],
+        ['Yameletwa / Raised', String(d.issues.raised)],
+        ['Yametatuliwa / Resolved', String(d.issues.resolved)
+          + (d.issues.avgDays ? ' (wastani siku ' + d.issues.avgDays + ')' : '')],
+        ['Bado wazi / Still open', String(d.issues.open)
+          + (d.issues.oldestOpenDays ? ' — kongwe siku ' + d.issues.oldestOpenDays : '')],
+        ['— Uzingatiaji / COMPLIANCE', ''],
+        ['Matukio kwenye kumbukumbu / Audit entries', String(d.compliance.audited)],
+        ['Misimbo ya kuangalia tu / Read-only codes', String(d.compliance.readOnlyCodes)],
+        ['Misimbo iliyosimamishwa / Suspended codes', String(d.compliance.suspendedCodes)],
+      ]);
+    let to = '';
+    try {
+      const { data: s } = await db.from('settings').select('value').eq('key', 'IT_REPORT_EMAIL').maybeSingle();
+      to = String((s && s.value) || '').trim();
+    } catch (e) { to = ''; }
+    const mail = to
+      ? await sendMail(db, { to, subject: 'HOOPLOAN — ripoti ya IT / weekly IT report: ' + d.from + ' → ' + d.to,
+        html: noticeHtml('Ripoti ya wiki ya IT / Weekly IT report', rows,
+          'IT SOP E: ripoti za IT kwa Mkurugenzi kila wiki — utendaji, usajili, na masuala '
+          + 'yaliyotatuliwa. / IT SOP E: weekly IT reports to the General Manager on system '
+          + 'performance, enrolment status and technical issues resolved.') })
+      : await sendMail(db, { toKey: 'GM_EMAIL', subject: 'HOOPLOAN — ripoti ya IT / weekly IT report: ' + d.from + ' → ' + d.to,
+        html: noticeHtml('Ripoti ya wiki ya IT / Weekly IT report', rows,
+          'IT SOP E. IT_REPORT_EMAIL haijawekwa, kwa hiyo imekwenda kwa GM_EMAIL. '
+          + '/ IT_REPORT_EMAIL is not set, so this went to GM_EMAIL.') });
+    if (!mail.sent) bad('Barua pepe haikutumwa: ' + mail.reason
+      + ' / The report was not sent: ' + mail.reason);
+    /* THE SUMMARY IS COPIED. Opening a June submission next January must show what was SENT in
+       June, not what June looks like after six months of re-uploads and resolved issues. */
+    const summary = 'faili zilizokosekana ' + p.missingDays
+      + ' · rejista ' + d.enrolment.total + ' (hazijakamilika ' + d.enrolment.gaps + ')'
+      + ' · masuala yameletwa ' + d.issues.raised + ', yametatuliwa ' + d.issues.resolved
+      + (p.door ? ' · waliokataliwa mlangoni ' + p.door.fails : '');
+    const { error } = await db.from('it_reports').insert([{
+      week_from: d.from, week_to: d.to, sent_at: new Date().toISOString(),
+      sent_by: user.name || '', sent_to: String(mail.to || '').slice(0, 200),
+      summary: summary.slice(0, 500),
+    }]);
+    if (error && !tableMissing(error)) throw new Error(error.message);
+    return { ok: true, sent: true, to: mail.to, from: d.from, week: d.from + ' → ' + d.to,
+      /* Told plainly rather than silently: the report DID go, and the record of it did not,
+         which is a different thing and the person should know which one to chase. */
+      recorded: !error, recordNote: error ? ITREP_NOT_READY : '' };
+  },
+
+  /* =====================================================================================
      THE DOOR (IT SOP D).
      =====================================================================================
        "Access Controls: set and maintain user access controls so only authorized personnel
@@ -6830,24 +7175,14 @@ const FNS = {
     let to = isDay(a.to) ? String(a.to) : today;
     let from = isDay(a.from) ? String(a.from) : dayShift(to, -6);
     if (from > to) { const t = from; from = to; to = t; }
-    let raw = [];
-    try {
-      raw = await fetchAll(() => db.from('signin_attempts').select(SIGNIN_COLS)
-        .gte('day', from).lte('day', to).order('at', { ascending: false }).limit(4000));
-    } catch (e) {
-      if (!tableMissing(e)) throw e;
+    const win = await signinWindow(db, from, to);
+    if (win.notReady) {
       return { ok: true, from, to, notReady: true, rows: [], groups: [], byDay: [],
         alertFails: SIGNIN_ALERT_DEFAULT,
         counts: { ok: 0, fails: 0, alarming: 0, people: 0, watch: 0 } };
     }
-    const rows = raw.map(signinRow);
-    const alertFails = await (async () => {
-      try {
-        const { data } = await db.from('settings').select('value').eq('key', 'SIGNIN_ALERT_FAILS').maybeSingle();
-        const n = parseInt(String((data && data.value) || '').replace(/[^0-9]/g, ''), 10);
-        return (Number.isFinite(n) && n >= 1 && n <= 500) ? n : SIGNIN_ALERT_DEFAULT;
-      } catch (e) { return SIGNIN_ALERT_DEFAULT; }
-    })();
+    const rows = win.rows;
+    const alertFails = await signinAlertFails(db);
     const groups = signinGroups(rows);
     const good = rows.filter(r => r.ok);
     const bad = rows.filter(r => !r.ok);
