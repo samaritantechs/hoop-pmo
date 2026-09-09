@@ -1412,7 +1412,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   // Issues: a raise re-sent files twice; an update re-sent trips its own stale-row guard.
   issueRaise:1, issueUpdate:1,
   // Sending the GM his copy: pressed again by a person who can see it went, never re-sent.
-  fuOutcomesSend:1};
+  fuOutcomesSend:1,
+  // Stock: a request re-sent files twice; a decision or a handover re-sent trips its own guard.
+  stockRequest:1, stockDecide:1, stockIssue:1};
 function srv(fn,args,tries){
   tries=tries||0;
   busy(true);
@@ -1535,6 +1537,15 @@ var NAV=[
     ic:'<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/><path d="M9 10V8a3 3 0 0 1 6 0v2"/><rect x="8" y="10" width="8" height="5" rx="1"/>' },
   { g:'stock', t:'move',     nav:'movement',   sw:'Mwenendo wa stoo', en:'Stock movement',
     ic:'<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/><path d="M11 18l-6-6 6-6"/>' },
+  /* STOCK REQUESTS: ask, decide against the aging gate, hand over. Three panes because they
+     are three different jobs -- the RSM who asks, the store keeper who releases, and whoever
+     reads the tracker -- each granted on its own, like every other request here. */
+  { g:'stock', t:'streq',    nav:'stockreq',   sw:'Omba stoo',        en:'Stock request',
+    ic:'<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M12 8v8M8 12h8"/>' },
+  { g:'stock', t:'stappr',   nav:'stockappr',  sw:'Idhini ya stoo',   en:'Stock approval',
+    ic:'<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>' },
+  { g:'stock', t:'strep',    nav:'stockrep',   sw:'Ripoti ya stoo',   en:'Stock reports',
+    ic:'<path d="M3 3v18h18"/><path d="M8 17v-5M12 17V7M16 17v-9"/>' },
 
   /* SALARY ADVANCE: three panes, because they are three different jobs done by three
      different people. Asking, deciding and paying are not one screen with hidden buttons --
@@ -1700,6 +1711,9 @@ function draw(){
   if(TAB==='stock') return drawStock(m);
   if(TAB==='move') return drawMove(m);
   if(TAB==='acct') return drawStockAccount(m);
+  if(TAB==='streq') return drawStockReq(m);
+  if(TAB==='stappr') return drawStockAppr(m);
+  if(TAB==='strep') return drawStockRep(m);
   if(TAB==='dev') return drawDevices(m);
   if(TAB==='advreq') return drawAdvReq(m);
   if(TAB==='advappr') return drawAdvAppr(m);
@@ -4870,6 +4884,330 @@ function drawLeaveRep(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* ---------- stock requests, the aging gate, and the handover note ----------
+     Store SOP B.1 the request, B.2 + E the aging gate, B.4 the approval,
+     B.5-B.9 the pre-numbered note, the joint count, the photographs, the signature and the
+     courier's documents, B.11 the distribution report, E.3 the tracker, G the low-stock alert.
+
+   Three panes, three grants. The gate is the whole point: the approval pane refuses to release
+   to somebody sitting on stock older than STOCK_AGING_DAYS unless the store keeper says why. */
+function stockNotReady(){
+  return '<div class="note bad">Jedwali la maombi ya stoo halijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-09-stock-requests.sql</b> kwenye Supabase, kisha rudi hapa. '
+    +'/ The stock request tables have not been created yet — run that migration, then come back.</div>';
+}
+function stockChip(r){
+  if(r.status==='issued') return '<span class="chip ok">Issued</span>';
+  if(r.status==='approved') return '<span class="chip">Approved</span>';
+  if(r.status==='rejected') return '<span class="chip bad">Rejected</span>';
+  if(r.status==='cancelled') return '<span class="chip">Cancelled</span>';
+  return '<span class="chip warn">Pending</span>';
+}
+/* THE GATE, IN ONE LINE, wherever it needs saying. Blocked is red because it is a refusal. */
+function agingLine(g){
+  if(!g) return '';
+  if(!g.blocked) return '<span class="chip ok">Hakuna stoo iliyokaa / no aging stock</span>';
+  return '<span class="chip bad">'+money(g.aging)+' pcs zaidi ya siku '+money(g.agingDays)
+    +' · kongwe siku '+money(g.oldest)+'</span>';
+}
+function stockTable(rows, o){
+  o=o||{};
+  return '<div class="scroll"><table><thead><tr>'
+    +'<th>MUDA</th><th>KWA AJILI YA</th><th>MODELI</th><th class="r">IDADI</th><th>INAKWENDA</th>'
+    +'<th>ALIYEOMBA</th><th>HALI</th><th class="r">IMEIDHINISHWA</th><th>STOO ILIYOKAA</th><th>MAONI</th>'
+    +'<th class="noxl"></th></tr></thead><tbody>'
+    +rows.map(function(r){
+      var g=r.agingNow;
+      var acts='<button class="btn sm ghost" data-stv="'+esc(r.id)+'">Maelezo</button>';
+      if(o.decide&&r.status==='pending') acts+=' <button class="btn sm" data-std="'+esc(r.id)+'">Amua</button>';
+      if(o.issue&&r.status==='approved') acts+=' <button class="btn sm" data-sti="'+esc(r.id)+'">Kabidhi</button>';
+      if(r.status==='issued') acts+=' <button class="btn sm ghost" data-sth="'+esc(r.id)+'">Hati</button>';
+      return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
+        +'<td><b>'+esc(r.holder||'—')+'</b></td>'
+        +'<td>'+esc(r.item||'—')+'</td><td class="r">'+money(r.qty)+'</td>'
+        +'<td>'+esc(r.destination||'—')+'</td>'
+        +'<td>'+esc(r.staffName||'—')+'<div class="mut" style="font-size:10px">'+esc(r.staffRole||'')+'</div></td>'
+        +'<td>'+stockChip(r)+(r.agingOverride?' <span class="chip bad">override</span>':'')+'</td>'
+        +'<td class="r">'+(r.approvedQty==null?'—':money(r.approvedQty))+'</td>'
+        +'<td style="font-size:11px">'+(g?agingLine(g)
+            :(r.agingCount?'<span class="chip warn">'+money(r.agingCount)+' pcs</span>':'—'))+'</td>'
+        +'<td style="font-size:11px">'+esc(r.comment||'')+'</td>'
+        +'<td class="r noxl">'+acts+'</td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+function stockDetailsDrawer(r){
+  drawer('<h3>'+esc(r.item||'—')+' ×'+money(r.qty)+'</h3>'
+    +'<div class="sub">'+stockChip(r)+' kwa ajili ya <b>'+esc(r.holder||'—')+'</b>'
+    +(r.destination?' · '+esc(r.destination):'')+'</div>'
+    +'<div style="margin:8px 0;font-size:12.5px">'
+    +'<div class="mut" style="font-size:11px">Ameomba '+esc(r.staffName||'—')+' · '+esc(advWhen(r.at))+'</div>'
+    +(r.reason?'<div style="white-space:pre-wrap;margin-top:6px">'+esc(r.reason)+'</div>':'')
+    +(r.agingCount?'<div class="note" style="margin-top:8px;font-size:11.5px">Wakati wa kuomba: stoo '+money(r.agingCount)
+      +' iliyokaa (kongwe siku '+money(r.agingOldestDays||0)+', deki ya '+esc(r.agingAsOf||'—')+').</div>':'')
+    +(r.decidedBy?'<div class="mut" style="font-size:11px;margin-top:6px">Ameamua '+esc(r.decidedBy)+' · '+esc(advWhen(r.decidedAt))+'</div>':'')
+    +(r.comment?'<div style="white-space:pre-wrap;margin-top:4px">'+esc(r.comment)+'</div>':'')
+    +(r.agingOverride?'<div class="note bad" style="margin-top:8px;font-size:11.5px"><b>Imetolewa licha ya stoo iliyokaa (SOP E):</b> '
+      +esc(r.agingOverrideReason||'')+'</div>':'')
+    +(r.issuedAt?'<div class="note ok" style="margin-top:8px;font-size:11.5px">Imekabidhiwa na '+esc(r.issuedBy||'—')
+      +' · '+esc(advWhen(r.issuedAt))+'</div>':'')
+    +'</div>');
+}
+function stockHandoverDrawer(id){
+  drawer('<h3>Hati ya makabidhiano / Handover note</h3><div class="sk"></div>');
+  srv('stockHandover',{id:id}).then(function(d){
+    var h=d.handover, it=d.items||[];
+    if(!h){ drawer('<h3>Hati ya makabidhiano / Handover note</h3><div class="mut">Hakuna hati. / No handover note.</div>'); return; }
+    drawer('<h3>Hati ya makabidhiano / Handover note</h3>'
+      +'<div class="sub">'+(h.noteNo?'Na. <b>'+esc(h.noteNo)+'</b> · ':'')+esc(advWhen(h.at))+' · '+esc(h.by||'')+'</div>'
+      +'<div style="margin:8px 0;font-size:12.5px">'
+      +'<div>Amepokea na kusaini / Received and signed: <b>'+esc(h.receivedBy||'—')+'</b></div>'
+      +'<div>Tumehesabu pamoja / Joint count: '+(h.countedJointly?'<span class="chip ok">ndiyo</span>':'<span class="chip bad">hapana</span>')+'</div>'
+      +(h.courier?'<div>Kozi / Courier: <b>'+esc(h.courier)+'</b> · nyaraka '
+        +(h.docsComplete?'<span class="chip ok">zimekamilika</span>':'<span class="chip bad">hazijakamilika</span>')+'</div>':'')
+      +(h.conditionNote?'<div style="white-space:pre-wrap;margin-top:6px">'+esc(h.conditionNote)+'</div>':'')
+      +'</div>'
+      +'<h4 style="margin:10px 0 4px">IMEI ('+money(it.length)+')</h4>'
+      +(it.length?'<div class="scroll" style="max-height:220px"><table><tbody>'
+        +it.map(function(x){ return '<tr><td style="font-size:11.5px">'+esc(x.imei)+'</td><td style="font-size:11px">'+esc(x.condition||'')+'</td></tr>'; }).join('')
+        +'</tbody></table></div>':'<div class="mut">Hakuna IMEI kwenye hati. / No IMEIs on this note.</div>')
+      +(h.photos?'<button class="btn w ghost" id="sthP" style="margin-top:10px">Picha ('+money(h.photos)+') / Photos</button>':''));
+    var pb=$('#sthP');
+    if(pb) pb.onclick=function(){
+      drawer('<h3>Picha za makabidhiano / Handover photos</h3><div class="sk"></div>');
+      srv('stockPhotos',{id:id}).then(function(p){
+        /* Only an image data URL goes into a src -- the same rule the server kept on the way in. */
+        var ps=(p.photos||[]).filter(function(x){ return /^data:image\/(jpeg|jpg|png|webp);base64,/.test(String(x.data||'')); });
+        drawer('<h3>Picha za makabidhiano / Handover photos</h3>'
+          +(ps.length?ps.map(function(x){
+              return '<div style="margin:8px 0"><img src="'+esc(x.data)+'" alt="handover '+x.seq+'" '
+                +'style="max-width:100%;border-radius:8px;border:1px solid var(--line)">'
+                +'<div class="mut" style="font-size:10px">#'+x.seq+' · '+Math.round((x.bytes||0)/1024)+'KB</div></div>';
+            }).join(''):'<div class="mut">Hakuna picha. / No photos.</div>'));
+      }).catch(function(e){ drawer('<div class="msg bad">'+esc(safeErr(e))+'</div>'); });
+    };
+  }).catch(function(e){ drawer('<div class="msg bad">'+esc(safeErr(e))+'</div>'); });
+}
+function stockWireRows(m, rows, o){
+  var find=function(id){ return rows.filter(function(x){ return String(x.id)===id; })[0]; };
+  [].slice.call(m.querySelectorAll('[data-stv]')).forEach(function(b){
+    b.onclick=function(){ var r=find(b.getAttribute('data-stv')); if(r) stockDetailsDrawer(r); };
+  });
+  [].slice.call(m.querySelectorAll('[data-sth]')).forEach(function(b){
+    b.onclick=function(){ stockHandoverDrawer(b.getAttribute('data-sth')); };
+  });
+  if(o.decide) [].slice.call(m.querySelectorAll('[data-std]')).forEach(function(b){
+    b.onclick=function(){ var r=find(b.getAttribute('data-std')); if(r) o.decide(r); };
+  });
+  if(o.issue) [].slice.call(m.querySelectorAll('[data-sti]')).forEach(function(b){
+    b.onclick=function(){ var r=find(b.getAttribute('data-sti')); if(r) o.issue(r); };
+  });
+}
+/* THE REQUEST PANE: the form, the gate as it stands for this person RIGHT NOW (so nobody
+   files a request the desk is bound to refuse), and their own requests underneath. */
+function drawStockReq(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('stockMine',{}).then(function(d){
+    if(d.notReady){ m.innerHTML=stockNotReady(); return; }
+    var rows=d.rows||[], g=d.aging;
+    m.innerHTML=(g&&g.blocked?'<div class="note bad">Kwa mujibu wa SOP E, huwezi kupewa stoo mpya ukiwa na stoo '
+        +money(g.aging)+' iliyokaa zaidi ya siku '+money(g.agingDays)+' (kongwe: siku '+money(g.oldest)
+        +', deki ya '+esc(g.asOf||'—')+'). Iuze, irudishe au ipatanishe kwanza. '
+        +'/ No new stock while aging stock is outstanding — sell, return or reconcile it first. '
+        +'Unaweza kuomba, lakini stoo itatolewa tu kwa sababu iliyoandikwa. / You may still ask; the store can only release with a recorded reason.</div>':'')
+      +'<div class="card" style="padding:14px;max-width:640px">'
+      +'<h3 style="margin:0 0 4px">Omba stoo / Stock request</h3>'
+      +'<div class="sub">Ombi linakwenda kwa dawati la stoo. / The request goes to the store desk.</div>'
+      +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+      +'<div style="flex:1;min-width:160px"><label class="lbl">Kwa ajili ya / Stock is for *</label>'
+      +'<input id="stHolder" class="inp" value="'+esc(BOOT.name||'')+'" placeholder="Jina la RSM au ajenti"></div>'
+      +'<div style="flex:1;min-width:140px"><label class="lbl">Inakwenda / Destination</label><input id="stDest" class="inp"></div>'
+      +'</div>'
+      +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+      +'<div style="flex:1;min-width:160px"><label class="lbl">Modeli / Model *</label><input id="stItem" class="inp" placeholder="A07, A06 …"></div>'
+      +'<div style="flex:1;min-width:100px"><label class="lbl">Idadi / Quantity *</label><input id="stQty" class="inp" type="number" min="1" step="1"></div>'
+      +'</div>'
+      +'<label class="lbl">Sababu / Reason</label><textarea id="stReason" class="inp" rows="2" placeholder="Kwa nini na kwa lini"></textarea>'
+      +'<div class="mut" style="font-size:11.5px;margin-top:6px">Stoo yako iliyokaa sasa: '+agingLine(g)
+      +(d.asOf?' <span style="font-size:10.5px">(deki ya '+esc(d.asOf)+')</span>':'')+'</div>'
+      +'<button class="btn w" id="stSend" style="margin-top:10px">Tuma ombi / Submit request</button>'
+      +'</div>'
+      +'<h3 style="margin:18px 0 6px">Maombi yangu / My requests</h3>'
+      +(rows.length?stockTable(rows,{}):'<div class="mut">Bado hujaomba stoo. / No requests yet.</div>');
+    $('#stSend').onclick=function(){
+      var b=this; b.disabled=true;
+      srv('stockRequest',{ holder:$('#stHolder').value, destination:$('#stDest').value, item:$('#stItem').value,
+        qty:$('#stQty').value, reason:$('#stReason').value })
+      .then(function(r){
+        toast('Ombi limetumwa'+(r.emailed?' · dawati la stoo limeambiwa':' · email haikutumwa: '+(r.emailNote||'')), !r.emailed);
+        if(TAB==='streq') drawStockReq(m);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+    stockWireRows(m, rows, {});
+  }).catch(function(e){ paneFailed(m,e); });
+}
+/* THE STORE DESK: decide, then hand over. The gate is recomputed live on the server, so the
+   red chip here and the refusal there are the same arithmetic. */
+var STOCKQ='';
+function drawStockAppr(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('stockQueue',{state:STOCKQ}).then(function(d){
+    if(d.notReady){ m.innerHTML=stockNotReady(); return; }
+    var rows=d.rows||[], c=d.counts||{};
+    var pick=function(k){ return function(){ STOCKQ=(STOCKQ===k?'':k); if(TAB==='stappr') drawStockAppr(m); }; };
+    var chip=function(k,label){ return '<button class="btn sm'+(STOCKQ===k?'':' ghost')+'" data-stq="'+k+'">'+label+'</button>'; };
+    m.innerHTML='<div class="tiles">'
+      +tile('Yanasubiri',money(c.pending||0),'hayajaamuliwa',{color:c.pending?'bad':'',on:STOCKQ==='pending',cta:'chuja ›',go:pick('pending')})
+      +tile('Yamezuiwa',money(c.blocked||0),'wana stoo iliyokaa — SOP E',{color:c.blocked?'bad':'',on:STOCKQ==='blocked',cta:'chuja ›',go:pick('blocked')})
+      +tile('Yameidhinishwa',money(c.approved||0),'yanasubiri kukabidhiwa',{color:c.approved?'warn':'',on:STOCKQ==='approved',cta:'chuja ›',go:pick('approved')})
+      +tile('Yamekabidhiwa',money(c.issued||0),'jumla · yamekataliwa '+money(c.rejected||0),{color:'ok',on:STOCKQ==='issued',cta:'chuja ›',go:pick('issued')})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +chip('','Kazi zilizopo / Open')+chip('pending','Yanasubiri')+chip('blocked','Yamezuiwa')
+      +chip('approved','Yameidhinishwa')+chip('issued','Yamekabidhiwa')+chip('all','Yote / All')
+      +'<span style="flex:1"></span>'
+      +'<span class="mut" style="font-size:11.5px">Kikomo cha kukaa: siku '+money(d.agingDays||5)
+      +(d.asOf?' · deki ya '+esc(d.asOf):'')+'</span>'
+      +'</div>'
+      +(rows.length?stockTable(rows,{decide:!BOOT.readOnly,issue:!BOOT.readOnly})
+        :'<div class="mut">Hakuna ombi hapa. / Nothing here.</div>');
+    wireTiles(m);
+    [].slice.call(m.querySelectorAll('[data-stq]')).forEach(function(b){
+      b.onclick=function(){ STOCKQ=b.getAttribute('data-stq'); if(TAB==='stappr') drawStockAppr(m); };
+    });
+    stockWireRows(m, rows, {
+      decide:function(r){ stockDecideDrawer(m, r); },
+      issue:function(r){ stockIssueDrawer(m, r); },
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+function stockDecideDrawer(m, r){
+  var g=r.agingNow;
+  drawer('<h3>'+esc(r.item||'—')+' ×'+money(r.qty)+' — '+esc(r.holder||'—')+'</h3>'
+    +'<div class="sub">Ameomba '+esc(r.staffName||'—')+' · '+esc(advWhen(r.at))
+    +(r.destination?' · '+esc(r.destination):'')+'</div>'
+    +(r.reason?'<div style="white-space:pre-wrap;margin:8px 0;font-size:12.5px">'+esc(r.reason)+'</div>':'')
+    +'<div style="margin:8px 0">'+agingLine(g)+'</div>'
+    +(g&&g.blocked?'<div class="note bad" style="margin:6px 0;font-size:11.5px">'
+      +'<b>SOP E:</b> hakuna stoo mpya kwa mwenye stoo iliyokaa mpaka iuzwe, irudishwe au ipatanishwe. '
+      +'Ukiamua kutoa hata hivyo, tiki hapa chini na uandike sababu — itabaki kwenye kumbukumbu. '
+      +'/ Releasing anyway is allowed, with a reason, and the reason is kept.</div>'
+      +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:8px 0 0">'
+      +'<input type="checkbox" id="stdOv" style="margin-top:3px"><span>Toa hata hivyo / Release anyway</span></label>'
+      +'<textarea id="stdOvR" class="inp" rows="2" placeholder="Sababu ya kutoa licha ya stoo iliyokaa / Why, despite the aging stock"></textarea>':'')
+    +'<label class="lbl" style="margin-top:8px">Idadi ya kutoa / Quantity to release</label>'
+    +'<input id="stdQty" class="inp" type="number" min="1" step="1" max="'+money(r.qty)+'" value="'+esc(String(r.qty))+'">'
+    +'<label class="lbl">Maoni / Comment</label>'
+    +'<textarea id="stdC" class="inp" rows="2" placeholder="Lazima ukikataa. / Required when rejecting."></textarea>'
+    +'<button class="btn w" id="stdOk" style="margin-top:10px">Idhinisha / Approve</button>'
+    +'<button class="btn w danger ghost" id="stdNo" style="margin-top:6px">Kataa / Reject</button>');
+  var send=function(approve){
+    var b=$('#stdOk'), n=$('#stdNo'); if(b) b.disabled=true; if(n) n.disabled=true;
+    var ov=$('#stdOv');
+    srv('stockDecide',{ id:r.id, approve:approve, qty:$('#stdQty').value, comment:$('#stdC').value,
+      overrideAging:!!(ov&&ov.checked), overrideReason:$('#stdOvR')?$('#stdOvR').value:'' })
+    .then(function(){
+      toast(approve?'Imeidhinishwa / Approved':'Imekataliwa / Rejected');
+      closeDrawer(); if(TAB==='stappr') drawStockAppr(m);
+    }).catch(function(e){ if(b) b.disabled=false; if(n) n.disabled=false; toast(safeErr(e), true); });
+  };
+  $('#stdOk').onclick=function(){ send(true); };
+  $('#stdNo').onclick=function(){ send(false); };
+}
+/* THE HANDOVER (B.5-B.9). The note number, the joint count, the IMEIs, the signature, the
+   courier's papers and up to three photographs -- shrunk on the phone to the ceiling the
+   server holds, exactly as the imprest receipts are. */
+function stockIssueDrawer(m, r){
+  var approved=r.approvedQty==null?r.qty:r.approvedQty;
+  drawer('<h3>Kabidhi / Hand over — '+esc(r.item||'—')+' ×'+money(approved)+'</h3>'
+    +'<div class="sub">Kwa '+esc(r.holder||'—')+(r.destination?' · '+esc(r.destination):'')+'</div>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:140px"><label class="lbl">Namba ya hati / Note no. (SOP B.5)</label><input id="siNo" class="inp"></div>'
+    +'<div style="flex:1;min-width:140px"><label class="lbl">Amepokea na kusaini / Received by *</label><input id="siRcv" class="inp"></div>'
+    +'</div>'
+    +'<label class="lbl">IMEI (moja kwa mstari au tenganisha kwa comma) / one per line</label>'
+    +'<textarea id="siImeis" class="inp" rows="4" placeholder="35…"></textarea>'
+    +'<div id="siCount" class="mut" style="font-size:11.5px;margin:4px 0"></div>'
+    +'<label class="lbl">Hali ya simu na boksi / Condition</label><textarea id="siCond" class="inp" rows="2"></textarea>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:140px"><label class="lbl">Kozi / Courier (SOP B.9)</label><input id="siCour" class="inp" placeholder="Acha wazi kama hakuna"></div>'
+    +'</div>'
+    +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:8px 0 0">'
+    +'<input type="checkbox" id="siDocs" style="margin-top:3px"><span>Nyaraka zote zipo na zimehakikiwa kabla ya kuondoka / Documents verified complete before dispatch</span></label>'
+    +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:8px 0 0">'
+    +'<input type="checkbox" id="siJoint" style="margin-top:3px"><span><b>Tumehesabu pamoja / Joint physical count done</b> (SOP B.6)</span></label>'
+    +'<label class="lbl" style="margin-top:10px">Picha za maboksi na orodha ya IMEI / Photos (SOP B.7)</label>'
+    +[1,2,3].map(function(i){ return '<input id="siP'+i+'" class="inp" type="file" accept="image/*" style="margin-bottom:6px">'; }).join('')
+    +'<div id="siMsg" class="mut" style="font-size:11.5px"></div>'
+    +'<button class="btn w" id="siOk" style="margin-top:10px">Kabidhi / Complete the handover</button>');
+  var recount=function(){
+    var n=String($('#siImeis').value||'').split(/[\s,;]+/).filter(function(x){ return x.replace(/\D/g,''); }).length;
+    $('#siCount').textContent='IMEI '+n+' kati ya '+approved+(n>approved?' — ni nyingi kuliko zilizoidhinishwa!':'');
+  };
+  $('#siImeis').oninput=recount; recount();
+  $('#siOk').onclick=function(){
+    var b=this; b.disabled=true;
+    var msg=$('#siMsg'); msg.textContent='Inapunguza picha… / shrinking photos…';
+    var files=[1,2,3].map(function(i){ var el=$('#siP'+i); return el&&el.files&&el.files[0]; }).filter(Boolean);
+    Promise.all(files.map(shrinkForReceipt)).then(function(photos){
+      msg.textContent='Inatuma… / sending…';
+      return srv('stockIssue',{ id:r.id, noteNo:$('#siNo').value, receivedBy:$('#siRcv').value,
+        imeis:$('#siImeis').value, conditionNote:$('#siCond').value, courier:$('#siCour').value,
+        docsComplete:$('#siDocs').checked, countedJointly:$('#siJoint').checked, photos:photos });
+    }).then(function(d){
+      toast('Imekabidhiwa · IMEI '+money(d.imeis)+' · picha '+money(d.photos)
+        +(d.holdersMoved?' · simu '+money(d.holdersMoved)+' zimehamishiwa kwake kwenye register':''));
+      closeDrawer(); if(TAB==='stappr') drawStockAppr(m);
+    }).catch(function(e){ b.disabled=false; msg.textContent=''; toast(safeErr(e), true); });
+  };
+}
+/* THE TRACKER AND THE DISTRIBUTION REPORT (SOP E.3, B.11, G). */
+var STOCKR={from:'',to:'',status:'',holder:''};
+function drawStockRep(m){
+  if(!STOCKR.from&&!STOCKR.to&&!STOCKR.explicit){ var mr=monthRange_(); STOCKR.from=mr.from; STOCKR.to=mr.to; }
+  m.innerHTML='<div class="sk"></div>';
+  srv('stockReqReport',STOCKR).then(function(d){
+    var t=d.totals||{}, ag=d.aging||{}, rows=d.rows||[], holders=ag.holders||[];
+    var pick=function(k){ return function(){ STOCKR.status=(STOCKR.status===k?'':k); if(TAB==='strep') drawStockRep(m); }; };
+    m.innerHTML=(ag.low?'<div class="note bad">Stoo ya sokoni ipo chini ya kiwango: '+money(ag.pieces)
+        +' pcs, kikomo ni '+money(ag.lowAlert)+' (SOP G). Taarifa uongozini. / Market stock is below the alert level.</div>':'')
+      +'<div class="tiles">'
+      +tile('Maombi',money(t.count||0),'kwenye kipindi hiki',{on:STOCKR.status==='',cta:STOCKR.status===''?'yote':'onyesha yote ›',go:function(){ STOCKR.status=''; if(TAB==='strep') drawStockRep(m); }})
+      +tile('Yanasubiri',money(t.pending||0),'hayajaamuliwa',{color:t.pending?'bad':'',on:STOCKR.status==='pending',cta:'chuja ›',go:pick('pending')})
+      +tile('Yamekabidhiwa',money(t.issued||0),'pcs zilizotoka '+money(t.qtyIssued||0)+' kati ya '+money(t.qtyAsked||0)+' zilizoombwa',{color:'ok',on:STOCKR.status==='issued',cta:'chuja ›',go:pick('issued')})
+      +tile('Yamekataliwa',money(t.rejected||0),'',{on:STOCKR.status==='rejected',cta:'chuja ›',go:pick('rejected')})
+      +tile('Zimetolewa kwa override',money(t.overrides||0),'licha ya stoo iliyokaa — SOP E',{color:t.overrides?'bad':''})
+      +tile('Stoo ya sokoni',money(ag.pieces||0),'pcs kwenye deki ya '+esc(ag.asOf||'—')+' · kikomo '+money(ag.lowAlert||0),{color:ag.low?'bad':''})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<span class="mut" style="font-size:12px">Tarehe ya kuomba:</span>'
+      +'<input id="strFrom" class="inp" type="date" style="width:auto" value="'+esc(STOCKR.from||'')+'">'
+      +'<input id="strTo" class="inp" type="date" style="width:auto" value="'+esc(STOCKR.to||'')+'">'
+      +'<input id="strHolder" class="inp" style="width:auto" placeholder="Kwa ajili ya / holder" value="'+esc(STOCKR.holder||'')+'">'
+      +'<button class="btn sm" id="strGo">Chuja / Filter</button>'
+      +'<button class="btn sm ghost" id="strClr">Mwezi huu</button>'
+      +'<button class="btn sm ghost" id="strAll">Tarehe zote</button>'
+      +'</div>'
+      +'<h3 style="margin:14px 0 6px">Stoo iliyokaa / Aging stock tracker <span class="mut" style="font-size:11.5px">— kikomo siku '+money(ag.agingDays||5)+', deki ya '+esc(ag.asOf||'—')+'</span></h3>'
+      +(holders.length?'<div class="scroll" style="margin-bottom:12px"><table><thead><tr><th>MWENYE STOO</th><th class="r">PCS</th>'
+        +'<th class="r">ZILIZOKAA</th><th class="r">KONGWE (SIKU)</th><th>MODELI</th></tr></thead><tbody>'
+        +holders.map(function(h){
+          return '<tr><td>'+esc(h.holder||'—')+'</td><td class="r">'+money(h.pieces)+'</td>'
+            +'<td class="r'+(h.aging?' bad':'')+'">'+money(h.aging)+'</td>'
+            +'<td class="r'+(h.aging?' bad':'')+'">'+money(h.oldest)+'</td>'
+            +'<td style="font-size:11px">'+esc(h.items||'')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut" style="margin-bottom:12px">Hakuna ripoti ya stoo iliyokaa bado — pakia Aged Stock. / No aged-stock upload yet.</div>')
+      +'<h3 style="margin:14px 0 6px">Maombi na makabidhiano / Requests and handovers</h3>'
+      +(d.notReady?stockNotReady()
+        :rows.length?stockTable(rows,{}):'<div class="mut">Hakuna ombi kwenye kipindi hiki. / No requests in this period.</div>');
+    wireTiles(m);
+    $('#strGo').onclick=function(){ STOCKR={from:$('#strFrom').value,to:$('#strTo').value,holder:$('#strHolder').value,status:STOCKR.status,explicit:true}; if(TAB==='strep') drawStockRep(m); };
+    $('#strClr').onclick=function(){ var r=monthRange_(); STOCKR={from:r.from,to:r.to,status:'',holder:'',explicit:true}; if(TAB==='strep') drawStockRep(m); };
+    $('#strAll').onclick=function(){ STOCKR={from:'',to:'',status:'',holder:'',explicit:true}; if(TAB==='strep') drawStockRep(m); };
+    stockWireRows(m, rows, {});
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 /* ---------- issues ----------
    ONE LOG for everything somebody has to chase. Four SOPs describe the same shape -- somebody
    raises a thing, a department works it, it is resolved or escalated -- so it is one table and
@@ -5924,7 +6262,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',movement:'Stock movement',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',
@@ -6128,7 +6466,12 @@ function drawSettings(m){
          parse is ignored, never refused: a typo here must not stop an issue being filed. */
       +'<b>ISSUES_EMAIL</b>: mstari mmoja kwa kila idara, <i>IDARA=anwani,anwani</i> (IT=it@…, STORE=stoo@…, FINANCE=…, HR=…, CREDIT=…, SALES=…, GENERAL_DUTY=…, ADMIN=…); idara isiyo na mstari haipati email. '
       +'<b>GM_EMAIL</b>: anayeambiwa suala likipandishwa (escalated). '
-      +'/ ISSUES_EMAIL is one line per department, DEPARTMENT=address,address; GM_EMAIL hears about escalations.</div>'
+      +'/ ISSUES_EMAIL is one line per department, DEPARTMENT=address,address; GM_EMAIL hears about escalations. '
+      /* THE STORE'S TWO NUMBERS, as settings rather than constants: a policy that needs a
+         deploy to change is a policy nobody changes. */
+      +'<b>STOCK_EMAIL</b>: anayepokea maombi mapya ya stoo. <b>STOCK_AGING_DAYS</b>: siku ambazo stoo ikizidi inahesabiwa imekaa (SOP E, chaguo-msingi 5) — '
+      +'ndizo zinazozuia kutoa stoo mpya kwenye Idhini ya stoo. <b>STOCK_LOW_ALERT</b>: kikomo cha stoo ya sokoni kinachotoa tahadhari (SOP G, chaguo-msingi 1500). '
+      +'/ STOCK_AGING_DAYS is the aging threshold that gates new releases; STOCK_LOW_ALERT is the low-stock warning level.</div>'
       /* THE LOCK SCREEN IS WRITTEN HERE, so the shape it makes is drawn here. Nobody sees
          that screen in the course of ordinary work -- it takes a provisioned handset and a
          lock order to appear at all -- so somebody editing DEVICE_LOCK_MESSAGE is otherwise

@@ -547,3 +547,28 @@ Six buckets that **partition** the customer (paid, unpaid, not available, stolen
 unresponded) plus an honest seventh, "not called". A promise is unpaid. The bucket is read from
 the WORDS of the status, so a status the office invents still counts. The default-rate KPI sits
 on the Recovery pane and says plainly that it is this system's proxy, not WATU's own figure.
+
+## 16. SHIPPED 2026-09-09: stock requests, the aging gate, and the handover note
+
+The Store SOP's core gap. The full story is [`docs/STOCK-REQUESTS.md`](STOCK-REQUESTS.md); the
+short version:
+
+| nav | pane | who |
+|---|---|---|
+| `stockreq` | Omba stoo / Stock request | RSMs, team leaders, anybody who asks |
+| `stockappr` | Idhini ya stoo / Stock approval | the store keeper — decides and hands over |
+| `stockrep` | Ripoti ya stoo / Stock reports | the GM, Finance, the store manager |
+
+**Do, in this order:**
+
+1. Run `db/migrations/RUN-ME-2026-09-09-stock-requests.sql` in Supabase — every pane names it
+   until it is run.
+2. Tick the three navs on the right roles in Access codes.
+3. Optional Settings: `STOCK_EMAIL`, `STOCK_AGING_DAYS` (5 if unset), `STOCK_LOW_ALERT` (1500).
+4. **Keep uploading the Aged Stock report** — the gate and the tracker read it.
+
+The gate (SOP E) is the point: the desk cannot release new stock to somebody holding stock past
+the threshold without ticking an override AND writing a reason, which is kept and counted.
+Rejecting is never gated. The gate is recomputed live at decision time, not read off the stamp.
+The handover note (B.5–B.9) refuses to record without the joint count and a signature, caps the
+IMEIs at what was approved, and moves the phone registry's holder for every IMEI it knows.

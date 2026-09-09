@@ -72,6 +72,12 @@ AUDITED.add('issueUpdate');
    Manager"). The report itself is a read; sending a copy of the department's day to somebody
    outside the pane is an act, so who sent which period is kept. */
 AUDITED.add('fuOutcomesSend');
+/* STOCK: who asked for stock, who released it, and who overrode the aging gate to do so.
+   KEEP drops the free text on the way in, so the log names the request and never becomes a
+   second copy of somebody's reason. */
+AUDITED.add('stockRequest');
+AUDITED.add('stockDecide');
+AUDITED.add('stockIssue');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -119,7 +125,7 @@ const EDITABLE_SETTINGS = [
   'IMPREST_ADMIN_EMAIL', 'IMPREST_CEO_EMAIL', 'HR_EMAIL', 'EMAIL_FROM',
   /* ISSUES_EMAIL is several lines of DEPARTMENT=address so each department hears about its
      own issues; GM_EMAIL hears about escalations. See the issues migration. */
-  'ISSUES_EMAIL', 'GM_EMAIL',
+  'ISSUES_EMAIL', 'GM_EMAIL', 'STOCK_EMAIL', 'STOCK_AGING_DAYS', 'STOCK_LOW_ALERT',
 ];
 
 /* =======================================================================================
@@ -206,7 +212,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -511,6 +517,99 @@ const eatDayOf = ts => {
   const ms = Date.parse(String(ts || ''));
   return Number.isFinite(ms) ? new Date(ms + TZ_OFFSET_MS).toISOString().slice(0, 10) : '';
 };
+
+/* ---------- STOCK REQUESTS AND THE AGING GATE (Store SOP B and E) ---------- */
+const STOCK_NOT_READY = 'Jedwali la maombi ya stoo halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-09-stock-requests.sql kwenye Supabase. '
+  + '/ The stock request tables have not been created yet — run that migration first.';
+const STOCK_STATES = ['pending', 'approved', 'rejected', 'issued', 'cancelled'];
+const STOCK_COLS = 'id, requested_at, staff_code, staff_name, staff_role, holder, destination, '
+  + 'item, qty, reason, aging_count, aging_oldest_days, aging_as_of, status, approved_qty, comment, '
+  + 'decided_by, decided_at, aging_override, aging_override_reason, issued_at, issued_by, updated_by, updated_at';
+const stockRow = (r, me) => ({
+  id: String(r.id),
+  at: r.requested_at ? Date.parse(r.requested_at) : null,
+  mine: !!(me && r.staff_code && String(r.staff_code) === String(me)),
+  staffName: r.staff_name || '', staffRole: r.staff_role || '',
+  holder: r.holder || '', destination: r.destination || '',
+  item: r.item || '', qty: num(r.qty), reason: r.reason || '',
+  agingCount: r.aging_count == null ? null : num(r.aging_count),
+  agingOldestDays: r.aging_oldest_days == null ? null : num(r.aging_oldest_days),
+  agingAsOf: r.aging_as_of ? String(r.aging_as_of).slice(0, 10) : '',
+  status: r.status || 'pending',
+  approvedQty: r.approved_qty == null ? null : num(r.approved_qty),
+  comment: r.comment || '',
+  decidedBy: r.decided_by || '', decidedAt: r.decided_at ? Date.parse(r.decided_at) : null,
+  agingOverride: !!r.aging_override, agingOverrideReason: r.aging_override_reason || '',
+  issuedAt: r.issued_at ? Date.parse(r.issued_at) : null, issuedBy: r.issued_by || '',
+  updatedAt: r.updated_at ? Date.parse(r.updated_at) : null,
+});
+/* PENDING FIRST, then whatever is still going to move, then the settled. A store desk's list
+   is a worklist: an issued note from Tuesday is history, a request from Tuesday is not. */
+const STOCK_RANK = { pending: 0, approved: 1, issued: 2, rejected: 3, cancelled: 4 };
+const stockWorkFirst = (x, y) => (STOCK_RANK[x.status] - STOCK_RANK[y.status]) || (y.at || 0) - (x.at || 0);
+
+/** How many days old is "aging" here, and how few pieces is "low". Settings, per SOP E and G,
+    with the SOP's own numbers as the fallback so an unset key is never a disabled policy. */
+async function stockPolicy(db) {
+  const out = { agingDays: 5, lowAlert: 1500 };
+  try {
+    const rows = await fetchAll(() => db.from('settings').select('key, value')
+      .in('key', ['STOCK_AGING_DAYS', 'STOCK_LOW_ALERT']));
+    for (const r of rows) {
+      const v = parseInt(String(r.value == null ? '' : r.value).replace(/[^0-9]/g, ''), 10);
+      if (!Number.isFinite(v) || v < 0) continue;
+      if (r.key === 'STOCK_AGING_DAYS') out.agingDays = v;
+      if (r.key === 'STOCK_LOW_ALERT') out.lowAlert = v;
+    }
+  } catch (e) { /* the SOP's own numbers stand */ }
+  return out;
+}
+
+/* THE AGING STOCK TRACKER (SOP E.3), read off the shop's OWN daily upload.
+   hoop_aged_stock already carries age_days per serial per agent, so the gate and the tracker
+   are the same file -- never a second private idea of what "old" means. The newest as_of is
+   the tracker: an aging report from last week is not evidence about this morning. */
+async function stockAgingIndex(db) {
+  const policy = await stockPolicy(db);
+  let rows = [];
+  try {
+    rows = await fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, item, age_days, as_of'));
+  } catch (e) { rows = []; }
+  let asOf = null;
+  for (const r of rows) if (r.as_of && (!asOf || String(r.as_of) > String(asOf))) asOf = String(r.as_of).slice(0, 10);
+  const today = rows.filter(r => String(r.as_of).slice(0, 10) === asOf);
+  const by = new Map();
+  let pieces = 0;
+  for (const r of today) {
+    pieces++;
+    const k = nameKey(r.agent) || '?';
+    let g = by.get(k);
+    if (!g) { g = { holder: r.agent || '—', pieces: 0, aging: 0, oldest: 0, items: new Map() }; by.set(k, g); }
+    g.pieces++;
+    const age = r.age_days == null ? null : num(r.age_days);
+    if (age != null) {
+      if (age > g.oldest) g.oldest = age;
+      // "Beyond the threshold" -- five days means the sixth day is late, not the fifth.
+      if (age > policy.agingDays) g.aging++;
+    }
+    const it = String(r.item || '—');
+    g.items.set(it, (g.items.get(it) || 0) + 1);
+  }
+  return {
+    asOf, policy, pieces,
+    /** What the gate says about one holder, by name, case- and spacing-insensitively. */
+    for(holder) {
+      const g = by.get(nameKey(holder) || '?');
+      return { holder: (g && g.holder) || String(holder || ''), asOf,
+        pieces: g ? g.pieces : 0, aging: g ? g.aging : 0, oldest: g ? g.oldest : 0,
+        agingDays: policy.agingDays, blocked: !!(g && g.aging > 0) };
+    },
+    holders: [...by.values()].map(g => ({ holder: g.holder, pieces: g.pieces, aging: g.aging, oldest: g.oldest,
+      items: [...g.items.entries()].sort((x, y) => y[1] - x[1]).slice(0, 4).map(e => e[0] + ' ×' + e[1]).join(', ') }))
+      .sort((x, y) => y.aging - x.aging || y.oldest - x.oldest || y.pieces - x.pieces),
+  };
+}
 
 /** The report both the pane and the email are built from, so the screen and the GM's copy can
     never disagree. Defaults to TODAY alone: this is a daily report. */
@@ -3896,6 +3995,398 @@ const FNS = {
         avgDays: resolved.length ? Math.round(resolved.reduce((s, r) => s + r.ageDays, 0) / resolved.length) : 0,
         oldestOpenDays: open.reduce((m, r) => Math.max(m, r.ageDays), 0),
         byDept,
+      } };
+  },
+
+  /* =====================================================================================
+     STOCK REQUESTS -- ask, decide against the aging gate, hand over.
+     =====================================================================================
+       Store SOP B.1  "Receive the stock request from the RSM in the system"
+       Store SOP B.2  "Confirm the RSM/agent has no outstanding aging stock"
+       Store SOP B.5-B.9  the pre-numbered note, the joint count, the photographs, the
+                      signature, and the courier's documents
+       Store SOP E    "No new stock is released to any RSM/agent with outstanding aging
+                      stock until it is fully sold, returned, or reconciled"
+
+     THE GATE IS THE POINT. Everything else here is the same request shape as the imprest and
+     the advance; what is new is that the approval can be refused by ARITHMETIC rather than by
+     somebody remembering. The figures come from hoop_aged_stock, the shop's own daily upload,
+     so the gate and the Aging Stock Tracker are one file. Releasing anyway is allowed -- the
+     SOP escalates, it does not lock the door -- but it takes a reason and the reason is kept.
+
+     Three navs, granted the ordinary way: stockreq asks, stockappr decides and hands over,
+     stockrep reads the tracker and the distribution report. */
+
+  /** Anybody who may ask, and the desk (which files on an RSM's behalf when they phone in). */
+  async stockRequest(db, user, args) {
+    requireAnyNav(user, ['stockreq', 'stockappr']);
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    // Whose shelf it lands on. Defaults to the person asking, which is the usual case.
+    const holder = S(a.holder, 120) || (user.name || '');
+    if (!holder) bad('Andika anayepokea stoo. / Say who the stock is for.');
+    const item = S(a.item, 120);
+    if (!item) bad('Chagua modeli. / Give the model.');
+    const qty = Math.floor(num(a.qty));
+    if (!(qty > 0)) bad('Idadi lazima iwe zaidi ya sifuri. / The quantity must be more than zero.');
+    if (qty > 5000) bad('Idadi ni kubwa mno. / That quantity is too large.');
+    /* THE TRACKER AS IT STOOD THIS MORNING, stamped on the row. A request that should never
+       have been filed stays visible as one even after the stock has gone out. */
+    const idx = await stockAgingIndex(db);
+    const gate = idx.for(holder);
+    const at = new Date().toISOString();
+    const row = {
+      requested_at: at, updated_at: at,
+      staff_code: user.code || null, staff_name: user.name || '', staff_role: user.role || '',
+      holder, destination: S(a.destination, 120) || null, item, qty,
+      reason: S(a.reason, 2000) || null,
+      aging_count: gate.aging, aging_oldest_days: gate.oldest || null, aging_as_of: gate.asOf || null,
+      status: 'pending', updated_by: user.name || '',
+    };
+    const { data, error } = await db.from('stock_requests').insert([row]).select('id');
+    if (error) {
+      if (tableMissing(error)) bad(STOCK_NOT_READY);
+      throw new Error(error.message);
+    }
+    const id = data && data[0] ? String(data[0].id) : null;
+    const mail = await sendMail(db, { toKey: 'STOCK_EMAIL',
+      subject: 'HOOPLOAN — ombi la stoo / stock request: ' + item + ' ×' + qty + ' (' + holder + ')',
+      html: noticeHtml('Ombi jipya la stoo / New stock request', [
+        ['Kwa ajili ya / For', holder], ['Modeli / Model', item], ['Idadi / Quantity', String(qty)],
+        ['Inakwenda / Destination', row.destination || '—'], ['Ameomba / Requested by', user.name || ''],
+        ['Stoo iliyokaa / Aging stock', gate.aging
+          ? gate.aging + ' pcs zaidi ya siku ' + gate.agingDays + ' (kongwe: ' + gate.oldest + ') — SOP E'
+          : 'hakuna / none'],
+        ['Sababu / Reason', String(row.reason || '').slice(0, 400)],
+      ], 'Fungua Idhini ya stoo kuamua. / Open the stock approval pane to decide.') });
+    return { ok: true, id, aging: gate, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
+  },
+
+  /** The asker's own requests, and the gate as it stands for them right now. */
+  async stockMine(db, user) {
+    requireNav(user, 'stockreq');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('stock_requests').select(STOCK_COLS).eq('staff_code', user.code || '~none~'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, aging: null };
+    }
+    const idx = await stockAgingIndex(db);
+    return { ok: true, rows: rows.map(r => stockRow(r, user.code)).sort(stockWorkFirst),
+      aging: idx.for(user.name || ''), asOf: idx.asOf };
+  },
+
+  /** THE STORE DESK. Every request, work first, each carrying the gate as it stands NOW --
+      a request filed on Monday is a different question by Wednesday. */
+  async stockQueue(db, user, args) {
+    requireNav(user, 'stockappr');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('stock_requests').select(STOCK_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, counts: { pending: 0, approved: 0, issued: 0, rejected: 0, blocked: 0 } };
+    }
+    const idx = await stockAgingIndex(db);
+    const all = rows.map(r => {
+      const o = stockRow(r, user.code);
+      o.agingNow = idx.for(o.holder);
+      return o;
+    });
+    const want = String(a.state || '').trim();
+    const shown = all
+      .filter(r => want === 'all' ? true
+        : want === 'blocked' ? (r.status === 'pending' && r.agingNow.blocked)
+        : want ? r.status === want
+        : (r.status === 'pending' || r.status === 'approved'))
+      .sort(stockWorkFirst);
+    return { ok: true, rows: shown, asOf: idx.asOf, agingDays: idx.policy.agingDays,
+      counts: {
+        pending: all.filter(r => r.status === 'pending').length,
+        approved: all.filter(r => r.status === 'approved').length,
+        issued: all.filter(r => r.status === 'issued').length,
+        rejected: all.filter(r => r.status === 'rejected').length,
+        blocked: all.filter(r => r.status === 'pending' && r.agingNow.blocked).length,
+      } };
+  },
+
+  /** THE DECISION, AND THE GATE (SOP B.2, E). Approving somebody who is holding aging stock
+      takes an explicit override and a reason; rejecting never does. */
+  async stockDecide(db, user, args) {
+    requireNav(user, 'stockappr');
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('stock_requests').select(STOCK_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(STOCK_NOT_READY);
+    }
+    const row = rows.find(r => String(r.id) === id);
+    if (!row) bad('Ombi halipo. / That request no longer exists.');
+    if (row.status !== 'pending') bad('Ombi hili limeshaamuliwa. / That request has already been decided.');
+    const approve = a.approve === true;
+    const comment = S(a.comment, 2000);
+    if (!approve && !comment) bad('Sababu inahitajika ukikataa. / A reason is required when rejecting.');
+    const at = new Date().toISOString();
+    const patch = { status: approve ? 'approved' : 'rejected', comment: comment || null,
+      decided_by: user.name || '', decided_at: at, updated_by: user.name || '', updated_at: at };
+    if (approve) {
+      const qty = a.qty == null || a.qty === '' ? num(row.qty) : Math.floor(num(a.qty));
+      if (!(qty > 0)) bad('Idadi inayotolewa lazima iwe zaidi ya sifuri. / The released quantity must be more than zero.');
+      if (qty > num(row.qty)) bad('Huwezi kutoa zaidi ya kilichoombwa. / You cannot release more than was asked for.');
+      patch.approved_qty = qty;
+      /* THE GATE, RECOMPUTED LIVE rather than read off the stamp. */
+      const gate = (await stockAgingIndex(db)).for(row.holder);
+      if (gate.blocked) {
+        const reason = S(a.overrideReason, 500);
+        if (a.overrideAging !== true || !reason) {
+          bad(row.holder + ' ana stoo ' + gate.aging + ' iliyokaa zaidi ya siku ' + gate.agingDays
+            + ' (kongwe: siku ' + gate.oldest + ', deki ya ' + (gate.asOf || '—') + '). '
+            + 'SOP E: hakuna stoo mpya mpaka iuzwe, irudishwe au ipatanishwe. Ukiamua kutoa hata hivyo, '
+            + 'tumia "Toa hata hivyo" na uandike sababu. '
+            + '/ Outstanding aging stock: no new stock until it is sold, returned or reconciled. '
+            + 'Release anyway only with a recorded reason.');
+        }
+        patch.aging_override = true;
+        patch.aging_override_reason = reason;
+      }
+    }
+    /* GUARDED on what was read, so two desks cannot both decide the same request. */
+    const { data, error } = await db.from('stock_requests').update(patch)
+      .eq('id', id).eq('status', 'pending').select('id');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) bad('Ombi hili limeamuliwa na mtu mwingine sasa hivi. / Somebody else just decided this request.');
+    return { ok: true, id, status: patch.status, approvedQty: patch.approved_qty == null ? null : patch.approved_qty,
+      agingOverride: !!patch.aging_override };
+  },
+
+  /** THE HANDOVER (SOP B.5-B.9). Only on an approved request, once: the note number, the joint
+      count, who signed, the courier's papers, the IMEIs and up to three photographs. Any IMEI
+      the phone registry already knows has its holder moved, so "who has it" stops being two
+      different answers in two different panes. */
+  async stockIssue(db, user, args) {
+    requireNav(user, 'stockappr');
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('stock_requests').select(STOCK_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(STOCK_NOT_READY);
+    }
+    const row = rows.find(r => String(r.id) === id);
+    if (!row) bad('Ombi halipo. / That request no longer exists.');
+    if (row.status === 'issued') bad('Stoo hii tayari imetolewa. / That stock has already been handed over.');
+    if (row.status !== 'approved') bad('Idhinisha kwanza kabla ya kutoa. / Approve the request before handing anything over.');
+    /* B.6 AND B.8 ARE NOT PAPERWORK. Without the joint count and a name on the note there is
+       nobody to hold accountable for a shortage, which is the whole objective of this SOP. */
+    if (a.countedJointly !== true) bad('Thibitisha mmehesabu pamoja. / Confirm the joint physical count (SOP B.6).');
+    const receivedBy = S(a.receivedBy, 120);
+    if (!receivedBy) bad('Andika jina la aliyepokea na kusaini. / Name the person who received and signed (SOP B.8).');
+    const courier = S(a.courier, 120);
+    const docsComplete = a.docsComplete === true;
+    if (courier && !docsComplete) {
+      bad('Ikitumwa kwa kozi, thibitisha nyaraka zote zipo kabla haijaondoka. '
+        + '/ For a courier dispatch, confirm the documents are complete before it leaves (SOP B.9).');
+    }
+    /* THE IMEIs ON THE NOTE (B.5). Digits only, de-duplicated, and never more than were
+       approved -- a note that lists more phones than were released is a shortage waiting to
+       be argued about. */
+    const seen = new Set();
+    const imeis = [];
+    for (const v of (Array.isArray(a.imeis) ? a.imeis : String(a.imeis || '').split(/[\s,;]+/))) {
+      const d = String(v == null ? '' : v).replace(/\D/g, '');
+      if (!d) continue;
+      if (d.length < 14 || d.length > 17) bad('IMEI "' + d + '" si sahihi. / That IMEI is not a valid length.');
+      if (seen.has(d)) continue;
+      seen.add(d); imeis.push(d);
+    }
+    const approved = row.approved_qty == null ? num(row.qty) : num(row.approved_qty);
+    if (imeis.length > approved) {
+      bad('Umeorodhesha IMEI ' + imeis.length + ' lakini zilizoidhinishwa ni ' + approved
+        + '. / More IMEIs listed than were approved.');
+    }
+    const photos = Array.isArray(a.photos) ? a.photos.filter(p => p != null && p !== '') : [];
+    if (photos.length > IMP_PHOTO_MAX) bad('Picha ni nyingi mno (kiwango ni ' + IMP_PHOTO_MAX + '). / Too many photos.');
+    const sized = photos.map(p => ({ data: String(p), bytes: photoBytes(p) }));
+    if (sized.some(p => p.bytes == null)) bad('Picha moja si picha. / One of those is not an image.');
+    if (sized.some(p => p.bytes > IMP_PHOTO_MAX_BYTES)) {
+      bad('Picha moja ni kubwa mno (zaidi ya ' + Math.round(IMP_PHOTO_MAX_BYTES / 1024) + 'KB). Ipunguze kisha jaribu tena. '
+        + '/ One photo is too large; shrink it and try again.');
+    }
+    if (sized.some(p => p.bytes < IMP_PHOTO_MIN_BYTES)) bad('Picha moja ni ndogo mno. / One photo is too small to be a photograph.');
+
+    const at = new Date().toISOString();
+    /* CLAIM THE REQUEST FIRST, guarded on `approved`, so two store keepers pressing at once
+       cannot write two handover notes for one release. The unique index on request_id would
+       catch it too; this catches it before any photo is written. */
+    const { data: claimed, error: cErr } = await db.from('stock_requests')
+      .update({ status: 'issued', issued_at: at, issued_by: user.name || '', updated_by: user.name || '', updated_at: at })
+      .eq('id', id).eq('status', 'approved').select('id');
+    if (cErr) throw new Error(cErr.message);
+    if (!claimed || !claimed.length) bad('Stoo hii imeshatolewa na mtu mwingine sasa hivi. / Somebody else just handed this stock over.');
+
+    const { data: hv, error: hErr } = await db.from('stock_handovers').insert([{
+      request_id: id, at, by_code: user.code || null, by_name: user.name || '',
+      note_no: S(a.noteNo, 60) || null, counted_jointly: true, received_by: receivedBy,
+      condition_note: S(a.conditionNote, 2000) || null, courier: courier || null,
+      docs_complete: docsComplete, qty: imeis.length || approved,
+    }]).select('id');
+    if (hErr) throw new Error(hErr.message);
+    const hid = hv && hv[0] ? String(hv[0].id) : null;
+    if (imeis.length) {
+      const { error: iErr } = await db.from('stock_handover_items')
+        .insert(imeis.map(imei => ({ handover_id: hid, imei, condition: S(a.conditionNote, 120) || null })));
+      if (iErr) throw new Error(iErr.message);
+    }
+    if (sized.length) {
+      const { error: pErr } = await db.from('stock_handover_photos')
+        .insert(sized.map((p, i) => ({ handover_id: hid, seq: i + 1, data: p.data, bytes: p.bytes })));
+      if (pErr) throw new Error(pErr.message);
+    }
+    /* WHO HAS IT, in the one place that locks phones. Allowed to fail quietly per IMEI: a
+       device not in the registry is normal (only enrolled phones are there), and a registry
+       hiccup must never undo a handover the store has physically made. */
+    let moved = 0;
+    for (const imei of imeis) {
+      try {
+        const { data: up } = await db.from('devices').update({ holder: row.holder }).eq('imei', imei).select('imei');
+        if (up && up.length) moved++;
+      } catch (e) { /* the note is the record either way */ }
+    }
+    return { ok: true, id, handoverId: hid, imeis: imeis.length, photos: sized.length, holdersMoved: moved };
+  },
+
+  /** One handover note, with its IMEIs. The desk and the report see any; an asker sees only
+      the note for their own request. */
+  async stockHandover(db, user, args) {
+    requireAnyNav(user, ['stockreq', 'stockappr', 'stockrep']);
+    const id = String((args && args.id) || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    const navs = navsFor(user);
+    if (!navs.includes('stockappr') && !navs.includes('stockrep')) {
+      let own;
+      try {
+        own = await fetchAll(() => db.from('stock_requests').select('id, staff_code').eq('id', id));
+      } catch (e) {
+        if (!tableMissing(e)) throw e;
+        return { ok: true, handover: null, items: [], notReady: true };
+      }
+      const r = own.find(x => String(x.id) === id);
+      if (!r || String(r.staff_code || '') !== String(user.code || '')) bad('Ombi halipo. / That request no longer exists.');
+    }
+    let hv;
+    try {
+      hv = await fetchAll(() => db.from('stock_handovers').select('*').eq('request_id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, handover: null, items: [] };
+    }
+    const h = hv[0];
+    if (!h) return { ok: true, handover: null, items: [] };
+    let items = [];
+    try {
+      items = await fetchAll(() => db.from('stock_handover_items').select('imei, condition').eq('handover_id', String(h.id)));
+    } catch (e) { items = []; }
+    let photos = 0;
+    try {
+      photos = (await fetchAll(() => db.from('stock_handover_photos').select('seq').eq('handover_id', String(h.id)))).length;
+    } catch (e) { photos = 0; }
+    return { ok: true,
+      handover: { id: String(h.id), at: h.at ? Date.parse(h.at) : null, by: h.by_name || '',
+        noteNo: h.note_no || '', countedJointly: !!h.counted_jointly, receivedBy: h.received_by || '',
+        conditionNote: h.condition_note || '', courier: h.courier || '', docsComplete: !!h.docs_complete,
+        qty: num(h.qty), photos },
+      items: items.map(i => ({ imei: String(i.imei), condition: i.condition || '' })).sort((x, y) => (x.imei < y.imei ? -1 : 1)) };
+  },
+
+  /** The photographs of one handover (SOP B.7), fetched only when somebody asks to see them. */
+  async stockPhotos(db, user, args) {
+    requireAnyNav(user, ['stockreq', 'stockappr', 'stockrep']);
+    const id = String((args && args.id) || '').trim();
+    if (!isUuid(id)) bad('Ombi halijachaguliwa. / No request chosen.');
+    const navs = navsFor(user);
+    if (!navs.includes('stockappr') && !navs.includes('stockrep')) {
+      let own;
+      try {
+        own = await fetchAll(() => db.from('stock_requests').select('id, staff_code').eq('id', id));
+      } catch (e) {
+        if (!tableMissing(e)) throw e;
+        return { ok: true, photos: [], notReady: true };
+      }
+      const r = own.find(x => String(x.id) === id);
+      if (!r || String(r.staff_code || '') !== String(user.code || '')) bad('Ombi halipo. / That request no longer exists.');
+    }
+    let hv;
+    try {
+      hv = await fetchAll(() => db.from('stock_handovers').select('id').eq('request_id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, photos: [] };
+    }
+    if (!hv[0]) return { ok: true, photos: [] };
+    let rows = [];
+    try {
+      rows = await fetchAll(() => db.from('stock_handover_photos').select('seq, data, bytes').eq('handover_id', String(hv[0].id)));
+    } catch (e) { rows = []; }
+    return { ok: true, photos: rows.map(p => ({ seq: num(p.seq), data: p.data, bytes: num(p.bytes) }))
+      .sort((x, y) => x.seq - y.seq) };
+  },
+
+  /** THE AGING STOCK TRACKER (SOP E.3) and the distribution report (B.11), on one pane: who is
+      holding what and for how long, the low-stock alert (SOP G), and every request in a period
+      with what was released against it. */
+  async stockReqReport(db, user, args) {
+    requireNav(user, 'stockrep');
+    const a = args || {};
+    const idx = await stockAgingIndex(db);
+    let rows = [];
+    let notReady = false;
+    try {
+      rows = await fetchAll(() => db.from('stock_requests').select(STOCK_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      notReady = true;
+    }
+    const from = isDay(a.from) ? String(a.from) : null;
+    const to = isDay(a.to) ? String(a.to) : null;
+    const want = String(a.status || '').trim();
+    const holder = K(a.holder);
+    const all = rows.map(r => stockRow(r, user.code));
+    const day = ms => new Date(ms + TZ_OFFSET_MS).toISOString().slice(0, 10);
+    const inPeriod = all
+      .filter(r => !from || (r.at && day(r.at) >= from))
+      .filter(r => !to || (r.at && day(r.at) <= to))
+      .filter(r => !holder || nameKey(r.holder) === nameKey(a.holder));
+    const shown = inPeriod.filter(r => !STOCK_STATES.includes(want) || r.status === want)
+      .sort((x, y) => (y.at || 0) - (x.at || 0));
+    const issued = inPeriod.filter(r => r.status === 'issued');
+    return { ok: true, rows: shown, notReady,
+      aging: { asOf: idx.asOf, agingDays: idx.policy.agingDays, pieces: idx.pieces,
+        lowAlert: idx.policy.lowAlert, low: idx.pieces > 0 && idx.pieces < idx.policy.lowAlert,
+        holders: idx.holders },
+      totals: {
+        count: inPeriod.length,
+        pending: inPeriod.filter(r => r.status === 'pending').length,
+        approved: inPeriod.filter(r => r.status === 'approved').length,
+        rejected: inPeriod.filter(r => r.status === 'rejected').length,
+        issued: issued.length,
+        qtyAsked: inPeriod.reduce((s, r) => s + r.qty, 0),
+        qtyIssued: issued.reduce((s, r) => s + (r.approvedQty == null ? r.qty : r.approvedQty), 0),
+        // SOP E again, after the fact: how often the gate was overridden, and by whom.
+        overrides: inPeriod.filter(r => r.agingOverride).length,
       } };
   },
 

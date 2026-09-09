@@ -1699,3 +1699,95 @@ test('call.html: the company script is on the card, folded, and absent when nobo
   // The empty case is a MISSING panel, not an empty one.
   assert.match(html, /\? '<details class="script-box">[\s\S]*?: ''\)/);
 });
+
+/* =========================================================================================
+   STOCK REQUESTS: ask, decide against the aging gate, hand over.
+     Store SOP B.1/B.2/B.5-B.9, E (the gate), E.3 (the tracker), G (the low-stock alert).
+   The wiring test proves the three navs open defined panes calling functions the server has.
+   These pin what the server cannot see: that the person asking is shown the gate BEFORE they
+   file, that the override is a tick plus a reason rather than a silent flag, and that the
+   handover form asks for the things the SOP says make somebody accountable.
+   ========================================================================================= */
+test('portal.html: the stock panes are wired, their writes never re-sent, and the owner can tick them', () => {
+  const html = read('portal.html');
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  for (const f of ['stockRequest', 'stockDecide', 'stockIssue']) {
+    assert.match(nr[1], new RegExp('\\b' + f + ':1'), f + ' is a write; a dropped one is re-pressed by a person');
+  }
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  for (const k of ['stockreq', 'stockappr', 'stockrep']) {
+    assert.match(lbl[0], new RegExp("\\b" + k + ":'[^']+'"), k + ' has a label, not a bare key');
+  }
+  // Three entries under the Stoo group the page already has -- no new group for these.
+  for (const t of ['streq', 'stappr', 'strep']) {
+    assert.match(html, new RegExp("\\{ g:'stock', t:'" + t + "'"), t + ' files under Stoo');
+  }
+  assert.match(IMP_SRC('stockNotReady', html), /RUN-ME-2026-09-09-stock-requests\.sql/);
+});
+
+test('portal.html: the asker is shown the gate before filing, not after being refused', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawStockReq', html);
+  assert.match(fn, /srv\('stockMine',\{\}\)/);
+  // The red banner is drawn from the SERVER's live verdict for this person, above the form.
+  assert.match(fn, /g&&g\.blocked\?'<div class="note bad">/, 'a blocked asker sees why at the top of the pane');
+  assert.match(fn, /SOP E/);
+  assert.match(fn, /Unaweza kuomba/, 'and is told they may still ask -- the gate is the desk\'s, not a locked form');
+  const call = /srv\('stockRequest',\{([\s\S]*?)\}\)/.exec(fn);
+  for (const k of ['holder', 'destination', 'item', 'qty', 'reason']) {
+    assert.match(call[1], new RegExp('\\b' + k + ':'), k + ' is sent');
+  }
+  for (const k of ['status', 'agingCount', 'agingOverride', 'staffName']) {
+    assert.ok(!new RegExp('\\b' + k + ':').test(call[1]), k + ' is the server\'s to stamp');
+  }
+});
+
+test('portal.html: releasing over the gate takes a tick AND a reason, and the desk sees the live position', () => {
+  const html = read('portal.html');
+  const dec = IMP_SRC('stockDecideDrawer', html);
+  // The override controls exist only when the gate is actually blocking.
+  assert.match(dec, /g&&g\.blocked\?'<div class="note bad"[\s\S]*?id="stdOv"[\s\S]*?id="stdOvR"[\s\S]*?:''\)/,
+    'no blocked holder, no override box to tick out of habit');
+  assert.match(dec, /overrideAging:!!\(ov&&ov\.checked\), overrideReason:/);
+  assert.match(dec, /max="'\+money\(r\.qty\)\+'"/, 'the release box is capped at what was asked');
+  // The queue shows each row's gate as it stands NOW, and has a chip for the blocked ones.
+  const appr = IMP_SRC('drawStockAppr', html);
+  assert.match(appr, /c\.blocked/, 'the blocked tile');
+  assert.match(appr, /stockTable\(rows,\{decide:!BOOT\.readOnly,issue:!BOOT\.readOnly\}\)/,
+    'a view-only code gets no Decide and no Hand over');
+  assert.match(IMP_SRC('stockTable', html), /agingLine\(g\)/, 'and each row carries the live position');
+});
+
+test('portal.html: the handover form asks for what the SOP says makes somebody accountable', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('stockIssueDrawer', html);
+  for (const [id, why] of [['siNo', 'B.5 the pre-numbered note'], ['siImeis', 'B.5 the IMEIs'],
+    ['siJoint', 'B.6 the joint count'], ['siRcv', 'B.8 who signed'],
+    ['siCour', 'B.9 the courier'], ['siDocs', 'B.9 its documents']]) {
+    assert.match(fn, new RegExp('id="' + id + '"'), why + ' is on the form');
+  }
+  // B.7: photos, shrunk on the phone to the ceiling the server holds.
+  assert.match(fn, /siP'\+i/, 'three photo inputs');
+  assert.match(fn, /Promise\.all\(files\.map\(shrinkForReceipt\)\)/, 'shrunk before sending, as the receipts are');
+  assert.match(fn, /srv\('stockIssue',\{[\s\S]*?countedJointly:\$\('#siJoint'\)\.checked/);
+  // The IMEI counter tells the store keeper they have over-listed before the server does.
+  assert.match(fn, /ni nyingi kuliko zilizoidhinishwa/);
+  // And the note reads back, photos included, behind one button.
+  const hv = IMP_SRC('stockHandoverDrawer', html);
+  assert.match(hv, /srv\('stockHandover',\{id:id\}\)/);
+  assert.match(hv, /srv\('stockPhotos'/);
+  assert.match(hv, /data:image\\\/\(jpeg\|jpg\|png\|webp\);base64,/,
+    'only an image data URL ever reaches a src, the same rule the server kept on the way in');
+});
+
+test('portal.html: the stock report is the aging tracker and the distribution book on one pane', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawStockRep', html);
+  assert.match(fn, /srv\('stockReqReport',STOCKR\)/);
+  assert.match(fn, /ag\.low\?'<div class="note bad">/, 'SOP G: the low-stock alert is a banner, not a tile nobody reads');
+  assert.match(fn, /t\.overrides/, 'and how often the gate was overridden');
+  assert.match(fn, /Stoo iliyokaa \/ Aging stock tracker/);
+  assert.match(fn, /monthRange_\(\)/, 'this month by default, like every other report here');
+  assert.match(html, /<b>STOCK_AGING_DAYS<\/b>/, 'Settings explains the threshold');
+  assert.match(html, /<b>STOCK_LOW_ALERT<\/b>/);
+});
