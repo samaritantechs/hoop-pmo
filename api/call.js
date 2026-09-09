@@ -1,6 +1,7 @@
 import { supabase } from './_lib/supabase.js';
 import { withApi } from './_lib/auth.js';
 import { callApi } from './_lib/call-core.js';
+import { ipOf, uaOf } from './_lib/signin.js';
 
 // POST /api/call   { fn: 'api_callBoot' | 'api_callRegister' | ..., args: [...] }
 // One route for the whole HOOPLOAN Calls app (public/call.html), same transport as Hope's.
@@ -10,5 +11,7 @@ import { callApi } from './_lib/call-core.js';
 export default withApi(async (req) => {
   if (req.method !== 'POST') { const e = new Error('Method not allowed'); e.status = 405; throw e; }
   const { fn, args } = req.body || {};
-  return callApi(supabase, fn, args);
+  /* The address and the handset's own user-agent, for the ONE handler that is a door:
+     registration. callApi ignores them for every other fn -- see its header. */
+  return callApi(supabase, fn, args, Date.now(), { ip: ipOf(req), ua: uaOf(req) });
 });

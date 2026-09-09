@@ -697,3 +697,35 @@ The clock stops at the payment, not the paperwork. Four stamps rather than one s
 the gap between two of them is somebody's afternoon. Verifying takes both the IMEI (B.2) and the
 payer against the bank (B.3); paying is refused before that; confirming the unlock (B.6) needs
 somebody to say they actually rang the customer.
+
+## 22. SHIPPED 2026-09-10: the door — sign-in monitoring (IT SOP D)
+
+The audit log records what somebody did once they were inside, and it is written after the
+door — so a refused sign-in threw before it and left nothing anywhere. Somebody could try
+access codes all night and the record of that night would be empty. The full story is
+[`docs/SIGNIN-WATCH.md`](SIGNIN-WATCH.md); the short version:
+
+| nav | pane | who |
+|---|---|---|
+| `security` | Usalama wa kuingia / Sign-in security | IT, and whoever else the owner ticks |
+
+**Do:**
+
+1. Run `db/migrations/RUN-ME-2026-09-10-signin-watch.sql`.
+2. Tick the `security` nav.
+3. Optional Settings: `SIGNIN_ALERT_FAILS` (5), `SECURITY_EMAIL`.
+
+Nothing written down is a working credential — that is the whole design. A code is stored as a
+truncated hash (so a hundred tries at one wrong code are ONE line) and as `K•••••` (so a person
+recognises their own typo), and never as itself. A phone is masked from the back, because the
+front of a Tanzanian number is the network and identifies nobody.
+
+All three doors are watched: the portal, the upload page (reachable from any origin by design,
+so it is the one somebody guessing would find first), and the phone's registration. Successes
+are kept once per code per door per day rather than once per call — every portal call passes the
+same door, and a row per call would bury the twelve that matter.
+
+SOP D's second sentence — "act immediately on any breach" — is a decision, so the pane records
+one, stamped against the ATTEMPTS rather than the code: a line somebody has handled stops
+shouting, and one new attempt puts it straight back on the desk. Changing a code stays in Access
+codes; the drawer points there rather than keeping a second copy of that authority.

@@ -6,6 +6,7 @@ import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
   importAgedStock, isAgedStockFile, importOfflineQueue, isOfflineQueueFile,
   looksLikeHeader, lifetimeDay } from './_lib/importers.js';
 import { WINDOW_DAYS } from './_lib/call-core.js';
+import { noteSignin, outcomeOf, ipOf, uaOf } from './_lib/signin.js';
 
 /* =====================================================================================
    POST /api/upload -- the daily Watu list, AND the hoopltd.shop sales export. The header
@@ -149,10 +150,25 @@ async function deleteDay(user, day) {
 export default withApi(async (req) => {
   if (req.method !== 'POST') { const e = new Error('Method not allowed'); e.status = 405; throw e; }
   const { code, rows, meta, part, action } = req.body || {};
-  const user = await gatedUser(code);
+  /* THE SECOND DOOR, WATCHED THE SAME WAY (IT SOP D). The upload page is reachable from any
+     origin by design -- it carries an "API endpoint" field -- so it is the door somebody who
+     is guessing would find first, and it was the one with no record of being tried. */
+  let user;
+  try {
+    user = await gatedUser(code);
+  } catch (e) {
+    await noteSignin(supabase, { door: 'upload', ok: false, outcome: outcomeOf(e), code,
+      who: e && e.who, detail: e && e.message, ip: ipOf(req), ua: uaOf(req) });
+    throw e;
+  }
   if (!(await can(user, 'upload'))) {
+    await noteSignin(supabase, { door: 'upload', ok: false, outcome: 'refused', code,
+      who: { name: user.name, role: user.role }, detail: 'no upload permission',
+      ip: ipOf(req), ua: uaOf(req) });
     const e = new Error('Upload permission is required for your access code.'); e.status = 403; throw e;
   }
+  await noteSignin(supabase, { door: 'upload', ok: true, code,
+    who: { name: user.name, role: user.role }, ip: ipOf(req), ua: uaOf(req) });
 
   if (String(action || '') === 'delete') {
     const day = String((meta && meta.uploadDate) || '').trim();

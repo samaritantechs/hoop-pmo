@@ -5,6 +5,7 @@ import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey, addDaysKey, TZ_OFFSET_MS } from './_lib/time.js';
 import { sendMail, noticeHtml } from './_lib/mail.js';
 import { nudge } from './_lib/push.js';
+import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signin.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS } from './_lib/call-core.js';
 
@@ -108,6 +109,10 @@ AUDITED.add('priceDelete');
    delayed, so who did which step and when is the record that proves it was not. */
 AUDITED.add('topupRequest');
 AUDITED.add('topupUpdate');
+/* THE DOOR (IT SOP D): who decided a run of refusals had been dealt with, and who sent the
+   window out of the building. KEEP drops the note itself -- what was done is on the row. */
+AUDITED.add('signinReview');
+AUDITED.add('signinSend');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -157,6 +162,10 @@ const EDITABLE_SETTINGS = [
      own issues; GM_EMAIL hears about escalations. See the issues migration. */
   'ISSUES_EMAIL', 'GM_EMAIL', 'STOCK_EMAIL', 'STOCK_AGING_DAYS', 'STOCK_LOW_ALERT', 'COMMISSION_EMAIL',
   'ADVANCE_DEADLINE_DAY', 'ADVANCE_MAX_PCT', 'LOSS_EMAIL', 'TOPUP_EMAIL',
+  /* THE DOOR (IT SOP D). SIGNIN_ALERT_FAILS is how many refusals against one code in the
+     window stop being a typo and start being somebody working at it; SECURITY_EMAIL is
+     who hears about it. Both blank-safe: 5, and nobody. */
+  'SIGNIN_ALERT_FAILS', 'SECURITY_EMAIL',
 ];
 
 /* =======================================================================================
@@ -252,7 +261,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'security', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -741,6 +750,61 @@ const topupRow = (r, me, nowMs) => {
    a rule that says "must never be delayed" can be served by. */
 const TOPUP_RANK = { requested: 0, verified: 1, paid: 2, unlocked: 3, rejected: 4 };
 const topupWaitFirst = (x, y) => (TOPUP_RANK[x.status] - TOPUP_RANK[y.status]) || (x.at || 0) - (y.at || 0);
+
+/* ---------- THE DOOR'S OWN LOG (IT SOP D "monitor for unauthorized access") ---------- */
+const SIGNIN_NOT_READY = 'Kumbukumbu ya kuingia haijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-10-signin-watch.sql kwenye Supabase. '
+  + '/ The sign-in log has not been created yet — run that migration first.';
+const SIGNIN_COLS = 'id, at, day, door, ok, outcome, code_key, code_masked, phone_masked, '
+  + 'device, who_name, who_role, detail, ip, ua, reviewed_by, reviewed_at, review_note';
+/* HOW MANY TRIES IN THE WINDOW STOP BEING A TYPO. The SOP names no number, so five is a
+   judgement, and it is a setting so the office can move it without a deploy. */
+const SIGNIN_ALERT_DEFAULT = 5;
+const signinRow = r => ({
+  id: String(r.id),
+  at: r.at ? Date.parse(r.at) : null,
+  day: r.day || '', door: r.door || '', ok: !!r.ok, outcome: r.outcome || '',
+  codeKey: r.code_key || '', codeMasked: r.code_masked || '', phoneMasked: r.phone_masked || '',
+  device: r.device || '', whoName: r.who_name || '', whoRole: r.who_role || '',
+  detail: r.detail || '', ip: r.ip || '', ua: r.ua || '',
+  reviewedBy: r.reviewed_by || '',
+  reviewedAt: r.reviewed_at ? Date.parse(r.reviewed_at) : null,
+  reviewNote: r.review_note || '',
+});
+/* ONE LINE PER SECRET TRIED, which is the shape the question actually has: nobody asks "how
+   many refusals were there", they ask "is somebody working on one code". Rows without a key
+   (an empty box submitted) group under their own bucket rather than merging into each other. */
+function signinGroups(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    if (r.ok) continue;
+    const k = r.codeKey || ('~blank~' + r.door);
+    let g = by.get(k);
+    if (!g) {
+      g = { key: r.codeKey || '', door: r.door, masked: r.codeMasked || '', phoneMasked: r.phoneMasked || '',
+        whoName: r.whoName || '', tries: 0, first: r.at, last: r.at, outcomes: {}, doors: {}, ips: [],
+        reviewed: true, reviewedBy: '', reviewNote: '' };
+      by.set(k, g);
+    }
+    g.tries++;
+    if (r.at != null) {
+      if (g.first == null || r.at < g.first) g.first = r.at;
+      if (g.last == null || r.at > g.last) g.last = r.at;
+    }
+    g.outcomes[r.outcome] = (g.outcomes[r.outcome] || 0) + 1;
+    g.doors[r.door] = (g.doors[r.door] || 0) + 1;
+    if (!g.masked && r.codeMasked) g.masked = r.codeMasked;
+    if (!g.phoneMasked && r.phoneMasked) g.phoneMasked = r.phoneMasked;
+    if (!g.whoName && r.whoName) g.whoName = r.whoName;
+    if (r.ip && g.ips.indexOf(r.ip) < 0 && g.ips.length < 6) g.ips.push(r.ip);
+    /* A GROUP IS ONLY DEALT WITH WHEN EVERY ATTEMPT IN IT IS. One new try after somebody
+       wrote "spoke to her, she had the old code" puts the line back on the desk, which is
+       the whole difference between a note and an acknowledgement. */
+    if (!r.reviewedAt) g.reviewed = false;
+    else if (!g.reviewedBy) { g.reviewedBy = r.reviewedBy; g.reviewNote = r.reviewNote; }
+  }
+  return [...by.values()].sort((a, b) => (b.tries - a.tries) || ((b.last || 0) - (a.last || 0)));
+}
 
 /* ---------- LOSS AND DAMAGE (Finance SOP H; opened by Store SOP C.7) ---------- */
 const LOSS_NOT_READY = 'Jedwali la upotevu halijatengenezwa bado. Endesha '
@@ -6392,6 +6456,138 @@ const FNS = {
     return { ok: true, key };
   },
 
+  /* =====================================================================================
+     THE DOOR (IT SOP D).
+     =====================================================================================
+       "Access Controls: set and maintain user access controls so only authorized personnel
+        can view or edit sensitive information."
+       "Monitoring: MONITOR FOR UNAUTHORIZED ACCESS and act immediately on any breach,
+        including changing the affected password."
+
+     audit_log answers what somebody did once they were inside. It is written by audited(),
+     which runs AFTER the door -- so a refused sign-in threw before it and left nothing
+     anywhere. Somebody could sit and guess access codes all night and the record of that
+     night would be empty. The writing half of this lives in api/_lib/signin.js; this is the
+     reading half, and the acknowledgement the SOP's second sentence asks for.
+
+     NOTHING READ HERE IS A WORKING CREDENTIAL. The code is stored as a truncated hash (for
+     grouping) and a first-character mask (for recognising your own typo), and never as
+     itself -- see the migration's header. */
+
+  /** The window, grouped by the secret that was tried. Default: the last seven days. */
+  async signinWatch(db, user, args) {
+    requireNav(user, 'security');
+    const a = args || {};
+    const isDay = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+    const today = todayKey();
+    let to = isDay(a.to) ? String(a.to) : today;
+    let from = isDay(a.from) ? String(a.from) : dayShift(to, -6);
+    if (from > to) { const t = from; from = to; to = t; }
+    let raw = [];
+    try {
+      raw = await fetchAll(() => db.from('signin_attempts').select(SIGNIN_COLS)
+        .gte('day', from).lte('day', to).order('at', { ascending: false }).limit(4000));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, from, to, notReady: true, rows: [], groups: [], byDay: [],
+        alertFails: SIGNIN_ALERT_DEFAULT,
+        counts: { ok: 0, fails: 0, alarming: 0, people: 0, watch: 0 } };
+    }
+    const rows = raw.map(signinRow);
+    const alertFails = await (async () => {
+      try {
+        const { data } = await db.from('settings').select('value').eq('key', 'SIGNIN_ALERT_FAILS').maybeSingle();
+        const n = parseInt(String((data && data.value) || '').replace(/[^0-9]/g, ''), 10);
+        return (Number.isFinite(n) && n >= 1 && n <= 500) ? n : SIGNIN_ALERT_DEFAULT;
+      } catch (e) { return SIGNIN_ALERT_DEFAULT; }
+    })();
+    const groups = signinGroups(rows);
+    const good = rows.filter(r => r.ok);
+    const bad = rows.filter(r => !r.ok);
+    /* A LITTLE BAR PER DAY, so a bad night is visible without reading a single line: a
+       Tuesday with four hundred refusals looks nothing like a Tuesday with four. */
+    const dayMap = new Map();
+    for (const r of rows) {
+      let d = dayMap.get(r.day);
+      if (!d) { d = { day: r.day, ok: 0, fails: 0 }; dayMap.set(r.day, d); }
+      if (r.ok) d.ok++; else d.fails++;
+    }
+    return { ok: true, from, to, alertFails,
+      // Newest first and capped: a log is read from the top and the whole of it is never the
+      // question. The groups above are computed over the WHOLE window, not over this slice.
+      rows: rows.slice(0, 300),
+      truncated: rows.length > 300,
+      groups,
+      byDay: [...dayMap.values()].sort((x, y) => (x.day < y.day ? -1 : 1)),
+      counts: {
+        ok: good.length,
+        fails: bad.length,
+        alarming: bad.filter(r => SIGNIN_ALARMING.includes(r.outcome)).length,
+        // Distinct codes that got in -- "how many people used the system this week".
+        people: new Set(good.map(r => r.codeKey).filter(Boolean)).size,
+        // The lines a person should actually look at: enough tries to be somebody working
+        // at it, and nobody has written down what was done about them yet.
+        watch: groups.filter(g => g.tries >= alertFails && !g.reviewed).length,
+      } };
+  },
+
+  /** "ACT IMMEDIATELY ON ANY BREACH" -- and then say what was done, against the line it was
+      done about. Marks every unreviewed attempt on one code in the window; a NEW attempt
+      afterwards is unreviewed again and the line comes straight back to the desk. */
+  async signinReview(db, user, args) {
+    requireNav(user, 'security');
+    requireWrite(user);
+    const a = args || {};
+    const key = String(a.key || '').trim();
+    if (!/^[0-9a-f]{4,64}$/i.test(key)) bad('Hakuna msimbo uliochaguliwa. / No attempt chosen.');
+    const note = String(a.note == null ? '' : a.note).trim().slice(0, 500);
+    if (!note) bad('Andika ulichofanya (SOP D). / Write down what was done about it.');
+    const at = new Date().toISOString();
+    let data, error;
+    try {
+      ({ data, error } = await db.from('signin_attempts')
+        .update({ reviewed_by: user.name || '', reviewed_at: at, review_note: note })
+        .eq('code_key', key).eq('ok', false).is('reviewed_at', null).select('id'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(SIGNIN_NOT_READY);
+    }
+    if (error) {
+      if (tableMissing(error)) bad(SIGNIN_NOT_READY);
+      throw new Error(error.message);
+    }
+    const n = (data || []).length;
+    if (!n) bad('Hakuna la kuhifadhi — mtu mwingine amekwisha shughulikia. / Nothing to mark: somebody has already dealt with these.');
+    return { ok: true, marked: n };
+  },
+
+  /** The window, to whoever Settings says watches the door. A courtesy on top of the pane,
+      never the record -- the pane is the record, exactly as everywhere else here. */
+  async signinSend(db, user, args) {
+    requireNav(user, 'security');
+    requireWrite(user);
+    const d = await FNS.signinWatch(db, user, args);
+    if (d.notReady) bad(SIGNIN_NOT_READY);
+    const watch = d.groups.filter(g => g.tries >= d.alertFails && !g.reviewed).slice(0, 20);
+    const rows = [
+      ['Kipindi / Period', d.from + ' → ' + d.to],
+      ['Zimeingia / Sign-ins', String(d.counts.ok) + ' (watu ' + d.counts.people + ')'],
+      ['Zimekataliwa / Refused', String(d.counts.fails)],
+      ['Za kuangaliwa / Worth a look', String(d.counts.alarming)],
+      ['Misimbo inayosubiri / Codes awaiting a decision', String(d.counts.watch)],
+    ].concat(watch.map(g => [
+      (g.masked || g.phoneMasked || '—') + (g.whoName ? ' (' + g.whoName + ')' : ''),
+      g.tries + ' × ' + Object.keys(g.outcomes).join(', ') + ' · ' + Object.keys(g.doors).join(', '),
+    ]));
+    const mail = await sendMail(db, { toKey: 'SECURITY_EMAIL',
+      subject: 'HOOPLOAN — mlango / the door: ' + d.from + ' → ' + d.to,
+      html: noticeHtml('Kumbukumbu ya mlango / Sign-in monitoring', rows,
+        'IT SOP D: fuatilia kuingia kusikoruhusiwa na chukua hatua mara moja. '
+        + '/ IT SOP D: monitor for unauthorized access and act immediately on any breach.') });
+    if (!mail.sent) bad('Barua pepe haikutumwa: ' + mail.reason + ' / The email was not sent: ' + mail.reason);
+    return { ok: true, sent: true, to: mail.to, watch: watch.length };
+  },
+
   async audit(db, user, args) {
     requireSettings(user);
     return { ok: true, ...(await auditList(db, { limit: 200 })) };
@@ -6403,7 +6599,21 @@ export const _FNS = FNS;   // tests only -- the fns run against the fake db
 export default withApi(async (req) => {
   if (req.method !== 'POST') { const e = new Error('Method not allowed'); e.status = 405; throw e; }
   const { code, fn, args } = req.body || {};
-  const user = await gatedUser(code);
+  /* THE DOOR IS WATCHED (IT SOP D). audited() below records what somebody did once they were
+     inside; it runs after this line, so until signin.js there was NO record of anybody turned
+     away -- a night of guessing left an empty log. noteSignin can never throw and can never
+     delay a sign-in by more than one small write; see its header. */
+  let user;
+  try {
+    user = await gatedUser(code);
+  } catch (e) {
+    await noteSignin(supabase, { door: 'portal', ok: false, outcome: outcomeOf(e), code,
+      who: e && e.who, detail: e && e.message, ip: ipOf(req), ua: uaOf(req) });
+    throw e;
+  }
+  /* Once per code per day, not once per request -- see rule 3 in signin.js. */
+  await noteSignin(supabase, { door: 'portal', ok: true, code,
+    who: { name: user.name, role: user.role }, ip: ipOf(req), ua: uaOf(req) });
   /* OWN PROPERTIES ONLY. FNS is an object literal, so it inherits from Object.prototype, and
      `FNS['constructor']`, `FNS['toString']`, `FNS['valueOf']` and their friends are all truthy.
      Every one of them sailed past this guard's 400 and got CALLED with (supabase, user, args) --

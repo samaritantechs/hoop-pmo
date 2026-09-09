@@ -2071,3 +2071,45 @@ test('portal.html: the top-up request form sends the parts and never the state',
   const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
   for (const k of ['topupreq', 'topups']) assert.match(lbl[0], new RegExp('\\b' + k + ":'[^']+'"));
 });
+
+/* =========================================================================================
+   THE DOOR -- IT SOP D "monitor for unauthorized access ... act immediately on any breach".
+
+   Two things must hold on the page, and the first is the whole feature: the pane can be
+   ticked for more than one person, so it must never become a list of the company's keys.
+   ========================================================================================= */
+test('portal.html: the security pane shows a mask and never a code', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawSecurity', html);
+  // What is drawn per attempt is the MASK the server sent, never anything else.
+  assert.match(fn, /esc\(r\.codeMasked\|\|'—'\)/, 'the masked code is the only form on screen');
+  assert.ok(!/r\.code\b/.test(fn), 'the page never reaches for a plain code -- there is not one to reach for');
+  assert.match(fn, /Misimbo haihifadhiwi hapa/,
+    'and it says so, so nobody spends the morning looking for a column that does not exist');
+  assert.match(fn, /d\.alertFails/, 'how many tries count as somebody working at it comes from Settings');
+  assert.match(fn, /watch\.length\?'<div class="note bad">/,
+    'codes nobody has acted on are a banner, because SOP D says immediately');
+  assert.match(IMP_SRC('secNotReady', html), /RUN-ME-2026-09-10-signin-watch\.sql/);
+});
+
+test('portal.html: the door pane counts the right refusals and asks what was done', () => {
+  const html = read('portal.html');
+  // The admin's own switch turning everybody away says nothing about anybody.
+  const al = IMP_SRC('secAlarming', html);
+  assert.ok(!/'closed'/.test(al), 'a closed system is not a break-in');
+  for (const k of ['invalid', 'suspended', 'switched_off', 'unknown_phone', 'view_only']) {
+    assert.match(al, new RegExp("'" + k + "'"), k + ' is worth a look');
+  }
+  const dr = IMP_SRC('secReviewDrawer', html);
+  assert.match(dr, /srv\('signinReview',\{key:g\.key,note:\$\('#secNote'\)\.value\}\)/,
+    'acting on a breach is recorded against the line it was about');
+  assert.match(dr, /Misimbo ya kuingia|Access codes/,
+    'and it points at the pane where a code is actually changed, rather than duplicating it here');
+  assert.match(dr, /BOOT\.readOnly\?''/, 'supervision changes nothing');
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  for (const f of ['signinReview', 'signinSend']) {
+    assert.match(nr[1], new RegExp('\\b' + f + ':1'), f + ' is a write and is never re-sent by the client');
+  }
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  assert.match(lbl[0], /\bsecurity:'[^']+'/, 'the nav is grantable by name in the roles editor');
+});

@@ -1413,6 +1413,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   issueRaise:1, issueUpdate:1,
   // Sending the GM his copy: pressed again by a person who can see it went, never re-sent.
   fuOutcomesSend:1,
+  // The door: a review re-sent tells the reviewer somebody else beat them to a mark they
+  // themselves just made, and a send re-sent is a second copy of the same window.
+  signinReview:1, signinSend:1,
   // Stock: a request re-sent files twice; a decision or a handover re-sent trips its own guard.
   stockRequest:1, stockDecide:1, stockIssue:1,
   // Targets: a re-sent save would be harmless (it upserts) but a re-sent delete is not.
@@ -1627,6 +1630,12 @@ var NAV=[
   { g:'issue', t:'issuerep', nav:'issuerep',   sw:'Ripoti ya masuala',  en:'Issues report',
     ic:'<path d="M3 3v18h18"/><path d="M8 17v-6M12 17V8M16 17v-3"/>' },
 
+  /* THE DOOR (IT SOP D "monitor for unauthorized access"). audit_log says what people did
+     once they were inside; this says who was turned away, which is the half nothing here
+     recorded until the sign-in log existed. */
+  { g:'admin', t:'security', nav:'security',   sw:'Usalama wa kuingia', en:'Sign-in security',
+    ic:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 11v4"/><path d="M12 8h.01"/>' },
+
   { g:'admin', t:'staff',    nav:'staff',      sw:'Wafanyakazi',      en:'Staff',
     ic:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
   { g:'admin', t:'codes',    nav:'codes',      sw:'Misimbo ya kuingia', en:'Access codes',
@@ -1776,6 +1785,7 @@ function draw(){
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='furep') return drawFuRep(m);
   if(TAB==='recovery') return drawRecovery(m);
+  if(TAB==='security') return drawSecurity(m);
   if(TAB==='staff') return drawStaff(m);
   if(TAB==='codes') return drawCodes(m);
   if(TAB==='settings') return drawSettings(m);
@@ -7132,6 +7142,154 @@ function drawSalaries(){
   });
 }
 
+/* ---------- the door (IT SOP D) ----------
+     "Monitoring: monitor for unauthorized access and act immediately on any breach,
+      including changing the affected password."
+
+   The audit log says what somebody did once they were INSIDE. It is written after the door,
+   so a refused sign-in used to leave nothing anywhere at all -- somebody could sit and guess
+   access codes all night and the record of that night would be empty.
+
+   ONE LINE PER SECRET TRIED, not one per refusal, because nobody asks "how many refusals
+   were there" -- they ask "is somebody working on one code". And the code itself is never
+   here: the server stores a hash to group by and a first-character mask to recognise by, so
+   this pane can be ticked for more than one person without becoming a list of the keys. */
+var SECQ={from:'',to:''};
+function secNotReady(){
+  return '<div class="note bad">Kumbukumbu ya kuingia haijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-10-signin-watch.sql</b> kwenye Supabase, kisha rudi hapa. '
+    +'/ The sign-in log has not been created yet — run that migration, then come back.</div>';
+}
+var SEC_OUTCOME={ok:'Ameingia / Signed in',invalid:'Msimbo si sahihi / Wrong code',
+  suspended:'Amesimamishwa / Suspended',closed:'Mfumo umefungwa / System closed',
+  switched_off:'Akaunti imezimwa / Account off',unknown_phone:'Namba haipo kwenye rejista / Phone not on the register',
+  view_only:'Msimbo wa kuangalia tu / View-only code',refused:'Amekataliwa / Refused'};
+var SEC_DOOR={portal:'Mfumo / Portal',upload:'Upload',app:'Simu / App'};
+function secOutcome(k){ return SEC_OUTCOME[k]||k||''; }
+function secDoor(k){ return SEC_DOOR[k]||k||''; }
+/* The outcomes worth a person's attention. `closed` is the admin's own switch turning
+   everybody away and says nothing about anybody, so it is deliberately not on this list. */
+function secAlarming(k){ return k==='invalid'||k==='suspended'||k==='switched_off'||k==='unknown_phone'||k==='view_only'; }
+function secWho(g){
+  return esc(g.masked||g.phoneMasked||'—')+(g.whoName?'<div class="mut" style="font-size:10px">'+esc(g.whoName)+'</div>':'');
+}
+function secCounts(o){
+  return Object.keys(o||{}).map(function(k){
+    return '<span class="chip'+(secAlarming(k)?' bad':'')+'">'+esc(secOutcome(k).split(' / ')[0])+' '+o[k]+'</span>';
+  }).join(' ');
+}
+function secReviewDrawer(m, g){
+  drawer('<h3>Fanyia kazi / Act on this</h3>'
+    +'<div class="sub">'+esc(g.masked||g.phoneMasked||'—')+(g.whoName?' · '+esc(g.whoName):'')
+    +' · majaribio '+money(g.tries)+'</div>'
+    +'<div class="note bad" style="font-size:11.5px;margin-top:8px">SOP D: chukua hatua mara moja, '
+    +'ikiwa ni pamoja na kubadilisha msimbo husika. Msimbo unabadilishwa kwenye <b>Misimbo ya kuingia</b>. '
+    +'/ SOP D: act immediately, including changing the affected code. Codes are changed in Access codes.</div>'
+    +'<div style="margin:8px 0;font-size:12.5px">'
+    +'<div>Mara ya kwanza / First: <b>'+esc(advWhen(g.first))+'</b></div>'
+    +'<div>Mara ya mwisho / Last: <b>'+esc(advWhen(g.last))+'</b></div>'
+    +'<div style="margin-top:4px">'+secCounts(g.outcomes)+'</div>'
+    +(g.ips&&g.ips.length?'<div class="mut" style="font-size:11px;margin-top:4px">'+esc(g.ips.join(', '))+'</div>':'')
+    +'</div>'
+    +(BOOT.readOnly?'':'<label class="lbl">Ulichofanya / What was done *</label>'
+      +'<textarea id="secNote" class="inp" rows="3" placeholder="Nimebadilisha msimbo wake na nimemwambia"></textarea>'
+      +'<button class="btn w" id="secMark" style="margin-top:10px">Hifadhi / Mark as handled</button>'));
+  if($('#secMark')) $('#secMark').onclick=function(){
+    var b=this; b.disabled=true;
+    srv('signinReview',{key:g.key,note:$('#secNote').value}).then(function(){
+      toast('Imehifadhiwa / Saved'); closeDrawer(); if(TAB==='security') drawSecurity(m);
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+function drawSecurity(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('signinWatch',SECQ).then(function(d){
+    if(d.notReady){ m.innerHTML=secNotReady(); return; }
+    var groups=d.groups||[], rows=d.rows||[], c=d.counts||{}, byDay=d.byDay||[];
+    var need=(d.alertFails||5);
+    var watch=groups.filter(function(g){ return g.tries>=need&&!g.reviewed; });
+    m.innerHTML=(watch.length?'<div class="note bad">Kuna misimbo '+money(watch.length)
+        +' iliyojaribiwa mara '+money(need)+' au zaidi na bado hakuna aliyeandika alichofanya. '
+        +'/ Codes tried that many times or more, with nobody yet saying what was done about them.</div>':'')
+      +'<div class="tiles">'
+      +tile('Wameingia',money(c.people||0),'watu tofauti kwenye kipindi hiki',{color:'ok'})
+      +tile('Wamekataliwa',money(c.fails||0),'majaribio yaliyokataliwa mlangoni',{color:c.fails?'warn':''})
+      +tile('Ya kuangaliwa',money(c.alarming||0),'si mfumo uliofungwa — ni msimbo usio sahihi',{color:c.alarming?'bad':''})
+      +tile('Yanasubiri uamuzi',money(c.watch||0),'misimbo ya kufanyiwa kazi (SOP D)',{color:c.watch?'bad':'ok'})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<span class="mut" style="font-size:12px">Tarehe:</span>'
+      +'<input id="secFrom" class="inp" type="date" style="width:auto" value="'+esc(d.from||'')+'">'
+      +'<input id="secTo" class="inp" type="date" style="width:auto" value="'+esc(d.to||'')+'">'
+      +'<button class="btn sm" id="secGo">Chuja / Filter</button>'
+      +'<button class="btn sm ghost" id="secWeek">Siku 7 / Last 7 days</button>'
+      +'<button class="btn sm ghost" id="secMonth">Mwezi huu / This month</button>'
+      +'<span style="flex:1"></span>'
+      +(BOOT.readOnly?'':'<button class="btn sm ghost" id="secSend">Tuma kwa usalama / Send</button>')
+      +'</div>'
+      +'<div class="note" style="font-size:11.5px">Misimbo haihifadhiwi hapa. Kinachoonekana ni herufi ya '
+      +'kwanza na urefu tu, ili mtu atambue kosa lake mwenyewe bila mtu mwingine kupata ufunguo. '
+      +'/ No code is stored here — only its first character and its length, so a person can recognise '
+      +'their own typo and nobody else gains a key.</div>'
+      +(groups.length?'<h3 style="margin:16px 0 6px">Kwa kila msimbo uliojaribiwa / By the secret that was tried</h3>'
+        +'<div class="scroll"><table><thead><tr>'
+        +'<th>MSIMBO</th><th class="r">MAJARIBIO</th><th>NINI KILITOKEA</th><th>MLANGO</th>'
+        +'<th>MARA YA KWANZA</th><th>MARA YA MWISHO</th><th>ANWANI</th><th>HATUA</th><th class="noxl"></th>'
+        +'</tr></thead><tbody>'
+        +groups.map(function(g){
+          return '<tr><td>'+secWho(g)+'</td>'
+            +'<td class="r'+(g.tries>=need?' bad':'')+'"><b>'+money(g.tries)+'</b></td>'
+            +'<td>'+secCounts(g.outcomes)+'</td>'
+            +'<td style="font-size:11px">'+esc(Object.keys(g.doors||{}).map(secDoor).join(', '))+'</td>'
+            +'<td style="font-size:11px">'+esc(advWhen(g.first))+'</td>'
+            +'<td style="font-size:11px">'+esc(advWhen(g.last))+'</td>'
+            +'<td style="font-size:10.5px">'+esc((g.ips||[]).join(' '))+'</td>'
+            +'<td style="font-size:11px">'+(g.reviewed
+              ? '<span class="chip ok">Imeshughulikiwa</span>'+(g.reviewNote?'<div class="mut" style="font-size:10px">'+esc(g.reviewNote)+'</div>':'')
+              : '<span class="chip bad">Inasubiri</span>')+'</td>'
+            +'<td class="r noxl"><button class="btn sm ghost" data-secg="'+esc(g.key)+'">'+(g.reviewed?'Maelezo':'Fanyia kazi')+'</button></td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut" style="margin-top:12px">Hakuna aliyekataliwa mlangoni kwenye kipindi hiki. / Nobody was turned away in this period.</div>')
+      +(byDay.length?'<h3 style="margin:16px 0 6px">Kwa siku / By day</h3>'
+        +'<div class="scroll"><table><thead><tr><th>SIKU</th><th class="r">WAMEINGIA</th><th class="r">WAMEKATALIWA</th></tr></thead><tbody>'
+        +byDay.map(function(x){
+          return '<tr><td>'+esc(x.day)+'</td><td class="r">'+money(x.ok)+'</td>'
+            +'<td class="r'+(x.fails?' bad':'')+'">'+money(x.fails)+'</td></tr>';
+        }).join('')+'</tbody></table></div>':'')
+      +(rows.length?'<h3 style="margin:16px 0 6px">Kila jaribio / Every attempt'
+        +(d.truncated?' <span class="mut" style="font-size:11px">(mpya 300 tu / newest 300 only)</span>':'')+'</h3>'
+        +'<div class="scroll"><table><thead><tr>'
+        +'<th>LINI</th><th>MLANGO</th><th>MSIMBO</th><th>NAMBA</th><th>NINI KILITOKEA</th><th>JINA</th><th>ANWANI</th>'
+        +'</tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
+            +'<td style="font-size:11px">'+esc(secDoor(r.door))+'</td>'
+            +'<td>'+esc(r.codeMasked||'—')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.phoneMasked||'')+'</td>'
+            +'<td style="font-size:11.5px"'+(r.ok?'':(secAlarming(r.outcome)?' class="bad"':''))+'>'+esc(secOutcome(r.outcome))+'</td>'
+            +'<td style="font-size:11px">'+esc(r.whoName||'')+'</td>'
+            +'<td style="font-size:10.5px">'+esc(r.ip||'')+'</td></tr>';
+        }).join('')+'</tbody></table></div>':'');
+    wireTiles(m);
+    $('#secGo').onclick=function(){ SECQ={from:$('#secFrom').value,to:$('#secTo').value}; if(TAB==='security') drawSecurity(m); };
+    $('#secWeek').onclick=function(){ SECQ={from:'',to:''}; if(TAB==='security') drawSecurity(m); };
+    $('#secMonth').onclick=function(){ var r=monthRange_(); SECQ={from:r.from,to:r.to}; if(TAB==='security') drawSecurity(m); };
+    var sn=$('#secSend');
+    if(sn) sn.onclick=function(){
+      var b=this; b.disabled=true;
+      srv('signinSend',SECQ).then(function(x){
+        b.disabled=false; toast('Imetumwa kwa '+(x.to||'')+' / Sent');
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+    [].slice.call(m.querySelectorAll('[data-secg]')).forEach(function(b){
+      b.onclick=function(){
+        var g=groups.filter(function(x){ return String(x.key)===b.getAttribute('data-secg'); })[0];
+        if(g) secReviewDrawer(m, g);
+      };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 function drawStaff(m){
   m.innerHTML='<div class="card"><h2>Staff</h2><div class="sk"></div></div>';
   srv('staffDirectory').then(function(d){
@@ -7263,6 +7421,7 @@ function drawCodes(m){
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',
+            security:'Sign-in security (IT: who was turned away at the door)',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
             +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';
