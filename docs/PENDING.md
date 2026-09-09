@@ -729,3 +729,41 @@ SOP D's second sentence — "act immediately on any breach" — is a decision, s
 one, stamped against the ATTEMPTS rather than the code: a line somebody has handled stops
 shouting, and one new attempt puts it straight back on the desk. Changing a code stays in Access
 codes; the drawer points there rather than keeping a second copy of that authority.
+
+## 23. SHIPPED 2026-09-10: enrolment — the details, the check, the RSM being told (IT SOP A)
+
+Three SOPs ask whether everybody is "enrolled with correct and complete details" (IT A, RSM
+E.1, CSM H.1) and nothing could answer it: the register arrives by uploading Sipho's page, which
+has no notion of a missing field, no notion of a record having been checked, and no way to tell
+an RSM their person is on it. The full story is [`docs/ENROLMENT.md`](ENROLMENT.md); the short
+version:
+
+| nav | pane | who |
+|---|---|---|
+| `enrol` | Usajili wa wafanyakazi / Enrolment | IT |
+
+**Do:**
+
+1. Run `db/migrations/RUN-ME-2026-09-10-enrolment.sql`.
+2. Tick the `enrol` nav.
+3. Optional: `ENROL_EMAIL`, either plain addresses or one `BRANCH=address` per line so each
+   region's RSM hears about their own people.
+
+A.3 is the only gate: completeness is verified BEFORE the account is activated, so activation is
+a button that counts the missing fields first and refuses, naming them — and the count is taken
+from the stored row, never from what the caller sends. There is no "active" box on the form, and
+switching somebody back on later goes through the same check.
+
+What the gate deliberately does not do is switch off the people already on the register. They
+show as unverified and the desk has a tile counting exactly them; deactivating a working company
+to satisfy a checklist is not what A.3 means.
+
+"Referees" is plural in the SOP and was singular in the table, so a second pair of columns is
+added rather than the first being reinterpreted. An ID of an unusual length is FLAGGED, never
+refused — the register holds real nineteen-digit numbers and real ones written with dashes. An
+edit that empties a required field clears the verification stamp but does not switch the account
+off: a typo must not cost somebody their working day.
+
+Also here: on the register is not the same as using the system. The desk shows, per person and
+per branch, whether that phone has actually signed a handset on — which is the half of RSM E.1
+that proves the details reached them.

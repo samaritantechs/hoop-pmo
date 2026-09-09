@@ -1415,6 +1415,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   fuOutcomesSend:1,
   // The door: a review re-sent tells the reviewer somebody else beat them to a mark they
   // themselves just made, and a send re-sent is a second copy of the same window.
+  // Enrolment: a save re-sent would overwrite an edit somebody made in between, and a
+  // verify or a notify re-sent is a second activation or a second email.
+  enrolSave:1, enrolUpdate:1,
   signinReview:1, signinSend:1,
   // Stock: a request re-sent files twice; a decision or a handover re-sent trips its own guard.
   stockRequest:1, stockDecide:1, stockIssue:1,
@@ -1630,6 +1633,12 @@ var NAV=[
   { g:'issue', t:'issuerep', nav:'issuerep',   sw:'Ripoti ya masuala',  en:'Issues report',
     ic:'<path d="M3 3v18h18"/><path d="M8 17v-6M12 17V8M16 17v-3"/>' },
 
+  /* ENROLMENT (IT SOP A). Three SOPs ask whether everybody is "enrolled with correct and
+     complete details" (IT A, RSM E.1, CSM H.1) and until this pane the answer was scrolling
+     a list. A.3 makes activation an ACT that counts the missing fields first. */
+  { g:'admin', t:'enrol',    nav:'enrol',      sw:'Usajili wa wafanyakazi', en:'Enrolment',
+    ic:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/>' },
+
   /* THE DOOR (IT SOP D "monitor for unauthorized access"). audit_log says what people did
      once they were inside; this says who was turned away, which is the half nothing here
      recorded until the sign-in log existed. */
@@ -1785,6 +1794,7 @@ function draw(){
   if(TAB==='ripoti') return drawRipoti(m);
   if(TAB==='furep') return drawFuRep(m);
   if(TAB==='recovery') return drawRecovery(m);
+  if(TAB==='enrol') return drawEnrol(m);
   if(TAB==='security') return drawSecurity(m);
   if(TAB==='staff') return drawStaff(m);
   if(TAB==='codes') return drawCodes(m);
@@ -7142,6 +7152,200 @@ function drawSalaries(){
   });
 }
 
+/* ---------- enrolment (IT SOP A) ----------
+     A.1 collect full name, ID number, contact information and REFEREES from the RSM/TL
+     A.2 enter them accurately and completely
+     A.3 VERIFY DATA COMPLETENESS BEFORE ACTIVATING THE ACCOUNT
+     A.4 notify the RSM/General Manager once enrolment is complete
+
+   RSM SOP E.1 and CSM SOP H.1 ask the same question from the other side -- "are all my agents
+   enrolled with complete details" -- and until this pane the answer was scrolling a list. So
+   the branch table is not decoration: it IS their question, and it is above the register.
+
+   Activation is a BUTTON, not a column, because A.3 puts the check before it. */
+var ENROLQ={branch:'',state:'',q:''};
+function enrolNotReady(){
+  return '<div class="note bad">Safu za usajili hazipo bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-10-enrolment.sql</b> kwenye Supabase, kisha rudi hapa. '
+    +'Orodha hapa chini bado inasomeka; uthibitisho hauwezekani mpaka safu zipo. '
+    +'/ The enrolment columns do not exist yet — the list below still reads, but nothing can be '
+    +'verified until that migration is run.</div>';
+}
+function enrolChip(r){
+  if(!r.complete) return '<span class="chip bad">Haijakamilika</span>';
+  if(!r.verifiedAt) return '<span class="chip warn">Haijathibitishwa</span>';
+  if(!r.notifiedAt) return '<span class="chip">Hakuna aliyeambiwa</span>';
+  return '<span class="chip ok">Imekamilika</span>';
+}
+function enrolGapChips(r, fields){
+  if(r.complete) return '<span class="mut">—</span>';
+  var lbl={}; (fields||[]).forEach(function(f){ lbl[f.key]=f.label; });
+  return r.gaps.map(function(k){
+    return '<span class="chip bad">'+esc((lbl[k]||k).split(' / ')[0])+'</span>';
+  }).join(' ');
+}
+/* THE FORM, shared by "enrol somebody new" and "fix what is missing" -- the same nine fields
+   either way, because A.1 does not have a short version. */
+function enrolFormHtml(r){
+  r=r||{};
+  var f=function(id,label,val,ph,type){
+    return '<div style="flex:1;min-width:150px"><label class="lbl">'+esc(label)+'</label>'
+      +'<input id="en'+id+'" class="inp"'+(type?' type="'+type+'"':'')+' value="'+esc(val||'')+'"'
+      +(ph?' placeholder="'+esc(ph)+'"':'')+'></div>';
+  };
+  return '<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +f('Name','Jina kamili / Full name *',r.name)
+    +f('Phone','Namba ya simu / Phone *',r.phone,'07…')
+    +'</div>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +f('Nid','Namba ya kitambulisho / ID number *',r.nationalId,'NIDA')
+    +f('Email','Barua pepe / Email',r.email)
+    +'</div>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +f('Role','Wadhifa / Role *',r.role,'Field_Officer')
+    +f('Branch','Tawi / Branch *',r.branch)
+    +f('Mgr','Anaripoti kwa / Reports to',r.manager)
+    +'</div>'
+    +'<h4 style="margin:12px 0 4px">Wadhamini / Referees <span class="mut" style="font-weight:400">— SOP A.1 inasema wawili</span></h4>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +f('K1n','Mdhamini wa kwanza / First referee *',r.kinName)
+    +f('K1p','Namba / Number *',r.kinPhone)
+    +f('K1r','Uhusiano / Relationship',r.kinRel)
+    +'</div>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +f('K2n','Mdhamini wa pili / Second referee *',r.kin2Name)
+    +f('K2p','Namba / Number *',r.kin2Phone)
+    +f('K2r','Uhusiano / Relationship',r.kin2Rel)
+    +'</div>';
+}
+function enrolFormArgs(){
+  return { phone:$('#enPhone').value, name:$('#enName').value, nationalId:$('#enNid').value,
+    email:$('#enEmail').value, role:$('#enRole').value, branch:$('#enBranch').value,
+    manager:$('#enMgr').value,
+    kinName:$('#enK1n').value, kinPhone:$('#enK1p').value, kinRel:$('#enK1r').value,
+    kin2Name:$('#enK2n').value, kin2Phone:$('#enK2p').value, kin2Rel:$('#enK2r').value };
+}
+function enrolDrawer(m, r, fields){
+  var isNew=!r;
+  drawer('<h3>'+(isNew?'Sajili mtu mpya / Enrol somebody':esc(r.name||r.phone))+'</h3>'
+    +(isNew?'<div class="sub">SOP A.1: jina kamili, kitambulisho, mawasiliano na wadhamini — kutoka kwa RSM au kiongozi wa timu. '
+        +'Akaunti haitakuwa hai mpaka ithibitishwe (A.3). / The account is not live until it is verified.</div>'
+      :'<div class="sub">'+enrolChip(r)+' '+esc(r.role||'')+(r.branch?' · '+esc(r.branch):'')
+        +(r.inApp?' · <span class="chip ok">yupo kwenye app</span>':' · <span class="chip">hajaingia kwenye app</span>')+'</div>')
+    +(!isNew&&r.idOdd?'<div class="note bad" style="font-size:11.5px;margin-top:8px">Namba ya kitambulisho ina urefu usio wa kawaida — '
+      +'hakiki (SOP A.2). / That ID number is an unusual length — check it.</div>':'')
+    +(!isNew&&!r.complete?'<div class="note bad" style="font-size:11.5px;margin-top:8px">Bado: '
+      +enrolGapChips(r,fields)+'</div>':'')
+    +(!isNew?'<div class="mut" style="font-size:11px;margin:8px 0">'
+      +(r.enrolledBy?'Amesajiliwa na '+esc(r.enrolledBy)+' · '+esc(advWhen(r.enrolledAt)):'Ametoka kwenye upload wa rejista')
+      +(r.verifiedAt?'<br>Amethibitishwa na '+esc(r.verifiedBy||'')+' · '+esc(advWhen(r.verifiedAt)):'')
+      +(r.notifiedAt?'<br>Taarifa imetumwa '+esc(advWhen(r.notifiedAt))+' kwa '+esc(r.notifiedTo||''):'')
+      +(r.note?'<br>'+esc(r.note):'')+'</div>':'')
+    +enrolFormHtml(r)
+    +(BOOT.readOnly?'':'<button class="btn w" id="enSave" style="margin-top:12px">Hifadhi / Save the details</button>'
+      +(isNew?'':'<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'
+        +(r.verifiedAt&&r.active?'':'<button class="btn sm" id="enVer" style="flex:1">Thibitisha na washa (A.3)</button>')
+        +(r.verifiedAt&&!r.notifiedAt?'<button class="btn sm ghost" id="enNot" style="flex:1">Toa taarifa kwa RSM (A.4)</button>':'')
+        +(r.active?'<button class="btn sm danger ghost" id="enOff" style="flex:1">Zima akaunti</button>':'')
+        +'</div>')));
+  var again=function(){ closeDrawer(); if(TAB==='enrol') drawEnrol(m); };
+  if($('#enSave')) $('#enSave').onclick=function(){
+    var b=this; b.disabled=true;
+    srv('enrolSave',enrolFormArgs()).then(function(d){
+      toast(d.gaps&&d.gaps.length?'Imehifadhiwa — bado hakijakamilika':'Imehifadhiwa / Saved', !!(d.gaps&&d.gaps.length));
+      again();
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+  var step=function(id, s, extra){
+    var el=$('#'+id); if(!el) return;
+    el.onclick=function(){
+      var b=this; b.disabled=true;
+      srv('enrolUpdate',Object.assign({phone:r.phone, step:s}, extra?extra():{})).then(function(d){
+        toast(s==='notify'?('Taarifa imetumwa kwa '+(d.to||'')):'Imehifadhiwa / Saved'); again();
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+  };
+  step('enVer','verify');
+  step('enNot','notify');
+  var off=$('#enOff');
+  if(off) off.onclick=function(){
+    var why=prompt('Sababu ya kuzima akaunti? / Why is this account being switched off?');
+    if(!why) return;
+    var b=this; b.disabled=true;
+    srv('enrolUpdate',{phone:r.phone, step:'off', note:why}).then(function(){
+      toast('Imezimwa / Switched off'); again();
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+function drawEnrol(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('enrolQueue',ENROLQ).then(function(d){
+    var rows=d.rows||[], c=d.counts||{}, fields=d.fields||[], byBranch=d.byBranch||[];
+    var pick=function(k){ return function(){ ENROLQ.state=(ENROLQ.state===k?'':k); if(TAB==='enrol') drawEnrol(m); }; };
+    m.innerHTML=(d.columnsReady?'':enrolNotReady())
+      +(c.liveUnverified?'<div class="note bad">Kuna akaunti '+money(c.liveUnverified)
+        +' hai ambazo hazijawahi kuthibitishwa. SOP A.3 inasema uthibitisho unatangulia kuwasha. '
+        +'/ Accounts that are live and were never checked. They came from the register upload, not from this desk.</div>':'')
+      +'<div class="tiles">'
+      +tile('Kwenye rejista',money(c.total||0),'wafanyakazi wote',{on:ENROLQ.state==='',cta:'onyesha wote ›',go:function(){ ENROLQ.state=''; if(TAB==='enrol') drawEnrol(m); }})
+      +tile('Hazijakamilika',money(c.gaps||0),'zinakosa kitu kati ya vitu SOP A.1',{color:c.gaps?'bad':'ok',on:ENROLQ.state==='gaps',cta:'chuja ›',go:pick('gaps')})
+      +tile('Hazijathibitishwa',money(c.unverified||0),'hakuna aliyekagua ukamilifu',{color:c.unverified?'warn':'ok',on:ENROLQ.state==='unverified',cta:'chuja ›',go:pick('unverified')})
+      +tile('Hai bila kukaguliwa',money(c.liveUnverified||0),'A.3: uthibitisho unatangulia kuwasha',{color:c.liveUnverified?'bad':'ok',on:ENROLQ.state==='live',cta:'chuja ›',go:pick('live')})
+      +tile('Hakuna aliyeambiwa',money(c.unnotified||0),'A.4: RSM/GM hawajapewa taarifa',{color:c.unnotified?'warn':'ok',on:ENROLQ.state==='unnotified',cta:'chuja ›',go:pick('unnotified')})
+      +tile('Wapo kwenye app',money(c.inApp||0),'wameshaingia kwenye simu',{on:ENROLQ.state==='noapp',cta:'wasiokuwepo ›',go:pick('noapp')})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<input id="enQ" class="inp" style="width:auto;min-width:180px" placeholder="Tafuta jina au namba" value="'+esc(ENROLQ.q||'')+'">'
+      +'<select id="enBr" class="inp" style="width:auto"><option value="">Matawi yote / All branches</option>'
+      +(d.branches||[]).map(function(b){ return '<option value="'+esc(b)+'"'+(ENROLQ.branch===b?' selected':'')+'>'+esc(b)+'</option>'; }).join('')+'</select>'
+      +'<button class="btn sm" id="enGo">Chuja / Filter</button>'
+      +'<button class="btn sm ghost" id="enClr">Ondoa vichujio</button>'
+      +'<span style="flex:1"></span>'
+      +(BOOT.readOnly?'':'<button class="btn sm" id="enNew">+ Sajili mtu mpya / Enrol somebody</button>')
+      +'</div>'
+      +(byBranch.length?'<h3 style="margin:16px 0 6px">Kwa tawi / By branch '
+        +'<span class="mut" style="font-size:11px;font-weight:400">— RSM SOP E.1</span></h3>'
+        +'<div class="scroll"><table><thead><tr><th>TAWI</th><th class="r">WOTE</th>'
+        +'<th class="r">HAZIJAKAMILIKA</th><th class="r">HAZIJATHIBITISHWA</th><th class="r">WAPO KWENYE APP</th></tr></thead><tbody>'
+        +byBranch.map(function(b){
+          return '<tr><td>'+esc(b.branch)+'</td><td class="r">'+money(b.total)+'</td>'
+            +'<td class="r'+(b.gaps?' bad':'')+'">'+money(b.gaps)+'</td>'
+            +'<td class="r'+(b.unverified?' bad':'')+'">'+money(b.unverified)+'</td>'
+            +'<td class="r">'+money(b.inApp)+'</td></tr>';
+        }).join('')+'</tbody></table></div>':'')
+      +(rows.length?'<h3 style="margin:16px 0 6px">Rejista / The register '
+        +'<span class="mut" style="font-size:11px;font-weight:400">('+money(d.shown||rows.length)+')</span></h3>'
+        +'<div class="scroll"><table><thead><tr>'
+        +'<th>JINA</th><th>SIMU</th><th>WADHIFA</th><th>TAWI</th><th>HALI</th><th>BADO INAHITAJIKA</th>'
+        +'<th>AMETHIBITISHWA</th><th>APP</th><th class="noxl"></th></tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr><td><b>'+esc(r.name||'—')+'</b>'+(r.idOdd?' <span class="chip bad" title="kitambulisho">ID?</span>':'')
+            +(r.active?'':' <span class="chip">imezimwa</span>')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.phone)+'</td>'
+            +'<td style="font-size:11px">'+esc(r.role||'—')+'</td>'
+            +'<td style="font-size:11px">'+esc(r.branch||'—')+'</td>'
+            +'<td>'+enrolChip(r)+'</td>'
+            +'<td>'+enrolGapChips(r,fields)+'</td>'
+            +'<td style="font-size:11px">'+esc(r.verifiedBy||'—')
+              +(r.verifiedAt?'<div class="mut" style="font-size:10px">'+esc(advWhen(r.verifiedAt))+'</div>':'')+'</td>'
+            +'<td>'+(r.inApp?'<span class="chip ok">ndiyo</span>':'<span class="mut">—</span>')+'</td>'
+            +'<td class="r noxl"><button class="btn sm ghost" data-env="'+esc(r.phone)+'">Fungua</button></td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut" style="margin-top:12px">Hakuna anayelingana na kichujio hiki. / Nobody matches this filter.</div>');
+    wireTiles(m);
+    $('#enGo').onclick=function(){ ENROLQ.q=$('#enQ').value; ENROLQ.branch=$('#enBr').value; if(TAB==='enrol') drawEnrol(m); };
+    $('#enClr').onclick=function(){ ENROLQ={branch:'',state:'',q:''}; if(TAB==='enrol') drawEnrol(m); };
+    var nw=$('#enNew');
+    if(nw) nw.onclick=function(){ enrolDrawer(m, null, fields); };
+    [].slice.call(m.querySelectorAll('[data-env]')).forEach(function(b){
+      b.onclick=function(){
+        var r=rows.filter(function(x){ return String(x.phone)===b.getAttribute('data-env'); })[0];
+        if(r) enrolDrawer(m, r, fields);
+      };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 /* ---------- the door (IT SOP D) ----------
      "Monitoring: monitor for unauthorized access and act immediately on any breach,
       including changing the affected password."
@@ -7421,6 +7625,7 @@ function drawCodes(m){
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',
+            enrol:'Enrolment (IT: the details, the check, the RSM being told)',
             security:'Sign-in security (IT: who was turned away at the door)',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'

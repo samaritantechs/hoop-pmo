@@ -2113,3 +2113,48 @@ test('portal.html: the door pane counts the right refusals and asks what was don
   const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
   assert.match(lbl[0], /\bsecurity:'[^']+'/, 'the nav is grantable by name in the roles editor');
 });
+
+/* =========================================================================================
+   ENROLMENT -- IT SOP A. The page's job is to make A.3 look like what it is: a check that
+   comes BEFORE an activation, rather than a switch with a checklist beside it.
+   ========================================================================================= */
+test('portal.html: the enrolment desk shows the gaps and activation is a button, not a box', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawEnrol', html);
+  assert.match(fn, /c\.liveUnverified\?'<div class="note bad">/,
+    'live and never checked is the one number A.3 exists to drive to zero');
+  assert.match(fn, /RSM SOP E\.1/, 'the branch table IS the RSM’s own question');
+  assert.match(fn, /byBranch\.map/);
+  /* No "active" control anywhere on the form: switching an account on goes through the gate
+     or not at all. The form builds its ids by concatenation, so the field LIST is what to
+     look at -- checking for a literal id="enActive" would pass whatever the form did. */
+  assert.ok(!/f\('Active'|f\('Verified'/.test(IMP_SRC('enrolFormHtml', html)),
+    'there is no way to tick somebody live past the check');
+  assert.match(IMP_SRC('enrolNotReady', html), /RUN-ME-2026-09-10-enrolment\.sql/);
+});
+
+test('portal.html: the enrolment form asks for both referees and sends only the details', () => {
+  const html = read('portal.html');
+  const form = IMP_SRC('enrolFormHtml', html);
+  // The ids are built by concatenation, so the field list is what the form actually declares.
+  for (const f of ['Name', 'Phone', 'Nid', 'Role', 'Branch', 'K1n', 'K1p', 'K2n', 'K2p']) {
+    assert.ok(form.includes("f('" + f + "'"), f + ' is on the form (SOP A.1)');
+  }
+  assert.match(form, /SOP A\.1 inasema wawili/, 'and it says why there are two referees');
+  const args = IMP_SRC('enrolFormArgs', html);
+  for (const id of ['enName', 'enPhone', 'enNid', 'enK2n', 'enK2p']) {
+    assert.ok(args.includes("$('#" + id + "')"), id + ' is read back when the form is sent');
+  }
+  for (const k of ['active', 'verified', 'notified']) {
+    assert.ok(!new RegExp('\\b' + k, 'i').test(args), k + ' is the server’s, decided by A.3/A.4');
+  }
+  const dr = IMP_SRC('enrolDrawer', html);
+  assert.match(dr, /step\('enVer','verify'\)/);
+  assert.match(dr, /step\('enNot','notify'\)/);
+  assert.match(dr, /r\.verifiedAt&&!r\.notifiedAt\?/, 'A.4 is only offered once A.3 is done');
+  assert.match(dr, /BOOT\.readOnly\?''/, 'supervision changes nothing');
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  for (const f of ['enrolSave', 'enrolUpdate']) assert.match(nr[1], new RegExp('\\b' + f + ':1'));
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  assert.match(lbl[0], /\benrol:'[^']+'/);
+});
