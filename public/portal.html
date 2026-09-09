@@ -1423,7 +1423,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   // The advance rules: paying twice and deducting twice are exactly what the stamps prevent.
   advPay:1, advDeduct:1, salarySave:1, salaryDelete:1,
   // Loss: a re-sent case opens two; a re-sent update trips its own stale-row guard.
-  lossRaise:1, lossUpdate:1, priceSave:1, priceDelete:1};
+  lossRaise:1, lossUpdate:1, priceSave:1, priceDelete:1,
+  // Top-ups: a re-sent request pays twice; a re-sent step trips its own status guard.
+  topupRequest:1, topupUpdate:1};
 function srv(fn,args,tries){
   tries=tries||0;
   busy(true);
@@ -1559,6 +1561,13 @@ var NAV=[
     ic:'<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>' },
   { g:'stock', t:'strep',    nav:'stockrep',   sw:'Ripoti ya stoo',   en:'Stock reports',
     ic:'<path d="M3 3v18h18"/><path d="M8 17v-5M12 17V7M16 17v-9"/>' },
+
+  /* TOP-UPS: SOP B.5 is the only step in any of these SOPs with the words "must never be
+     delayed", so the desk pane counts minutes and orders by who has waited longest. */
+  { g:'adv',   t:'tureq',    nav:'topupreq',   sw:'Omba top-up',      en:'Request a top-up',
+    ic:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>' },
+  { g:'adv',   t:'topups',   nav:'topups',     sw:'Top-up (Finance)', en:'Top-ups',
+    ic:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>' },
 
   /* LOSS AND DAMAGE: four SOPs point at one process (Finance H, Store C.7, RSM F, CSM G) and
      none of them could open a case. `lossreq` opens one and reads its own; `loss` is Finance's
@@ -1741,6 +1750,8 @@ function draw(){
   if(TAB==='move') return drawMove(m);
   if(TAB==='acct') return drawStockAccount(m);
   if(TAB==='targets') return drawTargets(m);
+  if(TAB==='tureq') return drawTopupReq(m);
+  if(TAB==='topups') return drawTopups(m);
   if(TAB==='lossreq') return drawLossReq(m);
   if(TAB==='loss') return drawLoss(m);
   if(TAB==='comm') return drawComm(m);
@@ -5009,6 +5020,219 @@ function drawLeaveRep(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* ---------- top-ups (credit sales) ----------
+     Finance SOP B.1 the request with proof, B.2 the IMEI, B.3 the payer, B.4 the balance,
+     B.5 "this step MUST NEVER BE DELAYED", B.6 confirm the phone actually opened.
+
+   B.5 is the only step in any of these SOPs with those words, and it is why this pane counts
+   MINUTES. A customer whose phone is still locked after they have paid is the worst thing this
+   company can do to somebody; the queue is ordered by who has waited longest. */
+function topupNotReady(){
+  return '<div class="note bad">Jedwali la top-up halijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-09-topups.sql</b> kwenye Supabase, kisha rudi hapa. '
+    +'/ The top-up table has not been created yet — run that migration, then come back.</div>';
+}
+var TOPUPQ='';
+function topupChip(r){
+  if(r.status==='unlocked') return '<span class="chip ok">Unlocked</span>';
+  if(r.status==='paid') return '<span class="chip">Paid</span>';
+  if(r.status==='rejected') return '<span class="chip bad">Rejected</span>';
+  if(r.status==='verified') return '<span class="chip warn">Verified</span>';
+  return '<span class="chip bad">Waiting</span>';
+}
+/* The wait, in the words somebody will act on. Red once it is hours rather than minutes. */
+function topupWait(r){
+  if(r.waitedMins==null) return '—';
+  var m=r.waitedMins, txt=m<60?(m+' dk'):(Math.floor(m/60)+'h '+(m%60)+'dk');
+  var done=r.status==='unlocked'||r.status==='paid'||r.status==='rejected';
+  if(done) return '<span class="mut">'+esc(txt)+'</span>';
+  return '<b style="color:var(--'+(m>=120?'bad':(m>=30?'warn':'ok'))+')">'+esc(txt)+'</b>';
+}
+function topupTable(rows, desk){
+  return '<div class="scroll"><table><thead><tr>'
+    +'<th>ILIOMBWA</th><th>IMEI</th><th>MTEJA</th><th class="r">AMELIPA</th><th class="r">BEI</th>'
+    +'<th class="r">SALIO</th><th>HALI</th><th class="r">MUDA WA KUSUBIRI</th><th>ALIYEOMBA</th>'
+    +'<th class="noxl"></th></tr></thead><tbody>'
+    +rows.map(function(r){
+      return '<tr><td style="font-size:11px">'+esc(advWhen(r.at))+'</td>'
+        +'<td style="font-size:11.5px">'+esc(r.imei)+'</td>'
+        +'<td>'+esc(r.customer||'—')+(r.customerPhone?'<div class="mut" style="font-size:10px">'+esc(r.customerPhone)+'</div>':'')+'</td>'
+        +'<td class="r">'+money(r.paidAmount)+'</td>'
+        +'<td class="r">'+(r.price==null?'—':money(r.price))+'</td>'
+        +'<td class="r">'+(r.balance==null?'—':money(r.balance))+'</td>'
+        +'<td>'+topupChip(r)+'</td>'
+        +'<td class="r">'+topupWait(r)+'</td>'
+        +'<td style="font-size:11px">'+esc(r.staffName||'—')+'</td>'
+        +'<td class="r noxl"><button class="btn sm ghost" data-tuv="'+esc(r.id)+'">'+(desk?'Fanyia kazi':'Maelezo')+'</button></td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+function topupRaiseHtml(p){
+  p=p||'tu';
+  return '<label class="lbl">IMEI ya simu / Phone IMEI *</label>'
+    +'<input id="'+p+'Imei" class="inp" placeholder="35…">'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:160px"><label class="lbl">Mteja / Customer</label><input id="'+p+'Cust" class="inp"></div>'
+    +'<div style="flex:1;min-width:140px"><label class="lbl">Simu ya mteja / Customer phone</label><input id="'+p+'Phone" class="inp" placeholder="07…"></div>'
+    +'</div>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:140px"><label class="lbl">Amelipa / Client paid (TZS) *</label>'
+    +'<input id="'+p+'Paid" class="inp" type="number" min="1" step="1000"></div>'
+    +'<div style="flex:1;min-width:140px"><label class="lbl">Bei kamili / Full price (TZS)</label>'
+    +'<input id="'+p+'Price" class="inp" type="number" min="0" step="1000" placeholder="Acha wazi ili itafutwe">'
+    +'</div></div>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:160px"><label class="lbl">Jina la mlipaji / Payer name</label><input id="'+p+'Payer" class="inp"></div>'
+    +'<div style="flex:1;min-width:160px"><label class="lbl">Uthibitisho wa malipo / Proof reference</label>'
+    +'<input id="'+p+'Proof" class="inp" placeholder="Namba ya muamala"></div>'
+    +'</div>'
+    +'<button class="btn w" id="'+p+'Send" style="margin-top:10px">Tuma ombi / Send the request</button>';
+}
+function topupRaiseWire(p, after){
+  p=p||'tu';
+  $('#'+p+'Send').onclick=function(){
+    var b=this; b.disabled=true;
+    srv('topupRequest',{ imei:$('#'+p+'Imei').value, customer:$('#'+p+'Cust').value,
+      customerPhone:$('#'+p+'Phone').value, paidAmount:$('#'+p+'Paid').value,
+      price:$('#'+p+'Price').value, payerName:$('#'+p+'Payer').value, proofRef:$('#'+p+'Proof').value })
+    .then(function(r){
+      toast('Ombi limetumwa'+(r.balance!=null?' · salio TZS '+money(r.balance):'')
+        +(r.emailed?' · Finance imeambiwa':''), false);
+      after();
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+function topupDrawer(m, r, desk, checks){
+  drawer('<h3>Top-up — '+esc(r.imei)+'</h3>'
+    +'<div class="sub">'+topupChip(r)+' '+esc(r.customer||'')+' · amelipa TZS '+money(r.paidAmount)
+    +(r.balance!=null?' · salio TZS '+money(r.balance):'')+'</div>'
+    +'<div style="margin:8px 0;font-size:12.5px">'
+    +'<div class="mut" style="font-size:11px">Ameomba '+esc(r.staffName||'—')+' · '+esc(advWhen(r.at))
+    +' · amesubiri '+esc(r.waitedMins==null?'—':(r.waitedMins+' dakika'))+'</div>'
+    +(r.payerName?'<div>Mlipaji / Payer: <b>'+esc(r.payerName)+'</b></div>':'')
+    +(r.proofRef?'<div>Uthibitisho / Proof: <b>'+esc(r.proofRef)+'</b></div>':'')
+    +(r.verifiedBy?'<div class="mut" style="font-size:11px;margin-top:4px">Imethibitishwa na '+esc(r.verifiedBy)+' · '+esc(advWhen(r.verifiedAt))+'</div>':'')
+    +(r.paidAt?'<div class="note ok" style="margin-top:6px;font-size:11.5px">Imelipwa na '+esc(r.paidBy||'—')+' · '+esc(advWhen(r.paidAt))
+      +' · kumbukumbu <b>'+esc(r.paymentRef||'')+'</b></div>':'')
+    +(r.unlockedAt?'<div class="note ok" style="margin-top:6px;font-size:11.5px">Simu imefunguliwa · imethibitishwa na '+esc(r.unlockedBy||'—')+' · '+esc(advWhen(r.unlockedAt))+'</div>':'')
+    +(r.comment?'<div style="white-space:pre-wrap;margin-top:6px">'+esc(r.comment)+'</div>':'')
+    +'</div>'
+    +(desk&&!BOOT.readOnly?(
+      r.status==='requested'
+        ? '<div class="note bad" style="font-size:11.5px">SOP B.5: malipo haya hayapaswi kucheleweshwa — simu ya mteja imefungwa. / This payment must never be delayed.</div>'
+          +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:8px 0 0">'
+          +'<input type="checkbox" id="tuImei" style="margin-top:3px"><span>Nimethibitisha IMEI (SOP B.2) / IMEI verified</span></label>'
+          +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:4px 0 0">'
+          +'<input type="checkbox" id="tuPayer" style="margin-top:3px"><span>Nimethibitisha jina la mlipaji dhidi ya benki (SOP B.3) / Payer verified against the bank record</span></label>'
+          +'<label class="lbl" style="margin-top:8px">Jina la mlipaji / Payer name</label>'
+          +'<input id="tuPayerName" class="inp" value="'+esc(r.payerName||'')+'">'
+          +'<label class="lbl">Bei kamili / Full price (TZS)</label>'
+          +'<input id="tuPrice" class="inp" type="number" min="0" step="1000" value="'+esc(r.price==null?'':String(r.price))+'">'
+          +'<button class="btn w" id="tuVerify" style="margin-top:10px">Thibitisha / Verify</button>'
+        : r.status==='verified'
+        ? '<label class="lbl">Kumbukumbu ya malipo / Payment reference *</label>'
+          +'<input id="tuRef" class="inp" placeholder="Namba ya muamala">'
+          +'<button class="btn w" id="tuPay" style="margin-top:10px">Rekodi malipo / Record the payment</button>'
+        : r.status==='paid'
+        ? '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:8px 0 0">'
+          +'<input type="checkbox" id="tuConf" style="margin-top:3px"><span>Nimethibitisha na mteja au ajenti kuwa simu imefunguliwa (SOP B.6) / Confirmed the phone opened</span></label>'
+          +'<button class="btn w" id="tuUnlock" style="margin-top:10px">Funga kesi / Confirm the unlock</button>'
+        : '')
+      +'<h4 style="margin:12px 0 4px">Orodha ya ukaguzi / Top-up audit checklist</h4>'
+      +checks.map(function(c){
+        return '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:4px 0">'
+          +'<input type="checkbox" class="tuChk" data-k="'+esc(c.key)+'"'+(r.checks&&r.checks[c.key]?' checked disabled':'')+' style="margin-top:3px">'
+          +'<span>'+esc(c.label)+'</span></label>';
+      }).join('')
+      +'<label class="lbl" style="margin-top:8px">Maoni / Comment</label>'
+      +'<textarea id="tuC" class="inp" rows="2"></textarea>'
+      +'<button class="btn w ghost" id="tuNote" style="margin-top:8px">Hifadhi maoni / Save the note</button>'
+      +(r.status!=='rejected'?'<button class="btn w danger ghost" id="tuRej" style="margin-top:6px">Kataa / Reject</button>':'')
+    :''));
+  var picked=function(){
+    var o={};
+    [].slice.call(document.querySelectorAll('.tuChk')).forEach(function(c){ if(c.checked&&!c.disabled) o[c.getAttribute('data-k')]=true; });
+    return o;
+  };
+  var send=function(step, extra){
+    var a=Object.assign({id:r.id, step:step, comment:$('#tuC')?$('#tuC').value:'', checks:picked()}, extra||{});
+    srv('topupUpdate',a).then(function(){
+      toast('Imehifadhiwa / Saved'); closeDrawer();
+      if(TAB==='topups') drawTopups(m); else if(TAB==='topupreq') drawTopupReq(m);
+    }).catch(function(e){ toast(safeErr(e), true); });
+  };
+  if($('#tuVerify')) $('#tuVerify').onclick=function(){ this.disabled=true;
+    send('verify',{imeiOk:$('#tuImei').checked, payerOk:$('#tuPayer').checked,
+      payerName:$('#tuPayerName').value, price:$('#tuPrice').value}); };
+  if($('#tuPay')) $('#tuPay').onclick=function(){ this.disabled=true; send('pay',{paymentRef:$('#tuRef').value}); };
+  if($('#tuUnlock')) $('#tuUnlock').onclick=function(){ this.disabled=true; send('unlock',{confirmed:$('#tuConf').checked}); };
+  if($('#tuNote')) $('#tuNote').onclick=function(){ this.disabled=true; send('note'); };
+  if($('#tuRej')) $('#tuRej').onclick=function(){
+    if(!confirm('Kataa top-up hii? / Reject this top-up?')) return;
+    this.disabled=true; send('reject');
+  };
+}
+function drawTopupReq(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('topupMine',{}).then(function(d){
+    if(d.notReady){ m.innerHTML=topupNotReady(); return; }
+    var rows=d.rows||[];
+    m.innerHTML='<div class="card" style="padding:14px;max-width:640px">'
+      +'<h3 style="margin:0 0 4px">Omba top-up / Request a top-up</h3>'
+      +'<div class="sub">Mteja amelipa sehemu; Finance inatuma salio ili simu ifunguliwe (SOP B). '
+      +'Ambatanisha uthibitisho wa malipo. / The client has paid part; Finance sends the balance so the phone opens.</div>'
+      +topupRaiseHtml('tu')
+      +'</div>'
+      +'<h3 style="margin:18px 0 6px">Maombi yangu / My requests</h3>'
+      +(rows.length?topupTable(rows,false):'<div class="mut">Bado hujaomba top-up. / Nothing requested yet.</div>');
+    topupRaiseWire('tu', function(){ if(TAB==='topupreq') drawTopupReq(m); });
+    [].slice.call(m.querySelectorAll('[data-tuv]')).forEach(function(b){
+      b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-tuv'); })[0];
+        if(r) topupDrawer(m, r, false, []); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+function drawTopups(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('topupQueue',{state:TOPUPQ}).then(function(d){
+    if(d.notReady){ m.innerHTML=topupNotReady(); return; }
+    var rows=d.rows||[], c=d.counts||{}, checks=d.checks||[], canW=!BOOT.readOnly;
+    var pick=function(k){ return function(){ TOPUPQ=(TOPUPQ===k?'':k); if(TAB==='topups') drawTopups(m); }; };
+    var longest=c.longestWaitMins||0;
+    m.innerHTML=(longest>=120?'<div class="note bad">Kuna mteja amesubiri saa '+Math.floor(longest/60)
+        +' na dakika '+(longest%60)+' na simu yake bado imefungwa. SOP B.5: malipo haya hayapaswi kucheleweshwa. '
+        +'/ Somebody has been waiting that long with a locked phone; SOP B.5 says this must never be delayed.</div>':'')
+      +'<div class="tiles">'
+      +tile('Zinasubiri',money(c.waiting||0),'wateja wenye simu zilizofungwa',{color:c.waiting?'bad':'',on:TOPUPQ==='requested',cta:'chuja ›',go:pick('requested')})
+      +tile('Muda mrefu zaidi',longest<60?money(longest)+' dk':Math.floor(longest/60)+'h '+(longest%60)+'dk','ndio aliyesubiri zaidi sasa',
+        {color:longest>=120?'bad':(longest>=30?'warn':'ok')})
+      +tile('Zimethibitishwa',money(c.verified||0),'zinasubiri malipo',{color:c.verified?'warn':'',on:TOPUPQ==='verified',cta:'chuja ›',go:pick('verified')})
+      +tile('Zimelipwa',money(c.paid||0),'zinasubiri uthibitisho wa kufunguliwa',{on:TOPUPQ==='paid',cta:'chuja ›',go:pick('paid')})
+      +tile('Zimefunguliwa',money(c.unlocked||0),'zimekamilika',{color:'ok',on:TOPUPQ==='unlocked',cta:'chuja ›',go:pick('unlocked')})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<button class="btn sm'+(TOPUPQ===''?'':' ghost')+'" data-tuq="">Zinaendelea / Live</button>'
+      +'<button class="btn sm'+(TOPUPQ==='all'?'':' ghost')+'" data-tuq="all">Zote / All</button>'
+      +'<span style="flex:1"></span>'
+      +(canW?'<button class="btn sm" id="tuNew">+ Ingiza top-up / Log one</button>':'')
+      +'</div>'
+      +(rows.length?topupTable(rows,true):'<div class="mut">Hakuna top-up hapa. / Nothing here.</div>');
+    wireTiles(m);
+    [].slice.call(m.querySelectorAll('[data-tuq]')).forEach(function(b){
+      b.onclick=function(){ TOPUPQ=b.getAttribute('data-tuq'); if(TAB==='topups') drawTopups(m); };
+    });
+    var nw=$('#tuNew');
+    if(nw) nw.onclick=function(){
+      drawer('<h3>Ingiza top-up / Log a top-up</h3><div class="sub">Kwa niaba ya ajenti aliyepiga simu. / On behalf of an agent who phoned it in.</div>'
+        +topupRaiseHtml('tun'));
+      topupRaiseWire('tun', function(){ closeDrawer(); if(TAB==='topups') drawTopups(m); });
+    };
+    [].slice.call(m.querySelectorAll('[data-tuv]')).forEach(function(b){
+      b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-tuv'); })[0];
+        if(r) topupDrawer(m, r, true, checks); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 /* ---------- loss and damage ----------
      Finance SOP H (valuation, liability, recovery), opened by Store SOP C.7, the custodian
      named by RSM SOP F and CSM SOP G.
@@ -7035,7 +7259,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',

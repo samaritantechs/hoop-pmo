@@ -674,3 +674,26 @@ value is COPIED from the price list when the case opens, so changing a price nev
 debt already signed for (H.2). A case cannot be acknowledged before it has a value — nobody
 signs for a number nobody has worked out (H.5 after H.2). Money in is capped at the value and
 settles the case by itself when it reaches it. Writing a debt off takes a reason.
+
+## 21. SHIPPED 2026-09-09: top-ups (credit sales) — request, verify, pay, unlock
+
+Finance SOP B, the last of the Finance gaps. The full story is [`docs/TOPUPS.md`](TOPUPS.md);
+the short version:
+
+| nav | pane | who |
+|---|---|---|
+| `topupreq` | Omba top-up / Request a top-up | agents, team leaders, the credit desk |
+| `topups` | Top-up (Finance) | Finance |
+
+**Do:**
+
+1. Run `db/migrations/RUN-ME-2026-09-09-topups.sql`.
+2. Tick the two navs.
+3. Optional: `TOPUP_EMAIL`, so Finance hears the moment one is waiting.
+
+B.5 is the only step in any of these SOPs with the words "must never be delayed", so the desk
+pane counts MINUTES, orders by who has waited longest, turns red after two hours and banners it.
+The clock stops at the payment, not the paperwork. Four stamps rather than one status, because
+the gap between two of them is somebody's afternoon. Verifying takes both the IMEI (B.2) and the
+payer against the bank (B.3); paying is refused before that; confirming the unlock (B.6) needs
+somebody to say they actually rang the customer.
