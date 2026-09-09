@@ -1414,7 +1414,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   // Sending the GM his copy: pressed again by a person who can see it went, never re-sent.
   fuOutcomesSend:1,
   // Stock: a request re-sent files twice; a decision or a handover re-sent trips its own guard.
-  stockRequest:1, stockDecide:1, stockIssue:1};
+  stockRequest:1, stockDecide:1, stockIssue:1,
+  // Targets: a re-sent save would be harmless (it upserts) but a re-sent delete is not.
+  targetSave:1, targetDelete:1, staffManager:1};
 function srv(fn,args,tries){
   tries=tries||0;
   busy(true);
@@ -1526,6 +1528,10 @@ var NAV=[
     ic:'<path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 5-6"/>' },
   { g:'mauzo', t:'score',    nav:'scorecards', sw:'Alama za maajenti',en:'Agent scorecards',
     ic:'<path d="M12 2l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17l-5.9 3 1.2-6.5L2.5 8.9 9.1 8z"/>' },
+  /* Malengo: the Sales performance board says how much we sold; this says against what.
+     CSM SOP B.3 sets regional targets, RSM SOP B.1 sets each agent's -- one pane, one nav. */
+  { g:'mauzo', t:'targets',  nav:'targets',    sw:'Malengo ya mauzo', en:'Sales targets',
+    ic:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>' },
   { g:'mauzo', t:'fraud',    nav:'fraud',      sw:'Ukaguzi wa udanganyifu', en:'Fraud audit',
     ic:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>' },
 
@@ -1711,6 +1717,7 @@ function draw(){
   if(TAB==='stock') return drawStock(m);
   if(TAB==='move') return drawMove(m);
   if(TAB==='acct') return drawStockAccount(m);
+  if(TAB==='targets') return drawTargets(m);
   if(TAB==='streq') return drawStockReq(m);
   if(TAB==='stappr') return drawStockAppr(m);
   if(TAB==='strep') return drawStockRep(m);
@@ -4884,6 +4891,134 @@ function drawLeaveRep(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* ---------- sales targets ----------
+     CSM SOP B.3 "Set regional targets for each RSM and monitor performance against them"
+     RSM SOP B.1 "Set and monitor sales targets for each agent/team leader"
+     RSM SOP B.3 "Review performance data weekly and monthly"
+
+   The Sales performance board says how much we sold. This says against WHAT. Four scopes off
+   one read -- agent, RSM, branch, company -- and a row with a target and no sales is the point,
+   not an omission: that is exactly who this pane exists to name. */
+function targetNotReady(){
+  return '<div class="note bad">Jedwali la malengo halijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-09-targets.sql</b> kwenye Supabase, kisha rudi hapa. '
+    +'/ The targets table has not been created yet — run that migration, then come back.</div>';
+}
+var TGT={period:'',scope:'agent'};
+var TGT_SCOPE_LABEL={agent:'Ajenti / Agents',rsm:'RSM',branch:'Mikoa / Branches',company:'Kampuni / Company'};
+function thisMonth_(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2); }
+/* A bar you can read at a glance: green at or over, amber close, red short. NOTHING is drawn
+   when nobody set a target -- an empty bar reads as zero attainment, which is a lie. */
+function tgtBar(pct){
+  if(pct==null) return '<span class="mut">—</span>';
+  var w=Math.max(0,Math.min(100,pct));
+  var c=pct>=100?'ok':(pct>=70?'warn':'bad');
+  return '<div style="display:flex;align-items:center;gap:6px">'
+    +'<div style="flex:1;min-width:52px;height:7px;background:var(--line);border-radius:4px;overflow:hidden">'
+    +'<div style="width:'+w+'%;height:100%;background:var(--'+c+')"></div></div>'
+    +'<b style="font-size:11.5px;color:var(--'+c+')">'+money(pct)+'%</b></div>';
+}
+function drawTargets(m){
+  if(!TGT.period) TGT.period=thisMonth_();
+  m.innerHTML='<div class="sk"></div>';
+  srv('targetsView',{period:TGT.period}).then(function(d){
+    var t=d.totals||{}, rows=(d.rows&&d.rows[TGT.scope])||[];
+    var canW=!BOOT.readOnly;
+    m.innerHTML=(d.notReady?targetNotReady():'')
+      +'<div class="tiles">'
+      +tile('Mauzo ya mwezi',money(t.sales||0),'simu · TZS '+money(t.amount||0))
+      +tile('Lengo la kampuni',t.targetQty==null?'—':money(t.targetQty),
+        t.targetAmount==null?'halijawekwa':'TZS '+money(t.targetAmount),{color:t.pctQty!=null&&t.pctQty>=100?'ok':''})
+      +tile('Ufikiaji',t.pctQty==null?'—':money(t.pctQty)+'%',
+        t.pctAmount==null?'kwa idadi':'kwa kiasi '+money(t.pctAmount)+'%',
+        {color:t.pctQty==null?'':(t.pctQty>=100?'ok':(t.pctQty>=70?'warn':'bad'))})
+      +tile('Malengo yaliyowekwa',money(t.withTarget||0),'kati ya haya '+money(t.missed||0)+' hayajafikiwa',
+        {color:t.missed?'bad':''})
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<span class="mut" style="font-size:12px">Mwezi:</span>'
+      +'<input id="tgMonth" class="inp" type="month" style="width:auto" value="'+esc(TGT.period)+'">'
+      +'<button class="btn sm" id="tgGo">Onyesha / Show</button>'
+      +'<span style="width:10px"></span>'
+      +(d.scopes||['agent','rsm','branch','company']).map(function(s){
+        return '<button class="btn sm'+(TGT.scope===s?'':' ghost')+'" data-tgs="'+s+'">'+esc(TGT_SCOPE_LABEL[s]||s)+'</button>';
+      }).join('')
+      +'<span style="flex:1"></span>'
+      +(canW?'<button class="btn sm" id="tgNew">+ Weka lengo / Set a target</button>':'')
+      +'</div>'
+      +(rows.length?'<div class="scroll"><table><thead><tr>'
+        +'<th>'+esc((TGT_SCOPE_LABEL[TGT.scope]||'').split(' / ')[0])+'</th>'
+        +(TGT.scope==='agent'?'<th>RSM</th>':'')
+        +'<th class="r">ZIMEUZWA</th><th class="r">LENGO</th><th>UFIKIAJI (IDADI)</th>'
+        +'<th class="r">KIASI (TZS)</th><th class="r">LENGO (TZS)</th><th>UFIKIAJI (KIASI)</th>'
+        +'<th>MAELEZO</th><th class="noxl"></th></tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr><td><b>'+esc(r.name)+'</b>'+(r.setBy?'<div class="mut" style="font-size:10px">lengo: '+esc(r.setBy)+'</div>':'')+'</td>'
+            +(TGT.scope==='agent'?'<td style="font-size:11.5px">'+esc(r.manager||'—')+'</td>':'')
+            +'<td class="r">'+money(r.qty)+'</td>'
+            +'<td class="r">'+(r.targetQty==null?'—':money(r.targetQty))+'</td>'
+            +'<td>'+tgtBar(r.pctQty)+'</td>'
+            +'<td class="r">'+money(r.amount)+'</td>'
+            +'<td class="r">'+(r.targetAmount==null?'—':money(r.targetAmount))+'</td>'
+            +'<td>'+tgtBar(r.pctAmount)+'</td>'
+            +'<td style="font-size:11px">'+esc(r.note||'')+'</td>'
+            +'<td class="r noxl">'+(canW?'<button class="btn sm ghost" data-tge="'+esc(r.name)+'">Lengo</button>':'')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">Hakuna mauzo wala lengo kwenye mwezi huu. / No sales and no targets this month.</div>');
+    wireTiles(m);
+    $('#tgGo').onclick=function(){ TGT.period=$('#tgMonth').value||thisMonth_(); if(TAB==='targets') drawTargets(m); };
+    [].slice.call(m.querySelectorAll('[data-tgs]')).forEach(function(b){
+      b.onclick=function(){ TGT.scope=b.getAttribute('data-tgs'); if(TAB==='targets') drawTargets(m); };
+    });
+    var open=function(name){
+      var r=rows.filter(function(x){ return x.name===name; })[0]||{name:name};
+      targetDrawer(m, d, r);
+    };
+    var nb=$('#tgNew'); if(nb) nb.onclick=function(){ open(''); };
+    [].slice.call(m.querySelectorAll('[data-tge]')).forEach(function(b){
+      b.onclick=function(){ open(b.getAttribute('data-tge')); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+function targetDrawer(m, d, r){
+  var scope=TGT.scope, names=(d.names||{})[scope]||[];
+  var isCo=scope==='company';
+  drawer('<h3>Lengo la '+esc(TGT_SCOPE_LABEL[scope]||scope)+' — '+esc(TGT.period)+'</h3>'
+    +'<div class="sub">Lengo ni la mwezi mzima; likiwekwa tena linarekebishwa, halikusanyiki. '
+    +'/ One target per name per month; setting it again corrects it.</div>'
+    +(isCo?'<input id="tgName" class="inp" value="ALL" readonly>'
+      :'<label class="lbl">Jina / Name *</label>'
+        +'<input id="tgName" class="inp" list="tgNames" value="'+esc(r.name||'')+'"'+(r.name?' readonly':'')+'>'
+        +'<datalist id="tgNames">'+names.map(function(n){ return '<option value="'+esc(n)+'">'; }).join('')+'</datalist>')
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div style="flex:1;min-width:120px"><label class="lbl">Lengo la idadi / Target phones</label>'
+    +'<input id="tgQty" class="inp" type="number" min="0" step="1" value="'+esc(r.targetQty==null?'':String(r.targetQty))+'"></div>'
+    +'<div style="flex:1;min-width:140px"><label class="lbl">Lengo la kiasi / Target TZS</label>'
+    +'<input id="tgAmt" class="inp" type="number" min="0" step="1000" value="'+esc(r.targetAmount==null?'':String(r.targetAmount))+'"></div>'
+    +'</div>'
+    +'<div class="mut" style="font-size:11.5px;margin-top:4px">Weka moja au yote mawili. Sifuri ni lengo halali (mwezi wa mapumziko); kuacha wazi ni "hakuna lengo". '
+    +'/ Set either or both. Zero is a real target; blank is no target.</div>'
+    +'<label class="lbl" style="margin-top:8px">Maelezo / Note</label>'
+    +'<textarea id="tgNote" class="inp" rows="2" placeholder="Hatua zilizochukuliwa na matokeo / actions taken and results (RSM SOP B.5)">'+esc(r.note||'')+'</textarea>'
+    +'<button class="btn w" id="tgSave" style="margin-top:10px">Hifadhi / Save</button>'
+    +(r.hasTarget?'<button class="btn w danger ghost" id="tgDel" style="margin-top:6px">Futa lengo / Remove the target</button>':''));
+  $('#tgSave').onclick=function(){
+    var b=this; b.disabled=true;
+    srv('targetSave',{ period:TGT.period, scope:scope, name:$('#tgName').value,
+      qty:$('#tgQty').value, amount:$('#tgAmt').value, note:$('#tgNote').value })
+    .then(function(){ toast('Lengo limehifadhiwa / Target saved'); closeDrawer(); if(TAB==='targets') drawTargets(m); })
+    .catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+  var del=$('#tgDel');
+  if(del) del.onclick=function(){
+    if(!confirm('Futa lengo la '+($('#tgName').value||'')+' kwa '+TGT.period+'? / Remove this target?')) return;
+    var b=this; b.disabled=true;
+    srv('targetDelete',{ period:TGT.period, scope:scope, name:$('#tgName').value })
+    .then(function(){ toast('Lengo limefutwa / Target removed'); closeDrawer(); if(TAB==='targets') drawTargets(m); })
+    .catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+
 /* ---------- stock requests, the aging gate, and the handover note ----------
      Store SOP B.1 the request, B.2 + E the aging gate, B.4 the approval,
      B.5-B.9 the pre-numbered note, the joint count, the photographs, the signature and the
@@ -6172,14 +6307,42 @@ function drawStaff(m){
       +'<div class="mut" style="margin-bottom:8px">From the agents register: agents, team leaders, RSMs. System logins (portal codes, app users) live under Access codes.</div>'
       +'<div class="row"><input class="inp" id="staffQ" placeholder="Search: name, phone, role, branch, IMEI, agent…"></div>'
       +'<div class="row" style="gap:6px">'+Object.keys(d.byRole||{}).map(function(k){return '<button class="chip" data-rf="'+esc(k)+'" style="border:1px solid transparent;cursor:pointer">'+esc(k)+' · '+money(d.byRole[k])+'</button>';}).join('')+'</div>'
-      +'<div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Phone</th>'+(canKin?'<th>Next of kin</th>':'')+'<th>Status</th></tr></thead><tbody>'
+      /* REPORTS TO is the one column of this register the office keeps by hand -- everything
+         else comes from the SyscoPos upload. It is what lets an agent's sales be added to
+         their RSM's on the targets pane; blank means "the branch decides", which is right for
+         almost everybody, so the column shows that rather than an empty cell. */
+      +'<div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Reports to</th><th>Phone</th>'+(canKin?'<th>Next of kin</th>':'')+'<th>Status</th></tr></thead><tbody>'
       +((d.staff||[]).length?(d.staff||[]).map(function(o){
         return '<tr data-role="'+esc(o.role||'')+'"><td><b>'+esc(o.name)+'</b>'+(o.joined?'<div class="mut" style="font-size:10px">since '+esc(o.joined)+'</div>':'')+'</td>'
-          +'<td>'+esc(o.role||'—')+'</td><td>'+esc(o.branch||'—')+'</td><td>'+esc(o.phone||'')+'</td>'
+          +'<td>'+esc(o.role||'—')+'</td><td>'+esc(o.branch||'—')+'</td>'
+          +'<td style="font-size:11.5px">'+(o.manager?esc(o.manager):'<span class="mut">kwa tawi / by branch</span>')
+          +(BOOT.readOnly?'':' <button class="btn sm ghost" data-mgr="'+esc(o.phone||'')+'" data-mgrv="'+esc(o.manager||'')+'" data-mgrn="'+esc(o.name||'')+'">✎</button>')+'</td>'
+          +'<td>'+esc(o.phone||'')+'</td>'
           +(canKin?'<td class="mut" style="font-size:11px">'+esc(o.kin||'—')+(o.kinPhone?' · '+esc(o.kinPhone):'')+'</td>':'')
           +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td></tr>';
-      }).join(''):'<tr><td colspan="6" class="mut">No staff yet — upload the Agents Register page (saved HTML) at /upload.</td></tr>')
+      }).join(''):'<tr><td colspan="7" class="mut">No staff yet — upload the Agents Register page (saved HTML) at /upload.</td></tr>')
       +'</tbody></table></div></div><div id="staffCust"></div>';
+    var rsmNames=(d.staff||[]).filter(function(x){ return /REGIONAL|COUNTRY_SALES/.test(String(x.role||'').toUpperCase().replace(/\s+/g,'_')); })
+      .map(function(x){ return x.name; }).filter(Boolean).sort();
+    [].slice.call(m.querySelectorAll('[data-mgr]')).forEach(function(b){
+      b.onclick=function(){
+        var phone=b.getAttribute('data-mgr');
+        drawer('<h3>Anaripoti kwa nani / Reports to</h3>'
+          +'<div class="sub">'+esc(b.getAttribute('data-mgrn'))+'</div>'
+          +'<label class="lbl">RSM</label>'
+          +'<input id="mgrV" class="inp" list="mgrList" value="'+esc(b.getAttribute('data-mgrv'))+'" placeholder="Acha wazi ili itumike ya tawi / blank = use the branch">'
+          +'<datalist id="mgrList">'+rsmNames.map(function(n){ return '<option value="'+esc(n)+'">'; }).join('')+'</datalist>'
+          +'<div class="mut" style="font-size:11.5px;margin-top:6px">Ukiacha wazi, mfumo hutumia Regional_Manager wa tawi lake. Jaza tu pale mtu anaporipoti nje ya tawi lake. '
+          +'/ Blank derives the RSM from the branch; fill it only where somebody reports across a branch line.</div>'
+          +'<button class="btn w" id="mgrSave" style="margin-top:10px">Hifadhi / Save</button>');
+        $('#mgrSave').onclick=function(){
+          var sb=this; sb.disabled=true;
+          srv('staffManager',{phone:phone, manager:$('#mgrV').value})
+          .then(function(){ toast('Imehifadhiwa / Saved'); closeDrawer(); if(TAB==='staff') drawStaff(m); })
+          .catch(function(e){ sb.disabled=false; toast(safeErr(e), true); });
+        };
+      };
+    });
     /* The role chips are FILTERS: click one to see just that rank, click again for all.
        The search box and the chip compose -- both must match. */
     var ROLEF='';
@@ -6262,7 +6425,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',

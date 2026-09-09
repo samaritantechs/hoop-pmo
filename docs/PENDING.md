@@ -572,3 +572,30 @@ the threshold without ticking an override AND writing a reason, which is kept an
 Rejecting is never gated. The gate is recomputed live at decision time, not read off the stamp.
 The handover note (B.5–B.9) refuses to record without the joint count and a signature, caps the
 IMEIs at what was approved, and moves the phone registry's holder for every IMEI it knows.
+
+## 17. SHIPPED 2026-09-09: sales targets, and who an agent reports to
+
+The Sales performance board says how much we sold; nothing said against what. The full story is
+[`docs/TARGETS.md`](TARGETS.md); the short version:
+
+| nav | pane | who |
+|---|---|---|
+| `targets` | Malengo ya mauzo / Sales targets | the CSM and the RSMs |
+
+**Do:**
+
+1. Run `db/migrations/RUN-ME-2026-09-09-targets.sql` — it creates `sales_targets` and adds a
+   `manager` column to the agents register.
+2. Tick `targets` on the right roles.
+
+Four scopes off one read (agent, RSM, branch, company), measured against `watu_loans` by
+disbursed date. A target with no sales still appears — that is the row worth reading. No target
+means no percentage, never 0%. Zero is a real target; removing one is a different fact.
+
+An agent rolls up to their RSM: blank `manager` derives it from the branch, so the roll-up works
+before anybody edits anything. Override it per person on Staff → Reports to.
+
+Also in this change: `tableMissing` now recognises PostgREST's PGRST204 ("could not find the 'x'
+column of 'y' in the schema cache"). Migrations here are run by hand, so between a deploy and
+the paste a WRITE hits a column the schema has not got. The read path already said "run the
+migration"; the write path used to 500 on the identical cause.
