@@ -650,3 +650,27 @@ single approval nav on 2026-09-07 and that decision stands.
 
 Also here: `isMonth` now rejects month 13. Three features store a period as TEXT, so there is no
 date column to catch a nonsense month afterwards.
+
+## 20. SHIPPED 2026-09-09: loss and damage — the price list, the case, the acknowledgement
+
+Four SOPs point at one process (Finance H, Store C.7, RSM F, CSM G) and none of them could open
+a case. The full story is [`docs/LOSS-DAMAGE.md`](LOSS-DAMAGE.md); the short version:
+
+| nav | pane | who |
+|---|---|---|
+| `lossreq` | Toa taarifa ya upotevu / Report a loss | the store keeper, RSMs, anybody who finds a shortage |
+| `loss` | Upotevu na uharibifu / Loss and damage | Finance |
+
+**Do:**
+
+1. Run `db/migrations/RUN-ME-2026-09-09-loss-damage.sql`.
+2. Tick the two navs.
+3. Fill in the price list on the Finance pane — without it a case opens unvalued, and the desk
+   has a tile counting exactly those.
+4. Optional: `LOSS_EMAIL` so the GM hears the same day.
+
+Theft is refused without a police report (H.1, the one document the SOP names outright). The
+value is COPIED from the price list when the case opens, so changing a price never re-prices a
+debt already signed for (H.2). A case cannot be acknowledged before it has a value — nobody
+signs for a number nobody has worked out (H.5 after H.2). Money in is capped at the value and
+settles the case by itself when it reaches it. Writing a debt off takes a reason.
