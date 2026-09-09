@@ -1416,7 +1416,10 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   // Stock: a request re-sent files twice; a decision or a handover re-sent trips its own guard.
   stockRequest:1, stockDecide:1, stockIssue:1,
   // Targets: a re-sent save would be harmless (it upserts) but a re-sent delete is not.
-  targetSave:1, targetDelete:1, staffManager:1};
+  targetSave:1, targetDelete:1, staffManager:1,
+  // Commission: a re-sent build would rewrite a sheet somebody is reading; a re-sent PAY is
+  // the one thing SOP A.6 exists to prevent.
+  commBuild:1, commDecide:1, commPay:1, commRateSave:1, commRateDelete:1};
 function srv(fn,args,tries){
   tries=tries||0;
   busy(true);
@@ -1552,6 +1555,14 @@ var NAV=[
     ic:'<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>' },
   { g:'stock', t:'strep',    nav:'stockrep',   sw:'Ripoti ya stoo',   en:'Stock reports',
     ic:'<path d="M3 3v18h18"/><path d="M8 17v-5M12 17V7M16 17v-9"/>' },
+
+  /* COMMISSION: Finance builds and pays, the Administration approval group signs off.
+     Two navs because Finance SOP A.4 puts the sign-off in somebody else's hands, and nobody
+     should be able to build a sheet AND approve it unless the owner ticks both boxes. */
+  { g:'adv',   t:'comm',     nav:'commission', sw:'Kamisheni',        en:'Commission',
+    ic:'<path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>' },
+  { g:'adv',   t:'commappr', nav:'commappr',   sw:'Idhini ya kamisheni', en:'Commission sign-off',
+    ic:'<path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/><path d="M19 15l2 2 4-4"/>' },
 
   /* SALARY ADVANCE: three panes, because they are three different jobs done by three
      different people. Asking, deciding and paying are not one screen with hidden buttons --
@@ -1718,6 +1729,8 @@ function draw(){
   if(TAB==='move') return drawMove(m);
   if(TAB==='acct') return drawStockAccount(m);
   if(TAB==='targets') return drawTargets(m);
+  if(TAB==='comm') return drawComm(m);
+  if(TAB==='commappr') return drawCommAppr(m);
   if(TAB==='streq') return drawStockReq(m);
   if(TAB==='stappr') return drawStockAppr(m);
   if(TAB==='strep') return drawStockRep(m);
@@ -4891,6 +4904,206 @@ function drawLeaveRep(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* ---------- commission ----------
+     Finance SOP A.1 the daily 9:00 AM and monthly schedules, A.3 the phone-to-agent check,
+     A.4 the payment sheet and its sign-off, A.6 the CLEARED stamp, plus the audit checklist.
+
+   Two panes because SOP A.4 puts the sign-off in somebody else's hands. The sheet is a
+   SNAPSHOT: built once, frozen when signed, and refused a second payment for ever after. */
+function commNotReady(){
+  return '<div class="note bad">Jedwali la kamisheni halijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-09-commission.sql</b> kwenye Supabase, kisha rudi hapa. '
+    +'/ The commission tables have not been created yet — run that migration, then come back.</div>';
+}
+function commChip(r){
+  if(r.status==='paid') return '<span class="chip ok">Paid · cleared</span>';
+  if(r.status==='approved') return '<span class="chip">Approved</span>';
+  if(r.status==='cancelled') return '<span class="chip">Cancelled</span>';
+  return '<span class="chip warn">Draft</span>';
+}
+function commRunTable(rows){
+  return '<div class="scroll"><table><thead><tr><th>KIPINDI</th><th>AINA</th><th>HALI</th>'
+    +'<th class="r">SIMU</th><th class="r">KIASI (TZS)</th><th class="r">HAZIJALIPWA</th>'
+    +'<th>IMEIDHINISHWA NA</th><th>IMELIPWA</th><th class="noxl"></th></tr></thead><tbody>'
+    +rows.map(function(r){
+      return '<tr><td><b>'+esc(r.period)+'</b></td><td>'+esc(r.kind)+'</td>'
+        +'<td>'+commChip(r)+'</td>'
+        +'<td class="r">'+money(r.totalQty)+'</td><td class="r">'+money(r.totalAmount)+'</td>'
+        +'<td class="r'+(r.disqualified?' bad':'')+'">'+money(r.disqualified)+'</td>'
+        +'<td style="font-size:11px">'+esc(r.approvedBy||'—')+(r.approvedAt?'<div class="mut" style="font-size:10px">'+esc(advWhen(r.approvedAt))+'</div>':'')+'</td>'
+        +'<td style="font-size:11px">'+(r.clearedAt?esc(advWhen(r.clearedAt))+'<div class="mut" style="font-size:10px">'+esc(r.paymentRef||'')+'</div>':'—')+'</td>'
+        +'<td class="r noxl"><button class="btn sm ghost" data-cmv="'+esc(r.id)+'">Karatasi</button></td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+/* THE SHEET (SOP A.4): agent name, sales quantity, commission amount, phone number, and the
+   RSM the agent falls under -- the five fields, in the order the SOP lists them, because
+   Finance reads this against a printed voucher. */
+function commSheetHtml(d){
+  var lines=d.lines||[], r=d.run||{};
+  return '<div class="sub">'+commChip(r)+' '+esc(r.period)+' · '+esc(r.kind)
+    +' · simu '+money(r.totalQty)+' · TZS '+money(r.totalAmount)
+    +(r.disqualified?' · <span style="color:var(--bad)">hazijalipwa '+money(r.disqualified)+'</span>':'')+'</div>'
+    +(r.comment?'<div class="note" style="margin:8px 0;font-size:11.5px">'+esc(r.comment)+'</div>':'')
+    +(r.clearedAt?'<div class="note ok" style="margin:8px 0;font-size:11.5px">Imelipwa na '+esc(r.paidBy||'—')
+      +' · '+esc(advWhen(r.paidAt))+' · kumbukumbu <b>'+esc(r.paymentRef||'')+'</b>. Imefungwa (cleared) — haiwezi kulipwa tena.</div>':'')
+    +(lines.length?'<div class="scroll" style="max-height:340px"><table><thead><tr>'
+      +'<th>AJENTI</th><th class="r">IDADI</th><th class="r">KAMISHENI</th><th>SIMU</th><th>RSM</th><th>MAELEZO</th>'
+      +'</tr></thead><tbody>'
+      +lines.map(function(l){
+        return '<tr><td><b>'+esc(l.agent)+'</b>'+(l.role?'<div class="mut" style="font-size:10px">'+esc(l.role)+'</div>':'')+'</td>'
+          +'<td class="r">'+money(l.qty)+'</td><td class="r">'+money(l.amount)+'</td>'
+          +'<td style="font-size:11.5px">'+esc(l.agentPhone||'—')+'</td>'
+          +'<td style="font-size:11.5px">'+esc(l.rsm||'—')+'</td>'
+          +'<td style="font-size:11px'+(l.disqualified?';color:var(--bad)':'')+'">'+esc(l.note||'')+'</td></tr>';
+      }).join('')+'</tbody></table></div>'
+      :'<div class="mut">Hakuna mstari kwenye karatasi hii. / Nothing on this sheet.</div>');
+}
+function commSheetDrawer(m, id, opts){
+  opts=opts||{};
+  drawer('<h3>Karatasi ya kamisheni / Commission sheet</h3><div class="sk"></div>');
+  srv('commSheet',{id:id}).then(function(d){
+    var r=d.run||{}, checks=d.checks||[];
+    var canPay=opts.pay&&!BOOT.readOnly&&r.status==='approved'&&!r.clearedAt;
+    var canSign=opts.sign&&!BOOT.readOnly&&r.status==='draft';
+    var canUnsign=opts.sign&&!BOOT.readOnly&&r.status==='approved';
+    drawer('<h3>Karatasi ya kamisheni / Commission sheet</h3>'
+      +commSheetHtml(d)
+      +(canPay?'<h4 style="margin:12px 0 4px">Orodha ya ukaguzi / Commission audit checklist</h4>'
+        +'<div class="mut" style="font-size:11.5px;margin-bottom:6px">Yote matano lazima yakamilike kabla ya kurekodi malipo. / All five before the payment can be recorded.</div>'
+        +checks.map(function(c){
+          return '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:4px 0">'
+            +'<input type="checkbox" class="cmChk" data-k="'+esc(c.key)+'" style="margin-top:3px"><span>'+esc(c.label)+'</span></label>';
+        }).join('')
+        +'<label class="lbl" style="margin-top:8px">Kumbukumbu ya malipo / Payment reference *</label>'
+        +'<input id="cmRef" class="inp" placeholder="Namba ya muamala / transaction reference">'
+        +'<button class="btn w" id="cmPay" style="margin-top:10px">Rekodi malipo na funga / Record payment and clear</button>':'')
+      +(canSign?'<label class="lbl" style="margin-top:12px">Maoni / Comment</label>'
+        +'<textarea id="cmC" class="inp" rows="2" placeholder="Lazima ukirudisha. / Required when sending it back."></textarea>'
+        +'<button class="btn w" id="cmOk" style="margin-top:8px">Idhinisha / Sign off</button>'
+        +'<button class="btn w danger ghost" id="cmNo" style="margin-top:6px">Rudisha kwa Finance / Send back</button>':'')
+      +(canUnsign?'<div class="note" style="margin-top:12px;font-size:11.5px">Imeidhinishwa tayari; Finance inaweza kurekodi malipo. '
+        +'/ Signed off; Finance can record the payment.</div>':''));
+    var pay=$('#cmPay');
+    if(pay) pay.onclick=function(){
+      var b=this; b.disabled=true;
+      var picked={};
+      [].slice.call(document.querySelectorAll('.cmChk')).forEach(function(c){ picked[c.getAttribute('data-k')]=c.checked; });
+      srv('commPay',{id:id, paymentRef:$('#cmRef').value, checks:picked}).then(function(){
+        toast('Malipo yamerekodiwa na kipindi kimefungwa / Paid and cleared');
+        closeDrawer(); if(TAB==='comm') drawComm(m);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+    var send=function(approve){
+      var b=$('#cmOk'), n=$('#cmNo'); if(b) b.disabled=true; if(n) n.disabled=true;
+      srv('commDecide',{id:id, approve:approve, comment:$('#cmC')?$('#cmC').value:''}).then(function(){
+        toast(approve?'Imeidhinishwa / Signed off':'Imerudishwa / Sent back');
+        closeDrawer(); if(TAB==='commappr') drawCommAppr(m);
+      }).catch(function(e){ if(b) b.disabled=false; if(n) n.disabled=false; toast(safeErr(e), true); });
+    };
+    if($('#cmOk')) $('#cmOk').onclick=function(){ send(true); };
+    if($('#cmNo')) $('#cmNo').onclick=function(){ send(false); };
+  }).catch(function(e){ drawer('<div class="msg bad">'+esc(safeErr(e))+'</div>'); });
+}
+function drawComm(m){
+  m.innerHTML='<div class="sk"></div>';
+  Promise.all([srv('commRuns',{}), srv('commRates',{})]).then(function(res){
+    var d=res[0], rt=res[1];
+    if(d.notReady){ m.innerHTML=commNotReady(); return; }
+    var rows=d.rows||[], c=d.counts||{}, rates=rt.rates||[];
+    var canW=!BOOT.readOnly;
+    m.innerHTML='<div class="tiles">'
+      +tile('Rasimu',money(c.draft||0),'zinasubiri idhini',{color:c.draft?'warn':''})
+      +tile('Zimeidhinishwa',money(c.approved||0),'zinasubiri malipo',{color:c.approved?'bad':''})
+      +tile('Zimelipwa',money(c.paid||0),'zimefungwa — haziwezi kulipwa tena')
+      +'</div>'
+      +'<div class="card" style="padding:14px;max-width:640px;margin-top:10px">'
+      +'<h3 style="margin:0 0 4px">Tengeneza kipindi / Build a cycle</h3>'
+      +'<div class="sub">Ratiba ya kila siku (9:00 asubuhi) au ya mwezi (tarehe 1 ya mwezi unaofuata) — SOP A.1. '
+      +'Kujenga upya kunaruhusiwa ikiwa bado ni rasimu tu. / Rebuilding is allowed only while it is a draft.</div>'
+      +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+      +'<div style="flex:1;min-width:120px"><label class="lbl">Aina / Kind</label>'
+      +'<select id="cmKind" class="inp"><option value="monthly">Mwezi / Monthly</option><option value="daily">Siku / Daily</option></select></div>'
+      +'<div style="flex:1;min-width:140px"><label class="lbl">Kipindi / Period</label>'
+      +'<input id="cmPeriod" class="inp" type="month" value="'+esc(thisMonth_())+'"></div>'
+      +'</div>'
+      +(canW?'<button class="btn w" id="cmBuild" style="margin-top:10px">Tengeneza / Build</button>':'')
+      +'</div>'
+      +'<h3 style="margin:18px 0 6px">Vipindi / Cycles</h3>'
+      +(rows.length?commRunTable(rows):'<div class="mut">Hakuna kipindi bado. / No cycles yet.</div>')
+      +'<h3 style="margin:18px 0 6px">Viwango vya kamisheni / Commission rates</h3>'
+      +'<div class="mut" style="font-size:11.5px;margin-bottom:6px">Kwa wadhifa na modeli. ANY ni kwa yeyote au modeli yoyote; mstari mahususi zaidi ndio unaotumika. '
+      +'Simu isiyo na kiwango hailipwi na inaonekana kwenye "hazijalipwa". / A phone with no rate is not paid and is reported as unpriced.</div>'
+      +(rates.length?'<div class="scroll"><table><thead><tr><th>WADHIFA</th><th>MODELI</th><th class="r">KIASI</th><th>IMEWEKWA NA</th><th class="noxl"></th></tr></thead><tbody>'
+        +rates.map(function(x){
+          return '<tr><td>'+esc(x.role)+'</td><td>'+esc(x.item)+'</td><td class="r">'+money(x.amount)+'</td>'
+            +'<td style="font-size:11px">'+esc(x.updatedBy||'—')+'</td>'
+            +'<td class="r noxl">'+(canW?'<button class="btn sm ghost" data-cmrd="'+esc(x.role)+'|'+esc(x.item)+'">Futa</button>':'')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">Hakuna kiwango bado — hakuna kamisheni itakayohesabiwa. / No rates yet, so nothing will be priced.</div>')
+      +(canW?'<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">'
+        +'<input id="cmRole" class="inp" style="width:auto" list="cmRoles" placeholder="Wadhifa / Role (ANY)">'
+        +'<datalist id="cmRoles">'+(rt.roles||[]).map(function(x){ return '<option value="'+esc(x)+'">'; }).join('')+'</datalist>'
+        +'<input id="cmItem" class="inp" style="width:auto" list="cmItems" placeholder="Modeli / Model (ANY)">'
+        +'<datalist id="cmItems">'+(rt.items||[]).map(function(x){ return '<option value="'+esc(x)+'">'; }).join('')+'</datalist>'
+        +'<input id="cmAmt" class="inp" style="width:auto" type="number" min="0" step="500" placeholder="TZS">'
+        +'<button class="btn sm" id="cmRateSave">Hifadhi kiwango</button></div>':'');
+    wireTiles(m);
+    var kind=$('#cmKind'), per=$('#cmPeriod');
+    kind.onchange=function(){
+      per.type=kind.value==='daily'?'date':'month';
+      per.value=kind.value==='daily'?isoToday(0):thisMonth_();
+    };
+    var bb=$('#cmBuild');
+    if(bb) bb.onclick=function(){
+      var b=this; b.disabled=true;
+      srv('commBuild',{period:per.value, kind:kind.value}).then(function(r){
+        toast('Kipindi kimetengenezwa · ajenti '+money(r.agents)+' · TZS '+money(r.totalAmount)
+          +(r.disqualified?' · hazijalipwa '+money(r.disqualified):''));
+        if(TAB==='comm') drawComm(m);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+    var rs=$('#cmRateSave');
+    if(rs) rs.onclick=function(){
+      var b=this; b.disabled=true;
+      srv('commRateSave',{role:$('#cmRole').value||'ANY', item:$('#cmItem').value||'ANY', amount:$('#cmAmt').value})
+      .then(function(){ toast('Kiwango kimehifadhiwa / Rate saved'); if(TAB==='comm') drawComm(m); })
+      .catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+    [].slice.call(m.querySelectorAll('[data-cmrd]')).forEach(function(b){
+      b.onclick=function(){
+        var p=b.getAttribute('data-cmrd').split('|');
+        if(!confirm('Futa kiwango cha '+p[0]+' / '+p[1]+'?')) return;
+        srv('commRateDelete',{role:p[0], item:p[1]})
+        .then(function(){ toast('Kimefutwa / Removed'); if(TAB==='comm') drawComm(m); })
+        .catch(function(e){ toast(safeErr(e), true); });
+      };
+    });
+    [].slice.call(m.querySelectorAll('[data-cmv]')).forEach(function(b){
+      b.onclick=function(){ commSheetDrawer(m, b.getAttribute('data-cmv'), {pay:true}); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+/* THE SIGN-OFF PANE (SOP A.4). Drafts are the queue; everything else is there to be read. */
+function drawCommAppr(m){
+  m.innerHTML='<div class="sk"></div>';
+  srv('commRuns',{}).then(function(d){
+    if(d.notReady){ m.innerHTML=commNotReady(); return; }
+    var rows=d.rows||[], c=d.counts||{};
+    m.innerHTML='<div class="tiles">'
+      +tile('Zinasubiri saini',money(c.draft||0),'karatasi za kamisheni',{color:c.draft?'bad':''})
+      +tile('Zimeidhinishwa',money(c.approved||0),'zinasubiri Finance ilipe')
+      +tile('Zimelipwa',money(c.paid||0),'zimefungwa')
+      +'</div>'
+      +'<div class="mut" style="font-size:12px;margin:10px 0">Fungua karatasi kuona ajenti, idadi, kiasi, namba ya simu na RSM wake — '
+      +'ndivyo SOP A.4 inavyotaka. / Open a sheet to see the five fields SOP A.4 requires.</div>'
+      +(rows.length?commRunTable(rows):'<div class="mut">Hakuna kipindi bado. / No cycles yet.</div>');
+    wireTiles(m);
+    [].slice.call(m.querySelectorAll('[data-cmv]')).forEach(function(b){
+      b.onclick=function(){ commSheetDrawer(m, b.getAttribute('data-cmv'), {sign:true}); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 /* ---------- sales targets ----------
      CSM SOP B.3 "Set regional targets for each RSM and monitor performance against them"
      RSM SOP B.1 "Set and monitor sales targets for each agent/team leader"
@@ -6425,7 +6638,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devices:'Devices (kufunga simu)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',

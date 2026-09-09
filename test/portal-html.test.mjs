@@ -1855,3 +1855,57 @@ test('portal.html: the staff register shows who each agent reports to, and says 
   // The picker offers the RSMs the register knows, so nobody types a name nothing matches.
   assert.match(fn, /REGIONAL\|COUNTRY_SALES/);
 });
+
+/* =========================================================================================
+   COMMISSION. Finance SOP A.1 the two schedules, A.3 the phone-to-agent check, A.4 the sheet
+   and its sign-off, A.6 the CLEARED stamp, plus the five-row audit checklist.
+   These pin what the server cannot: that the sheet shows the five fields the SOP names, that
+   the checklist is rendered from the server's own list rather than a second copy, and that
+   the pay controls appear only on a signed sheet that has not been cleared.
+   ========================================================================================= */
+test('portal.html: the commission sheet shows the five fields SOP A.4 requires', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('commSheetHtml', html);
+  for (const [col, why] of [['AJENTI', 'agent name'], ['IDADI', 'sales quantity'],
+    ['KAMISHENI', 'commission amount'], ['SIMU', 'phone number'], ['RSM', 'the RSM they fall under']]) {
+    assert.match(fn, new RegExp('<th[^>]*>' + col + '</th>'), why + ' is a column on the sheet');
+  }
+  assert.match(fn, /l\.agentPhone\|\|'—'/); assert.match(fn, /l\.rsm\|\|'—'/);
+  // A cleared cycle says so in words, not just a chip.
+  assert.match(fn, /r\.clearedAt\?'<div class="note ok"/);
+  assert.match(fn, /haiwezi kulipwa tena/, 'and says it cannot be paid again');
+  assert.match(IMP_SRC('commNotReady', html), /RUN-ME-2026-09-09-commission\.sql/);
+});
+
+test('portal.html: the checklist comes from the server, and paying is offered only where it is legal', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('commSheetDrawer', html);
+  // Rendered from d.checks -- one list on the server, not a second copy on the page that can drift.
+  assert.match(fn, /checks=d\.checks\|\|\[\]/);
+  assert.match(fn, /checks\.map\(function\(c\)\{/);
+  assert.match(fn, /class="cmChk" data-k="'\+esc\(c\.key\)/);
+  // Pay: only on an approved, uncleared sheet, and only for a code that may write.
+  assert.match(fn, /var canPay=opts\.pay&&!BOOT\.readOnly&&r\.status==='approved'&&!r\.clearedAt;/);
+  assert.match(fn, /var canSign=opts\.sign&&!BOOT\.readOnly&&r\.status==='draft';/);
+  assert.match(fn, /srv\('commPay',\{id:id, paymentRef:\$\('#cmRef'\)\.value, checks:picked\}\)/);
+  // The two panes open the same drawer with different powers -- that is the whole separation.
+  assert.match(IMP_SRC('drawComm', html), /commSheetDrawer\(m, b\.getAttribute\('data-cmv'\), \{pay:true\}\)/);
+  assert.match(IMP_SRC('drawCommAppr', html), /commSheetDrawer\(m, b\.getAttribute\('data-cmv'\), \{sign:true\}\)/);
+});
+
+test('portal.html: building a cycle switches the period control between a month and a day', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawComm', html);
+  assert.match(fn, /per\.type=kind\.value==='daily'\?'date':'month';/,
+    'SOP A.1 has two schedules, so the control asks for the right shape');
+  assert.match(fn, /srv\('commBuild',\{period:per\.value, kind:kind\.value\}\)/);
+  assert.match(fn, /Kujenga upya kunaruhusiwa ikiwa bado ni rasimu tu/, 'and says rebuilding is draft-only');
+  assert.match(fn, /A phone with no rate is not paid/, 'the rates block says what an unpriced phone does');
+  // Writes are never re-sent, least of all the payment.
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  for (const f of ['commBuild', 'commDecide', 'commPay', 'commRateSave', 'commRateDelete']) {
+    assert.match(nr[1], new RegExp('\\b' + f + ':1'), f + ' is a write');
+  }
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  for (const k of ['commission', 'commappr']) assert.match(lbl[0], new RegExp('\\b' + k + ":'[^']+'"));
+});

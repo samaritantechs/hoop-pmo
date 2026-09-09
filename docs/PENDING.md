@@ -599,3 +599,29 @@ Also in this change: `tableMissing` now recognises PostgREST's PGRST204 ("could 
 column of 'y' in the schema cache"). Migrations here are run by hand, so between a deploy and
 the paste a WRITE hits a column the schema has not got. The read path already said "run the
 migration"; the write path used to 500 on the identical cause.
+
+## 18. SHIPPED 2026-09-09: commission — rates, the run, the sheet, and the cleared stamp
+
+Finance SOP A, end to end. The full story is [`docs/COMMISSION.md`](COMMISSION.md); the short
+version:
+
+| nav | pane | who |
+|---|---|---|
+| `commission` | Kamisheni / Commission | Finance: rates, build, record the payment |
+| `commappr` | Idhini ya kamisheni / Commission sign-off | the Administration approval group |
+
+**Do:**
+
+1. Run `db/migrations/RUN-ME-2026-09-09-commission.sql`.
+2. Tick the two navs — deliberately two, so nobody builds a sheet and signs it off alone.
+3. Set the rates on the commission pane. Nothing is priced until somebody does.
+
+The point is A.6: a cycle is unique per period and kind, and once `cleared_at` is stamped no
+second payment is possible — the update is guarded on it, so a double press produces one
+payment. Recording a payment needs all five audit-checklist rows and a reference. Two kinds of
+phone are held back and explained rather than paid: disputed ones (the shop credits a different
+agent than Watu does) and unpriced ones. A draft can be rebuilt; a signed sheet cannot.
+
+Also here: the test fake now fills a missing `id` with a real UUID instead of "gen-1", which is
+what `gen_random_uuid()` does. Any path that inserts a row and then reads it back by id was
+previously untestable — the caller's own isUuid guard rejected the fake's id.

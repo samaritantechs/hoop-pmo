@@ -83,6 +83,14 @@ AUDITED.add('stockIssue');
 AUDITED.add('targetSave');
 AUDITED.add('targetDelete');
 AUDITED.add('staffManager');
+/* COMMISSION: money leaving the company. Who built a cycle, who signed it off, who paid it,
+   and who changed a rate -- all four, because A.6 exists to stop a second payment and the log
+   is how anybody proves which of them happened first. */
+AUDITED.add('commBuild');
+AUDITED.add('commDecide');
+AUDITED.add('commPay');
+AUDITED.add('commRateSave');
+AUDITED.add('commRateDelete');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -130,7 +138,7 @@ const EDITABLE_SETTINGS = [
   'IMPREST_ADMIN_EMAIL', 'IMPREST_CEO_EMAIL', 'HR_EMAIL', 'EMAIL_FROM',
   /* ISSUES_EMAIL is several lines of DEPARTMENT=address so each department hears about its
      own issues; GM_EMAIL hears about escalations. See the issues migration. */
-  'ISSUES_EMAIL', 'GM_EMAIL', 'STOCK_EMAIL', 'STOCK_AGING_DAYS', 'STOCK_LOW_ALERT',
+  'ISSUES_EMAIL', 'GM_EMAIL', 'STOCK_EMAIL', 'STOCK_AGING_DAYS', 'STOCK_LOW_ALERT', 'COMMISSION_EMAIL',
 ];
 
 /* =======================================================================================
@@ -226,7 +234,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -623,6 +631,56 @@ async function stockAgingIndex(db) {
       items: [...g.items.entries()].sort((x, y) => y[1] - x[1]).slice(0, 4).map(e => e[0] + ' ×' + e[1]).join(', ') }))
       .sort((x, y) => y.aging - x.aging || y.oldest - x.oldest || y.pieces - x.pieces),
   };
+}
+
+/* ---------- COMMISSION (Finance SOP A) ---------- */
+const COMM_NOT_READY = 'Jedwali la kamisheni halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-09-commission.sql kwenye Supabase. '
+  + '/ The commission tables have not been created yet — run that migration first.';
+const COMM_COLS = 'id, period, kind, status, created_at, created_by, built_at, approved_by, approved_at, '
+  + 'comment, paid_by, paid_at, payment_ref, cleared_at, chk_unpaid_list, chk_watu_verified, '
+  + 'chk_advance_topups, chk_voucher, chk_bank_statement, total_qty, total_amount, disqualified, updated_at';
+/* The five ticks Finance SOP A's Commission Audit Checklist demands against every cycle. Held
+   here so the pane, the gate and the tests all read one list. */
+const COMM_CHECKS = [
+  ['chkUnpaidList', 'chk_unpaid_list', 'Orodha ya kamisheni ambazo hazijalipwa (mfumo wa Hoop) / Unpaid commission list'],
+  ['chkWatuVerified', 'chk_watu_verified', 'Imehakikiwa dhidi ya data ya WATU / Verified against WATU system data'],
+  ['chkAdvanceTopups', 'chk_advance_topups', 'Imekaguliwa advance yoyote iliyolipwa kwenye top-up / Checked for paid advance on top-ups'],
+  ['chkVoucher', 'chk_voucher', 'Voucher ya malipo imeidhinishwa na ipo / Approved payment voucher on file'],
+  ['chkBankStatement', 'chk_bank_statement', 'Imelinganishwa na statement ya benki/Yas / Compared against bank/Yas statement'],
+];
+const commRow = r => ({
+  id: String(r.id), period: r.period || '', kind: r.kind || 'monthly', status: r.status || 'draft',
+  createdAt: r.created_at ? Date.parse(r.created_at) : null, createdBy: r.created_by || '',
+  builtAt: r.built_at ? Date.parse(r.built_at) : null,
+  approvedBy: r.approved_by || '', approvedAt: r.approved_at ? Date.parse(r.approved_at) : null,
+  comment: r.comment || '',
+  paidBy: r.paid_by || '', paidAt: r.paid_at ? Date.parse(r.paid_at) : null,
+  paymentRef: r.payment_ref || '', clearedAt: r.cleared_at ? Date.parse(r.cleared_at) : null,
+  checks: COMM_CHECKS.reduce((o, [js, col]) => { o[js] = !!r[col]; return o; }, {}),
+  totalQty: num(r.total_qty), totalAmount: num(r.total_amount), disqualified: num(r.disqualified),
+});
+/* A period is a DAY for the 9:00 AM schedule and a MONTH for the 1st-of-the-month one
+   (SOP A.1), so the shape of the string says which run this is. */
+function commRange(period, kind) {
+  if (kind === 'daily') {
+    if (!isDay(period)) bad('Chagua tarehe (YYYY-MM-DD). / Choose a date.');
+    return { from: period, to: period };
+  }
+  if (!isMonth(period)) bad('Chagua mwezi (YYYY-MM). / Choose a month.');
+  return monthDays(period);
+}
+/* WHAT ONE PHONE EARNS. The most specific row wins: this role and this model, then this role
+   for anything, then anyone for this model, then the catch-all. A model nobody priced earns
+   nothing and is REPORTED as unpriced rather than quietly paid at zero. */
+function commRateOf(rates, role, item) {
+  const r = K(role).replace(/\s+/g, '_') || 'ANY';
+  const i = K(item) || 'ANY';
+  for (const [rk, ik] of [[r, i], [r, 'ANY'], ['ANY', i], ['ANY', 'ANY']]) {
+    const hit = rates.get(rk + '|' + ik);
+    if (hit) return num(hit.amount);
+  }
+  return null;
 }
 
 /* ---------- SALES TARGETS (CSM SOP B.3, RSM SOP B.1/B.3) ---------- */
@@ -4049,6 +4107,322 @@ const FNS = {
         oldestOpenDays: open.reduce((m, r) => Math.max(m, r.ageDays), 0),
         byDept,
       } };
+  },
+
+  /* =====================================================================================
+     COMMISSION -- the rate table, the run, the payment sheet, and the CLEARED stamp.
+     =====================================================================================
+       Finance SOP A.1  the daily 9:00 AM and monthly schedules, generated by the system
+       Finance SOP A.2  verify each RSM/agent's commission against the sales records
+       Finance SOP A.3  "Cross-check that each phone being paid for is correctly linked to
+                         the agent who sold it, before approving payment"
+       Finance SOP A.4  the payment sheet -- agent name, sales quantity, commission amount,
+                         phone number, and the RSM the agent falls under -- forwarded to the
+                         Administration approval group for sign-off
+       Finance SOP A.6  "mark the payment as 'cleared' in the system IMMEDIATELY, to prevent
+                         duplicate payment"
+       Finance SOP A    the Commission Audit Checklist, filed against every cycle
+
+     THE POINT IS A.6. The arithmetic could be done in a spreadsheet; what a spreadsheet
+     cannot do is refuse to pay the same period twice. A run is unique per (period, kind) in
+     the database, and once it carries cleared_at nothing pays it again.
+
+     A RUN IS A SNAPSHOT, NOT A VIEW. The lines are written down when the run is built,
+     because a sheet that silently re-computes itself cannot be audited: the figure signed off
+     on Tuesday must still be the figure on Friday after another deck upload lands. Rebuilding
+     is allowed while it is a draft and refused the moment anybody has signed.
+
+     Two navs: `commission` builds, pays and clears (Finance); `commappr` signs off (the
+     Administration approval group). Nobody can do both halves unless the owner ticks both. */
+
+  /** The rate table, and the words the form offers for it. */
+  async commRates(db, user) {
+    requireAnyNav(user, ['commission', 'commappr']);
+    let rows = [];
+    let notReady = false;
+    try {
+      rows = await fetchAll(() => db.from('commission_rates').select('role, item, amount, updated_by, updated_at'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      notReady = true;
+    }
+    let roles = [], items = [];
+    try {
+      const agents = await fetchAll(() => db.from('hoop_agents').select('role'));
+      roles = [...new Set(agents.map(a => K(a.role || '').replace(/\s+/g, '_')).filter(Boolean))].sort();
+    } catch (e) { roles = []; }
+    try {
+      const models = await fetchAll(() => db.from('watu_loans').select('model'));
+      items = [...new Set(models.map(m => K(m.model || '')).filter(Boolean))].sort();
+    } catch (e) { items = []; }
+    return { ok: true, notReady, roles: ['ANY'].concat(roles), items: ['ANY'].concat(items),
+      rates: rows.map(r => ({ role: r.role, item: r.item, amount: num(r.amount),
+        updatedBy: r.updated_by || '', updatedAt: r.updated_at ? Date.parse(r.updated_at) : null }))
+        .sort((x, y) => (x.role < y.role ? -1 : x.role > y.role ? 1 : (x.item < y.item ? -1 : 1))) };
+  },
+
+  async commRateSave(db, user, args) {
+    requireNav(user, 'commission');
+    requireWrite(user);
+    const a = args || {};
+    const role = K(a.role).replace(/\s+/g, '_') || 'ANY';
+    const item = K(a.item) || 'ANY';
+    if (a.amount == null || String(a.amount).trim() === '') bad('Weka kiasi. / Set the amount.');
+    const amount = Math.round(num(a.amount));
+    if (!(amount >= 0) || amount > 1e9) bad('Kiasi si sahihi. / That amount is not a rate.');
+    const { error } = await db.from('commission_rates').upsert([{ role, item, amount,
+      updated_by: user.name || '', updated_at: new Date().toISOString() }], { onConflict: 'role,item' });
+    if (error) {
+      if (tableMissing(error)) bad(COMM_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, role, item, amount };
+  },
+
+  async commRateDelete(db, user, args) {
+    requireNav(user, 'commission');
+    requireWrite(user);
+    const a = args || {};
+    const role = K(a.role).replace(/\s+/g, '_');
+    const item = K(a.item);
+    if (!role || !item) bad('Kiwango hakijachaguliwa. / No rate chosen.');
+    const { error } = await db.from('commission_rates').delete().eq('role', role).eq('item', item);
+    if (error) {
+      if (tableMissing(error)) bad(COMM_NOT_READY);
+      throw new Error(error.message);
+    }
+    return { ok: true, role, item };
+  },
+
+  /** Every run, newest first, so Finance can see what is outstanding and what was cleared. */
+  async commRuns(db, user, args) {
+    requireAnyNav(user, ['commission', 'commappr']);
+    const a = args || {};
+    let rows = [];
+    try {
+      rows = await fetchAll(() => db.from('commission_runs').select(COMM_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, counts: { draft: 0, approved: 0, paid: 0 } };
+    }
+    const all = rows.map(commRow);
+    const want = String(a.status || '').trim();
+    return { ok: true,
+      rows: all.filter(r => !want || r.status === want)
+        .sort((x, y) => (y.period < x.period ? -1 : y.period > x.period ? 1 : 0) || (y.createdAt || 0) - (x.createdAt || 0)),
+      counts: { draft: all.filter(r => r.status === 'draft').length,
+        approved: all.filter(r => r.status === 'approved').length,
+        paid: all.filter(r => r.status === 'paid').length } };
+  },
+
+  /** BUILD OR REBUILD A DRAFT (SOP A.1). Reads the sales, prices them, and writes the sheet
+      down. Refused once anybody has signed: a signed sheet that moves is not a sheet. */
+  async commBuild(db, user, args) {
+    requireNav(user, 'commission');
+    requireWrite(user);
+    const a = args || {};
+    const kind = String(a.kind || 'monthly').trim().toLowerCase() === 'daily' ? 'daily' : 'monthly';
+    const period = String(a.period || '').trim();
+    const { from, to } = commRange(period, kind);
+
+    let existing = null;
+    try {
+      const rows = await fetchAll(() => db.from('commission_runs').select(COMM_COLS)
+        .eq('period', period).eq('kind', kind));
+      existing = rows[0] || null;
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(COMM_NOT_READY);
+    }
+    if (existing && existing.status !== 'draft') {
+      bad('Kipindi hiki tayari kime' + (existing.status === 'paid' ? 'lipwa' : 'idhinishwa')
+        + '; huwezi kukihesabu upya. / This cycle has already been signed off — it cannot be rebuilt.');
+    }
+
+    const [loans, shop, agents, rateRows] = await Promise.all([
+      fetchAll(() => db.from('watu_loans').select('imei, agent, model, price, disbursed_date')
+        .gte('disbursed_date', from).lte('disbursed_date', to)),
+      /* SOP A.3: the shop's own book, to check each phone is credited to the agent who sold
+         it. A disagreement is a DISPUTE, and a disputed phone is not paid this cycle. */
+      fetchAll(() => db.from('hoop_sales').select('imei, commission_agent, commission_phone')
+        .gte('sale_date', dayShift(from, -7)).lte('sale_date', dayShift(to, 7))).catch(() => []),
+      fetchAll(() => db.from('hoop_agents').select('name, phone, role, branch, manager'))
+        .catch(() => fetchAll(() => db.from('hoop_agents').select('name, phone, role, branch'))),
+      fetchAll(() => db.from('commission_rates').select('role, item, amount')).catch(() => []),
+    ]);
+    const rates = new Map(rateRows.map(r => [K(r.role) + '|' + K(r.item), r]));
+    const idx = managerIndex(agents);
+    const regBy = new Map(agents.filter(x => x.name).map(x => [nameKey(x.name), x]));
+    const shopBy = new Map();
+    for (const s of shop) if (s.imei) shopBy.set(String(s.imei), s);
+    const words = s => new Set(String(s || '').toUpperCase().split(/\s+/).filter(Boolean));
+    const overlap = (x, y) => { for (const w of words(x)) if (words(y).has(w)) return true; return false; };
+
+    const by = new Map();
+    let disqualified = 0;
+    for (const l of loans) {
+      const who = String(l.agent || '').trim();
+      if (!who) { disqualified++; continue; }        // nobody to pay
+      const k = nameKey(who);
+      let g = by.get(k);
+      if (!g) {
+        const reg = regBy.get(k) || null;
+        g = { agent: who, agentPhone: reg ? (reg.phone || '') : '', role: reg ? (reg.role || '') : '',
+          rsm: idx.of(who), qty: 0, amount: 0, disqualified: 0, noRate: 0, disputed: 0 };
+        by.set(k, g);
+      }
+      // SOP A.3: the shop says somebody else sold it -> not paid until that is settled.
+      const s = shopBy.get(String(l.imei));
+      if (s && s.commission_agent && !overlap(s.commission_agent, who)) {
+        g.disqualified++; g.disputed++; disqualified++; continue;
+      }
+      const rate = commRateOf(rates, g.role, l.model);
+      if (rate == null) { g.disqualified++; g.noRate++; disqualified++; continue; }
+      g.qty++; g.amount += rate;
+    }
+    const lines = [...by.values()].filter(g => g.qty || g.disqualified)
+      .sort((x, y) => y.amount - x.amount || (x.agent < y.agent ? -1 : 1));
+    const totalQty = lines.reduce((s, g) => s + g.qty, 0);
+    const totalAmount = lines.reduce((s, g) => s + g.amount, 0);
+    const now = new Date().toISOString();
+
+    let runId = existing ? String(existing.id) : null;
+    if (runId) {
+      const { error } = await db.from('commission_runs')
+        .update({ built_at: now, total_qty: totalQty, total_amount: totalAmount,
+          disqualified, updated_at: now })
+        .eq('id', runId).eq('status', 'draft');
+      if (error) throw new Error(error.message);
+      const { error: dErr } = await db.from('commission_lines').delete().eq('run_id', runId);
+      if (dErr) throw new Error(dErr.message);
+    } else {
+      const { data, error } = await db.from('commission_runs').insert([{
+        period, kind, status: 'draft', created_at: now, created_by: user.name || '', built_at: now,
+        total_qty: totalQty, total_amount: totalAmount, disqualified, updated_at: now,
+      }]).select('id');
+      if (error) {
+        if (tableMissing(error)) bad(COMM_NOT_READY);
+        throw new Error(error.message);
+      }
+      runId = data && data[0] ? String(data[0].id) : null;
+    }
+    if (lines.length) {
+      const note = g => [g.disputed ? g.disputed + ' mgogoro / disputed' : '',
+        g.noRate ? g.noRate + ' hazina kiwango / unpriced' : ''].filter(Boolean).join('; ');
+      const { error } = await db.from('commission_lines').insert(lines.map(g => ({
+        run_id: runId, agent: g.agent, agent_phone: g.agentPhone || null, rsm: g.rsm || null,
+        role: g.role || null, qty: g.qty, amount: g.amount, disqualified: g.disqualified,
+        note: note(g) || null,
+      })));
+      if (error) throw new Error(error.message);
+    }
+    return { ok: true, id: runId, period, kind, from, to,
+      totalQty, totalAmount, disqualified, agents: lines.length };
+  },
+
+  /** One run and its sheet -- the five fields SOP A.4 requires, per agent. */
+  async commSheet(db, user, args) {
+    requireAnyNav(user, ['commission', 'commappr']);
+    const id = String((args && args.id) || '').trim();
+    if (!isUuid(id)) bad('Kipindi hakijachaguliwa. / No cycle chosen.');
+    let runs;
+    try {
+      runs = await fetchAll(() => db.from('commission_runs').select(COMM_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, run: null, lines: [], notReady: true };
+    }
+    const r = runs.find(x => String(x.id) === id);
+    if (!r) bad('Kipindi hakipo. / That cycle no longer exists.');
+    let lines = [];
+    try {
+      lines = await fetchAll(() => db.from('commission_lines')
+        .select('agent, agent_phone, rsm, role, qty, amount, disqualified, note').eq('run_id', id));
+    } catch (e) { lines = []; }
+    return { ok: true, run: commRow(r), checks: COMM_CHECKS.map(([js, , label]) => ({ key: js, label })),
+      lines: lines.map(l => ({ agent: l.agent, agentPhone: l.agent_phone || '', rsm: l.rsm || '',
+        role: l.role || '', qty: num(l.qty), amount: num(l.amount),
+        disqualified: num(l.disqualified), note: l.note || '' }))
+        .sort((x, y) => y.amount - x.amount || (x.agent < y.agent ? -1 : 1)) };
+  },
+
+  /** SIGN-OFF (SOP A.4). The Administration approval group's own grant; rejecting sends the
+      sheet back to draft so Finance can fix it and rebuild. */
+  async commDecide(db, user, args) {
+    requireNav(user, 'commappr');
+    requireWrite(user);
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Kipindi hakijachaguliwa. / No cycle chosen.');
+    let runs;
+    try {
+      runs = await fetchAll(() => db.from('commission_runs').select(COMM_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(COMM_NOT_READY);
+    }
+    const r = runs.find(x => String(x.id) === id);
+    if (!r) bad('Kipindi hakipo. / That cycle no longer exists.');
+    if (r.status === 'paid') bad('Kipindi hiki tayari kimelipwa. / That cycle has already been paid.');
+    const approve = a.approve === true;
+    const comment = String(a.comment == null ? '' : a.comment).trim().slice(0, 2000);
+    if (!approve && !comment) bad('Sababu inahitajika ukirudisha. / A reason is required when sending it back.');
+    if (approve && !num(r.total_qty)) bad('Huwezi kuidhinisha karatasi tupu. / There is nothing on this sheet to approve.');
+    const now = new Date().toISOString();
+    const patch = approve
+      ? { status: 'approved', approved_by: user.name || '', approved_at: now, comment: comment || null, updated_at: now }
+      : { status: 'draft', approved_by: null, approved_at: null, comment, updated_at: now };
+    const { data, error } = await db.from('commission_runs').update(patch)
+      .eq('id', id).eq('status', r.status).select('id');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) bad('Kipindi hiki kimebadilishwa na mtu mwingine sasa hivi. / Somebody else just changed this cycle.');
+    return { ok: true, id, status: patch.status };
+  },
+
+  /** PAY AND CLEAR (SOP A.5-A.7). The checklist is a GATE: all five ticks and a payment
+      reference, or nothing moves. Guarded on cleared_at being empty, which is what stops the
+      same cycle being paid twice however many people press the button. */
+  async commPay(db, user, args) {
+    requireNav(user, 'commission');
+    requireWrite(user);
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Kipindi hakijachaguliwa. / No cycle chosen.');
+    let runs;
+    try {
+      runs = await fetchAll(() => db.from('commission_runs').select(COMM_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(COMM_NOT_READY);
+    }
+    const r = runs.find(x => String(x.id) === id);
+    if (!r) bad('Kipindi hakipo. / That cycle no longer exists.');
+    if (r.cleared_at || r.status === 'paid') {
+      bad('Kipindi hiki kimeshalipwa na kufungwa — hakiwezi kulipwa mara ya pili (SOP A.6). '
+        + '/ This cycle is already paid and cleared; it cannot be paid twice.');
+    }
+    if (r.status !== 'approved') bad('Inahitaji idhini kabla ya malipo (SOP A.4). / It needs sign-off before payment.');
+    const ref = String(a.paymentRef == null ? '' : a.paymentRef).trim().slice(0, 120);
+    if (!ref) bad('Andika kumbukumbu ya malipo. / Give the payment reference (SOP A.7).');
+    const checks = a.checks || {};
+    const missing = COMM_CHECKS.filter(([js]) => checks[js] !== true);
+    if (missing.length) {
+      bad('Orodha ya ukaguzi haijakamilika: ' + missing.map(x => x[2].split(' / ')[0]).join('; ')
+        + '. / The commission audit checklist is not complete.');
+    }
+    const now = new Date().toISOString();
+    const patch = { status: 'paid', paid_by: user.name || '', paid_at: now, payment_ref: ref,
+      cleared_at: now, updated_at: now };
+    for (const [js, col] of COMM_CHECKS) patch[col] = true;
+    /* GUARDED ON cleared_at BEING NULL. Two people pressing Pay at the same moment: the second
+       update matches nothing and is told the cycle is already cleared. */
+    const { data, error } = await db.from('commission_runs').update(patch)
+      .eq('id', id).eq('status', 'approved').is('cleared_at', null).select('id');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) {
+      bad('Kipindi hiki kimeshalipwa sasa hivi na mtu mwingine (SOP A.6). / Somebody else just paid and cleared this cycle.');
+    }
+    return { ok: true, id, status: 'paid', paymentRef: ref, clearedAt: Date.parse(now) };
   },
 
   /* =====================================================================================
