@@ -201,7 +201,16 @@ class FakeQuery {
       // Postgres fills `id` from `default gen_random_uuid()`, and code that inserts a parent
       // then writes a child row keyed on the returned id depends on getting one back. Without
       // this the fake handed back an undefined id and that whole path was untestable.
-      const made = this.payload.map(r => (r.id == null ? { ...r, id: 'gen-' + (++FakeQuery._seq) } : { ...r }));
+      /* AND IT FILLS IT WITH A UUID, because that is what gen_random_uuid() does. The fake
+         used to hand back "gen-1", which is not a uuid, so any path that inserts a row and
+         then reads it back BY ID -- build a commission cycle, then open it; file a request,
+         then decide it -- failed the caller's own isUuid() guard and could not be tested at
+         all. Deterministic (a counter, not randomness) so a test that pins an id still can. */
+      const made = this.payload.map(r => {
+        if (r.id != null) return { ...r };
+        const n = (++FakeQuery._seq).toString(16).padStart(12, '0');
+        return { ...r, id: n.slice(0, 8) + '-' + n.slice(8, 12) + '-4000-8000-' + n.padStart(12, '0').slice(-12) };
+      });
       /* A UNIQUE KEY REFUSES THE WHOLE INSERT, with Postgres's own words. The fake used to push
          unconditionally, so code that relies on a unique index as its lock could never see the
          error it depends on. Opt-in per table via fakeDb(tables, { unique }). */
