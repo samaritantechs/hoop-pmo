@@ -2017,3 +2017,57 @@ test('portal.html: the price list says why changing it does not re-price an open
   const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
   for (const k of ['lossreq', 'loss']) assert.match(lbl[0], new RegExp('\\b' + k + ":'[^']+'"));
 });
+
+/* =========================================================================================
+   TOP-UPS. Finance SOP B.5 is the only step in any of these SOPs with the words "must never
+   be delayed", so the pane's job is to make a delay impossible to miss. These pin that the
+   wait is drawn in minutes and colours, that the desk's three steps appear one at a time in
+   order, and that a checklist row already ticked cannot be quietly unticked.
+   ========================================================================================= */
+test('portal.html: the top-up queue draws the wait and shouts when somebody has waited hours', () => {
+  const html = read('portal.html');
+  const w = IMP_SRC('topupWait', html);
+  assert.match(w, /m>=120\?'bad':\(m>=30\?'warn':'ok'\)/, 'minutes turn amber then red');
+  assert.match(w, /done\) return '<span class="mut">/, 'a finished one is not still shouting');
+  const fn = IMP_SRC('drawTopups', html);
+  assert.match(fn, /longest>=120\?'<div class="note bad">/, 'and a long wait is a banner, not a tile nobody reads');
+  assert.match(fn, /SOP B\.5/);
+  assert.match(fn, /c\.longestWaitMins/);
+  assert.match(IMP_SRC('topupNotReady', html), /RUN-ME-2026-09-09-topups\.sql/);
+});
+
+test('portal.html: the desk gets one step at a time, in the order the SOP sets', () => {
+  const html = read('portal.html');
+  const dr = IMP_SRC('topupDrawer', html);
+  // Verify only while requested, pay only once verified, unlock only once paid.
+  assert.match(dr, /r\.status==='requested'\n?\s*\?[\s\S]*?id="tuImei"[\s\S]*?id="tuPayer"/,
+    'B.2 and B.3 are two ticks on the verify step');
+  assert.match(dr, /r\.status==='verified'\n?\s*\?[\s\S]*?id="tuRef"/, 'B.5 asks for the reference');
+  assert.match(dr, /r\.status==='paid'\n?\s*\?[\s\S]*?id="tuConf"/, 'B.6 asks somebody to confirm');
+  assert.match(dr, /send\('verify',\{imeiOk:\$\('#tuImei'\)\.checked, payerOk:\$\('#tuPayer'\)\.checked/);
+  assert.match(dr, /send\('unlock',\{confirmed:\$\('#tuConf'\)\.checked\}\)/);
+  assert.match(dr, /desk&&!BOOT\.readOnly\?/, 'and a view-only code gets none of it');
+  // A checklist row already ticked is shown ticked and disabled: an audit tick is not a toggle.
+  assert.match(dr, /r\.checks&&r\.checks\[c\.key\]\?' checked disabled':''/);
+  assert.match(dr, /if\(c\.checked&&!c\.disabled\)/, 'and only newly ticked rows are sent');
+});
+
+test('portal.html: the top-up request form sends the parts and never the state', () => {
+  const html = read('portal.html');
+  const wire = IMP_SRC('topupRaiseWire', html);
+  const call = /srv\('topupRequest',\{([\s\S]*?)\}\)/.exec(wire);
+  for (const k of ['imei', 'customer', 'customerPhone', 'paidAmount', 'price', 'payerName', 'proofRef']) {
+    assert.match(call[1], new RegExp('\\b' + k + ':'), k + ' is sent');
+  }
+  for (const k of ['status', 'verifiedBy', 'paidAt', 'balance']) {
+    assert.ok(!new RegExp('\\b' + k + ':').test(call[1]), k + ' is the server\'s');
+  }
+  assert.match(IMP_SRC('topupRaiseHtml', html), /Acha wazi ili itafutwe/,
+    'the price may be left blank and looked up');
+  const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
+  for (const f of ['topupRequest', 'topupUpdate']) {
+    assert.match(nr[1], new RegExp('\\b' + f + ':1'), f + ' is a write');
+  }
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  for (const k of ['topupreq', 'topups']) assert.match(lbl[0], new RegExp('\\b' + k + ":'[^']+'"));
+});

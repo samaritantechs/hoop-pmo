@@ -104,6 +104,10 @@ AUDITED.add('lossRaise');
 AUDITED.add('lossUpdate');
 AUDITED.add('priceSave');
 AUDITED.add('priceDelete');
+/* TOP-UPS: money out and a customer's phone unlocked. SOP B.5 says the payment must never be
+   delayed, so who did which step and when is the record that proves it was not. */
+AUDITED.add('topupRequest');
+AUDITED.add('topupUpdate');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -152,7 +156,7 @@ const EDITABLE_SETTINGS = [
   /* ISSUES_EMAIL is several lines of DEPARTMENT=address so each department hears about its
      own issues; GM_EMAIL hears about escalations. See the issues migration. */
   'ISSUES_EMAIL', 'GM_EMAIL', 'STOCK_EMAIL', 'STOCK_AGING_DAYS', 'STOCK_LOW_ALERT', 'COMMISSION_EMAIL',
-  'ADVANCE_DEADLINE_DAY', 'ADVANCE_MAX_PCT', 'LOSS_EMAIL',
+  'ADVANCE_DEADLINE_DAY', 'ADVANCE_MAX_PCT', 'LOSS_EMAIL', 'TOPUP_EMAIL',
 ];
 
 /* =======================================================================================
@@ -248,7 +252,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -690,6 +694,53 @@ async function stockAgingIndex(db) {
       .sort((x, y) => y.aging - x.aging || y.oldest - x.oldest || y.pieces - x.pieces),
   };
 }
+
+/* ---------- TOP-UPS / CREDIT SALES (Finance SOP B) ---------- */
+const TOPUP_NOT_READY = 'Jedwali la top-up halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-09-topups.sql kwenye Supabase. '
+  + '/ The top-up table has not been created yet — run that migration first.';
+const TOPUP_STATES = ['requested', 'verified', 'paid', 'unlocked', 'rejected'];
+const TOPUP_COLS = 'id, requested_at, staff_code, staff_name, staff_role, imei, customer, '
+  + 'customer_phone, payer_name, paid_amount, proof_ref, price, balance, status, comment, '
+  + 'verified_by, verified_at, paid_by, paid_at, payment_ref, unlocked_by, unlocked_at, '
+  + 'chk_request, chk_paid_to, chk_watu, chk_auditor, updated_by, updated_at';
+/* The Top-Up Audit Checklist, in one place the pane and the gate both read. */
+const TOPUP_CHECKS = [
+  ['chkRequest', 'chk_request', 'Ombi la top-up kutoka kwa ajenti / Top-up request from agent'],
+  ['chkPaidTo', 'chk_paid_to', 'Malipo yamekwenda kwenye namba iliyoombwa / Payment paid to the requested number'],
+  ['chkWatu', 'chk_watu', 'Uthibitisho wa mauzo kutoka WATU / Approved sales verification from WATU'],
+  ['chkAuditor', 'chk_auditor', 'Saini ya mkaguzi / Auditor sign-off'],
+];
+const topupRow = (r, me, nowMs) => {
+  const at = r.requested_at ? Date.parse(r.requested_at) : null;
+  const paidAt = r.paid_at ? Date.parse(r.paid_at) : null;
+  /* B.5: "this step must never be delayed". The number that makes a delay visible is how long
+     the customer has been waiting, and it stops counting the moment the money goes -- not when
+     somebody finally ticks the row closed. */
+  const waitedTo = paidAt || (nowMs || Date.now());
+  return {
+    id: String(r.id),
+    at,
+    mine: !!(me && r.staff_code && String(r.staff_code) === String(me)),
+    staffName: r.staff_name || '', staffRole: r.staff_role || '',
+    imei: r.imei || '', customer: r.customer || '', customerPhone: r.customer_phone || '',
+    payerName: r.payer_name || '', paidAmount: num(r.paid_amount), proofRef: r.proof_ref || '',
+    price: r.price == null ? null : num(r.price),
+    balance: r.balance == null ? null : num(r.balance),
+    status: r.status || 'requested', comment: r.comment || '',
+    verifiedBy: r.verified_by || '', verifiedAt: r.verified_at ? Date.parse(r.verified_at) : null,
+    paidBy: r.paid_by || '', paidAt, paymentRef: r.payment_ref || '',
+    unlockedBy: r.unlocked_by || '', unlockedAt: r.unlocked_at ? Date.parse(r.unlocked_at) : null,
+    checks: TOPUP_CHECKS.reduce((o, [js, col]) => { o[js] = !!r[col]; return o; }, {}),
+    // Minutes from the request to the payment, or to now while it is still waiting.
+    waitedMins: at ? Math.max(0, Math.round((waitedTo - at) / 60000)) : null,
+    updatedAt: r.updated_at ? Date.parse(r.updated_at) : null,
+  };
+};
+/* Waiting first, and among those the one who has waited longest -- which is the only sort order
+   a rule that says "must never be delayed" can be served by. */
+const TOPUP_RANK = { requested: 0, verified: 1, paid: 2, unlocked: 3, rejected: 4 };
+const topupWaitFirst = (x, y) => (TOPUP_RANK[x.status] - TOPUP_RANK[y.status]) || (x.at || 0) - (y.at || 0);
 
 /* ---------- LOSS AND DAMAGE (Finance SOP H; opened by Store SOP C.7) ---------- */
 const LOSS_NOT_READY = 'Jedwali la upotevu halijatengenezwa bado. Endesha '
@@ -4412,6 +4463,197 @@ const FNS = {
         oldestOpenDays: open.reduce((m, r) => Math.max(m, r.ageDays), 0),
         byDept,
       } };
+  },
+
+  /* =====================================================================================
+     TOP-UPS / CREDIT SALES -- request, verify, pay, unlock.
+     =====================================================================================
+       Finance SOP B.1  the request WITH proof of the client's upfront payment
+       Finance SOP B.2  "VERIFY THE IMEI NUMBER before processing the payment"
+       Finance SOP B.3  verify the payer's name against bank/mobile-money records
+       Finance SOP B.4  calculate the balance to complete the full phone price
+       Finance SOP B.5  "Send the top-up payment IMMEDIATELY so the system can unlock the
+                         device for the client -- THIS STEP MUST NEVER BE DELAYED"
+       Finance SOP B.6  confirm with the agent/client that the device has been unlocked
+       Finance SOP B    the Top-Up Audit Checklist, filed against every transaction
+
+     B.5 IS THE ONLY STEP IN ANY OF THESE SOPs WITH THE WORDS "MUST NEVER BE DELAYED", and it
+     is why this is a table rather than a WhatsApp thread. A customer whose phone stays locked
+     after they have paid is the worst thing this company can do to somebody, and the only way
+     to stop that happening quietly is to make the waiting visible and count the minutes.
+
+     FOUR STAMPS, NOT ONE STATUS: requested, verified, paid, unlocked. The gap between any two
+     of them is somebody's afternoon, and a single status column cannot show a gap.
+
+     Two navs: `topupreq` asks and reads its own, `topups` is Finance's desk. */
+
+  /** Anybody who may ask, and the desk (which files one when an agent phones it in). */
+  async topupRequest(db, user, args) {
+    requireAnyNav(user, ['topupreq', 'topups']);
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    /* B.2: the IMEI is the thing every later step is checked against, so it is the one field
+       with no way round it. */
+    const imei = String(a.imei == null ? '' : a.imei).replace(/\D/g, '');
+    if (!imei) bad('Weka IMEI ya simu. / Give the phone IMEI (SOP B.2).');
+    if (imei.length < 14 || imei.length > 17) bad('IMEI si sahihi. / That IMEI is not a valid length.');
+    const paid = Math.round(num(a.paidAmount));
+    if (!(paid > 0)) bad('Weka kiasi alicholipa mteja. / Enter what the client paid up front (SOP B.1).');
+    if (paid > 1e9) bad('Kiasi si sahihi. / That amount is not a payment.');
+    /* B.4: the balance is only a fact alongside the price it was worked out from, so the price
+       is looked up from the loan book where it is known and both are stored. */
+    let price = a.price == null || String(a.price).trim() === '' ? null : Math.round(num(a.price));
+    if (price == null) {
+      try {
+        const { data } = await db.from('watu_loans').select('price, client_name').eq('imei', imei).maybeSingle();
+        if (data && data.price != null) price = Math.round(num(data.price));
+        if (data && data.client_name && !a.customer) a.customer = data.client_name;
+      } catch (e) { price = null; }
+    }
+    const at = new Date().toISOString();
+    const row = {
+      requested_at: at, updated_at: at,
+      staff_code: user.code || null, staff_name: user.name || '', staff_role: user.role || '',
+      imei, customer: S(a.customer, 160) || null, customer_phone: S(a.customerPhone, 60) || null,
+      payer_name: S(a.payerName, 160) || null, paid_amount: paid,
+      proof_ref: S(a.proofRef, 200) || null,
+      price, balance: price == null ? null : Math.max(0, price - paid),
+      status: 'requested', updated_by: user.name || '',
+    };
+    const { data, error } = await db.from('topups').insert([row]).select('id');
+    if (error) {
+      if (tableMissing(error)) bad(TOPUP_NOT_READY);
+      throw new Error(error.message);
+    }
+    const id = data && data[0] ? String(data[0].id) : null;
+    const mail = await sendMail(db, { toKey: 'TOPUP_EMAIL',
+      subject: 'HOOPLOAN — top-up inasubiri / top-up waiting: ' + imei,
+      html: noticeHtml('Top-up inasubiri malipo / A top-up is waiting', [
+        ['IMEI', imei], ['Mteja / Customer', row.customer || '—'],
+        ['Amelipa / Client paid', 'TZS ' + money0(paid)],
+        ['Bei / Price', price == null ? '—' : 'TZS ' + money0(price)],
+        ['Salio / Balance', row.balance == null ? '—' : 'TZS ' + money0(row.balance)],
+        ['Amelipa nani / Payer', row.payer_name || '—'], ['Uthibitisho / Proof', row.proof_ref || '—'],
+        ['Ameomba / Requested by', user.name || ''],
+      ], 'SOP B.5: malipo haya hayapaswi kucheleweshwa — simu ya mteja imefungwa. '
+       + '/ SOP B.5: this payment must never be delayed; the customer’s phone is locked.') });
+    return { ok: true, id, imei, price, balance: row.balance,
+      emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
+  },
+
+  /** The asker's own top-ups. */
+  async topupMine(db, user) {
+    requireNav(user, 'topupreq');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('topups').select(TOPUP_COLS).eq('staff_code', user.code || '~none~'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true };
+    }
+    const now = Date.now();
+    return { ok: true, rows: rows.map(r => topupRow(r, user.code, now)).sort(topupWaitFirst) };
+  },
+
+  /** THE DESK. Waiting first, longest-waiting first among those, because that is the only
+      order a rule that says "must never be delayed" can be served by. */
+  async topupQueue(db, user, args) {
+    requireNav(user, 'topups');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('topups').select(TOPUP_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true,
+        counts: { requested: 0, verified: 0, paid: 0, unlocked: 0, waiting: 0 },
+        checks: TOPUP_CHECKS.map(([js, , label]) => ({ key: js, label })) };
+    }
+    const now = Date.now();
+    const all = rows.map(r => topupRow(r, user.code, now));
+    const want = String(a.state || '').trim();
+    const shown = all
+      .filter(r => want === 'all' ? true : want ? r.status === want
+        : (r.status !== 'unlocked' && r.status !== 'rejected'))
+      .sort(topupWaitFirst);
+    const waiting = all.filter(r => r.status === 'requested' || r.status === 'verified');
+    return { ok: true, rows: shown,
+      checks: TOPUP_CHECKS.map(([js, , label]) => ({ key: js, label })),
+      counts: {
+        requested: all.filter(r => r.status === 'requested').length,
+        verified: all.filter(r => r.status === 'verified').length,
+        paid: all.filter(r => r.status === 'paid').length,
+        unlocked: all.filter(r => r.status === 'unlocked').length,
+        waiting: waiting.length,
+        // The number B.5 exists to keep at zero: the longest anybody is currently waiting.
+        longestWaitMins: waiting.reduce((mx, r) => Math.max(mx, r.waitedMins || 0), 0),
+      } };
+  },
+
+  /** MOVE ONE (SOP B.2-B.6). Verifying, paying and confirming the unlock are three different
+      acts by possibly three different people, so each is its own step with its own stamp. */
+  async topupUpdate(db, user, args) {
+    requireNav(user, 'topups');
+    requireWrite(user);
+    const a = args || {};
+    const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    const id = String(a.id || '').trim();
+    if (!isUuid(id)) bad('Top-up haijachaguliwa. / No top-up chosen.');
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('topups').select(TOPUP_COLS).eq('id', id));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      bad(TOPUP_NOT_READY);
+    }
+    const row = rows.find(r => String(r.id) === id);
+    if (!row) bad('Top-up haipo. / That top-up no longer exists.');
+    if (row.status === 'unlocked') bad('Top-up hii imekamilika. / That top-up is already complete.');
+    const step = String(a.step || '').trim().toLowerCase();
+    const at = new Date().toISOString();
+    const patch = { updated_by: user.name || '', updated_at: at };
+    const comment = S(a.comment, 2000);
+
+    if (step === 'verify') {
+      /* B.2 AND B.3 ARE ONE STEP AND BOTH ARE REQUIRED. Verifying "the IMEI" without checking
+         who actually paid is how a top-up gets sent against somebody else's money. */
+      if (a.imeiOk !== true) bad('Thibitisha IMEI kwanza (SOP B.2). / Confirm the IMEI first.');
+      if (a.payerOk !== true) bad('Thibitisha jina la mlipaji dhidi ya benki (SOP B.3). / Confirm the payer against the bank record.');
+      patch.status = 'verified'; patch.verified_by = user.name || ''; patch.verified_at = at;
+      if (a.payerName != null && S(a.payerName, 160)) patch.payer_name = S(a.payerName, 160);
+      if (a.price != null && String(a.price).trim() !== '') {
+        const price = Math.round(num(a.price));
+        if (!(price >= 0)) bad('Bei si sahihi. / That is not a price.');
+        patch.price = price;
+        patch.balance = Math.max(0, price - num(row.paid_amount));
+      }
+    } else if (step === 'pay') {
+      if (row.status !== 'verified') bad('Thibitisha kwanza kabla ya kulipa (SOP B.2/B.3). / Verify it before paying.');
+      const ref = S(a.paymentRef, 120);
+      if (!ref) bad('Andika kumbukumbu ya malipo. / Give the payment reference.');
+      patch.status = 'paid'; patch.paid_by = user.name || ''; patch.paid_at = at; patch.payment_ref = ref;
+    } else if (step === 'unlock') {
+      /* B.6: somebody actually rang the customer. Recording an unlock nobody confirmed is the
+         one lie this table exists to prevent. */
+      if (row.status !== 'paid') bad('Simu haiwezi kufunguliwa kabla ya malipo. / It cannot be unlocked before it is paid.');
+      if (a.confirmed !== true) bad('Thibitisha na mteja au ajenti kuwa simu imefunguliwa (SOP B.6). / Confirm with the customer that the phone opened.');
+      patch.status = 'unlocked'; patch.unlocked_by = user.name || ''; patch.unlocked_at = at;
+    } else if (step === 'reject') {
+      if (!comment) bad('Sababu inahitajika ukikataa. / A reason is required when rejecting.');
+      patch.status = 'rejected';
+    } else if (step !== 'note') {
+      bad('Hatua si sahihi. / Unknown step.');
+    }
+    if (comment) patch.comment = comment;
+    for (const [js, col] of TOPUP_CHECKS) if (a.checks && a.checks[js] === true) patch[col] = true;
+    if (Object.keys(patch).length === 2) bad('Hakuna kilichobadilika. / Nothing to save.');
+    /* GUARDED on the status that was read, so two desks cannot both pay the same top-up. */
+    const { data, error } = await db.from('topups').update(patch)
+      .eq('id', id).eq('status', row.status).select('id');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) bad('Top-up hii imebadilishwa na mtu mwingine sasa hivi. / Somebody else just changed this top-up.');
+    return { ok: true, id, status: patch.status || row.status };
   },
 
   /* =====================================================================================
