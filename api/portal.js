@@ -8117,7 +8117,15 @@ const FNS = {
     const seen = new Map();
     roleRows.forEach(r => { const k = K(r.role); if (k) seen.set(k, { role: k, tabs: r.tabs || [] }); });
     rows.forEach(r => { const k = K(r.role); if (k && !seen.has(k)) seen.set(k, { role: k, tabs: [] }); });
-    ['ADMIN', 'MANAGER', 'FINANCE', 'RSM', 'CREDIT LEAD', 'GENERAL DUTY', 'STORE', 'IT', 'AUDITOR']
+    /* THE SUGGESTED SET, WITH THE CEO'S NEW NAMES ON IT.
+       "Agreed to change hoop dept names GENERAL DUTY into SALES COORDINATOR ... CREDIT into
+        PORTFOLIO AND COMPLIANCE OFFICER"
+       Only a SUGGESTION list: every role that already exists on a code or in the roles table
+       is merged in above this line, so a code still carrying GENERAL DUTY keeps working and
+       keeps appearing. Changing what is offered is what makes the next code created carry
+       the new name; it takes nothing away from the ones that exist. */
+    ['ADMIN', 'MANAGER', 'FINANCE', 'RSM', 'PORTFOLIO AND COMPLIANCE OFFICER',
+      'SALES COORDINATOR', 'STORE', 'IT', 'AUDITOR']
       .forEach(k => { if (!seen.has(k) && !hiddenSet.has(k)) seen.set(k, { role: k, tabs: [] }); });
     // How many codes hold each role decides whether the page may offer to delete it.
     const useCount = {};

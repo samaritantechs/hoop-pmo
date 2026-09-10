@@ -726,6 +726,14 @@ function paneFailed(m, e){
 function isoToday(off){ var d=new Date(); d.setDate(d.getDate()+(off||0)); var p=function(n){return('0'+n).slice(-2);}; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 
 var CODE='', BOOT=null, TAB='dash';
+/* THE TWO DEPARTMENTS THE CEO RENAMED, WRITTEN DOWN ONCE.
+     "Agreed to change hoop dept names GENERAL DUTY into SALES COORDINATOR since they analyze
+      and push sales, CREDIT into PORTFOLIO AND COMPLIANCE OFFICER since they make followups"
+   Every sentence on this page that names either desk reads it from here. They used to be
+   typed as literals in a dozen places, which is how the NEXT rename would have got half done
+   and stayed that way. The stored keys -- GENERAL_DUTY, CREDIT -- are untouched: a rename is
+   a change of name, and the name is what a person reads, never what a row holds. */
+var DEPT={SC:'Sales Coordinator',PC:'Portfolio and Compliance Officer'};
 /* EVERY TABLE EXPORTS TO EXCEL: a button injected above each table automatically, so
    every report in every tab -- including tabs added later -- is born exportable.
    CSV with a BOM: Excel opens it clean, Swahili characters intact. Hidden rows
@@ -3254,8 +3262,8 @@ function devPaint_(m, d, at){
        show every phone, which is exactly why the missing button needs a sentence. */
     +'<div class="note" style="font-size:11.5px;margin-bottom:8px">'
     +(canLock
-      ? 'Dawati la stoo: kufunga na kufunga upya. Kufungua kunafanywa na <b>General duty</b> kwenye dawati la kufungua. '
-        +'/ The store bench locks and re-locks; unlocking is general duty\'s, on their own pane.'
+      ? 'Dawati la stoo: kufunga na kufunga upya. Kufungua kunafanywa na <b>'+DEPT.SC+'</b> kwenye dawati la kufungua. '
+        +'/ The store bench locks and re-locks; unlocking is the '+DEPT.SC+'\'s, on their own pane.'
       : 'Dawati la kufungua (POS): kufungua na kuachia. Kufunga kunafanywa na <b>stoo</b>. '
         +'/ The POS desk unlocks and releases; locking is the store keeper\'s.')
     +'</div>'
@@ -3697,9 +3705,9 @@ var DEVBULK={
     /* Not "irreversible" -- it is not -- but not "harmless" either. Every one of these goes
        dark to whoever is holding it, and on a pasted list that is a number nobody counted. */
     warn:'Kila simu kwenye orodha itaenda gizani kwa aliye nayo hadi ifunguliwe. Kufungua ni '
-      +'kazi ya <b>General duty</b> kwenye dawati lao. Utaulizwa sababu — moja kwa orodha nzima. '
+      +'kazi ya <b>'+DEPT.SC+'</b> kwenye dawati lao. Utaulizwa sababu — moja kwa orodha nzima. '
       +'/ Every handset on this list goes dark to whoever holds it until it is opened again, '
-      +'which is <b>general duty\'s</b> to do on their own pane. You will be asked for one '
+      +'which is the <b>'+DEPT.SC+'\'s</b> to do on their own pane. You will be asked for one '
       +'reason, and it is recorded against all of them.',
     go:'Funga / Lock',
   },
@@ -5065,7 +5073,7 @@ function drawImpAppr(m){
           +'<button class="btn sm ghost danger" data-rld="'+esc(r.role)+'">Futa</button></td></tr>'; }).join('')
         +'</tbody></table></div>':'<div class="mut">Hakuna wadhifa bado. / No roles yet.</div>')
       +'<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">'
-      +'<input id="rlRole" class="inp" style="flex:2;min-width:140px" placeholder="Wadhifa (mfano CREDIT, RSM, CEO)">'
+      +'<input id="rlRole" class="inp" style="flex:2;min-width:140px" placeholder="Wadhifa (mfano SALES COORDINATOR, RSM, CEO)">'
       +'<input id="rlRate" class="inp" style="flex:1;min-width:110px" type="number" min="0" step="1" placeholder="TZS kwa siku">'
       +'<button class="btn sm" id="rlAdd">Hifadhi / Save</button></div>'
       +'</div>'
@@ -7224,8 +7232,24 @@ function issueNotReady(){
     +'<b>db/migrations/RUN-ME-2026-09-08-issues.sql</b> kwenye Supabase, kisha rudi hapa. '
     +'/ The issues tables have not been created yet — run that migration, then come back.</div>';
 }
-var ISSUE_DEPT_LABEL={STORE:'Stoo / Store',FINANCE:'Fedha / Finance',IT:'IT',HR:'HR',CREDIT:'Mikopo / Credit',
-  SALES:'Mauzo / Sales',GENERAL_DUTY:'General duty',ADMIN:'Admin'};
+/* THE TWO DEPARTMENTS THE CEO RENAMED, IN ONE PLACE.
+   =========================================================================================
+     "Agreed to change hoop dept names GENERAL DUTY into SALES COORDINATOR since they
+      analyze and push sales, CREDIT into PORTFOLIO AND COMPLIANCE OFFICER since they make
+      followups"
+
+   THE KEYS DO NOT MOVE, ONLY THE LABELS. `GENERAL_DUTY` and `CREDIT` are written into
+   `issues.department`, into `issues.to_role`, and into the ISSUES_EMAIL setting the owner
+   maintains by hand. Renaming the key would orphan every issue already filed and silently
+   stop routing mail for both departments -- a rename is a change of NAME, and the name is
+   what a person reads, never what a row stores.
+
+   AND THEY ARE NAMED ONCE, in DEPT at the top of this script. The old name was typed as a
+   literal in a dozen sentences across this page, which is exactly why a rename at the next
+   meeting would have missed half of them. */
+var ISSUE_DEPT_LABEL={STORE:'Stoo / Store',FINANCE:'Fedha / Finance',IT:'IT',HR:'HR',
+  CREDIT:'Mikopo / '+DEPT.PC,
+  SALES:'Mauzo / Sales',GENERAL_DUTY:DEPT.SC,ADMIN:'Admin'};
 var ISSUE_KIND_LABEL={issue:'Suala / Issue',complaint:'Malalamiko ya mteja / Customer complaint',document:'Nyaraka inayodaiwa / Missing document',
   performance:'Utendaji wa ajenti / Agent performance',system:'Mfumo · ukarabati / System · repair'};
 var ISSUE_SUBJECT_LABEL={'':'Hakuna / None',imei:'IMEI ya mteja / Customer IMEI',agent:'Ajenti / Agent',receipt:'Risiti / Receipt no.',
@@ -7707,7 +7731,7 @@ function drawSalesPerf(m){
 function salesRender(m){
   var d=SALESPERF.data; if(!d) return;
   var target=d.dailyTarget||0;
-  var pivots=[['general','General duty'],['rsm','RSM'],['agent','Commission agent'],['company','Company']];
+  var pivots=[['general',DEPT.SC],['rsm','RSM'],['agent','Commission agent'],['company','Company']];
   var bar='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'
     +'<button class="btn sm ghost" id="spPrev" title="previous week">◀</button>'
     +'<span style="font-size:12px;font-weight:600">'+esc(d.from||'')+' → '+esc(d.to||'')+'</span>'
@@ -7796,8 +7820,8 @@ function salesRender(m){
       +'</div>';
   }
   m.innerHTML='<div class="card"><h2>Sales performance</h2>'
-    +'<div class="mut" style="margin-bottom:8px">Mauzo ya kila siku, yaliyofuatiliwa kwa: mhudumu (general duty), RSM, wakala wa komisheni, na jumla ya kampuni. '
-    +'/ Daily sales pivoted by general duty, RSM, commission agent, and company.</div>'
+    +'<div class="mut" style="margin-bottom:8px">Mauzo ya kila siku, yaliyofuatiliwa kwa: mhudumu ('+DEPT.SC+'), RSM, wakala wa komisheni, na jumla ya kampuni. '
+    +'/ Daily sales pivoted by '+DEPT.SC+', RSM, commission agent, and company.</div>'
     +bar+tabs+body+'</div>';
   var step=function(n){
     var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
@@ -8111,7 +8135,7 @@ function drawAudit(m){
         Object.assign({color:'bad'},mzBy('HAKUNA_WATU')))
       +tile('Bulk/Pending',money((c.bulk||0)+(c.pending||0)),'',mzBy('BULK|PENDING'))
       +'</div>'
-      +'<div class="mut" style="margin-bottom:8px">General duty\'s sales checked against the Watu register by IMEI. Each seller is identified by payout number from the agents register (next of kin on file).</div>'
+      +'<div class="mut" style="margin-bottom:8px">The '+DEPT.SC+'\'s sales checked against the Watu register by IMEI. Each seller is identified by payout number from the agents register (next of kin on file).</div>'
       +'<div class="scroll"><table><thead><tr><th>Date</th><th>Customer</th><th>IMEI</th><th class="r">Price</th><th>Seller</th><th>Watu agent</th><th>Status</th></tr></thead><tbody>'
       +mzRows(d.rows||[]).map(function(r){
         var seller='<b>'+esc(r.seller||'—')+'</b>'
@@ -9044,7 +9068,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',oldstock:'OLD STOCK (held, never locked)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking (general duty at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',oldstock:'OLD STOCK (held, never locked)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking (the sales coordinator at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',

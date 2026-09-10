@@ -355,8 +355,21 @@ async function calledTodaySet(db, nowMs) {
 /* Only CREDIT people are dealt shares -- every other role opens the WHOLE book (the
    owner's rule; per-agent views come in a later stage). The app registers company-code
    users as OFFICER, so both spellings count as credit. All credits share EQUALLY:
-   round-robin gives every roster member the same count, plus-minus one. */
-const CREDIT_ROLES = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CREDIT TEAM']);
+   round-robin gives every roster member the same count, plus-minus one.
+
+   THE DEPARTMENT WAS RENAMED, AND EVERY OLD SPELLING STILL COUNTS.
+   -------------------------------------------------------------------------------------
+     "Agreed to change hoop dept names ... CREDIT into PORTFOLIO AND COMPLIANCE OFFICER
+      since they make followups"
+
+   This set is matched against `call_users.role` -- written by the handsets in the field
+   and carried by every row already in that table. A rename that DROPPED the old spellings
+   would take every one of those people off the roster the morning it deployed: their deck
+   would open empty and nobody would be dealt a share. So the new title is ADDED and the
+   old ones stay. This was never one name; it has held four spellings since the day it was
+   written, and a fifth costs nothing. */
+export const CREDIT_ROLES = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CREDIT TEAM',
+  'PORTFOLIO AND COMPLIANCE OFFICER', 'PORTFOLIO AND COMPLIANCE', 'PORTFOLIO & COMPLIANCE']);
 /* EXPLICIT roles only -- no fallback. An old trial account with a blank role must NOT
    be dealt a share by default (that bug put the admin's own phone into the deal). A
    person registered with a personal CREDIT access code counts, leader flag or not. */
