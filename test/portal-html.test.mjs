@@ -2310,3 +2310,16 @@ test('portal.html: the stock report reads both trackers, and the sync columns so
   assert.match(sec, /<th class="r">KIMYA<\/th><th class="r">STOO IMEKAA<\/th>/);
   assert.match(sec, /money\(r\.agedDays\)\+' siku'/);
 });
+
+test('portal.html: the sellers table names its source and shows the gap between the books', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawAgents', html);
+  assert.match(fn, /deki ya Watu/, 'the heading says which book the sales column counted');
+  assert.match(fn, /Sales \(deki\)/);
+  assert.match(fn, /<th class="r">Duka<\/th><th class="r">Tofauti<\/th>/,
+    'the shop book sits beside it, with the gap');
+  assert.match(fn, /s\.shopOnly\?' <span class="chip bad">duka pekee<\/span>'/,
+    'and a seller the shop pays that the deck cannot account for is marked on the row');
+  assert.match(fn, /t\.shopOnly\|\|0\)\?'<div class="note bad"/, 'and counted in a banner');
+  assert.match(fn, /var t=d\.totals\|\|\{\};/);
+});

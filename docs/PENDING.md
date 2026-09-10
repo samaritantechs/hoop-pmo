@@ -891,3 +891,31 @@ something, and a phone that never spoke sorts above every silence that has an en
 Also here: the guard that catches a pane drawing tiles without wiring them now keys on whether
 the tile carries a `go` handler. That is sharper, not looser — it also catches a pane that builds
 a door and wires nothing, while no longer accusing a section that only prints figures.
+
+## 28. SHIPPED 2026-09-10: who sold it is the Watu deck's answer
+
+"I said we trace sales in the watu deck uploaded by credits." The full story is
+[`docs/SALES-SOURCE.md`](SALES-SOURCE.md); the short version.
+
+**Do:** nothing. No migration, no setting. The numbers on Agent scorecards → Sellers will move,
+because they are now counting the book the amendment names.
+
+Everywhere that matters already drove off the deck — targetsView measures against `watu_loans`,
+commBuild builds the sheet from it and treats a shop disagreement as a DISPUTE. The AGENT
+SCORECARD was the odd one out: its sales column counted receipts out of `hoop_sales`, keyed on
+the payout phone, so an agent could look busy on phones the loan book had never heard of.
+
+The scorecard now counts the deck. The shop book stays BESIDE it as a cross-check rather than
+being dropped — a blind spot traded for another blind spot is not a fix — so the row carries
+Sales (deki), Duka, and the gap between them. A seller the shop pays that the deck cannot account
+for at all gets a red "duka pekee" chip and a banner counting them. `salesSource` rides on the
+response and the heading says it, because a column headed "sales" that quietly changed meaning is
+worse than one that names its book.
+
+salesAudit and commBuild still read BOTH books on purpose: comparing them is the first one's
+whole job, and the second refuses to pay a phone the shop credits to somebody else. A test
+asserts neither quietly becomes single-source.
+
+Also here: agentScore's deck read never selected `price` — it did not need it while the money
+came from the shop book — so this would have made every deck amount silently zero. Fixed in both
+column tiers.

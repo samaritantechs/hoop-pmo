@@ -7156,6 +7156,7 @@ function drawAudit(m){
 function drawAgents(m){
   m.innerHTML='<div class="card"><h2>Agent scorecards</h2><div class="sk"></div></div>';
   srv('agentScore',{from:MZ.from,to:MZ.to}).then(function(d){
+    var t=d.totals||{};
     m.innerHTML='<div class="card"><h2>Agent scorecards — how their customers behave (Watu)</h2>'
       +mzDates()
       +'<div class="mut" style="margin-bottom:8px">Per Watu agent: how their customers behave on the follow-up lists. Top = chase first (most locked 7+).</div>'
@@ -7174,16 +7175,29 @@ function drawAgents(m){
       }).join('')
       +((d.watuAgents||[]).length?'':'<tr><td colspan="7" class="mut">No Watu data yet.</td></tr>')
       +'</tbody></table></div></div>'
-      +'<div class="card"><h2>Sellers — commission (hoopltd.shop, '+esc(d.from)+' → '+esc(d.to)+')</h2>'
-      +'<div class="mut" style="margin-bottom:8px">Per payout number: how many sales, how much, and who they are in the agents register.</div>'
-      +'<div class="scroll"><table><thead><tr><th>Seller</th><th class="r">Sales</th><th class="r">TZS</th><th>Agents register</th></tr></thead><tbody>'
+      /* WHO SOLD IT IS THE DECK'S ANSWER -- "I said we trace sales in the watu deck uploaded
+         by credits". Sales counts the loan book; the shop's own book sits beside it as a
+         cross-check, because the GAP between the two is the most interesting number here and
+         dropping the shop column would trade one blind spot for another. */
+      +'<div class="card"><h2>Sellers — deki ya Watu ('+esc(d.from)+' → '+esc(d.to)+')</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Mauzo yanahesabiwa kwenye <b>deki ya Watu</b> iliyopakiwa na credits. '
+      +'Safu ya <b>duka</b> ni kitabu cha hoopltd.shop, kwa kulinganisha tu. '
+      +'/ Sales are counted from the Watu deck; the shop column is the shop’s own book, for comparison.</div>'
+      +((t.shopOnly||0)?'<div class="note bad" style="margin-bottom:8px">Wauzaji '+money(t.shopOnly)
+        +' wanalipwa na duka kwa simu ambazo deki haizijui kabisa. / Sellers the shop credits and the loan book has never heard of.</div>':'')
+      +'<div class="scroll"><table><thead><tr><th>Seller</th><th class="r">Sales (deki)</th><th class="r">TZS (deki)</th>'
+      +'<th class="r">Duka</th><th class="r">Tofauti</th><th>Agents register</th></tr></thead><tbody>'
       +(d.sellers||[]).map(function(s){
-        return '<tr><td><b>'+esc(s.name||'—')+'</b><div class="mut" style="font-size:10px">'+esc(s.phone||'')+'</div></td>'
+        return '<tr><td><b>'+esc(s.name||'—')+'</b>'
+          +(s.shopOnly?' <span class="chip bad">duka pekee</span>':'')
+          +'<div class="mut" style="font-size:10px">'+esc(s.phone||'')+'</div></td>'
           +'<td class="r">'+money(s.sales)+'</td><td class="r">'+money(s.amount)+'</td>'
+          +'<td class="r">'+money(s.shopSales)+'</td>'
+          +'<td class="r"'+(s.drift?' style="color:var(--bad)"':'')+'>'+(s.drift>0?'+':'')+money(s.drift)+'</td>'
           +'<td>'+(s.reg?esc(s.reg.name)+' · '+esc(s.reg.role)+(s.reg.branch?' · '+esc(s.reg.branch):'')+(s.reg.kin?'<div class="mut" style="font-size:10px">kin: '+esc(s.reg.kin)+' '+esc(s.reg.kinPhone)+'</div>':'')
                        :'<span class="chip warn">not in register</span>')+'</td></tr>';
       }).join('')
-      +((d.sellers||[]).length?'':'<tr><td colspan="4" class="mut">No sales report yet — upload one at /upload.</td></tr>')
+      +((d.sellers||[]).length?'':'<tr><td colspan="6" class="mut">No Watu deck yet — upload one at /upload.</td></tr>')
       +'</tbody></table></div></div>';
     mzWire(m,drawAgents);
   }).catch(function(e){ paneFailed(m,e); });

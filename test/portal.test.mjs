@@ -751,13 +751,31 @@ test('agentScore scores Watu agents by their customers and sellers by their payo
   assert.equal(sara.paidPct, 0.5);
   assert.equal(sara.over45, 1, 'the 100-day-old loan is past the window');
   assert.equal(r.watuAgents[0].agentId, '143201', 'most locked7 first -- the one to chase');
-  const cyp = r.sellers.find(s => s.phone === '0780866571');
-  assert.equal(cyp.sales, 3, 'S0 + S1 + S3 all pay the same payout phone');
-  assert.equal(cyp.amount, 1509000);
-  assert.equal(cyp.reg.name, 'Cyprian Dotto Renatus', 'payout phone resolves the identity');
+  /* WHO SOLD IT IS THE DECK'S ANSWER NOW -- "I said we trace sales in the watu deck uploaded
+     by credits". The shop book stays beside it as a cross-check rather than as the count, and
+     this fixture is exactly why: the shop paid Cyprian for THREE receipts while the loan book
+     credits him with one and the other two to two different people. That gap used to be
+     invisible on this pane, because the pane was counting the shop's intention to pay. */
+  const cyp = r.sellers.find(s => (s.reg && s.reg.name) === 'Cyprian Dotto Renatus');
+  assert.equal(cyp.shopSales, 3, 'S0 + S1 + S3 all pay the same payout phone');
+  assert.equal(cyp.shopAmount, 1509000);
+  assert.equal(cyp.sales, 1, 'but the deck credits him with one of them');
+  assert.equal(cyp.drift, -2, 'and the gap is the number worth reading');
+  assert.equal(cyp.reg.name, 'Cyprian Dotto Renatus', 'payout phone still resolves the identity');
+  assert.equal(cyp.shopOnly, false);
+
   const elia = r.sellers.find(s => s.phone === '0757578866');
-  assert.equal(elia.sales, 3);
+  assert.equal(elia.shopSales, 3);
+  assert.equal(elia.sales, 0, 'the loan book has never heard of these three');
+  assert.equal(elia.shopOnly, true, 'paid for phones the deck cannot account for -- open this row');
   assert.equal(elia.reg, null, 'not in the register yet -- shown as such, never invented');
+
+  // The deck's own sellers appear whether or not the shop book mentions them.
+  const saraSeller = r.sellers.find(s => s.name === 'Sara Fisoo');
+  assert.equal(saraSeller.sales, 1);
+  assert.equal(saraSeller.shopSales, 0);
+  assert.equal(r.salesSource, 'watu_loans', 'the pane says which book it counted');
+  assert.ok(r.totals.shopOnly >= 1 && r.totals.drifting >= 2);
 });
 
 test('ADMIN role passes every portal gate even with a blank tabs cell', async () => {
