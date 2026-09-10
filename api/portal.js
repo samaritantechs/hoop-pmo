@@ -888,16 +888,37 @@ async function oldStockIndex(db) {
     if (!tableMissing(e)) throw e;
     notReady = true;
   }
-  /* WHAT HAS SINCE BEEN FOUND. Both reads are best-effort: a missing devices table means we
-     have locked nothing, which is the honest reading, not a reason to refuse the list. */
+  /* WHAT HAS SINCE BEEN FOUND. Every read is best-effort: a missing devices table means we have
+     locked nothing, which is the honest reading, not a reason to refuse the list. */
   const locked = new Set();
   const sold = new Set();
   try {
     for (const d of await fetchAll(() => db.from('devices').select('imei'))) locked.add(String(d.imei));
   } catch (ignored) { /* nothing enrolled yet */ }
-  try {
-    for (const l of await fetchAll(() => db.from('watu_loans').select('imei'))) sold.add(String(l.imei));
-  } catch (ignored) { /* no deck yet */ }
+
+  /* SOLD MEANS SOLD, WHICHEVER BOOK SAYS SO -- and it stays sold after the book forgets.
+     -------------------------------------------------------------------------------------
+     Three reads, and the third is the one that makes the hand-off permanent:
+
+       watu_loans   the Watu deck
+       hoop_sales   our own shop's export -- a different upload, the same event. A handset
+                    written in one and not the other used to sit in OLD STOCK with a receipt
+                    against it, because only the deck was asked.
+       stock_audit  what we STAMPED when it moved. The decks are re-uploaded over themselves
+                    with rows gone; a phone that moved in September must not walk back into the
+                    un-enrolled list in October because Watu trimmed its export. Once the sale
+                    is stamped, the move is done with.
+
+     Membership in stock_audit is not itself evidence -- that table also holds handsets merged
+     off the stock report alone -- so it counts only where a sale was actually captured. */
+  const feedImeis = async (table, cols) => {
+    try { return await fetchAll(() => db.from(table).select(cols)); } catch (ignored) { return []; }
+  };
+  for (const l of await feedImeis('watu_loans', 'imei')) sold.add(String(l.imei));
+  for (const s of await feedImeis('hoop_sales', 'imei')) sold.add(String(s.imei));
+  for (const r of await feedImeis('stock_audit', 'imei, sale_date, customer, price')) {
+    if (stampedSale(r)) sold.add(String(r.imei));
+  }
 
   const out = rows.map(r => ({
     imei: String(r.imei), item: r.item || '',
@@ -1499,6 +1520,14 @@ const RSM_TIER = TARGET_TIERS.indexOf('REGIONAL_MANAGER');
     stamped -- it is the absence of one, and treating it as filled would close the column
     against the upload that could finally answer it. */
 const unanswered = v => v == null || String(v).trim() === '';
+
+/** DOES A STAMPED ROW ACTUALLY CARRY A SALE? stock_audit holds a row for every handset this
+    audit has ever merged -- including ones stamped off the stock report alone, which says who
+    was holding a phone and nothing about it being sold. So membership is not the test; a date,
+    a buyer or a price is. This is what lets the hand-off between the two stock lists be
+    PERMANENT without a `moved` column: the stamp is the receipt. */
+const stampedSale = r => !!r && (!unanswered(r.sale_date) || !unanswered(r.customer)
+  || (r.price != null && num(r.price) > 0));
 
 /** WHO THE RSM WAS. Not on any sale feed -- Watu does not know our hierarchy -- so it is read
     off the staff register by walking up from the agent until a Regional_Manager is reached.
@@ -6113,13 +6142,29 @@ const FNS = {
 
        So a sold handset joins on the strength of the sale, with no device row behind it. Its
        status reads `haijafungwa` rather than being dressed as one of the four states the
-       register can hold: we do not control this phone, and the pane must not imply we do. */
+       register can hold: we do not control this phone, and the pane must not imply we do.
+
+       ANY SALE BOOK MOVES IT, AND THE MOVE IS PERMANENT.
+       -----------------------------------------------------------------------------------
+       Both sale feeds are asked -- the Watu deck and our own shop's export are two uploads of
+       the same event, and a handset written in one and not the other is still sold -- and so
+       is the stamp we made last time. That third test is what makes this one-way: the decks
+       are re-uploaded over themselves with rows deleted, and without it a phone that moved in
+       September would reappear in OLD STOCK in October because Watu trimmed its export.
+
+       oldStockIndex() asks the identical question, deliberately. The two lists are defined
+       against each other, so the day they disagreed a handset would be on both or on neither
+       -- and the whole point of having no `moved` column is that there is only one answer. */
     let joined = [];
     try {
       const have = new Set(devs.map(d => String(d.imei)));
       const olds = await fetchAll(() => db.from('old_stock')
         .select('imei, item, agent, agent_phone, rsm, rsm_phone'));
-      joined = olds.filter(o => !have.has(String(o.imei)) && ctx.watu.has(String(o.imei)));
+      joined = olds.filter(o => {
+        const k = String(o.imei);
+        if (have.has(k)) return false;   // locked on a visit: it is in the register on its own
+        return ctx.watu.has(k) || ctx.sales.has(k) || stampedSale(stampedBy.get(k));
+      });
     } catch (ignored) { joined = []; }   // no old_stock table yet: the register alone, as before
 
     const rows = [];

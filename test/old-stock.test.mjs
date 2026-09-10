@@ -161,6 +161,96 @@ test('a sale on a never-locked handset shows up in NEW STOCK', async () => {
   assert.equal(os.counts.sold, 1);
 });
 
+test('our own shop’s deck moves a handset too, not just Watu’s', async () => {
+  /* "So all stock that read in watu deck although in old stock moves and permanently stamps
+      its appropriate column data into new stock, the other deck's columns inclusive?"
+
+     TWO UPLOADS, ONE EVENT. watu_loans is the finance company's export and hoop_sales is our
+     own shop's; a handset written in one and not the other is sold either way. Asking only the
+     first left a phone sitting in OLD STOCK with a receipt against it -- listed as never
+     enrolled and gathering dust, while the till had already rung it up. */
+  const db = fakeDb({
+    stock_audit: [], devices: [], watu_loans: [], hoop_aged_stock: [], hoop_agents: [],
+    old_stock: [old({ imei: 'TILL' }), old({ imei: 'QUIET' })],
+    hoop_sales: [{ imei: 'TILL', sale_date: D(-2), branch: 'Dar', agent: 'Denis John',
+      client_name: 'Neema Joseph', client_phone: '0716548153', model: 'A07',
+      commission_agent: 'Denis John', commission_phone: '0754000111', price: 470000 }],
+  });
+  const ns = await _FNS.newStock(db, STORE, {});
+  const row = ns.rows.find(r => r.imei === 'TILL');
+  assert.ok(row, 'the shop’s own receipt moves it');
+  assert.equal(row.customer, 'Neema Joseph');
+  assert.equal(row.price, 470000);
+  assert.equal(row.neverLocked, true, 'still nothing we control -- only the sale moved it');
+
+  // And OLD STOCK asks the identical question, so it is on one list, not both and not neither.
+  const os = await _FNS.oldStock(db, STORE, {});
+  assert.deepEqual(os.rows.map(r => r.imei), ['QUIET']);
+  assert.equal(os.counts.sold, 1);
+});
+
+test('once stamped, the move is permanent -- the deck can drop the row and it stays moved', async () => {
+  /* THE WORD IS "PERMANENTLY", AND THIS IS THE HALF THAT EARNS IT. The decks are re-uploaded
+     over themselves with rows deleted -- that is the whole reason the sale is stamped rather
+     than joined. Without this the hand-off would be a live join wearing a stamp's clothes: a
+     handset that moved in September would walk back into the un-enrolled list in October
+     because Watu trimmed its export, and the ground team would be sent to fetch a phone that
+     was sold two months ago. */
+  const first = fakeDb({
+    stock_audit: [], devices: [], hoop_sales: [], hoop_aged_stock: [], hoop_agents: [],
+    old_stock: [old({ imei: 'GONE' })],
+    watu_loans: [{ imei: 'GONE', client_name: 'Alafati K Selemani', client_mobile: '255716548153',
+      agent: 'Denis John', team: 'KINONDONI', model_details: 'A07',
+      disbursed_date: D(-40), price: 450000 }],
+  });
+  await _FNS.newStock(first, STORE, {});
+  const stamped = first._dump('stock_audit').map(r => Object.assign({}, r));
+  assert.equal(stamped.length, 1, 'the sale was stamped on the way through');
+
+  /* The next month's deck no longer mentions it. Everything else is as it was. */
+  const later = fakeDb({
+    stock_audit: stamped, devices: [], watu_loans: [], hoop_sales: [],
+    hoop_aged_stock: [], hoop_agents: [], old_stock: [old({ imei: 'GONE' })],
+  });
+  const ns = await _FNS.newStock(later, STORE, {});
+  const row = ns.rows.find(r => r.imei === 'GONE');
+  assert.ok(row, 'still on NEW STOCK, on the strength of the stamp alone');
+  assert.equal(row.customer, 'Alafati K Selemani', 'with the columns the deck has since lost');
+  assert.equal(row.price, 450000);
+  assert.equal(row.neverLocked, true);
+
+  // And it does not reappear on the worklist as something still to go and find.
+  const os = await _FNS.oldStock(later, STORE, {});
+  assert.equal(os.rows.length, 0);
+  assert.equal(os.counts.sold, 1);
+});
+
+test('a stamp with no sale on it is not a sale, and does not move anything', async () => {
+  /* stock_audit holds a row for every handset the audit has ever merged -- including ones
+     filled from the stock report alone, which says who was HOLDING a phone and nothing
+     whatever about it being sold. Counting membership as evidence would empty OLD STOCK of
+     exactly the handsets it exists to chase. A date, a buyer or a price is the test. */
+  const db = fakeDb({
+    devices: [], watu_loans: [], hoop_sales: [], hoop_aged_stock: [], hoop_agents: [],
+    old_stock: [old({ imei: 'HELD' })],
+    stock_audit: [{ imei: 'HELD', agent: 'ABEL MGANGA', rsm: 'ANORD SAWE', model: 'A07',
+      customer: null, sale_date: null, price: null, src: { agent: 'hoop_aged_stock' } }],
+  });
+  const os = await _FNS.oldStock(db, STORE, {});
+  assert.deepEqual(os.rows.map(r => r.imei), ['HELD'], 'still outstanding, still to be found');
+  assert.equal(os.counts.sold, 0);
+  assert.ok(!(await _FNS.newStock(db, STORE, {})).rows.some(r => r.imei === 'HELD'));
+
+  /* A PRICE OF ZERO IS NOT A SALE EITHER -- it is the missing price this system already
+     refuses to stamp anywhere else. */
+  const zero = fakeDb({
+    devices: [], watu_loans: [], hoop_sales: [], hoop_aged_stock: [], hoop_agents: [],
+    old_stock: [old({ imei: 'HELD' })],
+    stock_audit: [{ imei: 'HELD', agent: 'ABEL MGANGA', customer: '', sale_date: '', price: 0 }],
+  });
+  assert.deepEqual((await _FNS.oldStock(zero, STORE, {})).rows.map(r => r.imei), ['HELD']);
+});
+
 test('the stock report’s ageing now comes from this list, newest day winning', async () => {
   /* "Use these two navs to update data of aging stock in stock reports -- not uploading aged
      stock for now." OLD STOCK ages itself to today, which is exactly why the upload can be
