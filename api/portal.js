@@ -3402,6 +3402,21 @@ const FNS = {
     const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : [a.imei || a.imeis])
       .map(x => String(x || '').trim()).filter(Boolean))];
     if (!list.length) bad('Weka IMEI. / An IMEI is required.');
+    /* THE SAME CEILING ENROLMENT HAS, AND FOR THE SAME REASON.
+       -----------------------------------------------------------------------------------
+       Every IMEI in this list goes into an `in(...)` filter, which travels as a query string:
+       past a few hundred the URL is refused by something between here and the database, and
+       what comes back is a transport error rather than an answer about phones. A bulk release
+       is now fed by a PASTE, so the list is no longer bounded by what fits on a screen -- a
+       column dragged too far is a plausible accident, and the failure it causes should be a
+       sentence about the limit rather than a stack trace about a URL.
+
+       500 is deliberately the number deviceEnrol already uses: one ceiling to remember, and
+       it is above the 500 rows deviceList can show, so tick-all on a full table still fits. */
+    if (list.length > 500) {
+      bad('IMEI nyingi mno kwa mara moja (kikomo 500). Gawa kwa makundi. '
+        + '/ Too many at once — 500 max. Split the list into batches.');
+    }
 
     const current = await fetchAll(() => db.from('devices')
       .select('imei, state, released_at, last_seen').in('imei', list));
