@@ -303,10 +303,16 @@ test('portal.html: no tile is built by hand any more', () => {
 test('portal.html: every pane that draws tiles also wires them', () => {
   const src = read('portal.html');
   /* Each drawing function, sliced at the next top-level `function` -- a pane that calls
-     tile() and never wireTiles has painted a button that does nothing. */
+     tile() and never wireTiles has painted a button that does nothing.
+
+     A TILE IS ONLY A BUTTON WHEN IT CARRIES `go`. tile() also draws display-only figures --
+     a count with no destination -- and those need no wiring at all. Keying on `go:` makes
+     this SHARPER, not looser: it now also catches a pane that builds a door and wires
+     nothing, which is the failure the test is named for, while no longer accusing a section
+     that only prints numbers. */
   const fns = src.split(/\nfunction /).slice(1);
   const missing = fns
-    .filter(f => /\btile\(/.test(f) && !/wireTiles\(/.test(f))
+    .filter(f => /\btile\(/.test(f) && /\bgo:/.test(f) && !/wireTiles\(/.test(f))
     // The helper itself and the sorters it calls are not panes.
     .filter(f => !/^(tile|wireTiles|goWith)\b/.test(f))
     .map(f => f.slice(0, f.indexOf('(')));
@@ -2266,4 +2272,41 @@ test('portal.html: a role chip shows what it grants, and shouts when it grants n
   const fn = IMP_SRC('drawCodes', html);
   assert.match(fn, /hakuna nav/, 'an empty role is visible in the list, not only in the preview');
   assert.match(fn, /\(r\.tabs\|\|\[\]\)\.length\?' \\u00B7 '\+esc\(\(r\.tabs\|\|\[\]\)\.join\('\+'\)\)/);
+});
+
+/* =========================================================================================
+   AGING BY SYNCHRONISATION -- the locked phones our server is not pinging, on the stock
+   report where the desk issuing stock will actually see them.
+   ========================================================================================= */
+test('portal.html: the sync report counts silence and never accuses anybody of theft', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('syncSection', html);
+  assert.match(fn, /c\.neverAndRipe\|\|0\)\?'<div class="note bad">/,
+    'ordered locked, never spoke, long enough ago -- that is the banner');
+  assert.match(fn, /Hazipigi ripoti/, 'the words are "not reporting"');
+  /* THE REPORT MUST NOT LABEL ANYBODY A THIEF. A boxed phone is offline for weeks by design
+     and a region with no coverage is not a fraud, so no tile, chip or cell may carry the word
+     -- and the one place it does appear is the sentence DENYING it. Checking for the negation
+     rather than banning the word outright: the honest sentence is the one worth keeping. */
+  const accusing = [...fn.matchAll(/wizi|stolen|theft|fraud/gi)];
+  assert.equal(accusing.length, 1, 'the word appears exactly once, in the line that rules it out');
+  assert.match(fn, /si wizi/, 'and that line says a silent phone is NOT theft');
+  assert.match(fn, /Uhakiki wa stoo/, 'and it states the verification rule holders are being asked to follow');
+  // Display-only tiles: no `go`, so nothing here needs wireTiles (see the guard above).
+  assert.ok(!/\bgo:/.test(fn), 'these tiles are figures, not doors');
+  assert.match(IMP_SRC('syncDays', html), /hajawahi/);
+});
+
+test('portal.html: the stock report reads both trackers, and the sync columns sort', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawStockRep', html);
+  assert.match(fn, /Promise\.all\(\[srv\('stockReqReport',STOCKR\), srv\('syncAging',SYNCQ\)\]\)/,
+    'shelf age and silence are different questions about the same handsets, on one screen');
+  assert.match(fn, /\+syncSection\(sy\)/);
+  assert.match(fn, /syncWire\(m, function\(\)\{ if\(TAB==='strep'\) drawStockRep\(m\); \}\)/);
+  /* Every table on this page sorts itself on a header click, so the only thing the columns
+     have to do is lead with a number that means something. */
+  const sec = IMP_SRC('syncSection', html);
+  assert.match(sec, /<th class="r">KIMYA<\/th><th class="r">STOO IMEKAA<\/th>/);
+  assert.match(sec, /money\(r\.agedDays\)\+' siku'/);
 });

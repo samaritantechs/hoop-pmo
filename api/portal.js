@@ -172,6 +172,9 @@ const EDITABLE_SETTINGS = [
      window stop being a typo and start being somebody working at it; SECURITY_EMAIL is
      who hears about it. Both blank-safe: 5, and nobody. */
   'SIGNIN_ALERT_FAILS', 'SECURITY_EMAIL',
+  /* How many days a LOCKED handset may stay silent before the sync tracker calls it a case
+     to chase. Blank means seven; see syncAging. */
+  'SYNC_ALERT_DAYS',
   /* ENROLMENT (IT SOP A.4, "notify the RSM/General Manager"). Either plain addresses or one
      BRANCH=address per line, so each region's RSM hears about their own people; a branch with
      no line falls back to any plain address here and then to GM_EMAIL. */
@@ -993,6 +996,20 @@ async function feedDay(db, table, col, day) {
     if (error) return 0;
     return num(count);
   } catch (e) { return 0; }
+}
+
+/* ---------- AGING BY SYNCHRONISATION: the locked phones we are not pinging ---------- */
+/* HOW MANY DAYS OF SILENCE STOP BEING A FLAT BATTERY. Seven is a judgement rather than a rule
+   -- long enough that a weekend, a journey and a dead charger have all had their chance, short
+   enough that a month has not gone by -- and it is a setting so the office can move it without
+   a deploy. Blank falls back to seven. */
+const SYNC_ALERT_DEFAULT = 7;
+async function syncAlertDays(db) {
+  try {
+    const { data } = await db.from('settings').select('value').eq('key', 'SYNC_ALERT_DAYS').maybeSingle();
+    const n = parseInt(String((data && data.value) || '').replace(/[^0-9]/g, ''), 10);
+    return (Number.isFinite(n) && n >= 1 && n <= 365) ? n : SYNC_ALERT_DEFAULT;
+  } catch (e) { return SYNC_ALERT_DEFAULT; }
 }
 
 /* ---------- THE DOOR'S OWN LOG (IT SOP D "monitor for unauthorized access") ---------- */
@@ -4979,6 +4996,126 @@ const FNS = {
     if (error) throw new Error(error.message);
     if (!data || !data.length) bad('Top-up hii imebadilishwa na mtu mwingine sasa hivi. / Somebody else just changed this top-up.');
     return { ok: true, id, status: patch.status || row.status };
+  },
+
+  /* =====================================================================================
+     AGING BY SYNCHRONISATION -- the locked phones our server is not pinging.
+     =====================================================================================
+       "Issuing of stock at stock request, by using the devices synchronization we should get
+        a report of never synced by days, so sortable columns of aging stock by synchronisation
+        for locked phones -- here we easily trace the phones that our system is not pinging
+        (could have been frauded / software booted to remove lock), so now way forward stock
+        verification will require stock holders to always connect to the internet the stock
+        they hold so that we analyze which phones are not syncing"
+
+     THE AGING TRACKER ALREADY ASKS HOW LONG A PHONE HAS SAT ON A SHELF. This asks a different
+     question about the same phones: how long since it last SPOKE TO US. A handset that is
+     locked and has stopped beating is either off, or somewhere with no network, or no longer
+     locked at all -- and the third case is the one this exists to find.
+
+     IT DOES NOT ACCUSE. A boxed phone at the station is offline for weeks by design, and a
+     region with no coverage is not a fraud. What the report does is make the silence VISIBLE
+     and attach a NAME to it, so stock verification has something to ask about. The word used
+     on screen is "hazipigi ripoti" -- not reporting -- and never "stolen".
+
+     SILENCE IS MEASURED FROM TWO CLOCKS, because one of them lies. A phone locked five minutes
+     ago has not had time to confirm anything, and counting it as silent would bury the real
+     cases under every lock ordered today. So a row is only SUSPECT once the silence has
+     outlasted the order that caused it. */
+
+  async syncAging(db, user, args) {
+    /* Three desks need this and it is a read: the store keeper who will chase the handset,
+       the desk issuing stock against it, and whoever reads the tracker. */
+    requireAnyNav(user, ['stockrep', 'stockappr', 'devlock']);
+    const a = args || {};
+    const now = Date.now();
+    const alertDays = await syncAlertDays(db);
+
+    let devs = [];
+    let notReady = false;
+    try {
+      devs = await fetchAll(() => db.from('devices')
+        .select('imei, item, holder, state, reported, last_seen, state_at, released_at'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      notReady = true;
+    }
+    /* WHO IS ANSWERABLE FOR IT. devices.holder is stamped once, at enrolment, from the stock
+       report of that day; the aged-stock file is re-uploaded daily and is therefore the
+       current answer. The newest as_of wins, and the enrolment stamp is the fallback. */
+    let aged = [];
+    try {
+      aged = await fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, item, age_days, as_of'));
+    } catch (e) { aged = []; }
+    const latestAsOf = aged.reduce((mx, r) => (r.as_of && String(r.as_of) > mx ? String(r.as_of) : mx), '');
+    const agedBy = new Map();
+    for (const r of aged) {
+      if (latestAsOf && String(r.as_of || '') !== latestAsOf) continue;
+      agedBy.set(String(r.serial), r);
+    }
+
+    const want = String(a.state || 'locked').trim();
+    const dayOf = ms => Math.floor((now - ms) / 86400000);
+    const rows = devs
+      .filter(r => (want === 'all' ? true : String(r.state || '') === want))
+      .map(r => {
+        const seen = r.last_seen ? Date.parse(r.last_seen) : null;
+        const ordered = r.state_at ? Date.parse(r.state_at) : null;
+        const st = agedBy.get(String(r.imei)) || null;
+        const days = seen ? Math.max(0, dayOf(seen)) : null;
+        const sinceOrder = ordered ? Math.max(0, dayOf(ordered)) : null;
+        /* NOT YET SUSPECT: the order is younger than the silence we would need to see. A phone
+           locked this morning is not evidence of anything. */
+        const ripe = sinceOrder == null || sinceOrder >= alertDays;
+        return {
+          imei: String(r.imei), item: r.item || (st && st.item) || '',
+          holder: (st && st.agent) || r.holder || '',
+          state: r.state || '', reported: r.reported || '',
+          seenAt: seen, days,
+          neverSeen: !seen,
+          orderedAt: ordered, sinceOrderDays: sinceOrder,
+          // The stock's OWN age, so one row answers both questions at once.
+          agedDays: st && st.age_days != null ? num(st.age_days) : null,
+          suspect: ripe && (days == null || days >= alertDays),
+        };
+      })
+      /* WORST FIRST, and a phone that has never spoken is the worst there is: it is the one
+         whose lock was possibly never applied at all. */
+      .sort((x, y) => (y.neverSeen ? 1 : 0) - (x.neverSeen ? 1 : 0)
+        || (y.days || 0) - (x.days || 0)
+        || (y.agedDays || 0) - (x.agedDays || 0));
+
+    const shown = String(a.holder || '').trim()
+      ? rows.filter(r => K(r.holder) === K(a.holder)) : rows;
+
+    /* PER HOLDER, because that is who stock verification actually sits down with. */
+    const byHolder = {};
+    for (const r of rows) {
+      const k = r.holder || '(hakuna / unknown)';
+      const g = byHolder[k] || (byHolder[k] = { holder: k, held: 0, quiet: 0, never: 0, worstDays: 0 });
+      g.held++;
+      if (r.suspect) g.quiet++;
+      if (r.neverSeen) g.never++;
+      if (r.days != null && r.days > g.worstDays) g.worstDays = r.days;
+    }
+
+    const band = (lo, hi) => rows.filter(r => r.days != null && r.days >= lo && (hi == null || r.days < hi)).length;
+    return { ok: true, notReady, alertDays, asOf: now, state: want,
+      holders: [...new Set(rows.map(r => r.holder).filter(Boolean))].sort(),
+      rows: shown.slice(0, 2000),
+      shown: shown.length,
+      byHolder: Object.values(byHolder).sort((x, y) => (y.quiet - x.quiet) || (y.held - x.held)),
+      counts: {
+        total: rows.length,
+        never: rows.filter(r => r.neverSeen).length,
+        suspect: rows.filter(r => r.suspect).length,
+        // The bands the table sorts into, so a distribution is readable without the rows.
+        over30: band(30, null), d14: band(14, 30), d7: band(7, 14), d3: band(3, 7), fresh: band(0, 3),
+        /* NEVER SPOKEN AND LONG SINCE ORDERED -- the sharpest line in the report. The lock was
+           ordered, the handset has never once contacted us, and enough time has passed that
+           "it has not got round to it" has stopped being an explanation. */
+        neverAndRipe: rows.filter(r => r.neverSeen && r.suspect).length,
+      } };
   },
 
   /* =====================================================================================

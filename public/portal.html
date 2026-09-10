@@ -6154,10 +6154,107 @@ function stockIssueDrawer(m, r){
 }
 /* THE TRACKER AND THE DISTRIBUTION REPORT (SOP E.3, B.11, G). */
 var STOCKR={from:'',to:'',status:'',holder:''};
+/* ---------- aging by synchronisation ----------
+     "Issuing of stock at stock request, by using the devices synchronization we should get a
+      report of never synced by days, so sortable columns of aging stock by synchronisation for
+      locked phones -- here we easily trace the phones that our system is not pinging (could
+      have been frauded / software booted to remove lock), so now way forward stock
+      verification will require stock holders to always connect to the internet the stock they
+      hold so that we analyze which phones are not syncing"
+
+   The aging tracker asks how long a phone has sat on a shelf. This asks how long since it
+   SPOKE TO US -- a different question about the same handsets, and the one that finds a lock
+   that is no longer there.
+
+   IT DOES NOT ACCUSE. A boxed phone is offline for weeks by design and a region with no
+   coverage is not a fraud. The word on screen is "hazipigi ripoti" -- not reporting -- and the
+   report's job is to attach a NAME to the silence so verification has something to ask about.
+
+   Every table on this page sorts itself when you click a header, so the columns here are
+   written to sort: a leading number in each cell that means anything. */
+var SYNCQ={state:'locked',holder:''};
+function syncDays(r){
+  if(r.neverSeen) return '<span style="color:var(--bad)">hajawahi</span>';
+  return (r.suspect?'<span style="color:var(--bad)">':'<span>')+money(r.days)+' siku</span>';
+}
+function syncSection(d, redraw){
+  var c=d.counts||{}, rows=d.rows||[], byH=d.byHolder||[];
+  if(d.notReady){
+    return '<h3 style="margin:18px 0 6px">Ripoti ya kupiga ripoti / Aging by synchronisation</h3>'
+      +'<div class="note bad">Jedwali la vifaa halijatengenezwa bado. Endesha '
+      +'<b>db/migrations/RUN-ME-2026-08-24-devices.sql</b>. / The devices table does not exist yet.</div>';
+  }
+  return '<h3 style="margin:18px 0 6px">Ripoti ya kupiga ripoti / Aging by synchronisation '
+    +'<span class="mut" style="font-size:11.5px">— simu zilizofungwa, kikomo siku '+money(d.alertDays||7)+'</span></h3>'
+    /* THE SHARPEST LINE IN THE REPORT, and the only one that gets a banner: ordered locked,
+       never once spoke, and long enough ago that "it has not got round to it" has stopped
+       being an explanation. */
+    +((c.neverAndRipe||0)?'<div class="note bad">Simu '+money(c.neverAndRipe)
+      +' ziliagizwa kufungwa, hazijawahi kuongea, na muda umepita. Hizi zinaweza zisiwe zimefungwa kabisa. '
+      +'/ Ordered locked, never once spoke, and old enough that waiting is no longer the explanation.</div>':'')
+    +'<div class="tiles">'
+    +tile('Zilizofungwa',money(c.total||0),'kwenye rejista',{})
+    +tile('Hazipigi ripoti',money(c.suspect||0),'kimya zaidi ya siku '+money(d.alertDays||7),{color:c.suspect?'bad':'ok'})
+    +tile('Hazijawahi kuongea',money(c.never||0),'app haijawahi kufunguka',{color:c.never?'bad':'ok'})
+    +tile('Siku 30+',money(c.over30||0),'kimya mwezi mzima',{color:(c.over30||0)?'bad':''})
+    +tile('Siku 14–29',money(c.d14||0),'',{color:(c.d14||0)?'warn':''})
+    +tile('Siku 0–2',money(c.fresh||0),'zinapiga ripoti',{color:'ok'})
+    +'</div>'
+    +'<div class="note" style="font-size:11.5px;margin:8px 0">Uhakiki wa stoo: mwenye stoo anatakiwa '
+    +'kuunganisha simu alizonazo kwenye intaneti ili zionekane hapa. Simu kimya si wizi — ni swali. '
+    +'/ Stock verification: holders bring the stock they hold online so it shows here. A silent phone '
+    +'is a question, not an accusation.</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0">'
+    +'<select id="syState" class="inp" style="width:auto">'
+    +[['locked','Zilizofungwa / Locked'],['enrolled','Zilizosajiliwa / Enrolled'],['all','Zote / All']]
+      .map(function(x){ return '<option value="'+x[0]+'"'+(SYNCQ.state===x[0]?' selected':'')+'>'+x[1]+'</option>'; }).join('')
+    +'</select>'
+    +'<select id="syHolder" class="inp" style="width:auto"><option value="">Wote / every holder</option>'
+    +(d.holders||[]).map(function(h){ return '<option value="'+esc(h)+'"'+(SYNCQ.holder===h?' selected':'')+'>'+esc(h)+'</option>'; }).join('')
+    +'</select>'
+    +'<button class="btn sm" id="syGo">Chuja / Filter</button>'
+    +'</div>'
+    +(byH.length?'<div class="scroll" style="margin-bottom:10px"><table><thead><tr>'
+      +'<th>MWENYE STOO</th><th class="r">ANAZO</th><th class="r">HAZIPIGI RIPOTI</th>'
+      +'<th class="r">HAZIJAWAHI</th><th class="r">KIMYA ZAIDI</th></tr></thead><tbody>'
+      +byH.map(function(h){
+        return '<tr><td><b>'+esc(h.holder)+'</b></td><td class="r">'+money(h.held)+'</td>'
+          +'<td class="r'+(h.quiet?' bad':'')+'">'+money(h.quiet)+'</td>'
+          +'<td class="r'+(h.never?' bad':'')+'">'+money(h.never)+'</td>'
+          +'<td class="r">'+money(h.worstDays)+' siku</td></tr>';
+      }).join('')+'</tbody></table></div>':'')
+    +(rows.length?'<div class="scroll"><table><thead><tr>'
+      +'<th>IMEI</th><th>MODELI</th><th>MWENYE STOO</th><th>HALI</th>'
+      +'<th class="r">KIMYA</th><th class="r">STOO IMEKAA</th><th>ILIONGEA LINI</th><th>SIMU INASEMA</th>'
+      +'</tr></thead><tbody>'
+      +rows.map(function(r){
+        return '<tr><td style="font-size:11px">'+esc(r.imei)+'</td>'
+          +'<td>'+esc(r.item||'—')+'</td><td>'+esc(r.holder||'—')+'</td>'
+          +'<td>'+(r.state==='locked'?'<span class="chip bad">imefungwa</span>':'<span class="chip">'+esc(r.state)+'</span>')+'</td>'
+          /* The number leads the cell so the built-in column sort reads it as a number, and a
+             phone that has never spoken sorts above every silence that has an end. */
+          +'<td class="r">'+syncDays(r)+'</td>'
+          +'<td class="r">'+(r.agedDays==null?'<span class="mut">—</span>':money(r.agedDays)+' siku')+'</td>'
+          +'<td style="font-size:11px">'+esc(r.seenAt?advWhen(r.seenAt):'—')+'</td>'
+          +'<td style="font-size:11px">'+esc(r.reported||'—')+'</td></tr>';
+      }).join('')+'</tbody></table></div>'
+      +(d.shown>rows.length?'<div class="note" style="margin-top:6px">Inaonyesha '+money(rows.length)
+        +' kati ya '+money(d.shown)+'. / Showing the first '+money(rows.length)+'.</div>':'')
+      :'<div class="mut">Hakuna simu kwenye kundi hili. / No handsets in this group.</div>');
+}
+function syncWire(m, redraw){
+  var go=$('#syGo');
+  if(go) go.onclick=function(){ SYNCQ={state:$('#syState').value,holder:$('#syHolder').value}; redraw(); };
+}
+
 function drawStockRep(m){
   if(!STOCKR.from&&!STOCKR.to&&!STOCKR.explicit){ var mr=monthRange_(); STOCKR.from=mr.from; STOCKR.to=mr.to; }
   m.innerHTML='<div class="sk"></div>';
-  srv('stockReqReport',STOCKR).then(function(d){
+  /* TWO READS, ONE PANE. The aging tracker answers "how long has this sat on a shelf" and the
+     sync report answers "how long since it spoke to us" -- different questions about the same
+     handsets, and the desk issuing stock wants both on one screen. */
+  Promise.all([srv('stockReqReport',STOCKR), srv('syncAging',SYNCQ)]).then(function(res){
+    var d=res[0], sy=res[1];
     var t=d.totals||{}, ag=d.aging||{}, rows=d.rows||[], holders=ag.holders||[];
     var pick=function(k){ return function(){ STOCKR.status=(STOCKR.status===k?'':k); if(TAB==='strep') drawStockRep(m); }; };
     m.innerHTML=(ag.low?'<div class="note bad">Stoo ya sokoni ipo chini ya kiwango: '+money(ag.pieces)
@@ -6189,10 +6286,12 @@ function drawStockRep(m){
             +'<td style="font-size:11px">'+esc(h.items||'')+'</td></tr>';
         }).join('')+'</tbody></table></div>'
         :'<div class="mut" style="margin-bottom:12px">Hakuna ripoti ya stoo iliyokaa bado — pakia Aged Stock. / No aged-stock upload yet.</div>')
+      +syncSection(sy)
       +'<h3 style="margin:14px 0 6px">Maombi na makabidhiano / Requests and handovers</h3>'
       +(d.notReady?stockNotReady()
         :rows.length?stockTable(rows,{}):'<div class="mut">Hakuna ombi kwenye kipindi hiki. / No requests in this period.</div>');
     wireTiles(m);
+    syncWire(m, function(){ if(TAB==='strep') drawStockRep(m); });
     $('#strGo').onclick=function(){ STOCKR={from:$('#strFrom').value,to:$('#strTo').value,holder:$('#strHolder').value,status:STOCKR.status,explicit:true}; if(TAB==='strep') drawStockRep(m); };
     $('#strClr').onclick=function(){ var r=monthRange_(); STOCKR={from:r.from,to:r.to,status:'',holder:'',explicit:true}; if(TAB==='strep') drawStockRep(m); };
     $('#strAll').onclick=function(){ STOCKR={from:'',to:'',status:'',holder:'',explicit:true}; if(TAB==='strep') drawStockRep(m); };

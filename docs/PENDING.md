@@ -861,3 +861,33 @@ Commission on the way.
 
 One behaviour change worth knowing: a role ticked with ONLY `settings` used to fall through to
 nine panes and now gets Settings. That is the fix working as asked.
+
+## 27. SHIPPED 2026-09-10: aging by synchronisation — the locked phones we are not pinging
+
+The aging tracker asks how long a phone has sat on a shelf; this asks how long since it SPOKE to
+us. A locked handset that has stopped beating is switched off, out of coverage, or no longer
+locked at all — and the third is what this finds. The full story is
+[`docs/SYNC-AGING.md`](SYNC-AGING.md); the short version:
+
+**Do:** nothing required. Optional Settings: `SYNC_ALERT_DAYS` (blank = 7). No migration — every
+column it reads already exists. It appears on **Stock reports**, under the aging tracker, so the
+desk issuing stock sees both questions on one screen.
+
+It does NOT accuse. A boxed phone is offline for weeks by design and a region with no coverage is
+not a fraud, so the words on screen are "hazipigi ripoti" — not reporting — and the report's job
+is to attach a NAME to the silence so stock verification has something to ask about.
+
+Silence is measured from TWO clocks, because one of them lies: a phone locked five minutes ago
+has not had time to confirm anything, so a row is suspect only once the silence has outlasted the
+ORDER that caused it. The sharpest line, and the only one that gets a banner: ordered locked,
+never once spoke, and old enough that waiting has stopped being the explanation — those may never
+have been locked at all.
+
+Who holds it comes from the newest aged-stock upload rather than the enrolment stamp, because the
+stock file is re-uploaded daily and the stamp is written once. Columns sort for free: every table
+on the page already sorts on a header click, so each cell leads with a number that means
+something, and a phone that never spoke sorts above every silence that has an end.
+
+Also here: the guard that catches a pane drawing tiles without wiring them now keys on whether
+the tile carries a `go` handler. That is sharper, not looser — it also catches a pane that builds
+a door and wires nothing, while no longer accusing a section that only prints figures.
