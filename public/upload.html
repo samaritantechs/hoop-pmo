@@ -62,7 +62,16 @@ details summary i{color:var(--mut);font-size:12px}
       <button type="button" class="kchip" data-k="sales">Sales</button>
       <button type="button" class="kchip" data-k="offline">Offline queue</button>
       <button type="button" class="kchip" data-k="agents">Agents</button>
-      <button type="button" class="kchip" data-k="agedstock">Aged stock</button>
+      <!-- AGED STOCK IS OFF, NOT GONE.
+             "Not uploading aged stock for now though; leave the uploading button and function
+              just there but unclickable."
+           The ageing that pane fed now comes from NEW STOCK and OLD STOCK, which age themselves
+           from the day their list was made -- so a fresh daily upload would overwrite a number
+           that is already right. The button, the parser and the endpoint are all untouched
+           behind this: turning it back on is deleting one attribute. -->
+      <button type="button" class="kchip" data-k="agedstock" disabled
+              title="Imezimwa kwa sasa — umri wa stoo unasomwa NEW STOCK / OLD STOCK. / Off for now: ageing is read from the NEW STOCK and OLD STOCK panes."
+              style="opacity:.45;cursor:not-allowed">Aged stock <span style="font-size:10px">(imezimwa / off)</span></button>
     </div>
     <div id="kindSample" style="display:none;margin-top:10px;font-size:13px"></div>
     <label class="file-drop" id="drop">Choose a file — Excel, CSV, or a saved SyscoPos HTML page<input type="file" id="file" accept=".xlsx,.xls,.csv,.html,.htm"></label>
@@ -197,7 +206,11 @@ function kindOf(head){
   var has = function(){ for (var i=0;i<arguments.length;i++) if (H.indexOf(arguments[i])>=0) return true; return false; };
   if (has('RECEIPT_NUMBER','RECEIPT NUMBER','COMMISSION_AGENT','COMMISSION AGENT')) return 'sales';
   if (has('KIN_NAME','KIN NAME','NEXT_OF_KIN','NEXT OF KIN')) return 'agents';
-  if (has('SERIAL') && has('AGE','RECEIVED','DATE_RECEIVED')) return 'agedstock';
+  /* AUTO-DETECT MUST NOT ROUTE THERE EITHER. A disabled chip that the sniffer can still
+     select is a door that looks shut and is not: drop an aged-stock file on the page and
+     it would upload anyway. Returning '' leaves it unrecognised, which is the honest
+     answer while the feed is off. */
+  if (has('SERIAL') && has('AGE','RECEIVED','DATE_RECEIVED')) return '';
   // BEFORE the deck: the offline queue also carries IMEI, and it must never be
   // mistaken for a Watu daily list (a deck upload REPLACES its date).
   if (has('GUARANTOR','OFFLINE BUCKET','OFFLINE_BUCKET')) return 'offline';

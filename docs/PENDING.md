@@ -1223,3 +1223,41 @@ and `_` can never reach the LIKE pattern so the escaping question does not arise
 A search outranks the state chip -- the desk is holding that phone. While a search is live the
 tiles are replaced by a banner, because they count the fleet and the server has just answered about
 one phone. And an empty search no longer hides the box that caused it.
+
+## 40. SHIPPED 2026-09-12: OLD STOCK, and the two lists that hand off to each other
+
+The full story is [`docs/OLD-STOCK.md`](OLD-STOCK.md).
+
+**Do:**
+1. `db/migrations/RUN-ME-2026-09-12-old-stock.sql`
+2. `db/RUN-ME-2026-09-12-sipho-september-load.sql` — 2,682 handsets, 17 RSMs, 217 agents
+3. Tick `oldstock` on the roles that should see it.
+4. Still outstanding from before: `RUN-ME-2026-08-24-sales-performance.sql`.
+
+NEW STOCK is every locked IMEI plus any old-stock IMEI that has since SOLD. OLD STOCK is
+everything on Sipho's list that is in neither. Nothing marks a row as moved -- both questions are
+asked at read time, so the two panes cannot disagree and there is no Done button to forget.
+
+THE AGE IS ARITHMETIC: age_days + (today - as_of), worked out on every read. A handset nobody has
+visited gets visibly worse with nothing re-uploaded, and no nightly job has to stay alive. A row
+with no age reads as no age, never as zero -- calling those brand new would bury the oldest stock
+at the bottom of a worklist.
+
+It opens as a worklist: the ROUND first (one row per holder, with their number, sorted by the
+oldest piece), then the handsets. The tiles count what was locked on a visit and what sold before
+we got there, because a list that only shrinks says nothing about why.
+
+A SALE ON A NEVER-LOCKED HANDSET moves to NEW STOCK with its status reading "Haijafungwa" -- not
+dressed as a state the register never held. We do not control that phone.
+
+NAMES NOW CARRY THEIR NUMBERS: four pairs of columns became four. The feed that filled each cell
+moved to the tooltip.
+
+THE AGEING TRACKER reads OLD STOCK aged to today, which is why the aged-stock upload could be
+switched off. A file you DO paste still wins where its as_of is newer. The chip is disabled and
+greyed with the reason in its tooltip; the parser and endpoint are untouched, and auto-detect no
+longer routes to it -- a disabled chip the sniffer can still pick is a door that looks shut.
+
+WAITING ON PHONE NUMBERS: five people on Sipho's list have none, and phone is the staff register's
+key. Their stock loaded; only their staff row is missing. They are named at the foot of the load
+file -- add them on the Staff pane once Sipho has the numbers.

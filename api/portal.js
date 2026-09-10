@@ -318,7 +318,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    the safe direction. A missing case that defaulted to "allowed" is how a nav split quietly
    stops splitting anything. */
 const DEVICE_STATE_NAV = { locked: 'devlock', lost: 'devlock', enrolled: 'devunlock', released: 'devunlock' };
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'oldstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -845,19 +845,124 @@ async function stockPolicy(db) {
   return out;
 }
 
+/* OLD STOCK -- what we hold and have never locked, and how old it is TODAY.
+   =========================================================================================
+     "For an OLD STOCK new nav pane for all those stock that imei no does not exist in our new
+      enrolled phones. So we have NEW STOCK and OLD STOCK (never enrolled)."
+
+     "They start reading with those aging days off, so everyday that goes they've not yet been
+      enrolled they continue to count aging."
+
+   THE AGE IS ARITHMETIC, NEVER A STORED NUMBER. `age_days` was true on `as_of`; today's age is
+   that number plus the days since. Re-saving an age every night would need a job somebody has
+   to keep alive, and the morning it did not run the whole list would quietly understate itself.
+
+   A ROW LEAVES THIS LIST BY BEING FOUND SOMEWHERE ELSE -- in `devices` because we locked it on
+   a ground visit, or in the deck because it sold. Both are asked here, at read time. A `moved`
+   column would be a second opinion about a question the data already answers, and the day the
+   two disagreed a handset would be on both lists or on neither. */
+const OLDSTOCK_NOT_READY = 'Jedwali la OLD STOCK halijatengenezwa bado. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-12-old-stock.sql kwenye Supabase, kisha pakia orodha ya Sipho. '
+  + '/ The old_stock table has not been created yet — run that migration, then load the list.';
+/* Whole days between two ISO days. NOT daysBetween() -- that one returns the LIST of days in a
+   range, which added to a number gives NaN and would have put "NaN" in the age column of every
+   row. Parsed at UTC midnight so a timezone can never move an age by a day. */
+const daysApart = (fromK, toK) => {
+  const a = Date.parse(String(fromK || '') + 'T00:00:00Z');
+  const b = Date.parse(String(toK || '') + 'T00:00:00Z');
+  return (isNaN(a) || isNaN(b)) ? 0 : Math.round((b - a) / 86400000);
+};
+const ageToday = (r, todayK) => (r.age_days == null ? null
+  : num(r.age_days) + Math.max(0, daysApart(String(r.as_of || '').slice(0, 10), todayK)));
+
+/** Every un-enrolled handset, aged to today. One reader, so the pane, the stock report and any
+    later caller cannot each hold a different idea of what is still outstanding. */
+async function oldStockIndex(db) {
+  const todayK = todayKey();
+  let rows = [];
+  let notReady = false;
+  try {
+    rows = await fetchAll(() => db.from('old_stock')
+      .select('imei, item, agent, agent_phone, rsm, rsm_phone, age_days, as_of'));
+  } catch (e) {
+    if (!tableMissing(e)) throw e;
+    notReady = true;
+  }
+  /* WHAT HAS SINCE BEEN FOUND. Both reads are best-effort: a missing devices table means we
+     have locked nothing, which is the honest reading, not a reason to refuse the list. */
+  const locked = new Set();
+  const sold = new Set();
+  try {
+    for (const d of await fetchAll(() => db.from('devices').select('imei'))) locked.add(String(d.imei));
+  } catch (ignored) { /* nothing enrolled yet */ }
+  try {
+    for (const l of await fetchAll(() => db.from('watu_loans').select('imei'))) sold.add(String(l.imei));
+  } catch (ignored) { /* no deck yet */ }
+
+  const out = rows.map(r => ({
+    imei: String(r.imei), item: r.item || '',
+    agent: r.agent || '', agentPhone: r.agent_phone || '',
+    rsm: r.rsm || '', rsmPhone: r.rsm_phone || '',
+    asOf: String(r.as_of || '').slice(0, 10),
+    ageStart: r.age_days == null ? null : num(r.age_days),
+    age: ageToday(r, todayK),
+    lockedNow: locked.has(String(r.imei)),
+    soldNow: sold.has(String(r.imei)),
+  }));
+  return { notReady, todayK, rows: out,
+    /* STILL OUTSTANDING is the list this pane is for; the other two are counted so the pane can
+       say how the ground visits are going rather than just shrinking silently. */
+    open: out.filter(r => !r.lockedNow && !r.soldNow),
+    gone: out.filter(r => r.lockedNow || r.soldNow) };
+}
+
 /* THE AGING STOCK TRACKER (SOP E.3), read off the shop's OWN daily upload.
    hoop_aged_stock already carries age_days per serial per agent, so the gate and the tracker
    are the same file -- never a second private idea of what "old" means. The newest as_of is
    the tracker: an aging report from last week is not evidence about this morning. */
 async function stockAgingIndex(db) {
   const policy = await stockPolicy(db);
-  let rows = [];
+  /* THE AGEING NOW COMES FROM THE TWO STOCK PANES, not from a daily upload.
+     -------------------------------------------------------------------------------------
+       "So use these two navs to update data of aging stock in stock reports -- not uploading
+        aged stock for now."
+
+     OLD STOCK is the answer to the question this index asks: what is a holder still sitting
+     on, and how old is it. It ages itself from the day its list was made, so it is right every
+     morning without anybody uploading anything -- which is exactly why the upload is off.
+
+     hoop_aged_stock is still read, and read FIRST where it has a newer day, because a file
+     somebody does paste is more current than a list from last month. Dropping it outright
+     would throw away the one feed that can still correct this, and neither list is a superset
+     of the other. Where both name a serial, the newer as_of wins. */
+  const todayK = todayKey();
+  let uploaded = [];
   try {
-    rows = await fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, item, age_days, as_of'));
-  } catch (e) { rows = []; }
+    uploaded = await fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, item, age_days, as_of'));
+  } catch (e) { uploaded = []; }
   let asOf = null;
-  for (const r of rows) if (r.as_of && (!asOf || String(r.as_of) > String(asOf))) asOf = String(r.as_of).slice(0, 10);
-  const today = rows.filter(r => String(r.as_of).slice(0, 10) === asOf);
+  for (const r of uploaded) if (r.as_of && (!asOf || String(r.as_of) > String(asOf))) asOf = String(r.as_of).slice(0, 10);
+  const fromUpload = uploaded.filter(r => String(r.as_of).slice(0, 10) === asOf);
+
+  /* The un-enrolled list, aged to TODAY rather than to the day it was written -- that is the
+     whole reason it can stand in for a daily file. */
+  let fromOld = [];
+  try {
+    const idx = await oldStockIndex(db);
+    fromOld = idx.open.map(r => ({ serial: r.imei, agent: r.agent, item: r.item,
+      age_days: r.age, as_of: todayK }));
+  } catch (ignored) { fromOld = []; }
+
+  const bySerial = new Map();
+  for (const r of fromOld) bySerial.set(String(r.serial), r);
+  for (const r of fromUpload) {
+    const k = String(r.serial);
+    const had = bySerial.get(k);
+    // The newer day wins; a pasted file from this morning outranks a list from last month.
+    if (!had || String(r.as_of || '') >= String(had.as_of || '')) bySerial.set(k, r);
+  }
+  const today = [...bySerial.values()];
+  if (fromOld.length) asOf = asOf && asOf > todayK ? asOf : todayK;
   const by = new Map();
   let pieces = 0;
   for (const r of today) {
@@ -5805,6 +5910,71 @@ const FNS = {
   },
 
   /* =====================================================================================
+     OLD STOCK -- what we hold, have never locked, and are going out to find.
+     =====================================================================================
+       "We'll conduct ground visits to all our previous agents and lock all stock we find, and
+        once a stock in OLD STOCK is enrolled into our lock then it moves to list of NEW STOCK."
+
+     This is a worklist, so it is ordered like one: oldest first, and grouped by the person a
+     visit is actually made to. The counts say how the visits are going -- how many have since
+     been locked or sold -- because a list that only shrinks tells you nothing about whether it
+     is shrinking for the right reason.
+     ===================================================================================== */
+  async oldStock(db, user, args) {
+    requireNav(user, 'oldstock');
+    const a = args || {};
+    const idx = await oldStockIndex(db);
+    const open = idx.open.slice();
+    const q = String(a.q == null ? '' : a.q).replace(/\D/g, '');
+    const who = K(a.agent || '');
+    const boss = K(a.rsm || '');
+    const shown = open.filter(r => {
+      if (q && !String(r.imei).includes(q)) return false;
+      if (who && K(r.agent) !== who) return false;
+      if (boss && K(r.rsm) !== boss) return false;
+      return true;
+    }).sort((x, y) => (y.age == null ? -1 : y.age) - (x.age == null ? -1 : x.age)
+      || String(x.agent).localeCompare(String(y.agent))
+      || String(x.imei).localeCompare(String(y.imei)));
+
+    /* PER HOLDER, because that is who a ground visit is made to -- one row per journey, with
+       the oldest piece on it so the worst trip is obvious before anybody sets off. */
+    const byAgent = new Map();
+    for (const r of open) {
+      const k = nameKey(r.agent) || '?';
+      let g = byAgent.get(k);
+      if (!g) {
+        g = { agent: r.agent || '(hakuna jina / unnamed)', phone: r.agentPhone || '',
+          rsm: r.rsm || '', rsmPhone: r.rsmPhone || '', pieces: 0, oldest: 0, over90: 0 };
+        byAgent.set(k, g);
+      }
+      g.pieces++;
+      if (r.age != null && r.age > g.oldest) g.oldest = r.age;
+      if (r.age != null && r.age >= 90) g.over90++;
+    }
+    const band = (lo, hi) => open.filter(r => r.age != null && r.age >= lo && (hi == null || r.age < hi)).length;
+    return { ok: true, notReady: idx.notReady,
+      notReadyNote: idx.notReady ? OLDSTOCK_NOT_READY : '',
+      asOf: Date.now(), q, agent: String(a.agent || ''), rsm: String(a.rsm || ''),
+      rows: shown.slice(0, 2000), shown: shown.length,
+      agents: [...new Set(open.map(r => r.agent).filter(Boolean))].sort(),
+      rsms: [...new Set(open.map(r => r.rsm).filter(Boolean))].sort(),
+      byAgent: [...byAgent.values()].sort((x, y) => y.oldest - x.oldest || y.pieces - x.pieces),
+      counts: {
+        open: open.length,
+        /* HOW THE VISITS ARE GOING. A list that only shrinks says nothing about WHY: these two
+           are the reason, and the difference between them matters -- one is a handset we now
+           control, the other is one that got away and sold first. */
+        locked: idx.rows.filter(r => r.lockedNow).length,
+        sold: idx.rows.filter(r => r.soldNow && !r.lockedNow).length,
+        listed: idx.rows.length,
+        over180: band(180, null), d90: band(90, 180), d30: band(30, 90), fresh: band(0, 30),
+        noAge: open.filter(r => r.age == null).length,
+        holders: byAgent.size,
+      } };
+  },
+
+  /* =====================================================================================
      NEW STOCK -- the sale behind every handset we have locked.
      =====================================================================================
        "An audit of our existing imeis since we started locking on our own -- Imei, Rsm, rsm
@@ -5930,8 +6100,54 @@ const FNS = {
       tree: salesTree(agents),
     };
 
+    /* AND THE ONES THAT SOLD WITHOUT EVER BEING LOCKED.
+       -----------------------------------------------------------------------------------
+         "If a phone imei once reads in sales [in watu deck] and it was in old stock not in
+          new stock, move its column data needed into NEW STOCK, so that we can always get the
+          update of current activities no matter the stock age."
+
+       The register was the whole population: we locked it, so it is ours to watch. But a
+       handset off the old list that turns up SOLD is current activity by any reading -- the
+       very thing this pane is opened for -- and leaving it in OLD STOCK would file a live sale
+       under "never enrolled, gathering dust".
+
+       So a sold handset joins on the strength of the sale, with no device row behind it. Its
+       status reads `haijafungwa` rather than being dressed as one of the four states the
+       register can hold: we do not control this phone, and the pane must not imply we do. */
+    let joined = [];
+    try {
+      const have = new Set(devs.map(d => String(d.imei)));
+      const olds = await fetchAll(() => db.from('old_stock')
+        .select('imei, item, agent, agent_phone, rsm, rsm_phone'));
+      joined = olds.filter(o => !have.has(String(o.imei)) && ctx.watu.has(String(o.imei)));
+    } catch (ignored) { joined = []; }   // no old_stock table yet: the register alone, as before
+
     const rows = [];
     const changed = [];
+    for (const o of joined) {
+      /* Stamped exactly like a locked one -- a sale is a sale -- then given the shape of a row
+         with no device behind it. */
+      const imei = String(o.imei);
+      const was = stampedBy.get(imei) || null;
+      const f = newStockFill(imei, was, ctx);
+      if (f.hits) changed.push(newStockRow(imei, f, was, at));
+      rows.push({
+        imei,
+        rsm: f.row.rsm || o.rsm || '', rsmPhone: f.row.rsm_phone || o.rsm_phone || '',
+        agent: f.row.agent || o.agent || '', agentPhone: f.row.agent_phone || o.agent_phone || '',
+        customer: f.row.customer || '', customerPhone: f.row.customer_phone || '',
+        price: f.row.price == null ? null : num(f.row.price),
+        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
+        branch: f.row.branch || '', model: f.row.model || o.item || '',
+        saleDate: f.row.sale_date || null,
+        status: 'unlocked', neverLocked: true,
+        by: '', atMs: null,
+        seenAt: null, neverSeen: true, silentDays: null,
+        lat: null, lng: null, locAcc: null, locAt: null,
+        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
+        src: f.src,
+      });
+    }
     for (const d of devs) {
       const imei = String(d.imei);
       const was = stampedBy.get(imei) || null;
@@ -5954,6 +6170,7 @@ const FNS = {
            handset does would hide a written-off phone inside the locked count, which is the
            one number this audit is read for. */
         status: NEWSTOCK_STATE[String(d.state || '')] || String(d.state || ''),
+        neverLocked: false,
         by: d.state_by || '', atMs: d.state_at ? Date.parse(d.state_at) : null,
         /* The position rides under the status because they answer one question together --
            what is this handset doing, and where. `locAt` is the fix's OWN age, not the beat's:
@@ -6018,6 +6235,10 @@ const FNS = {
         achia: count('achia'), lost: count('lost'),
         never: rows.filter(r => r.neverSeen).length,
         quiet7: rows.filter(r => r.silentDays != null && r.silentDays >= 7).length,
+        /* Sold, and we never had the lock on it. The number the ground visits exist to bring
+           down, and the one that would be invisible if a sale on an old handset stayed filed
+           under "never enrolled". */
+        soldUnlocked: rows.filter(r => r.neverLocked).length,
         /* HOW MUCH OF THE SALE WE STILL DO NOT KNOW. The number that says whether the feeds
            are answering -- and the one that should be falling, upload after upload. */
         gappy: rows.filter(r => r.gaps > 0).length,
