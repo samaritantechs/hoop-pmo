@@ -6958,7 +6958,7 @@ function nsBoardXl_(){
    THE AGE KEEPS CLIMBING ON ITS OWN. The list arrived with an age that was true on one morning
    and the server adds the days since on every read, so a handset nobody has been to see gets
    visibly worse without anything having to be re-uploaded. */
-var OSQ={q:'',agent:'',rsm:''};
+var OSQ={q:'',agent:'',rsm:'',location:''};
 /* WHICH OF THE TWO LISTS IS OPEN.
    =========================================================================================
      "Ziara / The round and Simu / The handsets should be chipped that the list opens once
@@ -6974,6 +6974,25 @@ var OSQ={q:'',agent:'',rsm:''};
    person, and the handset list is the reference you drop into afterwards. Remembered across
    redraws, so filtering does not throw you back to the other list. */
 var OSSEC='round';
+/* WHERE IT IS, AND HOW WE KNOW.
+   =========================================================================================
+     "the location we used as in PCOs calling not the kinondoni default"
+
+   A DERIVED PLACE AND A DECLARED ONE ARE DIFFERENT ANSWERS, and a van is sent on both -- so
+   the row says which it is rather than presenting a guess as a fact. Nothing written on the
+   handset itself reads as a plain name; a location worked out from the holder is dimmed and
+   carries where it came from in its tooltip.
+
+   AND AN UNKNOWN PLACE IS A DASH, never Kinondoni and never blank-means-head-office. Guessing
+   would send somebody to the wrong town, which costs a day. */
+function osPlace_(r){
+  if(!r.location) return '<span class="mut" title="Hakuna mahali panapojulikana / no location known">—</span>';
+  if(r.locFrom==='stated') return '<span style="font-size:11.5px">'+esc(r.location)+'</span>';
+  var why=r.locFrom==='staff'
+    ? 'Kutoka rejista ya wafanyakazi / from the staff register'
+    : 'Kutoka tawi la mauzo yake / from the branch their sales carry';
+  return '<span class="mut" style="font-size:11.5px" title="'+esc(why)+'">'+esc(r.location)+'</span>';
+}
 function osAge(r){
   if(r.age==null) return '<span class="mut">—</span>';
   var cls=r.age>=180?'style="color:var(--bad);font-weight:700"':r.age>=90?'style="color:var(--bad)"':'';
@@ -6998,17 +7017,31 @@ function osPaint_(m, d){
       +tile('Siku 180+',money(c.over180||0),money(c.d90||0)+' siku 90-179',
         Object.assign({color:(c.over180?'bad':'')},{on:false,cta:'',go:function(){}}))
       +tile('Wenye nazo',money(c.holders||0),'ziara za kufanya',{on:false,cta:'',go:function(){}})
+      /* HOW MUCH OF THE MAP IS BLANK. A pivot by place is only as good as how many rows have
+         one, and that should be visible rather than discovered by adding the bars up and
+         finding they fall short. */
+      +tile('Mahali',money(c.places||0),
+        (c.noPlace||0)?money(c.noPlace)+' hazijulikani zilipo':'zote zinajulikana zilipo',
+        Object.assign({color:((c.noPlace||0)?'bad':'ok')},{on:false,cta:'',go:function(){}}))
       +'</div>';
     var opts=function(list,sel){ return '<option value="">— zote / all —</option>'
       +(list||[]).map(function(x){ return '<option value="'+esc(x)+'"'+(x===sel?' selected':'')+'>'+esc(x)+'</option>'; }).join(''); };
     var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
       +'<select id="osRsm" style="min-width:150px">'+opts(d.rsms,d.rsm)+'</select>'
       +'<select id="osAgent" style="min-width:170px">'+opts(d.agents,d.agent)+'</select>'
+      /* PIVOT BY WHERE IT IS, not only by whose it is: an RSM's round can cross three towns and
+         a town's round can cross three RSMs, which is the whole reason this was asked for. */
+      +'<select id="osLoc" style="min-width:150px">'+opts(d.locations,d.location)+'</select>'
       +'<input id="osQ" inputmode="numeric" placeholder="Tafuta IMEI / find" value="'+esc(d.q||'')+'" '
       +'style="width:160px;font-family:ui-monospace,monospace;font-size:12px">'
       +'<button class="btn sm" id="osGo">Chuja / Filter</button>'
       +'<span style="flex:1"></span>'
-      +'<span class="mut" style="font-size:11px">Ilisomwa '+esc(clock(d.asOf))+'</span></div>';
+      +'<span class="mut" style="font-size:11px">Ilisomwa '+esc(clock(d.asOf))
+      /* SAID OUT LOUD when a read wrote something down. The stamp is silent by design and a
+         silent write is the kind nobody can audit -- and the number should fall to zero and
+         stay there, which is only visible if it was ever shown. */
+      +((d.placed||0)?' · <b>'+money(d.placed)+'</b> mahali pamehifadhiwa / locations stamped':'')
+      +'</span></div>';
     /* THE HOLDER BOARD IS THE ROUND. Sorted by the oldest piece, because that is the visit
        that has been waiting longest -- not by how many, which is a bigger van, not a worse
        problem. */
@@ -7022,11 +7055,12 @@ function osPaint_(m, d){
         +'<button class="btn sm ghost" id="osRoundXl" style="padding:2px 8px;font-size:11.5px" '
         +'title="Pakua ziara na IMEI zote / download the round with its handsets">⤓ Excel</button>'
         +'</div><div class="scroll"><table><thead><tr>'
-        +'<th>Mwenye nazo / holder</th><th>RSM</th><th class="r">Simu / pieces</th>'
+        +'<th>Mwenye nazo / holder</th><th>Mahali / location</th><th>RSM</th><th class="r">Simu / pieces</th>'
         +'<th class="r">Kongwe / oldest</th><th class="r">90+</th></tr></thead><tbody>'
         +d.byAgent.map(function(g){
           return '<tr><td><b>'+esc(g.agent)+'</b>'
             +(g.phone?'<div class="mut" style="font-size:10px"><a href="tel:'+esc(g.phone)+'">'+esc(g.phone)+'</a></div>':'')+'</td>'
+            +'<td>'+osPlace_(g)+'</td>'
             +'<td style="font-size:11.5px">'+esc(g.rsm||'—')
             +(g.rsmPhone?'<div class="mut" style="font-size:10px">'+esc(g.rsmPhone)+'</div>':'')+'</td>'
             /* THE THREE NUMBERS OPEN WHAT THEY COUNT. The cell still leads with the figure, so
@@ -7040,13 +7074,14 @@ function osPaint_(m, d){
       : '';
     var table=rows.length
       ? '<div class="scroll"><table><thead><tr>'
-        +'<th>IMEI</th><th>Bidhaa / item</th><th>Mwenye nazo / holder</th><th>RSM</th>'
+        +'<th>IMEI</th><th>Bidhaa / item</th><th>Mwenye nazo / holder</th><th>Mahali / location</th><th>RSM</th>'
         +'<th class="r">Umri leo / age today</th></tr></thead><tbody>'
         +rows.map(function(r){
           return '<tr><td style="font-family:ui-monospace,monospace">'+esc(r.imei)+'</td>'
             +'<td style="font-size:11.5px">'+esc(r.item||'—')+'</td>'
             +'<td style="font-size:11.5px">'+esc(r.agent||'—')
             +(r.agentPhone?'<div class="mut" style="font-size:10px">'+esc(r.agentPhone)+'</div>':'')+'</td>'
+            +'<td>'+osPlace_(r)+'</td>'
             +'<td style="font-size:11.5px">'+esc(r.rsm||'—')+'</td>'
             +'<td class="r">'+osAge(r)+'</td></tr>';
         }).join('')+'</tbody></table></div>'
@@ -7073,10 +7108,11 @@ function osPaint_(m, d){
       +(d.notReady?'<div class="note bad">'+esc(d.notReadyNote)+'</div>':'')
       +tiles+bar+chips+(OSSEC==='round'?board:table)+'</div>';
     wireTiles(m);
-    var go=function(){ OSQ={q:$('#osQ').value,agent:$('#osAgent').value,rsm:$('#osRsm').value}; drawOldStock(m); };
+    var go=function(){ OSQ={q:$('#osQ').value,agent:$('#osAgent').value,rsm:$('#osRsm').value,
+      location:$('#osLoc').value}; drawOldStock(m); };
     $('#osGo').onclick=go;
     $('#osQ').onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); go(); } };
-    $('#osRsm').onchange=go; $('#osAgent').onchange=go;
+    $('#osRsm').onchange=go; $('#osAgent').onchange=go; $('#osLoc').onchange=go;
     $all('[data-osh]').forEach(function(b){ b.onclick=function(){
       osHolderDrawer(b.getAttribute('data-osh'), b.getAttribute('data-osmin'),
         b.getAttribute('data-oslab'));
@@ -7126,12 +7162,15 @@ function osRoundXl_(btn){
   srv('oldStockRound',{}).then(function(d){
     var rows=d.rows||[];
     if(!rows.length){ done(); toast('Hakuna simu / nothing outstanding', true); return; }
-    var head=['MWENYE NAZO','SIMU YAKE','RSM','SIMU YA RSM','JUMLA YA SIMU','KONGWE','90+',
-      'IMEI','BIDHAA','UMRI LEO','ORODHA YA','ILIVYOSOMWA'];
+    var head=['MWENYE NAZO','SIMU YAKE','MAHALI','MAHALI KUTOKA','RSM','SIMU YA RSM',
+      'JUMLA YA SIMU','KONGWE','90+','IMEI','BIDHAA','UMRI LEO','ORODHA YA','ILIVYOSOMWA'];
     var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
     var lines=[head.map(q).join(',')];
     rows.forEach(function(r){
-      lines.push([r.agent,r.agentPhone,r.rsm,r.rsmPhone,r.pieces,r.oldest,r.over90,
+      /* THE SOURCE RIDES WITH THE PLACE. A derived location in a spreadsheet is
+         indistinguishable from a declared one, and somebody plans a route off this. */
+      lines.push([r.agent,r.agentPhone,r.location,r.locFrom,r.rsm,r.rsmPhone,
+        r.pieces,r.oldest,r.over90,
         r.imei,r.item,(r.age==null?'':r.age),r.asOf,d.todayK].map(q).join(','));
     });
     saveFile_('HOOPLOAN-ziara-'+String(d.todayK||'')+'.csv','text/csv;charset=utf-8',
@@ -7150,6 +7189,7 @@ function osHolderDrawer(key, min, label){
     var rows=d.rows||[];
     drawer('<h3 style="margin-bottom:2px">'+esc(d.agent||'(hakuna jina / unnamed)')+'</h3>'
       +'<div class="mut" style="font-size:11px;margin-bottom:8px">'+esc(label||'')
+      +(d.location?' · '+esc(d.location):'')
       +(d.rsm?' · RSM '+esc(d.rsm):'')
       +(d.phone?' · <a href="tel:'+esc(d.phone)+'">'+esc(d.phone)+'</a>':'')+'</div>'
       +(rows.length

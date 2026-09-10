@@ -48,6 +48,46 @@ chase.
 against each other, so one answer is the only thing that keeps a phone off both lists or off
 neither.
 
+## Where it is, so a visit can be planned by place
+
+> *"add location column in old stock since this operation to visit it is better when we can pivot
+> by not just RSM but location too — the location we used as in PCOs calling not the kinondoni
+> default."*
+
+An RSM's round can cross three towns and a town's round can cross three RSMs, which is the whole
+reason this was asked for. So `location` is a column, a filter, and a column on both the round and
+the handset list.
+
+**`branch`, never `team`.** There are two location-shaped fields on the loan book and only one of
+them is a place. `team` is derived from the shop string *"Hoop Limited, Kinondoni"*, so it reads
+KINONDONI for every row this dealer has — the company's own address, not the agent's. Pivoting by
+it gives one bar. `branch` rides in on the offline queue, the PCOs' own portfolio sheet, and is the
+location the office already talks in.
+
+**Where the answer comes from, in order:** what somebody wrote on the handset · the holder's branch
+on the staff register · the commonest branch their own sales carry. The commonest, not the first
+seen — an agent who moved, or one row typed into the wrong branch, must not decide where a van is
+sent.
+
+**A place nobody knows is a dash.** Never Kinondoni, never blank-means-head-office. Guessing sends
+somebody to the wrong town, which costs a day. A tile counts how many are still unknown, because a
+pivot by place is only as good as how many rows have one.
+
+### And it is stamped, because the book underneath deletes
+
+> *"if such data is permanent stamp it permanent rather always fetching yet watu deletes the data
+> per time"*
+
+Worked out **once**, written to the row, and read off it for ever after. Watu re-uploads its export
+with rows gone, so a location re-derived on every read would go from naming a town to a dash the
+morning that agent's sales were trimmed — with nothing on screen to say why, on the list a van is
+dispatched from. Same axis as the NEW STOCK sale audit, for the same reason.
+
+`location_from` rides with it (`stated` · `staff` · `sales`), because the stamp would otherwise
+make a derived place indistinguishable from a declared one the moment it landed, and a van is sent
+on both. A stated location is never overwritten; a view-only code writes nothing; a database
+without the column reads fine and stamps nothing.
+
 ## The age is arithmetic, never a stored number
 
 `age_days` is what the list said on `as_of`. Today's age is **`age_days + (today − as_of)`**, worked
@@ -142,8 +182,9 @@ door that looks shut and is not.
 | file | what changed |
 |---|---|
 | `db/migrations/RUN-ME-2026-09-12-old-stock.sql` | `old_stock` |
+| `db/migrations/RUN-ME-2026-09-14-old-stock-location.sql` | `location`, `location_from` |
 | `db/RUN-ME-2026-09-12-sipho-september-load.sql` | the September list: staff + stock |
 | `api/portal.js` | `oldStockIndex`, `daysApart`, `ageToday`, the `oldStock` fn, the `oldstock` nav, NEW STOCK's sold-but-never-locked join, `stockAgingIndex` repointed |
 | `public/portal.html` | the catalog entry, `OSQ`/`osAge`/`drawOldStock`, `nsCell` collapsed to name+number |
 | `public/upload.html` | the aged-stock chip disabled, and the sniffer no longer routes to it |
-| `test/old-stock.test.mjs` | thirteen tests |
+| `test/old-stock.test.mjs` | twenty-four tests |
