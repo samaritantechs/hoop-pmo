@@ -209,8 +209,11 @@ test('the last button takes the list, and never the ticks', () => {
      "add a search at unlocking BEFORE the Achia kwa wingi button". */
   const at = t => { const i = bar.indexOf(t); assert.ok(i > 0, 'missing: ' + t); return i; };
   assert.ok(at('<span style="flex:1"></span>') < at('id="dvQ"'));
-  assert.ok(at('id="dvQ"') < at('id="dvFind"'));
-  assert.ok(at('id="dvFind"') < at('id="dvBulk"'), 'the search comes before the bulk button');
+  assert.ok(at('id="dvQ"') < at('id="dvBulk"'), 'the search comes before the bulk button');
+  /* AND THE MAGNIFIER IS GONE WITH IT: the box narrows the list as the digits go in, so a
+     button beside it would be a control with nothing left to do -- and one somebody presses
+     anyway, wondering what they missed. */
+  assert.ok(!/dvFind/.test(bar), 'no search button: the typing is the search');
   assert.match(bar, /rb\.onclick[^;]*devBulkForm\(m, rb\.getAttribute\('data-dvbulk'\)\)/,
     'and the order comes off the button rather than out of DEVMODE a second time');
 
@@ -350,15 +353,63 @@ test('an empty search leaves no trap: the box that caused it is still on screen'
   const bar = src('devPaint_');
   /* The action bar used to render only when there were rows. Type one wrong digit, get no
      rows, and the box you would clear the search in went with them. */
-  assert.match(bar, /var actions=\(!rows\.length && !d\.searching\) \? '' :/);
-  // While a search is live the tiles are replaced: they count the fleet, and the server has
-  // just answered about one phone.
-  assert.match(bar, /var tiles=d\.searching/);
+  assert.match(bar, /var actions=\(!rows\.length && !qLive\) \? '' :/);
+  // While a search is live the tiles are replaced: they count the fleet, and what is on screen
+  // is one phone. Keyed on what was TYPED, not on the server's last answer -- between a
+  // keystroke and the reply those two disagree, and the tiles must not flash back in the gap.
+  assert.match(bar, /var tiles=qLive/);
   assert.match(bar, /id="dvClear"/, 'and the banner carries the way out');
   assert.match(bar, /No handset carries those digits/);
+});
 
+test('the search banner is not built before the rows it counts', () => {
+  /* THE CRASH THIS PANE SHIPPED WITH.
+       "pressing search icon: Imeshindikana / Could not load.
+        Cannot read properties of undefined (reading 'length')"
+
+     `rows` was declared with `var` BELOW the banner that reads `rows.length`. The declaration
+     hoists and the assignment does not, so it was `undefined` at that line -- and because the
+     banner is the one piece of this pane that renders only while searching, nothing else ever
+     touched it. The pane died the first time somebody searched. */
+  const bar = src('devPaint_');
+  const rowsAt = bar.indexOf('var rows=');
+  const tilesAt = bar.indexOf('var tiles=');
+  assert.ok(rowsAt > 0 && tilesAt > 0);
+  assert.ok(rowsAt < tilesAt, 'rows is worked out before anything draws a count of it');
+  assert.ok(bar.indexOf('var qLive=') < rowsAt, 'and the typed digits before rows uses them');
+});
+
+test('typing narrows the list, with no button and no reload', () => {
+  /* "typing should auto reduce the list to the typed imei without even the button being there
+      or re-loading the whole page at unlocking page" */
   const wire = src('devPaint_');
-  assert.match(wire, /qBox\.onkeydown[\s\S]{0,120}Enter/, 'Enter searches: the hands are on the keys');
-  assert.match(wire, /if\(v===String\(DEV\.q\|\|''\)\) return;/,
-    'and an unchanged box does not re-read the register for nothing');
+  assert.match(wire, /qBox\.oninput=function/, 'every keystroke acts');
+  /* THE INSTANT HALF: repaint from rows already in hand. devPaint_ rather than drawDevices,
+     because drawDevices blanks the pane to a skeleton -- which is the "re-loading the whole
+     page" the ask is about. */
+  assert.match(wire, /oninput=function[\s\S]{0,400}devPaint_\(m, d, at\)/);
+  assert.ok(!/oninput=function[\s\S]{0,400}drawDevices/.test(wire),
+    'a keystroke never blanks the pane');
+  // THE WHOLE-REGISTER HALF, once the typing pauses: the loaded page is not the register.
+  assert.match(wire, /setTimeout\(function\(\)\{ DEVQ_TIMER=null; devSearchFetch_\(m\); \}, 250\)/);
+  assert.match(wire, /if\(v===String\(DEV\.q\|\|''\)\)\{ qBox\.value=v; return; \}/,
+    'and an unchanged box redraws nothing');
+  // Enter does not search -- the typing did -- it just stops waiting for the pause.
+  assert.match(wire, /qBox\.onkeydown[\s\S]{0,400}devSearchFetch_\(m\)/);
+
+  /* THE REPAINT COSTS THE CARET, so it is put back -- otherwise the second digit lands
+     nowhere. Counted in digits, so it survives the box stripping anything that is not one. */
+  assert.match(wire, /DEVQ_FOCUS=true; DEVQ_CARET=raw\.slice\(0,pos\)\.replace\(\/\\D\/g,''\)\.length/);
+  assert.match(wire, /if\(DEVQ_FOCUS\)\{[\s\S]{0,300}setSelectionRange/);
+  assert.ok(/DEVQ_FOCUS=false; DEVQ_CARET=null;/.test(wire),
+    'and it is one-shot: a tile repainting must not steal focus into the search box');
+
+  /* THE LAST QUESTION ASKED IS THE ONLY ONE WHOSE ANSWER COUNTS. Requests return in whatever
+     order the network feels like, and "35138" answering after "351388" would put the wider
+     list back under a narrower box. */
+  const fetch = src('devSearchFetch_');
+  assert.match(fetch, /var mine=\+\+DEVQ_SEQ;/);
+  assert.match(fetch, /if\(mine!==DEVQ_SEQ\) return;/);
+  assert.match(fetch, /catch\(function\(e\)\{ if\(mine===DEVQ_SEQ\) toast\(safeErr\(e\), true\); \}\)/,
+    'a failed keystroke toasts rather than replacing the fleet with an error page');
 });

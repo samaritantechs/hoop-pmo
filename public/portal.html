@@ -2997,15 +2997,60 @@ function devPaint_(m, d, at){
       DEV.flag=(DEV.flag===f?'':f); DEV.filter='';
       if(widening) drawDevices(m); else devPaint_(m, d, at);
     } }; };
+  /* WHAT IS ACTUALLY ON SCREEN, WORKED OUT BEFORE ANYTHING DRAWS IT.
+     =======================================================================================
+     This used to sit below the tiles, and the search banner above it read `rows.length` --
+     a `var` that hoists, so during a search it was `undefined` and the pane died on
+     "Cannot read properties of undefined (reading 'length')". The banner is the ONE thing
+     that only renders while searching, which is why nothing else ever tripped over it and
+     why the crash arrived the moment somebody pressed the magnifier. Anything the tiles or
+     the banner count has to be known before they are built.
+
+     THE FENCE MUST BE THE TILE'S OWN ARITHMETIC, not something near it.
+     ---------------------------------------------------------------------------------------
+     `r.stale` on a row means "not reporting" and INCLUDES a phone that has never spoken --
+     that is deliberate and tested, because it is what paints the clock red. The TILE beside
+     it counts something narrower on purpose: `stale && !neverSeen`, so the two tiles
+     partition the fleet instead of double-counting it.
+
+     Filtering on the bare flag therefore drew a different set from the one the tile had
+     counted, and the gap was widest in the state a demo is most likely to be in: a bench of
+     phones just enrolled, none of which has beaten yet. "Kimya / silent" read 0, and
+     clicking it opened the entire register. A tile that says none and then shows all is the
+     kind of thing an audience remembers.
+
+     AND THE TYPED DIGITS NARROW IT HERE TOO, not only at the server.
+     ---------------------------------------------------------------------------------------
+       "typing should auto reduce the list to the typed imei without even the button being
+        there or re-loading the whole page"
+
+     The search is two-stage on purpose. Every keystroke narrows the rows ALREADY IN HAND,
+     which costs nothing and shows an answer while the finger is still moving; a moment later
+     the server answers about the whole register, which is the half that finds a handset that
+     was never on the loaded page. Doing only the first would quietly search 500 rows of a
+     640-phone fleet; doing only the second puts a round trip between every keystroke and any
+     feedback at all. */
+  var qLive=String(DEV.q||'');
+  var rows=(d.rows||[]).filter(function(r){
+    if(qLive && String(r.imei||'').indexOf(qLive)<0) return false;
+    if(!DEV.flag) return true;
+    if(DEV.flag==='stale') return r.stale===true && r.neverSeen!==true;
+    return r[DEV.flag]===true;
+  });
+  /* HAS THE SERVER CAUGHT UP WITH WHAT IS TYPED? Between a keystroke and the answer these
+     rows are the loaded page, not the register, and the banner says so rather than reporting
+     a whole-fleet count it does not have yet. */
+  var qWhole=d.searching===true && String(d.q||'')===qLive;
   /* WHILE A SEARCH IS LIVE THE TILES GO. They count the fleet and they are also how you filter
      it -- and during a search the server has answered about one phone, so every number in them
      would describe the search result while still reading as "the fleet". A banner saying what
      is being searched, with the way out on it, is the honest thing in that space. */
-  var tiles=d.searching
+  var tiles=qLive
     ? '<div class="note" style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-      +'<span>&#128269; Utafutaji: <b style="font-family:ui-monospace,monospace">'+esc(d.q||'')+'</b>'
+      +'<span>&#128269; Utafutaji: <b style="font-family:ui-monospace,monospace">'+esc(qLive)+'</b>'
       +' &mdash; '+money(rows.length)+' simu / '+money(rows.length)+' found'
-      +(rows.length?'':'. Hakuna simu yenye tarakimu hizi. / No handset carries those digits.')
+      +(qWhole?'':' <span class="mut">(bado inatafuta kwenye rejista nzima… / still searching the register…)</span>')
+      +(rows.length||!qWhole?'':'. Hakuna simu yenye tarakimu hizi. / No handset carries those digits.')
       +'</span><span style="flex:1"></span>'
       +'<button class="btn sm" id="dvClear">Onyesha zote / Show all</button></div>'
     : '<div class="tiles">'
@@ -3029,25 +3074,6 @@ function devPaint_(m, d, at){
     +'<button class="btn sm ghost" id="dvRefresh" title="Soma upya kutoka seva / re-read from the server">↻</button>'
     +'<span style="flex:1"></span>'
     +(BOOT.readOnly||!canLock?'':'<button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button>')+'</div>';
-  /* neverSeen and stale ride on the row, so this fence is the same fact the tile counted
-     -- never a second definition of "silent" that could drift from the one in the tile. */
-  /* THE FENCE MUST BE THE TILE'S OWN ARITHMETIC, not something near it.
-     -------------------------------------------------------------------------------------
-     `r.stale` on a row means "not reporting" and INCLUDES a phone that has never spoken --
-     that is deliberate and tested, because it is what paints the clock red. The TILE beside
-     it counts something narrower on purpose: `stale && !neverSeen`, so the two tiles
-     partition the fleet instead of double-counting it.
-
-     Filtering on the bare flag therefore drew a different set from the one the tile had
-     counted, and the gap was widest in the state a demo is most likely to be in: a bench of
-     phones just enrolled, none of which has beaten yet. "Kimya / silent" read 0, and
-     clicking it opened the entire register. A tile that says none and then shows all is the
-     kind of thing an audience remembers. */
-  var rows=(d.rows||[]).filter(function(r){
-    if(!DEV.flag) return true;
-    if(DEV.flag==='stale') return r.stale===true && r.neverSeen!==true;
-    return r[DEV.flag]===true;
-  });
   /* THE FOUR ORDERS, ABOVE THE TABLE RATHER THAN UNDER IT.
      =======================================================================================
        "These buttons are so important but giving me headeche to find them on bottom ...
@@ -3089,7 +3115,7 @@ function devPaint_(m, d, at){
   /* THE BAR SURVIVES AN EMPTY SEARCH. It used to render only when there were rows, which is
      fine for an empty register and a trap for a search: type one wrong digit, get no rows, and
      the box you would clear the search in has gone with them. */
-  var actions=(!rows.length && !d.searching) ? '' :
+  var actions=(!rows.length && !qLive) ? '' :
     '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;align-items:center">'
     +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
     /* A view-only code cannot change a device, and every one of these buttons answered that
@@ -3133,9 +3159,12 @@ function devPaint_(m, d, at){
        motion: a customer puts a handset on the counter, you find it and you open it. Pushed
        right, immediately before the bulk button, which is where the ask put it. */
     +'<span style="flex:1"></span>'
+    /* NO BUTTON. The box narrows the list as the digits go in, so a magnifier beside it would
+       be a control with nothing left to do -- and one somebody presses anyway, wondering what
+       they missed. Its value comes from DEV.q rather than the server's answer, because that is
+       what the operator typed and it must not jump back a keystroke when a reply lands. */
     +'<input id="dvQ" inputmode="numeric" placeholder="Tafuta IMEI / find an IMEI" '
-      +'value="'+esc(d.q||'')+'" style="width:170px;font-family:ui-monospace,monospace;font-size:12px">'
-    +'<button class="btn sm ghost" id="dvFind" title="Tafuta / search">🔍</button>'
+      +'value="'+esc(qLive)+'" style="width:170px;font-family:ui-monospace,monospace;font-size:12px">'
     +(BOOT.readOnly ? ''
       : '<button class="btn sm ghost" id="dvBulk" data-dvbulk="'+(canLock?'locked':'released')+'" '
         +'title="Bandika orodha ya IMEI / paste a list of IMEIs">'
@@ -3199,7 +3228,11 @@ function devPaint_(m, d, at){
          was wrong. In front of a room, arithmetic that does not add up is the question
          you get asked, and "the table is truncated" is only a good answer if the screen
          said so first. */
-      +(devMore_(d)
+      /* NOT WHILE A SEARCH IS LIVE. This counts the SERVER'S payload against the whole fleet,
+         which is the right thing to say about a browsed register and a lie under a narrowed
+         one: mid-keystroke it would read "showing 500 of 640" above three matching rows. The
+         banner is already reporting that count, and it is reporting the right one. */
+      +(devMore_(d) && !qLive
         ? '<div class="note" style="margin-top:8px">Jedwali linaonyesha '+money((d.rows||[]).length)
           +' kati ya '+money(d.total)+'. Tumia vichujio hapo juu kupunguza. '
           +'/ Showing '+money((d.rows||[]).length)+' of '+money(d.total)
@@ -3231,16 +3264,45 @@ function devPaint_(m, d, at){
   $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
   var al=$('#dvAlarm'); if(al) al.onclick=function(){ DEV.flag='lockedNeverSpoke'; DEV.filter=''; devPaint_(m, d, at); };
   var rf=$('#dvRefresh'); if(rf) rf.onclick=function(){ drawDevices(m); };
-  /* Enter searches, because the operator is typing digits off a handset and reaching for the
-     mouse afterwards is the slow half of "finding a single phone in fast speed". Emptying the
-     box and pressing Enter is one way back; the banner's own button is the other. */
-  var qBox=$('#dvQ'), qGo=function(){
-    var v=String(qBox?qBox.value:'').replace(/\D/g,'');
-    if(v===String(DEV.q||'')) return;              // nothing changed: do not re-read for nothing
-    DEV.q=v; DEV.flag=''; drawDevices(m);
-  };
-  if(qBox) qBox.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); qGo(); } };
-  var fb=$('#dvFind'); if(fb) fb.onclick=qGo;
+  /* THE SEARCH NARROWS AS YOU TYPE, and never blanks the pane to do it.
+     =======================================================================================
+       "typing should auto reduce the list to the typed imei without even the button being
+        there or re-loading the whole page at unlocking page"
+
+     Each keystroke repaints from rows already in hand -- no request, no skeleton, an answer
+     before the next digit is pressed. A quarter-second after the typing stops, the server is
+     asked as well, because the loaded page is not the register: a fleet over 500 handsets has
+     rows the browser has never held, and a search that could not reach them would be a filter
+     wearing a search's clothes.
+
+     THE REPAINT COSTS THE CARET, which is why it is put back. devPaint_ rewrites the pane, so
+     the box the operator is typing in is destroyed and rebuilt mid-word; without restoring
+     focus and position the second digit would land nowhere. The offset is counted in DIGITS
+     rather than characters, so it survives the box stripping anything that is not one. */
+  var qBox=$('#dvQ');
+  if(qBox){
+    qBox.oninput=function(){
+      var raw=String(qBox.value||'');
+      var pos=qBox.selectionStart==null?raw.length:qBox.selectionStart;
+      var v=raw.replace(/\D/g,'');
+      if(v===String(DEV.q||'')){ qBox.value=v; return; }   // only punctuation moved: nothing to redraw
+      DEVQ_FOCUS=true; DEVQ_CARET=raw.slice(0,pos).replace(/\D/g,'').length;
+      DEV.q=v; DEV.flag='';
+      devPaint_(m, d, at);                                  // instantly, on what is in hand
+      if(DEVQ_TIMER) clearTimeout(DEVQ_TIMER);
+      DEVQ_TIMER=setTimeout(function(){ DEVQ_TIMER=null; devSearchFetch_(m); }, 250);
+    };
+    /* Enter does not search -- the typing already did -- it just stops waiting for the pause
+       and asks the server now, for the operator who has finished the digits and wants the
+       whole register checked this second. */
+    qBox.onkeydown=function(e){
+      if(e.key!=='Enter') return;
+      e.preventDefault();
+      if(DEVQ_TIMER){ clearTimeout(DEVQ_TIMER); DEVQ_TIMER=null; }
+      DEVQ_FOCUS=true; DEVQ_CARET=String(DEV.q||'').length;
+      devSearchFetch_(m);
+    };
+  }
   var cb=$('#dvClear'); if(cb) cb.onclick=function(){ DEV.q=''; DEV.flag=''; drawDevices(m); };
   var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
   /* The order comes off the button rather than out of DEVMODE a second time: one place decides
@@ -3259,6 +3321,40 @@ function devPaint_(m, d, at){
   $all('[data-dvt]').forEach(function(b){ b.onclick=function(){ devToken(b.getAttribute('data-dvt')); }; });
   $all('[data-dvd]').forEach(function(b){ b.onclick=function(){ devDelete(m, b.getAttribute('data-dvd')); }; });
   devWireTicks_();
+  /* PUT THE OPERATOR BACK WHERE THEY WERE. Only ever after a keystroke -- a tile or a chip
+     repainting must not steal focus into the search box from wherever the mouse is. */
+  if(DEVQ_FOCUS){
+    var nb=$('#dvQ');
+    if(nb){
+      nb.focus();
+      var p=(DEVQ_CARET==null?nb.value.length:Math.min(DEVQ_CARET, nb.value.length));
+      try{ nb.setSelectionRange(p,p); }catch(ignored){}
+    }
+    DEVQ_FOCUS=false; DEVQ_CARET=null;
+  }
+}
+
+/* THE WHOLE-REGISTER HALF OF THE SEARCH, without the skeleton.
+   =========================================================================================
+   drawDevices blanks the pane before it asks, which is right when you are ARRIVING and wrong
+   while you are typing: it would throw away the rows the keystroke just narrowed and leave a
+   grey box under the cursor until the reply came back. This asks and then repaints, so what
+   is on screen stays usable the whole way through.
+
+   THE LAST QUESTION ASKED IS THE ONLY ONE WHOSE ANSWER COUNTS. Requests come back in whatever
+   order the network feels like, and "35138" answering after "351388" would put the wider list
+   back under a narrower box. The sequence number is what makes a slow answer harmless.
+
+   AND A FAILURE TOASTS RATHER THAN WIPING THE PANE -- the rows in hand are still the ones the
+   operator was reading, and replacing them with an error page because one keystroke's request
+   timed out would lose the search along with the fleet. */
+var DEVQ_TIMER=null, DEVQ_SEQ=0, DEVQ_FOCUS=false, DEVQ_CARET=null;
+function devSearchFetch_(m){
+  var mine=++DEVQ_SEQ;
+  srv('deviceList',{state:DEV.filter,q:DEV.q}).then(function(d){
+    if(mine!==DEVQ_SEQ) return;            // a later keystroke already asked; that answer wins
+    devPaint_(m, d, Date.now());
+  }).catch(function(e){ if(mine===DEVQ_SEQ) toast(safeErr(e), true); });
 }
 
 /* TICK ALL, AND THE COUNT BESIDE THE BUTTONS.
