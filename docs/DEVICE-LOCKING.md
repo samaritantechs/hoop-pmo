@@ -701,6 +701,90 @@ genuinely serve our origin already owns the server and can simply mark the phone
 
 ---
 
+## Why Gmail cannot be created on a locked phone — read off the handset, not from memory
+
+> *"i think we should create a new alternate for the way foward that allows account creation while
+> unlocking, relocking and achia of the previous ones still work/undisturbed."*
+
+`adb shell dumpsys device_policy`, run on a live enrolled handset (a Samsung A-series, our own
+stock) — **twice: once locked, once unlocked.** The two dumps are identical on every line below;
+only the internal counters move. Four lines settle it.
+
+**That the two dumps match is itself the proof.** Locked and unlocked are states of *our screen*,
+not of the platform's policy — so nothing about pressing Funga or Fungua can affect what Google
+allows, and account creation is refused in both, exactly as the field reported. The only operation
+that changes this dump at all is **achia**, because achia is the only one that stops the phone being
+Device Owner. That is why it came back "the next morning".
+
+**1. Nothing on this phone blocks accounts.** Both device admins report:
+
+```
+accountTypesWithManagementDisabled={}
+```
+
+Empty for our `LockAdmin` **and** for Samsung's. So neither `DISALLOW_MODIFY_ACCOUNTS` nor
+`setAccountManagementDisabled` is in play — as the code always said, and now as the platform
+confirms. This is the half that could have been our fault. It is not.
+
+**2. What the phone actually is:**
+
+```
+isOrganizationOwnedDevice=true
+Device Owner Type: 0
+```
+
+`isOrganizationOwnedDevice` is the flag Google Play services reads, and it is a **consequence of
+being Device Owner at all** — not a policy anybody sets, and not one anybody can clear while still
+holding the lock. That is the whole answer: *"sign in with your work account"* is the platform
+saying "this handset belongs to an organisation", which is true, and which we cannot make untrue
+without ending the lock.
+
+`Device Owner Type: 0` is `DEVICE_OWNER_TYPE_DEFAULT`. There **is** a `DEVICE_OWNER_TYPE_FINANCED`
+for exactly our business, and it is present on this Android version — but `setDeviceOwnerType` is a
+system API held by the platform's own Device Lock Controller. A third-party APK cannot call it. So
+it is not a lever either, and it is worth writing down so nobody spends a week finding that out.
+
+**3. Our restrictions are the four we wrote, and no more:** `no_factory_reset`, `no_safe_boot`,
+`no_add_user`, `no_change_wifi_state`, plus `no_airplane_mode`, the lock-task package and the
+uninstall block. Nothing else. There is nothing to lift.
+
+### And the alternative is already installed on every handset
+
+```
+Enabled Device Admins (User 0):
+  com.samsung.android.kgclient/.agent.KGDeviceAdminReceiver
+```
+
+That is **Knox Guard** — Samsung's own device-financing lock — shipped as a system app on this
+stock and listed under `vendor_required_apps_managed_device`. Note where it sits: an **enabled
+device admin**, *not* the device owner. That distinction is the entire point:
+
+| | our lock | Knox Guard |
+|---|---|---|
+| mechanism | Device Owner (DPC) | Samsung firmware + Knox servers |
+| sets `isOrganizationOwnedDevice` | **yes** | no |
+| account creation | refused by Google | expected to work |
+| what it costs | nothing, it is ours | a Knox Guard licence, per device |
+
+**It is a commercial decision, not a code change.** Knox Guard needs a Samsung Knox account, a
+licence, and enrolment through Knox's console or API — and our Funga/Fungua/Achia buttons would
+have to drive that API instead of the beat. Nobody here can write their way to it.
+
+**It also gives the split that was asked for, for free.** Knox Guard is separate infrastructure, so
+handsets already in the field *cannot* be affected by adopting it: they keep this app, this beat and
+these buttons for the rest of their loans, because nothing about them changes. New stock would go
+out on Knox Guard, and the Gmail problem would end with the phones already sold rather than being
+carried forward.
+
+**Not yet verified, and say so:** that Knox Guard's lock leaves account creation working is a strong
+inference from it not being Device Owner — it is not something anyone here has watched happen. One
+trial licence on one handset answers it, and that test should come before any decision.
+
+Until then the counter procedure stands, and it costs two minutes: see **Gmail at the counter** in
+`docs/DEVICE-DESKS.md`.
+
+---
+
 ## Never rotate a token on a phone that is in the field
 
 > *"so the tokens should be autoupdated"*
