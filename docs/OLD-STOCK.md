@@ -115,7 +115,7 @@ it (none, the figure shown, ninety), and `oldest` needs no special case because 
 maximum age.
 
 The cell still leads with the figure. Every table here sorts on the cell's text, so putting an icon
-or a word in front of the number would make the Kongwe column sort alphabetically — on the one
+or a word in front of the number would make the DAYS OFF column sort alphabetically — on the one
 board read to decide which visit goes first. A zero is not a link: there is nothing behind it, and
 a control that answers with an empty list teaches people the numbers do not really do anything.
 

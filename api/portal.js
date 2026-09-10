@@ -6109,20 +6109,51 @@ const FNS = {
        migration. Both simply read what is there, which is the same rule the sale audit
        follows. */
     let placed = 0;
+    let placeNote = '';
     if (idx.hasLoc && !idx.notReady && !isReadOnly(user)) {
       const fresh = idx.rows.filter(r => r.locNew && r.location);
-      for (let i = 0; i < fresh.length; i += 200) {
-        const slice = fresh.slice(i, i + 200).map(r => ({
-          imei: r.imei, location: r.location, location_from: r.locFrom,
-          updated_at: new Date().toISOString(),
-        }));
-        const { error } = await db.from('old_stock').upsert(slice, { onConflict: 'imei' });
-        /* POSTGREST REFUSES BY RESOLVING, NOT BY THROWING -- and a stamp that reported
-           success on a write the database rejected is the exact failure this column exists
-           to prevent. It is still not worth failing the pane over: the list reads either
-           way, so the count simply stops climbing. */
-        if (error) { placed = 0; break; }
-        placed += slice.length;
+      /* UPDATE, NOT UPSERT, AND THE DIFFERENCE COST A DAY.
+         ---------------------------------------------------------------------------------
+         This was an upsert carrying only {imei, location, location_from, updated_at}, which
+         PostgREST turns into INSERT ... ON CONFLICT (imei) DO UPDATE. Postgres checks NOT
+         NULL against the PROPOSED tuple before it ever looks for the conflict -- and
+         `as_of` is `date not null` with no default -- so every batch was refused for a row
+         that already existed and only needed one column changed. Nothing was ever stamped.
+
+         Every row here exists by definition: it was read out of this table a moment ago.
+         There is nothing to insert, so nothing should pretend there might be.
+
+         GROUPED BY THE VALUE so this is fifteen writes and not two thousand. Every handset
+         a holder has takes the same place, and there are only as many distinct places as
+         the register knows about. */
+      const byPlace = new Map();
+      for (const r of fresh) {
+        const k = r.location + '\u0000' + r.locFrom;
+        if (!byPlace.has(k)) byPlace.set(k, []);
+        byPlace.get(k).push(r.imei);
+      }
+      const at = new Date().toISOString();
+      outer:
+      for (const [k, imeis] of byPlace) {
+        const cut = k.indexOf('\u0000');
+        const patch = { location: k.slice(0, cut), location_from: k.slice(cut + 1), updated_at: at };
+        for (let i = 0; i < imeis.length; i += 200) {
+          const slice = imeis.slice(i, i + 200);
+          const { error } = await db.from('old_stock').update(patch).in('imei', slice);
+          /* POSTGREST REFUSES BY RESOLVING, NOT BY THROWING -- and a refusal that is
+             swallowed is how this went unnoticed in the first place: the pane reported
+             nothing stamped, which reads exactly like nothing NEEDED stamping. The list
+             still opens either way, so the failure is carried on the answer rather than
+             thrown, but it is never silent again. */
+          if (error) {
+            placed = 0;
+            placeNote = 'Mahali hapakuhifadhiwa: ' + String(error.message || 'imekataliwa')
+              + ' / Locations could not be saved — the list still reads, but nothing was '
+              + 'written down.';
+            break outer;
+          }
+          placed += slice.length;
+        }
       }
     }
     const open = idx.open.slice();
@@ -6169,7 +6200,7 @@ const FNS = {
     return { ok: true, notReady: idx.notReady,
       notReadyNote: idx.notReady ? OLDSTOCK_NOT_READY : '',
       asOf: Date.now(), q, agent: String(a.agent || ''), rsm: String(a.rsm || ''),
-      location: String(a.location || ''), hasLoc: idx.hasLoc, placed,
+      location: String(a.location || ''), hasLoc: idx.hasLoc, placed, placeNote,
       rows: shown.slice(0, 2000), shown: shown.length,
       agents: [...new Set(open.map(r => r.agent).filter(Boolean))].sort(),
       rsms: [...new Set(open.map(r => r.rsm).filter(Boolean))].sort(),
