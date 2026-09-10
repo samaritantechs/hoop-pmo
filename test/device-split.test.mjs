@@ -160,3 +160,63 @@ test('an unknown state is refused before any nav is consulted', async () => {
   await assert.rejects(() => _FNS.deviceSetState(db, ADMIN, { imeis: ['D1'], state: 'constructor' }),
     /Unknown device state/, 'and an inherited property is not a state either');
 });
+
+/* ============================================================================================
+   THE LOCK NEVER TOUCHES THE CUSTOMER'S ACCOUNTS.
+   ============================================================================================
+     "RSMs in abroad regions are complaining phones at Point of sale cant login GMAIL account"
+     "they say they cant create account, they have to create in their own phones and then login
+      in our customer phone"
+     "signing in is okay but creating is not"
+
+   THE FIELD REPORT IS THE PROOF, and it clears this app: every account control a Device Owner
+   has blocks ADDING an account, an existing one exactly as much as a new one. If the lock held
+   either, signing in would fail too. It does not. What remains is Google's own rule on managed
+   phones -- create is dropped, sign-in is kept -- which is why it returns at achia, when the
+   step-down ends the management.
+
+   SO THIS TEST GUARDS THE ABSENCE. Adding one of these lines later would be a one-word change
+   that reads like hardening and, on 2,000 handsets in the field, silently takes Gmail away
+   from paying customers -- with the reason five thousand kilometres from whoever notices.
+   ============================================================================================ */
+test('the lock app holds no account restriction, so signing in keeps working', () => {
+  const admin = fs.readFileSync(
+    new URL('../android/lock/src/main/java/com/samaritantechs/hooploanlock/LockAdmin.java',
+      import.meta.url), 'utf8');
+  /* Comments are the record of WHY, and naming a restriction is how the record explains it --
+     so the check is on code, with block comments stripped first. */
+  const code = admin.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/DISALLOW_MODIFY_ACCOUNTS/.test(code),
+    'that would block signing in as well, which the field says still works');
+  assert.ok(!/setAccountManagementDisabled/.test(code),
+    'the same, by the other route');
+  // And the restrictions it DOES hold, unchanged -- none of them is about accounts.
+  for (const r of ['DISALLOW_FACTORY_RESET', 'DISALLOW_SAFE_BOOT', 'DISALLOW_ADD_USER']) {
+    assert.match(code, new RegExp('addUserRestriction\\(me, UserManager\\.' + r + '\\)'), r);
+  }
+  /* DISALLOW_ADD_USER is a second USER, not a second ACCOUNT -- the one pair a reader chasing
+     this complaint would most easily confuse, and confusing them ends with the wrong line
+     deleted from a lock that 2,000 handsets depend on. */
+  assert.ok(/DISALLOW_ADD_USER/.test(code) && !/DISALLOW_MODIFY_ACCOUNTS/.test(code));
+});
+
+test('the POS desk carries the Gmail steps, and the store bench does not', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const draw = html.slice(html.indexOf('function drawDevices('));
+  // On the unlocking pane only: that is the desk with the customer standing at it.
+  assert.match(draw.slice(0, 30000), /\+\(canLock \? '' :\s*\n?\s*'<div class="note"/,
+    'the card is gated to the POS desk');
+  assert.match(draw, /accounts\.google\.com\/signup/);
+  assert.match(draw, /Mipangilio → Akaunti → Ongeza akaunti → Google/);
+  /* THE KNOWN-GOOD ROUTE STAYS PRINTED. The browser step saves fetching a second handset and
+     is the one nobody at a desk has confirmed; a card offering only the untested route
+     strands whoever it fails for. */
+  assert.match(draw, /Ikikataa:/);
+  assert.match(draw, /create the account on any other phone and sign in with it here/i);
+  /* And it says whose rule this is, so nobody goes looking for a switch in our code. Matched in
+     the halves the SOURCE has: this sentence crosses a concat boundary, and a regex written the
+     way the customer reads it would fail on a card that is perfectly correct. */
+  assert.match(draw, /Si hitilafu ya /);
+  assert.match(draw, /kufuli letu, na hurudi yenyewe simu ikishaachiwa/);
+  assert.match(draw, /fault in the lock/);
+});

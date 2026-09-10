@@ -212,6 +212,45 @@ a search that found nothing.
 A search is a **read**. Finding a handset on the wrong desk still does not let you order anything
 about it — the gate is on the transition, as everywhere here.
 
+## Gmail at the counter — and why the obvious fix would end the product
+
+> *"RSMs in abroad regions are complaining phones at Point of sale cant login GMAIL account."*
+> *"they say they cant create account, they have to create in their own phones and then login in our
+> customer phone."*
+> *"signing in is okay but creating is not."*
+
+**That last line is the whole diagnosis, and it clears this app entirely.** Every account control a
+Device Owner has — `DISALLOW_MODIFY_ACCOUNTS`, `setAccountManagementDisabled` — blocks **adding** an
+account, an existing one exactly as much as a new one. If the lock were holding either, signing in
+would fail too. It does not, and `LockAdmin.harden()` sets neither.
+
+What is left is Google's own rule: **on a fully-managed phone the sign-in flow drops the "Create
+account" path and keeps sign-in.** It comes back at `achia` because `achia` steps us down as Device
+Owner (`clearDeviceOwnerApp`) and the phone stops being managed — which is exactly what the field
+saw the next morning, without anyone changing a setting.
+
+**There is no policy switch that hands account CREATION back while the lock stands.** A DPC can
+disable account management; it cannot re-enable a flow Google removes for managed devices. So this is
+a counter procedure, not a code change — and **no APK was built for it.** Nothing was pushed to the
+handsets already in the field.
+
+**The dangerous fix is the obvious one.** Somebody reading "the lock stops Gmail" reaches for
+dropping Device Owner. That does not weaken the lock, it *ends* it: every handset out there becomes
+an ordinary phone, and there is no way back without each one in your hands. That is why this is
+written down rather than left as counter folklore.
+
+### What the desk does instead
+
+The unlocking pane — the POS desk, where the customer is standing — carries the steps:
+
+1. Open **Chrome** on the customer's own phone → `accounts.google.com/signup` → create the account.
+2. **Settings → Accounts → Add account → Google** → sign in with it.
+
+Step 1 is the one that saves fetching a second handset, and it is the one **nobody at a desk has
+confirmed yet** — so the route the RSMs are already using successfully (create on any other phone,
+then sign in here) stays printed underneath it rather than being replaced by it. A card offering only
+the untested route strands whoever it fails for.
+
 ## Files
 
 | file | what changed |
