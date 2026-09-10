@@ -80,11 +80,88 @@ not silently drop a grant everybody holding that role depends on.
 `devunlock` on general duty, then unticks `devices`. Until then everything behaves exactly as it
 did yesterday.
 
+## The row panel obeys the split too
+
+> *"Now the unlocking needs the achia button — it shouldn't be at locking."*
+
+The split shipped on the bulk bar and stopped there. The **per-row drawer** — which only ever
+opens from the locking bench — went on offering all four orders, so **Fungua** and **Achia** sat
+there for the store keeper to press and the only thing behind them was the server's 403.
+
+That refusal is the rule working, and it is still the wrong screen: a button whose only possible
+answer is a refusal teaches the operator that the system is broken rather than that the order was
+never theirs to give.
+
+The panel now reads the same `DEVMODE` the pane derives, so the drawer and the bar cannot disagree
+about which half of the registry somebody is standing on. It is tested by **running** it in both
+modes, not by grepping for a button string — a button that is written down is not the same as a
+button that is drawn.
+
+## Achia kwa wingi — the fourth button
+
+> *"Add the 4th on the right 'Release/Achia Bulk' so that the general duty can paste a list of imeis
+> as we paste at enrolling bulk … since sales are many they can't just tick one by one imei, so they
+> paste a list of verified sales imeis and release at once."*
+
+The other three buttons act on what is **ticked**. Ticking is the right verb when the phones are in
+front of you — a bench of twenty, a hub, a customer at the counter. It is the wrong verb at the end
+of a selling day, when the desk is holding a list that came out of somewhere else entirely and
+turning it into ticks means hunting each IMEI through a register of hundreds.
+
+So the fourth button takes **the list itself** — the same door the bench already uses to enrol a
+batch, read from the other end of the handset's life. It sits apart from the other three, pushed
+right, because the selection has nothing to do with it: two controls that look like a set and read
+different inputs is how somebody ticks three rows, presses the fourth button, and expects those
+three.
+
+**The count under the box is the whole safety of the screen, and it is deliberately not a
+validation.** It says live what the paste *parsed to* — how many IMEIs, the first one, how many were
+repeats. That catches the two mistakes a paste actually makes:
+
+| the mistake | what the count shows |
+|---|---|
+| a whole column arriving as one unbroken token | reads **1** |
+| a header row riding along | first one reads **IMEI** |
+
+Both **before** the confirmation rather than after the phones are gone. It cannot catch the mistake
+that matters most — the right-shaped list of the wrong phones — so it does not pretend to.
+
+**Nothing is repaired and nothing is judged.** Newlines, tabs, commas, semicolons and Excel's quotes
+are separators or noise; everything else goes to the register exactly as typed. Stripping a stray
+character out of `35138-8334583295` would produce a shorter number that looks as valid as a real
+IMEI, and this list ends in an order that cannot be taken back. No shape rule is invented either —
+this register is keyed on whatever the stock report calls a serial and has never asserted a length
+anywhere else, so a fence added here would either cry wolf on real serials or teach people to ignore
+it. **The register is the judge**, and it answers by name.
+
+The order goes through `devAct_` like every other, so the one-way-door confirmation is the one
+already proven rather than a second copy that will one day disagree with the first.
+
+### And the strangers are named
+
+`deviceSetState` has always returned `notEnrolledList`; nothing ever showed it. *"2 hazijasajiliwa"*
+against a paste of eighty is the operator's problem restated — they would have to re-paste in
+batches to find which two. Those IMEIs now open in a drawer, by name, with *"…na nyingine N"* when
+the server's list of twenty is not all of them.
+
+From the bulk bar this stays silent, because ticked rows are enrolled by definition — except in the
+one case where it should not be silent: a row deleted by somebody else between the read and the
+press.
+
+### The ceiling
+
+Every IMEI rides in an `in(...)` filter, which travels as a query string. Past a few hundred the URL
+is refused somewhere between the portal and the database, and what comes back is a transport error
+rather than an answer about phones. A paste is no longer bounded by what fits on a screen, so
+`deviceSetState` now carries **the same 500 limit `deviceEnrol` already has** — one ceiling to
+remember, and above the 500 rows `deviceList` shows, so tick-all on a full table still fits.
+
 ## Files
 
 | file | what changed |
 |---|---|
-| `api/portal.js` | `DEVICE_STATE_NAV`; `devlock`/`devunlock` in `NAV_TABS`; the legacy expansion in `navsFor`; the gates on `deviceList`, `deviceHistory`, `deviceEnrol`, `deviceToken`, `deviceDelete`, `deviceSetState` |
-| `public/portal.html` | two catalog entries, `DEVMODE`, the per-mode action bar and row buttons, the per-row **Fungua** |
+| `api/portal.js` | `DEVICE_STATE_NAV`; `devlock`/`devunlock` in `NAV_TABS`; the legacy expansion in `navsFor`; the gates on `deviceList`, `deviceHistory`, `deviceEnrol`, `deviceToken`, `deviceDelete`, `deviceSetState`; the 500 ceiling |
+| `public/portal.html` | two catalog entries, `DEVMODE`, the per-mode action bar and row buttons, the per-row **Fungua**, the desk-aware row panel, `devParseImeis_`, `devRelBulkForm`, `devUnknownDrawer_` |
 | `test/device-split.test.mjs` | seven tests, one of them entirely about the field contract |
+| `test/device-bulk-release.test.mjs` | eight tests — the desk split run in both modes, the parser, the ceiling, the named strangers |
 | `api/_lib/device-core.js`, `api/device.js`, `android/` | **untouched** |

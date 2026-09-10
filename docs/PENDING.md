@@ -983,3 +983,38 @@ the log having emptied). The server answers which view it chose.
 The access codes never travel: `issueTargets` returns a name and a role and nothing that could
 sign anybody in, and there is deliberately no `to_code` column — it would have put a credential in
 a table more people can read.
+
+## 31. SHIPPED 2026-09-10: Achia is the unlocking desk's, and it takes a pasted list
+
+"Now the unlocking needs the achia button — it shouldn't be at locking" and "add the 4th on the
+right 'Release/Achia Bulk' … they paste a list of verified sales imeis and release at once." The
+full story is in [`docs/DEVICE-DESKS.md`](DEVICE-DESKS.md); the short version:
+
+**Do:** nothing. No migration, no new nav, no setting. It is on the `devunlock` pane already
+ticked for general duty.
+
+THE ROW PANEL HAD NOT BEEN SPLIT. The bulk bar was, but the per-row drawer — which only ever opens
+from the locking bench — still drew all four orders, so Fungua and Achia sat there for the store
+keeper with only the server's 403 behind them. A button whose only possible answer is a refusal
+teaches the operator that the system is broken rather than that the order was never theirs. It now
+reads the same DEVMODE the pane derives, and the test RUNS the panel in both modes rather than
+grepping for a button string.
+
+THE FOURTH BUTTON TAKES THE LIST, NOT THE TICKS, and it sits apart from the other three for exactly
+that reason. Ticking is right when the phones are in front of you; at the end of a selling day the
+desk holds a list that came from somewhere else and turning it into ticks means hunting each IMEI
+through hundreds of rows.
+
+The count under the box is live and is deliberately NOT a validation: it says what the paste parsed
+to — how many, the first one, how many repeats — which catches a column arriving as one token (reads
+1) and a header row riding along (first one reads "IMEI"), before the confirmation rather than after
+the phones are gone. Nothing is repaired: `35138-8334583295` goes to the register as typed, because a
+tidied-up IMEI looks exactly as valid as a real one and this list ends in a one-way door.
+
+THE STRANGERS ARE NOW NAMED. The server always returned notEnrolledList and nothing showed it —
+"2 hazijasajiliwa" against a paste of eighty is the operator's problem restated. They open in a
+drawer, by name, saying "na nyingine N" when twenty is not all of them.
+
+And deviceSetState now carries the same 500 ceiling deviceEnrol has, because a paste is no longer
+bounded by what fits on a screen and a too-long `in(...)` fails as a transport error rather than as
+an answer about phones.

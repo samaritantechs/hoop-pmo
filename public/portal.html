@@ -3073,6 +3073,30 @@ function devPaint_(m, d, at){
           +'<button class="btn sm ghost" data-dvs="lost">Imepotea / Write off</button>'
         : '<button class="btn sm" data-dvs="enrolled">Fungua / Unlock</button>'
           +'<button class="btn sm ghost" data-dvs="released">Achia / Release</button>'))
+    /* THE FOURTH BUTTON, ON THE RIGHT, AND IT IS THE ONE THAT DOES NOT READ THE TICKS.
+       =====================================================================================
+         "add the 4th on the right 'Release/Achia Bulk' so that the general duty can paste a
+          list of imeis as we paste at enrolling bulk, but now general duty paste them to
+          release many at once since sales are many they cant just tick one by one imei so
+          they paste a list of verified sales imeis and release at once"
+
+       The other three act on what is TICKED, and ticking is the right verb when the phones are
+       in front of you -- a bench of twenty, a hub, a customer at the counter. It is the wrong
+       verb at the end of a selling day: the desk is holding a list of verified sales that came
+       out of somewhere else entirely, and turning that list into ticks means finding each IMEI
+       in a register of hundreds, one at a time, with a mis-click costing a customer their phone.
+
+       So this one takes the list itself. It is the same door the bench already uses to ENROL a
+       batch -- paste, press -- read from the other end of the handset's life.
+
+       It sits apart from the other three, pushed right, because it is not another way to act on
+       the selection: the selection has nothing to do with it. Two controls that look like a set
+       and read different inputs is how somebody ticks three rows and presses the fourth button
+       expecting those three. */
+    +(BOOT.readOnly||canLock ? ''
+      : '<span style="flex:1"></span>'
+        +'<button class="btn sm ghost" id="dvRelBulk" '
+        +'title="Bandika orodha ya IMEI / paste a list of IMEIs">Achia kwa wingi / Release bulk</button>')
     +'</div>';
   var table=rows.length
     ? '<div class="scroll"><table><thead><tr>'
@@ -3165,6 +3189,7 @@ function devPaint_(m, d, at){
   var al=$('#dvAlarm'); if(al) al.onclick=function(){ DEV.flag='lockedNeverSpoke'; DEV.filter=''; devPaint_(m, d, at); };
   var rf=$('#dvRefresh'); if(rf) rf.onclick=function(){ drawDevices(m); };
   var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
+  var rb=$('#dvRelBulk'); if(rb) rb.onclick=function(){ devRelBulkForm(m); };
   $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
   /* The POS desk's one-row order. It ticks the row and reuses the same bulk path, so the
      confirmation, the count and the error handling are the ones already proven. */
@@ -3278,6 +3303,7 @@ function devAct_(m, imeis, state){
    The bulk bar is untouched. This is a second way in, not a replacement: a hub of twenty
    phones is still one tick-all and one press. */
 function devLockOne(m, d, imei){
+  var canLock=DEVMODE!=='unlock';
   var r=((d&&d.rows)||[]).filter(function(x){ return String(x.imei)===String(imei); })[0]||{imei:imei};
   var age=agoMins(r.silentMins);
   var line=function(k,v){ return '<div style="display:flex;gap:8px;font-size:12.5px;margin:2px 0">'
@@ -3286,7 +3312,7 @@ function devLockOne(m, d, imei){
      you learn, and this panel is opened precisely when somebody is not sure. */
   var st=r.state==='locked'?(r.lockState==='pending'?'imeagizwa kufungwa · bado haijathibitisha':'imefungwa')
     :r.state==='released'?'imeachiwa':r.state==='lost'?'imepotea':'tayari (haijafungwa)';
-  drawer('<h3>Kufunga · '+esc(imei)+'</h3>'
+  drawer('<h3>'+(canLock?'Kufunga':'Kufungua')+' · '+esc(imei)+'</h3>'
     +'<div class="card" style="padding:10px;margin-bottom:10px">'
     +line('Hali / state', esc(st))
     +line('Item', esc(r.item||'—')+' · '+esc(r.holder||'—'))
@@ -3302,10 +3328,25 @@ function devLockOne(m, d, imei){
     /* data-dvs1 rather than data-dvs: devBusy_ disables BOTH, but the bulk bar's own selector
        must not reach into this panel and vice versa -- two controls sharing one attribute is
        how a disabled button ends up somewhere nobody pressed anything. */
-    +'<button class="btn w danger" data-dvs1="locked">Funga / Lock</button>'
-    +'<button class="btn w" data-dvs1="enrolled" style="margin-top:6px">Fungua / Unlock</button>'
-    +'<button class="btn w ghost" data-dvs1="released" style="margin-top:6px">Achia / Release</button>'
-    +'<button class="btn w ghost" data-dvs1="lost" style="margin-top:6px">Imepotea / Write off</button>'
+    /* AND THIS PANEL OBEYS THE SPLIT TOO, which it did not.
+       ---------------------------------------------------------------------------------------
+         "now the unlocking needs the achia button - it shouldnt be at locking"
+
+       The bulk bar above the table was split when the two desks were -- but this drawer, which
+       opens from a row on the LOCKING bench, went on offering all four orders. Fungua and Achia
+       sat there for the store keeper to press, and the only thing between them and a released
+       handset was the server's 403. That refusal is the rule working, and it is still the wrong
+       screen: a button whose entire answer is a refusal teaches the operator that the system is
+       broken rather than that the order was never theirs to give.
+
+       So the panel offers what THIS desk holds, read from the same DEVMODE the pane derives --
+       one source of truth for both, so the drawer and the bar can never disagree about which
+       half of the registry somebody is standing on. */
+    +(canLock
+      ? '<button class="btn w danger" data-dvs1="locked">Funga / Lock</button>'
+        +'<button class="btn w ghost" data-dvs1="lost" style="margin-top:6px">Imepotea / Write off</button>'
+      : '<button class="btn w" data-dvs1="enrolled">Fungua / Unlock</button>'
+        +'<button class="btn w ghost" data-dvs1="released" style="margin-top:6px">Achia / Release</button>')
     +'<div class="mut" style="font-size:11px;margin-top:8px">Agizo linamfikia simu ikiongea. '
     +'/ The order reaches the handset on its next beat.</div>');
   $all('[data-dvs1]').forEach(function(b){
@@ -3349,6 +3390,17 @@ function devSend_(m, imeis, state, reason, force){
       +(r.alreadyThere?' · '+money(r.alreadyThere)+' zilikuwa hivyo':'')
       +(r.woken?' · '+money(r.woken)+' zimeamshwa':''));
     drawDevices(m);        // repaints the bar, so the buttons come back enabled with it
+    /* AND A COUNT OF WHAT DID NOT MATCH IS NOT AN ANSWER, IT IS A SEARCH.
+       -------------------------------------------------------------------------------------
+       "3 hazijasajiliwa" against a pasted list of eighty is the operator's problem restated:
+       they now hold eighty IMEIs and know only that three of them are strangers, with no way
+       to find which three short of re-pasting in batches until the number moves. The server
+       has always sent the names; nothing ever showed them.
+
+       Ticked rows are enrolled by definition, so from the bulk bar this is silent -- except
+       in the one case where it should not be, a row deleted by somebody else between the read
+       and the press. */
+    if(((r.notEnrolledList||[]).length)) devUnknownDrawer_(r);
   }).catch(function(e){
     devBusy_(false);
     var stuck=(e&&e.imeis)||[];
@@ -3371,6 +3423,22 @@ function devSend_(m, imeis, state, reason, force){
       +'only if you are about to re-provision them by cable; the order will be waiting.')) return;
     devSend_(m, stuck, state, reason, true);
   });
+}
+/** The IMEIs the register has never heard of, by name, so they can be chased rather than
+    counted. The server sends the first twenty and the true total separately -- a screen that
+    printed twenty and said nothing more would read as the whole answer. */
+function devUnknownDrawer_(r){
+  var list=r.notEnrolledList||[], more=(r.notEnrolled||list.length)-list.length;
+  drawer('<h3>Hazipo kwenye register / Not on the register</h3>'
+    +'<div class="sub">Agizo halikuzigusa hizi — IMEI hizi hazijasajiliwa hapa. Kagua uandishi, '
+    +'au zisajili kwanza kwenye dawati la stoo. '
+    +'/ The order did not touch these: they are not enrolled here. Check the typing, or have '
+    +'the store bench enrol them first.</div>'
+    +'<div class="card" style="padding:10px;font-family:ui-monospace,monospace;font-size:12px">'
+    +list.map(function(x){ return esc(x); }).join('<br>')
+    +(more>0?'<div class="mut" style="margin-top:6px">… na nyingine '+money(more)
+      +' / and '+money(more)+' more</div>':'')
+    +'</div>');
 }
 /* FUTA -- take a phone off the register entirely, for starting a handset over.
    The confirm has to say the part that is easy to assume the other way round: this erases
@@ -3409,6 +3477,84 @@ function devEnrolForm(m){
          the register screen; a phone that gets wiped is re-read one at a time, deliberately. */
       devProvision(m, r);
     }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+/* A PASTED BLOCK OF IMEIs, SPLIT THE WAY A PERSON ACTUALLY PASTES ONE.
+   =========================================================================================
+   The list arrives from wherever the desk keeps its verified sales -- a spreadsheet column, a
+   WhatsApp message, a printed sheet retyped -- so it comes with newlines, tabs, commas,
+   semicolons, and the quotes Excel wraps a text cell in. All of those are separators or noise
+   and none of them is part of an IMEI.
+
+   WHAT IT DOES NOT DO IS REPAIR ANYTHING. Stripping stray characters from inside a token would
+   turn `35138-8334583295` into a different, shorter number that looks exactly as valid as a
+   real one -- and this list ends in an order that cannot be taken back. Nothing here judges
+   the SHAPE of an IMEI either: this register is keyed on whatever the stock report calls a
+   serial and has never asserted a length anywhere else, so a fence invented here would either
+   cry wolf on real serials or teach people to ignore it. The register itself is the judge, and
+   it answers by name once the order is sent.
+
+   Duplicates are counted rather than silently dropped, because a paste that repeats is usually
+   two lists pasted over each other, and that is worth seeing before pressing. */
+function devParseImeis_(t){
+  var raw=String(t||'').split(/[\s,;]+/).map(function(x){
+    return String(x).replace(/^['"]+/,'').replace(/['"]+$/,'').trim();
+  }).filter(Boolean);
+  var seen={}, list=[];
+  for(var i=0;i<raw.length;i++){
+    var k='k'+raw[i];                      // prefixed: an IMEI must never collide with Object.prototype
+    if(seen[k]) continue;
+    seen[k]=1; list.push(raw[i]);
+  }
+  return { list:list, dupes:raw.length-list.length };
+}
+/* ACHIA KWA WINGI -- the end of the selling day, as one paste.
+   =========================================================================================
+   THE COUNT UNDER THE BOX IS THE WHOLE SAFETY OF THIS SCREEN, and it is deliberately not a
+   validation. It says what the paste PARSED TO, live, as it is typed: how many IMEIs, the
+   first one, how many were repeats. That catches the two mistakes a paste actually makes --
+   a whole column arriving as one unbroken token (the count reads 1), and a header row riding
+   along (the first one reads "IMEI") -- and it catches them BEFORE the confirmation rather
+   than after the phones are gone.
+
+   It cannot catch the mistake that matters most: pasting the right-shaped list of the wrong
+   phones. Nothing on this screen can, so nothing on this screen pretends to. What it does
+   instead is put the number in the confirm sentence and name every IMEI the register did not
+   recognise afterwards.
+
+   The order itself goes through devAct_ like every other -- same confirmation, same wording,
+   same one-way-door sentence. A second copy of that safety here is a second copy that will one
+   day disagree with the first. */
+function devRelBulkForm(m){
+  drawer('<h3>Achia kwa wingi / Release in bulk</h3>'
+    +'<div class="sub">Bandika IMEI za mauzo yaliyothibitishwa — moja kwa mstari, au kwa comma. '
+    +'Hazihitaji kuwa kwenye jedwali; zinasomwa kutoka kwenye register nzima. '
+    +'/ Paste the IMEIs of verified sales, one per line or comma-separated. They do not have to '
+    +'be on the table behind this — the whole register is searched.</div>'
+    +'<div class="note bad" style="font-size:11.5px;margin-bottom:8px">'
+    +'<b>Achia ni mlango wa njia moja.</b> Kila simu itaachana na Device Owner na itaacha kupiga '
+    +'ripoti; kuirudisha ni kazi ya kebo, kwa kila simu. '
+    +'/ <b>Release is one-way</b> — each handset drops Device Owner and stops reporting, and '
+    +'bringing one back is a cable job, per phone.</div>'
+    +'<div class="fld"><label>IMEI</label>'
+    +'<textarea id="dvRelImeis" rows="10" style="width:100%;font-family:ui-monospace,monospace;font-size:12px"></textarea></div>'
+    +'<div id="dvRelCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+    +'<button class="btn w danger" id="dvRelGo">Achia / Release</button>');
+  var ta=$('#dvRelImeis'), out=$('#dvRelCount');
+  var recount=function(){
+    var p=devParseImeis_(ta.value);
+    out.innerHTML = !p.list.length
+      ? 'Bado hakuna IMEI. / Nothing pasted yet.'
+      : '<b>'+money(p.list.length)+'</b> IMEI · ya kwanza: <b>'+esc(p.list[0])+'</b>'
+        +(p.dupes?' · '+money(p.dupes)+' zimerudiwa / repeated':'')
+        +(p.list.length>500?' · <span style="color:var(--bad)">zaidi ya 500 — gawa kwa makundi '
+          +'/ over the 500 limit, split it</span>':'');
+  };
+  ta.oninput=recount; recount();
+  $('#dvRelGo').onclick=function(){
+    var p=devParseImeis_(ta.value);
+    if(!p.list.length){ toast('Bandika angalau IMEI moja. / Paste at least one IMEI.', true); return; }
+    if(devAct_(m, p.list, 'released')) closeDrawer();
   };
 }
 /* THE STATION'S SCRIPT. A token on its own is a string nobody can act on -- what the bench
