@@ -6949,9 +6949,13 @@ function drawOldStock(m){
             +(g.phone?'<div class="mut" style="font-size:10px"><a href="tel:'+esc(g.phone)+'">'+esc(g.phone)+'</a></div>':'')+'</td>'
             +'<td style="font-size:11.5px">'+esc(g.rsm||'—')
             +(g.rsmPhone?'<div class="mut" style="font-size:10px">'+esc(g.rsmPhone)+'</div>':'')+'</td>'
-            +'<td class="r">'+money(g.pieces)+'</td>'
-            +'<td class="r"'+(g.oldest>=180?' style="color:var(--bad);font-weight:700"':'')+'>'+money(g.oldest)+'</td>'
-            +'<td class="r">'+(g.over90?money(g.over90):'<span class="mut">—</span>')+'</td></tr>';
+            /* THE THREE NUMBERS OPEN WHAT THEY COUNT. The cell still leads with the figure, so
+               the column sorts exactly as it did -- osNum_ wraps it, it does not replace it. */
+            +'<td class="r">'+osNum_(g.pieces,g.key,'','simu zote / all pieces')+'</td>'
+            +'<td class="r"'+(g.oldest>=180?' style="color:var(--bad);font-weight:700"':'')+'>'
+              +osNum_(g.oldest,g.key,g.oldest,'kongwe kuliko zote / the oldest piece')+'</td>'
+            +'<td class="r">'+(g.over90?osNum_(g.over90,g.key,90,'siku 90+ / 90 days and over')
+              :'<span class="mut">—</span>')+'</td></tr>';
         }).join('')+'</tbody></table></div>'
       : '';
     var table=rows.length
@@ -6983,7 +6987,62 @@ function drawOldStock(m){
     $('#osGo').onclick=go;
     $('#osQ').onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); go(); } };
     $('#osRsm').onchange=go; $('#osAgent').onchange=go;
+    $all('[data-osh]').forEach(function(b){ b.onclick=function(){
+      osHolderDrawer(b.getAttribute('data-osh'), b.getAttribute('data-osmin'),
+        b.getAttribute('data-oslab'));
+    }; });
   }).catch(function(e){ paneFailed(m,e); });
+}
+
+/* A NUMBER THAT OPENS WHAT IT COUNTS.
+   =========================================================================================
+     "pieces, oldest and 90+ numbers in Ziara / The round at old stock -- the nos should be
+      clickable to open a list of that qty displayed in the specified cell in a row/column"
+
+   THE CELL STILL LEADS WITH THE FIGURE. Every table on this page sorts itself on a <th>
+   click by reading the cell's text, so a number wrapped in a control has to remain a number
+   FIRST -- put an icon or a word in front of it and the Kongwe column starts sorting
+   alphabetically on whatever that is, on the one board read to decide which visit goes first.
+   So this is the plain figure with a button around it, underlined to say it does something.
+
+   A ZERO IS NOT A LINK. There is nothing behind it to open, and a control that answers with an
+   empty list teaches people that the numbers on this board do not really do anything. */
+function osNum_(n, key, min, label){
+  if(!n) return money(n||0);
+  return '<button class="btn sm ghost" data-osh="'+esc(key)+'" data-osmin="'+esc(min===''?'':min)+'" '
+    +'data-oslab="'+esc(label)+'" title="Fungua orodha / open the list" '
+    +'style="padding:0;border:0;background:none;font:inherit;color:inherit;'
+    +'text-decoration:underline;text-underline-offset:3px;cursor:pointer">'+money(n)+'</button>';
+}
+/* THE LIST BEHIND THE NUMBER, in a drawer rather than in the pane.
+   The board is not filtered, so this is not either -- a count of five that opened a list of
+   two because the pane happened to be narrowed to one RSM would be worse than no link at all.
+   And it leaves the pane exactly as it was: the filter, the search and the scroll position are
+   all still there when the drawer closes. */
+function osHolderDrawer(key, min, label){
+  drawer('<h3>Ziara / The round</h3><div class="sk"></div>');
+  srv('oldStockHolder',{key:key,min:(min===''||min==null)?null:min}).then(function(d){
+    var rows=d.rows||[];
+    drawer('<h3 style="margin-bottom:2px">'+esc(d.agent||'(hakuna jina / unnamed)')+'</h3>'
+      +'<div class="mut" style="font-size:11px;margin-bottom:8px">'+esc(label||'')
+      +(d.rsm?' · RSM '+esc(d.rsm):'')
+      +(d.phone?' · <a href="tel:'+esc(d.phone)+'">'+esc(d.phone)+'</a>':'')+'</div>'
+      +(rows.length
+        ? '<div class="scroll"><table><thead><tr><th>IMEI</th><th>Bidhaa / item</th>'
+          +'<th class="r">Umri leo / age today</th></tr></thead><tbody>'
+          +rows.map(function(r){
+            return '<tr><td style="font-family:ui-monospace,monospace;font-size:11.5px">'+esc(r.imei)+'</td>'
+              +'<td style="font-size:11.5px">'+esc(r.item||'—')+'</td>'
+              +'<td class="r">'+osAge(r)+'</td></tr>';
+          }).join('')+'</tbody></table></div>'
+          /* SAID OUT LOUD RATHER THAN SILENTLY TRIMMED. A depot's worth of stock belongs in
+             the pane's own table, not in a panel, and a heading naming 500 above a list of
+             300 is the kind of arithmetic that stops a board being believed. */
+          +(d.shown>rows.length?'<div class="note" style="margin-top:8px">Inaonyesha '+money(rows.length)
+            +' kati ya '+money(d.shown)+'. Tumia kichujio kwenye ukurasa kwa orodha nzima. '
+            +'/ Showing '+money(rows.length)+' of '+money(d.shown)+' — filter the pane itself for all of them.</div>':'')
+        : '<div class="mut">Hakuna simu. / Nothing here.</div>'));
+  }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
 }
 
 function drawNewStock(m){

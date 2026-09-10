@@ -6028,7 +6028,11 @@ const FNS = {
       const k = nameKey(r.agent) || '?';
       let g = byAgent.get(k);
       if (!g) {
-        g = { agent: r.agent || '(hakuna jina / unnamed)', phone: r.agentPhone || '',
+        /* `key` travels with the row so a number pressed on this board asks for the SAME group
+           it was counted from. Sending the display name back instead would break on the one
+           row that has no name -- "(hakuna jina)" is a label, not a holder, and looking it up
+           would find nobody while the count beside it says three. */
+        g = { key: k, agent: r.agent || '(hakuna jina / unnamed)', phone: r.agentPhone || '',
           rsm: r.rsm || '', rsmPhone: r.rsmPhone || '', pieces: 0, oldest: 0, over90: 0 };
         byAgent.set(k, g);
       }
@@ -6056,6 +6060,54 @@ const FNS = {
         noAge: open.filter(r => r.age == null).length,
         holders: byAgent.size,
       } };
+  },
+
+  /* =====================================================================================
+     ONE NUMBER ON THE ROUND, OPENED.
+     =====================================================================================
+       "pieces, oldest and 90+ numbers in Ziara / The round at old stock -- the nos should be
+        clickable to open a list of that qty displayed in the specified cell"
+
+     A count on a worklist is a promise that something is behind it, and until now the only way
+     to see what was to go back to the filter bar, pick the holder, and read the handset table
+     underneath -- which also threw away whatever the pane was already narrowed to.
+
+     ONE FUNCTION FOR ALL THREE CELLS, because they are the same question with a different
+     floor under it:
+
+       pieces   every outstanding handset this holder has     no floor
+       oldest   the handset that is that old                  floor = the number shown
+       90+      the ones past ninety days                     floor = 90
+
+     `oldest` needs no special case at all: it is the MAXIMUM age in the group, so asking for
+     "aged at least that" returns exactly the piece (or pieces) the cell is naming. A separate
+     path for it would be a second way to answer a question this one already answers.
+
+     IT READS THE SAME INDEX THE BOARD WAS COUNTED FROM, so the list can never disagree with
+     the number that opened it -- and it ignores the pane's own filter for the same reason:
+     the board is not filtered either, and a drawer that quietly dropped rows would be a count
+     of five opening a list of two. */
+  async oldStockHolder(db, user, args) {
+    requireNav(user, 'oldstock');
+    const a = args || {};
+    const idx = await oldStockIndex(db);
+    const key = String(a.key == null ? '' : a.key);
+    const min = (a.min == null || a.min === '') ? null : num(a.min);
+    const mine = idx.open.filter(r => (nameKey(r.agent) || '?') === key);
+    const rows = mine
+      .filter(r => min == null || (r.age != null && r.age >= min))
+      .sort((x, y) => (y.age == null ? -1 : y.age) - (x.age == null ? -1 : x.age)
+        || String(x.imei).localeCompare(String(y.imei)));
+    const first = mine[0] || null;
+    return { ok: true, notReady: idx.notReady,
+      key, min,
+      agent: first ? (first.agent || '') : '',
+      phone: first ? (first.agentPhone || '') : '',
+      rsm: first ? (first.rsm || '') : '',
+      /* A holder with five hundred pieces is a depot, not a visit, and a drawer is not the
+         place to read five hundred rows -- the pane's own table is. The cap is said out loud
+         rather than silently trimming the list under a heading that names the full count. */
+      rows: rows.slice(0, 300), shown: rows.length };
   },
 
   /* =====================================================================================

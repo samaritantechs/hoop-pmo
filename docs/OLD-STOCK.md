@@ -68,6 +68,17 @@ counted separately.
 their number to ring before setting off. Sorted by the **oldest piece**, not by how many: a bigger
 pile is a bigger van, an older pile is a worse problem.
 
+**Its three numbers open what they count.** Pieces, oldest and 90+ are buttons; pressing one opens
+that holder's handsets in a drawer, leaving the pane's filter, search and scroll exactly as they
+were. One server call serves all three — they are the same question with a different floor under
+it (none, the figure shown, ninety), and `oldest` needs no special case because it *is* the group's
+maximum age.
+
+The cell still leads with the figure. Every table here sorts on the cell's text, so putting an icon
+or a word in front of the number would make the Kongwe column sort alphabetically — on the one
+board read to decide which visit goes first. A zero is not a link: there is nothing behind it, and
+a control that answers with an empty list teaches people the numbers do not really do anything.
+
 Then the handsets, oldest first. Filters: RSM, holder, IMEI (digits only, like the device search).
 
 **Tiles:** outstanding · locked on a visit · sold before we got there · 180+ days · holders to visit.
