@@ -46,8 +46,9 @@ create table if not exists sales_targets (
   period        text not null check (period ~ '^[0-9]{4}-[0-9]{2}$'),
 
   -- WHAT THE NAME MEANS. agent = one seller, rsm = a regional manager and everyone under them,
-  -- branch = a region however it is staffed, company = the whole book.
-  scope         text not null check (scope in ('agent', 'rsm', 'branch', 'company')),
+  -- branch = a region however it is staffed, company = the whole book, and ROLE = every holder
+  -- of that role in the register ("target will be set by role not a single staff").
+  scope         text not null check (scope in ('agent', 'rsm', 'branch', 'company', 'role')),
   -- The person or place, as the register spells it. 'ALL' for the company scope.
   name          text not null,
 

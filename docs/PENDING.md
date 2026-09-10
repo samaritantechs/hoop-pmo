@@ -919,3 +919,37 @@ asserts neither quietly becomes single-source.
 Also here: agentScore's deck read never selected `price` — it did not need it while the money
 came from the shop book — so this would have made every deck amount silently zero. Fixed in both
 column tiers.
+
+## 29. SHIPPED 2026-09-10: one target, everybody's number
+
+"Set per rsm ... it increases to the higher leadership tiers, but decrease when going down ...
+2 halves if only 2 team leaders are under the rsm ... and target will be set by role not a single
+staff." The full story is [`docs/TARGET-CASCADE.md`](TARGET-CASCADE.md); the short version:
+
+**Do:**
+
+1. Run `db/migrations/RUN-ME-2026-09-10-target-roles.sql` (safe before or after the targets
+   migration — it does nothing until `sales_targets` exists).
+2. Fill `manager` in the register only where somebody reports across a branch line.
+3. Set ONE number — on a role, on an RSM, or at the top. The rest of the board fills itself in.
+
+Two sentences, one arithmetic: a number set at one level is DIVIDED among the people under it,
+and the sum of the shares is what you started with. Set 40 on an RSM with two team leaders and
+each carries 20; each of their two agents carries 10; add the leaves back up and you have 40.
+
+NOTHING DERIVED IS EVER STORED. A share written into a row is a lie the moment somebody moves
+team — and a lie nobody could see, because it would look exactly like a number a person typed. So
+the ladder is walked on every read and every row says where its number came from: limewekwa,
+wadhifa, or "sehemu ya RSM ONE ÷2".
+
+Three answers in order of authority: own, then role, then a share of the manager's — resolved
+recursively, so one number on the country manager reaches a field officer through every rung. A
+share rounds UP, because three people splitting ten who each aim at three finish the month short.
+
+`scope='role'` is the owner's "set by role": one row every holder inherits, picked from the
+register's own roles and stored the way the register spells them, so three spellings are one
+target. The role tab is a SOURCE, not a scoreboard — nothing is measured against a role.
+
+The board also gained: everybody the ladder gives a target to is on it even if they sold nothing;
+a leader's row shows what everybody beneath adds up to (an override below shows as a mismatch);
+and Remove is offered only for a target somebody typed, because a share is not a row.

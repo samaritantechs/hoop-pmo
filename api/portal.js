@@ -1161,7 +1161,12 @@ function commRateOf(rates, role, item) {
 const TARGET_NOT_READY = 'Jedwali la malengo halijatengenezwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-09-09-targets.sql kwenye Supabase. '
   + '/ The targets table has not been created yet — run that migration first.';
-const TARGET_SCOPES = ['agent', 'rsm', 'branch', 'company'];
+/* `role` is the scope the owner asked for: one row that every holder of that role inherits,
+   rather than one row per person. It is listed last because it is not a place on the board --
+   nothing is measured against a role directly; it is a SOURCE the people under it draw from. */
+const TARGET_SCOPES = ['agent', 'rsm', 'branch', 'company', 'role'];
+/* The scopes that are actually MEASURED. A role has no sales of its own. */
+const TARGET_BOARD_SCOPES = ['agent', 'rsm', 'branch', 'company'];
 /* A REAL MONTH, not merely something month-shaped. '2026-13' passes a bare \d{2} and there is
    no date column to catch it afterwards -- period is stored as TEXT in sales_targets, in the
    commission runs and on a deducted advance -- so a nonsense month would sit in a table for
@@ -1177,6 +1182,150 @@ function monthDays(period) {
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate();   // day 0 of next month = last of this
   return { from, to: period + '-' + String(last).padStart(2, '0') };
 }
+/* ---------- THE SALES HIERARCHY, and how one target becomes everybody's ----------
+     "Sales target is set per rsm like hope sets for team, so it increases to the higher
+      leadership tiers, but decrease when going down to team leaders and agents -- like it's
+      2 halves if only 2 team leaders are under the rsm. With that hierarchy down at agents
+      contributive auto target from that of rsm. And target will be set by role not a single
+      staff."
+
+   TWO SENTENCES, ONE ARITHMETIC. "Increases going up" and "decreases going down" are the same
+   rule read from either end: a number set at one level is DIVIDED among the people under it,
+   and the sum of those shares is the number you started with. Set thirty on an RSM with two
+   team leaders and each is expected to find fifteen; add the two back up and you have thirty.
+
+   SET BY ROLE, NOT BY A SINGLE STAFF. The scope 'role' means "every Regional_Manager is
+   expected to sell this much" -- one row instead of one row per person, which is the
+   difference between a target somebody keeps up and a target nobody sets after the first
+   month.
+
+   NOTHING DERIVED IS EVER STORED. A share written into a row is a lie the moment somebody
+   moves team, gains an agent or leaves -- and it would be a lie nobody could see, because it
+   would look exactly like a number a person typed. So the tree is walked on every read and
+   the row says WHERE its number came from. */
+
+/* The register's own ladder, top first. Anything else sits below the bottom rung and is a leaf:
+   an unknown role must never accidentally become somebody's manager. */
+const TARGET_TIERS = ['COUNTRY_SALES_MANAGER', 'REGIONAL_MANAGER', 'TEAM_LEADER', 'FIELD_OFFICER'];
+const roleKey = r => K(r || '').replace(/[\s-]+/g, '_');
+const tierOf = role => {
+  const i = TARGET_TIERS.indexOf(roleKey(role));
+  return i < 0 ? TARGET_TIERS.length : i;
+};
+
+/** Who reports to whom, and who is under whom. Built once per read from the register.
+
+    THE PARENT IS THE REGISTER'S OWN ANSWER FIRST. `manager` is the exception column somebody
+    fills where a person reports across a branch line; where it is blank -- which is almost
+    everybody -- the parent is the nearest person ONE RUNG UP in the same branch. That is right
+    for the ordinary case and means the cascade works on day one instead of after a thousand
+    edits.
+
+    A manager who is not ABOVE you is not your manager. Two field officers naming each other,
+    or a typo pointing at a peer, would otherwise make a loop that the share walk would fall
+    into; the tier check refuses it before it can happen. */
+function salesTree(agents) {
+  const live = agents.filter(a => a && a.name && a.active !== false);
+  const byKey = new Map(live.map(a => [nameKey(a.name), a]));
+  /* The nearest holder of each tier per branch, so a blank `manager` still finds one. First
+     seen wins, which is stable across reads because the register comes back in a fixed order. */
+  const upOf = new Map();                       // branch|tier -> nameKey
+  for (const a of live) {
+    const k = K(a.branch || '') + '|' + tierOf(a.role);
+    if (!upOf.has(k)) upOf.set(k, nameKey(a.name));
+  }
+  const parent = new Map();
+  for (const a of live) {
+    const me = nameKey(a.name);
+    const myTier = tierOf(a.role);
+    if (myTier === 0) continue;                 // the top of the ladder answers to nobody here
+    let p = '';
+    const named = nameKey(a.manager || '');
+    if (named && byKey.has(named) && tierOf(byKey.get(named).role) < myTier) p = named;
+    if (!p) {
+      // The nearest rung above, in this branch, then anywhere -- a region with no RSM of its
+      // own still rolls up to the country manager rather than falling out of the tree.
+      for (let t = myTier - 1; t >= 0 && !p; t--) {
+        p = upOf.get(K(a.branch || '') + '|' + t) || '';
+      }
+      for (let t = myTier - 1; t >= 0 && !p; t--) {
+        p = [...upOf.entries()].filter(([kk]) => kk.endsWith('|' + t)).map(e => e[1])[0] || '';
+      }
+    }
+    if (p && p !== me) parent.set(me, p);
+  }
+  const children = new Map();
+  for (const [me, p] of parent) {
+    if (!children.has(p)) children.set(p, []);
+    children.get(p).push(me);
+  }
+  return {
+    byKey, parent, children,
+    of: k => byKey.get(k) || null,
+    childrenOf: k => children.get(k) || [],
+    parentOf: k => parent.get(k) || '',
+    /* Everybody beneath somebody, at any depth. Used for the roll-up, and cycle-safe by the
+       same visited set the share walk uses. */
+    descendants(k) {
+      const out = [];
+      const seen = new Set([k]);
+      const stack = [k];
+      while (stack.length) {
+        for (const c of this.childrenOf(stack.pop())) {
+          if (seen.has(c)) continue;
+          seen.add(c); out.push(c); stack.push(c);
+        }
+      }
+      return out;
+    },
+  };
+}
+
+/** ONE PERSON'S TARGET, and where it came from. Three answers in order of authority:
+
+      own    somebody typed a number against this person's name
+      role   somebody typed a number against their role -- every RSM is expected to sell this
+      share  their manager's target, divided by how many people report to that manager
+
+    The manager's own target is resolved the same way, so a single number set on the country
+    manager reaches a field officer through however many rungs lie between. `seen` is what
+    stops a register that names a loop from taking the server with it. */
+function resolveTarget(key, tree, tBy, seen) {
+  if (!key) return null;
+  seen = seen || new Set();
+  if (seen.has(key)) return null;               // a loop in `manager`: refuse rather than hang
+  seen.add(key);
+  const person = tree.of(key);
+  const own = tBy.get('agent|' + key) || tBy.get('rsm|' + key) || null;
+  if (own) {
+    return { qty: own.target_qty == null ? null : num(own.target_qty),
+      amount: own.target_amount == null ? null : num(own.target_amount),
+      source: 'own', from: (person && person.name) || '' };
+  }
+  const byRole = person ? tBy.get('role|' + roleKey(person.role)) : null;
+  if (byRole) {
+    return { qty: byRole.target_qty == null ? null : num(byRole.target_qty),
+      amount: byRole.target_amount == null ? null : num(byRole.target_amount),
+      source: 'role', from: roleKey(person.role) };
+  }
+  const p = tree.parentOf(key);
+  if (!p) return null;
+  const up = resolveTarget(p, tree, tBy, seen);
+  if (!up) return null;
+  /* THE SHARE. Divided by how many people report to that manager -- "2 halves if only 2 team
+     leaders are under the rsm". Rounded UP, because three people splitting ten phones who each
+     aim at three will finish the month one short of what was asked for. */
+  const n = Math.max(1, tree.childrenOf(p).length);
+  const boss = tree.of(p);
+  return {
+    qty: up.qty == null ? null : Math.ceil(num(up.qty) / n),
+    amount: up.amount == null ? null : Math.ceil(num(up.amount) / n),
+    source: 'share',
+    from: (boss && boss.name) || p,
+    of: n,
+  };
+}
+
 /* WHICH RSM AN AGENT BELONGS TO. The register's own `manager` if somebody set one, else the
    Regional_Manager standing in the same branch -- which is right for almost everybody and
    means the roll-up works on day one instead of after a thousand edits. */
@@ -5872,8 +6021,22 @@ const FNS = {
       add('company', 'ALL', s.price);
     }
     const tBy = new Map();
-    for (const t of targets) tBy.set(String(t.scope) + '|' + nameKey(t.name), t);
+    /* A role target is keyed on the ROLE, not on a person's name, so it is normalised the way
+       the register spells roles rather than the way people are spelled. */
+    for (const t of targets) {
+      const k = String(t.scope) === 'role' ? roleKey(t.name) : nameKey(t.name);
+      tBy.set(String(t.scope) + '|' + k, t);
+    }
     const pct = (got, want) => (want == null || !(num(want) > 0)) ? null : Math.round((num(got) / num(want)) * 100);
+    /* THE LADDER. Built once and walked per row: a target set on an RSM (or on the role
+       Regional_Manager, or on the country manager above them) reaches every agent beneath as a
+       divided share, and the row says which. Nothing derived is stored -- see salesTree. */
+    const tree = salesTree(agents);
+    const resolved = new Map();
+    const targetOf = k => {
+      if (!resolved.has(k)) resolved.set(k, resolveTarget(k, tree, tBy, new Set()));
+      return resolved.get(k);
+    };
     const rowsFor = scope => {
       const seen = new Map();
       for (const [k, g] of buckets[scope]) seen.set(k, { ...g, scope });
@@ -5883,22 +6046,66 @@ const FNS = {
         const k = nameKey(t.name);
         if (!seen.has(k)) seen.set(k, { name: t.name, qty: 0, amount: 0, scope });
       }
+      /* AND EVERYBODY THE LADDER GIVES A TARGET TO. An agent who has sold nothing this month
+         and was never typed into this table still has a number to answer for, the moment their
+         RSM has one -- and a board that showed only the people who happened to sell would hide
+         exactly the rows worth reading. */
+      if (scope === 'agent' || scope === 'rsm') {
+        for (const [k, a] of tree.byKey) {
+          const isRsm = tierOf(a.role) <= 1;
+          if ((scope === 'rsm') !== isRsm) continue;
+          if (!seen.has(k) && targetOf(k)) seen.set(k, { name: a.name, qty: 0, amount: 0, scope });
+        }
+      }
       return [...seen.entries()].map(([k, g]) => {
         const t = tBy.get(scope + '|' + k) || null;
-        const targetQty = t && t.target_qty != null ? num(t.target_qty) : null;
-        const targetAmount = t && t.target_amount != null ? num(t.target_amount) : null;
+        /* THE NUMBER THIS PERSON ANSWERS FOR. Their own if somebody typed one, else their
+           role's, else their share of the manager's -- resolveTarget decides, and `source`
+           carries the answer onto the screen so nobody wonders where a figure came from. */
+        const dv = (scope === 'agent' || scope === 'rsm') ? targetOf(k) : null;
+        const targetQty = t && t.target_qty != null ? num(t.target_qty) : (dv ? dv.qty : null);
+        const targetAmount = t && t.target_amount != null ? num(t.target_amount) : (dv ? dv.amount : null);
+        const source = t ? 'own' : (dv ? dv.source : null);
+        /* WHAT EVERYBODY BENEATH THEM ADDS UP TO. The other half of the owner's sentence:
+           "it increases to the higher leadership tiers". Where it differs from their own
+           target somebody has been overridden below, and that is worth seeing rather than
+           quietly reconciling. */
+        const kids = (scope === 'rsm' || scope === 'company') ? tree.descendants(k) : [];
+        const rolled = kids.reduce((acc, c) => {
+          const cv = targetOf(c);
+          if (cv && cv.qty != null && tree.childrenOf(c).length === 0) acc += num(cv.qty);
+          return acc;
+        }, 0);
         return { scope, name: g.name, qty: g.qty, amount: g.amount,
           targetQty, targetAmount,
           pctQty: pct(g.qty, targetQty), pctAmount: pct(g.amount, targetAmount),
           hasTarget: !!(targetQty != null || targetAmount != null),
+          // 'own' | 'role' | 'share' | null -- never a number without a provenance.
+          targetSource: source,
+          targetFrom: t ? '' : (dv ? (dv.from || '') : ''),
+          shareOf: (dv && dv.source === 'share') ? (dv.of || 0) : 0,
+          rolledQty: kids.length ? rolled : null,
+          under: kids.length || 0,
           note: t ? (t.note || '') : '', setBy: t ? (t.set_by || '') : '',
           setAt: t && t.set_at ? Date.parse(t.set_at) : null,
           // Named because somebody set a target and nothing came of it.
           missed: !!((targetQty != null && g.qty < targetQty) || (targetAmount != null && g.amount < targetAmount)),
-          manager: scope === 'agent' ? idx.of(g.name) : '' };
+          manager: (scope === 'agent' || scope === 'rsm')
+            ? ((tree.of(tree.parentOf(k)) || {}).name || idx.of(g.name) || '') : '' };
       }).sort((x, y) => (y.amount - x.amount) || (x.name < y.name ? -1 : 1));
     };
-    const rows = { agent: rowsFor('agent'), rsm: rowsFor('rsm'), branch: rowsFor('branch'), company: rowsFor('company') };
+    /* The role rows are a SOURCE, not a place on the board: nothing is measured against a role,
+       so they carry what was set and how many people draw from it. */
+    const roleRows = targets.filter(t => String(t.scope) === 'role').map(t => {
+      const rk = roleKey(t.name);
+      const holders = [...tree.byKey.values()].filter(a => roleKey(a.role) === rk);
+      return { scope: 'role', name: rk, holders: holders.length,
+        targetQty: t.target_qty == null ? null : num(t.target_qty),
+        targetAmount: t.target_amount == null ? null : num(t.target_amount),
+        note: t.note || '', setBy: t.set_by || '', setAt: t.set_at ? Date.parse(t.set_at) : null };
+    }).sort((x, y) => (x.name < y.name ? -1 : 1));
+    const rows = { agent: rowsFor('agent'), rsm: rowsFor('rsm'), branch: rowsFor('branch'),
+      company: rowsFor('company'), role: roleRows };
     const co = rows.company[0] || { qty: 0, amount: 0, targetQty: null, targetAmount: null };
     return { ok: true, period, from, to, notReady, scopes: TARGET_SCOPES, rows,
       // The names the form offers, so nobody types a target against a spelling nothing matches.
@@ -5907,12 +6114,23 @@ const FNS = {
         rsm: [...new Set(agents.filter(x => /REGIONAL|COUNTRY_SALES/.test(K(x.role || '').replace(/\s+/g, '_')))
           .map(x => String(x.name || '').trim()).filter(Boolean))].sort(),
         branch: [...new Set(agents.map(x => String(x.branch || '').trim()).filter(Boolean))].sort(),
+        /* The roles the register actually uses, so a target is never set against a spelling
+           nobody holds. The ladder's own rungs first, then anything else somebody has typed
+           into the register -- offered rather than refused, because a company that invents a
+           role should still be able to give it a number. */
+        role: [...new Set(agents.map(x => roleKey(x.role)).filter(Boolean))]
+          .sort((x, y) => (tierOf(x) - tierOf(y)) || (x < y ? -1 : 1)),
       },
       totals: { sales: sales.length, amount: sales.reduce((s, r) => s + num(r.price), 0),
         targetQty: co.targetQty, targetAmount: co.targetAmount,
         pctQty: pct(co.qty, co.targetQty), pctAmount: pct(co.amount, co.targetAmount),
-        withTarget: TARGET_SCOPES.reduce((s, k) => s + rows[k].filter(r => r.hasTarget).length, 0),
-        missed: TARGET_SCOPES.reduce((s, k) => s + rows[k].filter(r => r.hasTarget && r.missed).length, 0) } };
+        withTarget: TARGET_BOARD_SCOPES.reduce((s, k) => s + rows[k].filter(r => r.hasTarget).length, 0),
+        missed: TARGET_BOARD_SCOPES.reduce((s, k) => s + rows[k].filter(r => r.hasTarget && r.missed).length, 0),
+        /* How much of the board is answering for a number NOBODY TYPED -- the cascade doing
+           its job. A company where this is zero has not set anything at the top. */
+        derived: TARGET_BOARD_SCOPES.reduce((s, k) =>
+          s + rows[k].filter(r => r.targetSource === 'share' || r.targetSource === 'role').length, 0),
+        roles: rows.role.length } };
   },
 
   /** SET ONE. Upserted on (period, scope, name), so re-setting a target corrects it rather
@@ -5925,8 +6143,14 @@ const FNS = {
     if (!period) bad('Chagua mwezi (YYYY-MM). / Choose a month.');
     const scope = String(a.scope || '').trim().toLowerCase();
     if (!TARGET_SCOPES.includes(scope)) bad('Aina ya lengo si sahihi. / Unknown target scope.');
-    const name = scope === 'company' ? 'ALL' : String(a.name == null ? '' : a.name).trim().slice(0, 120);
-    if (!name) bad('Andika jina. / Give the name the target is for.');
+    /* A ROLE IS STORED THE WAY THE REGISTER SPELLS ROLES -- underscored and upper-cased -- so
+       "regional manager", "Regional_Manager" and "REGIONAL MANAGER" are one target rather than
+       three, and the tree can look it up by the same key it reads off a person's row. */
+    const name = scope === 'company' ? 'ALL'
+      : scope === 'role' ? roleKey(a.name).slice(0, 120)
+      : String(a.name == null ? '' : a.name).trim().slice(0, 120);
+    if (!name) bad(scope === 'role' ? 'Chagua wadhifa. / Choose a role.'
+      : 'Andika jina. / Give the name the target is for.');
     /* A TARGET OF NOTHING IS NOT A TARGET. Zero is allowed and meaningful (a month off); both
        fields empty is somebody pressing Save on a blank form. */
     const has = v => v != null && String(v).trim() !== '';
@@ -5955,7 +6179,8 @@ const FNS = {
     const a = args || {};
     const period = isMonth(a.period) ? String(a.period) : '';
     const scope = String(a.scope || '').trim().toLowerCase();
-    const name = String(a.name == null ? '' : a.name).trim();
+    // Deleting a role target has to key it the same way saving one did, or it deletes nothing.
+    const name = scope === 'role' ? roleKey(a.name) : String(a.name == null ? '' : a.name).trim();
     if (!period || !TARGET_SCOPES.includes(scope) || !name) bad('Lengo halijachaguliwa. / No target chosen.');
     const { error } = await db.from('sales_targets').delete()
       .eq('period', period).eq('scope', scope).eq('name', name);

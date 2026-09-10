@@ -1838,12 +1838,19 @@ test('portal.html: the target drawer sends the parts, and removing is not the sa
     assert.match(call[1], new RegExp('\\b' + k + ':'), k + ' is sent');
   }
   assert.match(fn, /Sifuri ni lengo halali/, 'the form says zero is a real target and blank is none');
-  assert.match(fn, /r\.hasTarget\?'<button class="btn w danger ghost" id="tgDel"/,
-    'remove is offered only where a target exists');
+  /* REMOVE IS OFFERED ONLY FOR A TARGET SOMEBODY TYPED. Since the cascade, `hasTarget` is
+     also true for a number derived from a manager or a role -- and a share is not a row, so
+     there is nothing to delete and the button would promise what the server cannot do. */
+  assert.match(fn, /r\.targetSource==='own'\|\|\(scope==='role'&&r\.name\)/,
+    'remove is offered only where a target was actually set');
+  assert.match(fn, /id="tgDel"/);
   assert.match(fn, /confirm\('Futa lengo/, 'and removing asks first');
   assert.match(fn, /srv\('targetDelete'/);
   // The company scope names itself; nobody types a name for it.
   assert.match(fn, /isCo\?'<input id="tgName" class="inp" value="ALL" readonly>'/);
+  // A role is picked from the register's own roles, never typed -- one spelling, one target.
+  assert.match(fn, /scope==='role'/);
+  assert.match(fn, /<select id="tgName" class="inp">/);
   // Writes are never re-sent by the client.
   const nr = /var NO_RETRY=\{([\s\S]*?)\};/.exec(html);
   for (const f of ['targetSave', 'targetDelete', 'staffManager']) {
@@ -2322,4 +2329,32 @@ test('portal.html: the sellers table names its source and shows the gap between 
     'and a seller the shop pays that the deck cannot account for is marked on the row');
   assert.match(fn, /t\.shopOnly\|\|0\)\?'<div class="note bad"/, 'and counted in a banner');
   assert.match(fn, /var t=d\.totals\|\|\{\};/);
+});
+
+/* =========================================================================================
+   THE TARGET CASCADE, on screen. Most rows now carry a number NOBODY TYPED, so the board's
+   first duty is to say where each one came from.
+   ========================================================================================= */
+test('portal.html: every target on the board says where it came from', () => {
+  const html = read('portal.html');
+  const src = IMP_SRC('tgtSource', html);
+  assert.match(src, /r\.targetSource==='own'/);
+  assert.match(src, /wadhifa: /, 'a role target names the role');
+  assert.match(src, /sehemu ya /, 'a share names whose it was before it was divided');
+  assert.match(src, /r\.shareOf\?' \\u00F7'\+money\(r\.shareOf\)/, 'and how many ways it went');
+  const fn = IMP_SRC('drawTargets', html);
+  assert.match(fn, /tgtSource\(r\)/, 'the row carries it');
+  assert.match(fn, /r\.rolledQty!=null&&r\.under\?/,
+    '"it increases to the higher leadership tiers" -- what everybody beneath adds up to');
+  assert.match(fn, /Yaliyoshuka yenyewe/, 'and a tile counts the rows the cascade filled in');
+});
+
+test('portal.html: the role scope is a source, not a scoreboard', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawTargets', html);
+  assert.match(fn, /TGT\.scope==='role'/);
+  assert.match(fn, /<th>WADHIFA<\/th><th class="r">WANAOSHIKA<\/th>/,
+    'a role has no sales of its own, so it gets its own columns');
+  assert.match(fn, /Halipimwi hapa/, 'and says plainly that it is measured on each person instead');
+  assert.match(/var TGT_SCOPE_LABEL=\{[^}]*\}/.exec(html)[0], /role:'[^']+'/);
 });

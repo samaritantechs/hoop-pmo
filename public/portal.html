@@ -5762,7 +5762,18 @@ function targetNotReady(){
     +'/ The targets table has not been created yet — run that migration, then come back.</div>';
 }
 var TGT={period:'',scope:'agent'};
-var TGT_SCOPE_LABEL={agent:'Ajenti / Agents',rsm:'RSM',branch:'Mikoa / Branches',company:'Kampuni / Company'};
+var TGT_SCOPE_LABEL={agent:'Ajenti / Agents',rsm:'RSM',branch:'Mikoa / Branches',company:'Kampuni / Company',role:'Wadhifa / By role'};
+/* WHERE A NUMBER CAME FROM. Nothing on this board is a figure without a provenance: the
+   cascade means most rows carry a target NOBODY TYPED, and a person looking at their own
+   number is entitled to know whose it was before it was divided. */
+function tgtSource(r){
+  if(r.targetQty==null&&r.targetAmount==null) return '';
+  if(r.targetSource==='own') return '<span class="chip ok">limewekwa</span>';
+  if(r.targetSource==='role') return '<span class="chip">wadhifa: '+esc(r.targetFrom||'')+'</span>';
+  if(r.targetSource==='share') return '<span class="chip warn">sehemu ya '+esc(r.targetFrom||'')
+    +(r.shareOf?' \u00F7'+money(r.shareOf):'')+'</span>';
+  return '';
+}
 function thisMonth_(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2); }
 /* A bar you can read at a glance: green at or over, amber close, red short. NOTHING is drawn
    when nobody set a target -- an empty bar reads as zero attainment, which is a lie. */
@@ -5791,6 +5802,9 @@ function drawTargets(m){
         {color:t.pctQty==null?'':(t.pctQty>=100?'ok':(t.pctQty>=70?'warn':'bad'))})
       +tile('Malengo yaliyowekwa',money(t.withTarget||0),'kati ya haya '+money(t.missed||0)+' hayajafikiwa',
         {color:t.missed?'bad':''})
+      /* The cascade doing its job: rows answering for a number nobody typed. Zero here on a
+         staffed company means nothing has been set at the top. */
+      +tile('Yaliyoshuka yenyewe',money(t.derived||0),'kutoka kwa kiongozi au wadhifa',{color:(t.derived||0)?'ok':''})
       +'</div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
       +'<span class="mut" style="font-size:12px">Mwezi:</span>'
@@ -5803,7 +5817,23 @@ function drawTargets(m){
       +'<span style="flex:1"></span>'
       +(canW?'<button class="btn sm" id="tgNew">+ Weka lengo / Set a target</button>':'')
       +'</div>'
-      +(rows.length?'<div class="scroll"><table><thead><tr>'
+      +(TGT.scope==='role'
+        ? '<div class="note" style="font-size:11.5px;margin-bottom:8px">Lengo la wadhifa ni la kila mtu mwenye wadhifa huo — '
+          +'safu moja badala ya safu kwa kila mtu. Halipimwi hapa: linapimwa kwa kila mtu kwenye Ajenti na RSM. '
+          +'/ A role target is every holder\'s. It is not measured here — it is measured on each person.</div>'
+          +(rows.length?'<div class="scroll"><table><thead><tr><th>WADHIFA</th><th class="r">WANAOSHIKA</th>'
+            +'<th class="r">LENGO (IDADI)</th><th class="r">LENGO (TZS)</th><th>MAELEZO</th><th class="noxl"></th>'
+            +'</tr></thead><tbody>'
+            +rows.map(function(r){
+              return '<tr><td><b>'+esc(r.name)+'</b>'+(r.setBy?'<div class="mut" style="font-size:10px">'+esc(r.setBy)+'</div>':'')+'</td>'
+                +'<td class="r">'+money(r.holders)+'</td>'
+                +'<td class="r">'+(r.targetQty==null?'—':money(r.targetQty))+'</td>'
+                +'<td class="r">'+(r.targetAmount==null?'—':money(r.targetAmount))+'</td>'
+                +'<td style="font-size:11px">'+esc(r.note||'')+'</td>'
+                +'<td class="r noxl">'+(canW?'<button class="btn sm ghost" data-tge="'+esc(r.name)+'">Lengo</button>':'')+'</td></tr>';
+            }).join('')+'</tbody></table></div>'
+            :'<div class="mut">Hakuna lengo la wadhifa kwa mwezi huu. / No role targets this month.</div>')
+        : rows.length?'<div class="scroll"><table><thead><tr>'
         +'<th>'+esc((TGT_SCOPE_LABEL[TGT.scope]||'').split(' / ')[0])+'</th>'
         +(TGT.scope==='agent'?'<th>RSM</th>':'')
         +'<th class="r">ZIMEUZWA</th><th class="r">LENGO</th><th>UFIKIAJI (IDADI)</th>'
@@ -5813,7 +5843,14 @@ function drawTargets(m){
           return '<tr><td><b>'+esc(r.name)+'</b>'+(r.setBy?'<div class="mut" style="font-size:10px">lengo: '+esc(r.setBy)+'</div>':'')+'</td>'
             +(TGT.scope==='agent'?'<td style="font-size:11.5px">'+esc(r.manager||'—')+'</td>':'')
             +'<td class="r">'+money(r.qty)+'</td>'
-            +'<td class="r">'+(r.targetQty==null?'—':money(r.targetQty))+'</td>'
+            +'<td class="r">'+(r.targetQty==null?'—':money(r.targetQty))
+              +(tgtSource(r)?'<div style="font-size:10px">'+tgtSource(r)+'</div>':'')
+              /* "It increases to the higher leadership tiers": what everybody beneath adds up
+                 to. Where it differs from their own number somebody has been overridden
+                 below, and seeing that is the point of showing both. */
+              +(r.rolledQty!=null&&r.under?'<div class="mut" style="font-size:10px">chini yake '
+                +money(r.under)+' \u00B7 jumla '+money(r.rolledQty)+'</div>':'')
+            +'</td>'
             +'<td>'+tgtBar(r.pctQty)+'</td>'
             +'<td class="r">'+money(r.amount)+'</td>'
             +'<td class="r">'+(r.targetAmount==null?'—':money(r.targetAmount))+'</td>'
@@ -5843,7 +5880,16 @@ function targetDrawer(m, d, r){
   drawer('<h3>Lengo la '+esc(TGT_SCOPE_LABEL[scope]||scope)+' — '+esc(TGT.period)+'</h3>'
     +'<div class="sub">Lengo ni la mwezi mzima; likiwekwa tena linarekebishwa, halikusanyiki. '
     +'/ One target per name per month; setting it again corrects it.</div>'
-    +(isCo?'<input id="tgName" class="inp" value="ALL" readonly>'
+    +(scope==='role'
+      ? '<div class="note" style="font-size:11.5px">Kila mtu mwenye wadhifa huu atakuwa na lengo hili, '
+        +'na litashuka kwa walio chini yake kwa kugawanywa. / Every holder of this role gets this target, '
+        +'and it divides among the people under them.</div>'
+        +'<label class="lbl">Wadhifa / Role *</label>'
+        +'<select id="tgName" class="inp">'
+        +(r.name?'':'<option value="">— chagua / choose —</option>')
+        +names.map(function(n){ return '<option value="'+esc(n)+'"'+(r.name===n?' selected':'')+'>'+esc(n)+'</option>'; }).join('')
+        +'</select>'
+      : isCo?'<input id="tgName" class="inp" value="ALL" readonly>'
       :'<label class="lbl">Jina / Name *</label>'
         +'<input id="tgName" class="inp" list="tgNames" value="'+esc(r.name||'')+'"'+(r.name?' readonly':'')+'>'
         +'<datalist id="tgNames">'+names.map(function(n){ return '<option value="'+esc(n)+'">'; }).join('')+'</datalist>')
@@ -5858,7 +5904,10 @@ function targetDrawer(m, d, r){
     +'<label class="lbl" style="margin-top:8px">Maelezo / Note</label>'
     +'<textarea id="tgNote" class="inp" rows="2" placeholder="Hatua zilizochukuliwa na matokeo / actions taken and results (RSM SOP B.5)">'+esc(r.note||'')+'</textarea>'
     +'<button class="btn w" id="tgSave" style="margin-top:10px">Hifadhi / Save</button>'
-    +(r.hasTarget?'<button class="btn w danger ghost" id="tgDel" style="margin-top:6px">Futa lengo / Remove the target</button>':''));
+    /* Only a target somebody TYPED can be removed. A share is not a row -- there is nothing
+       to delete, and offering the button would promise something the server cannot do. */
+    +((r.targetSource==='own'||(scope==='role'&&r.name))
+      ?'<button class="btn w danger ghost" id="tgDel" style="margin-top:6px">Futa lengo / Remove the target</button>':''));
   $('#tgSave').onclick=function(){
     var b=this; b.disabled=true;
     srv('targetSave',{ period:TGT.period, scope:scope, name:$('#tgName').value,
