@@ -7056,7 +7056,7 @@ function osPaint_(m, d){
         +'title="Pakua ziara na IMEI zote / download the round with its handsets">⤓ Excel</button>'
         +'</div><div class="scroll"><table><thead><tr>'
         +'<th>Mwenye nazo / holder</th><th>Mahali / location</th><th>RSM</th><th class="r">Simu / pieces</th>'
-        +'<th class="r">Kongwe / oldest</th><th class="r">90+</th></tr></thead><tbody>'
+        +'<th class="r">DAYS OFF</th><th class="r">90+</th></tr></thead><tbody>'
         +d.byAgent.map(function(g){
           return '<tr><td><b>'+esc(g.agent)+'</b>'
             +(g.phone?'<div class="mut" style="font-size:10px"><a href="tel:'+esc(g.phone)+'">'+esc(g.phone)+'</a></div>':'')+'</td>'
@@ -7106,6 +7106,10 @@ function osPaint_(m, d){
       +'takes it off this list by itself</b> and it appears in NEW STOCK; nothing has to be '
       +'ticked off. The age keeps climbing for every day it stays un-enrolled.</div>'
       +(d.notReady?'<div class="note bad">'+esc(d.notReadyNote)+'</div>':'')
+      /* A REFUSED WRITE IS NEVER SILENT AGAIN. This pane reported "nothing stamped" through a
+         write the database was rejecting every single time -- which reads exactly like nothing
+         NEEDED stamping, and that is why it went unnoticed. */
+      +(d.placeNote?'<div class="note bad">'+esc(d.placeNote)+'</div>':'')
       +tiles+bar+chips+(OSSEC==='round'?board:table)+'</div>';
     wireTiles(m);
     var go=function(){ OSQ={q:$('#osQ').value,agent:$('#osAgent').value,rsm:$('#osRsm').value,
@@ -7133,7 +7137,7 @@ function osPaint_(m, d){
 
    THE CELL STILL LEADS WITH THE FIGURE. Every table on this page sorts itself on a <th>
    click by reading the cell's text, so a number wrapped in a control has to remain a number
-   FIRST -- put an icon or a word in front of it and the Kongwe column starts sorting
+   FIRST -- put an icon or a word in front of it and the DAYS OFF column starts sorting
    alphabetically on whatever that is, on the one board read to decide which visit goes first.
    So this is the plain figure with a button around it, underlined to say it does something.
 
@@ -7163,7 +7167,7 @@ function osRoundXl_(btn){
     var rows=d.rows||[];
     if(!rows.length){ done(); toast('Hakuna simu / nothing outstanding', true); return; }
     var head=['MWENYE NAZO','SIMU YAKE','MAHALI','MAHALI KUTOKA','RSM','SIMU YA RSM',
-      'JUMLA YA SIMU','KONGWE','90+','IMEI','BIDHAA','UMRI LEO','ORODHA YA','ILIVYOSOMWA'];
+      'JUMLA YA SIMU','DAYS OFF','90+','IMEI','BIDHAA','UMRI LEO','ORODHA YA','ILIVYOSOMWA'];
     var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
     var lines=[head.map(q).join(',')];
     rows.forEach(function(r){

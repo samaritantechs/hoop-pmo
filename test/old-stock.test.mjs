@@ -497,6 +497,63 @@ test('the place is stamped once, and survives the deck forgetting the agent', as
   assert.equal(d.placed, 0, 'and nothing was written a second time');
 });
 
+test('the stamp is an UPDATE, because every row it touches already exists', async () => {
+  /* THE BUG THIS EXISTS TO PREVENT, and it shipped once.
+     ---------------------------------------------------------------------------------------
+     The stamp was an upsert carrying only {imei, location, location_from, updated_at}, which
+     PostgREST turns into INSERT ... ON CONFLICT (imei) DO UPDATE. Postgres checks NOT NULL
+     against the PROPOSED tuple before it looks for the conflict -- and old_stock.as_of is
+     `date not null` with no default -- so every batch was refused for a row that already
+     existed and needed one column changed. Two thousand handsets, nothing stamped, and the
+     pane reported "0 locations stamped", which reads exactly like nothing needed stamping.
+
+     Every row here was read out of this table a moment ago, so there is nothing to insert and
+     nothing should pretend there might be. */
+  const api = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  const fn = api.slice(api.indexOf('async oldStock(db, user, args) {'), api.indexOf('async oldStockHolder'));
+  assert.match(fn, /\.update\(patch\)\.in\('imei', slice\)/);
+  assert.ok(!/\.upsert\(/.test(fn), 'an upsert here proposes an INSERT the table will refuse');
+  // Grouped by the value, so this is a handful of writes and not two thousand.
+  assert.match(fn, /const byPlace = new Map\(\)/);
+});
+
+test('a refused write is said out loud, never counted as nothing to do', async () => {
+  /* A stamp that reported success on a write the database rejected is the exact failure this
+     column exists to prevent -- and the SWALLOWED version of it is why the bug above went
+     unnoticed: the pane reported "0 stamped", which reads exactly like "0 needed stamping".
+
+     The refusal below is the real one, word for word, that the live database gave. */
+  const inner = locDb({
+    stock: [old({ imei: 'W1', agent: 'ABEL MGANGA' })],
+    loans: [{ imei: 's1', agent: 'ABEL MGANGA', branch: 'MOROGORO' }],
+  });
+  const REFUSAL = 'null value in column "as_of" violates not-null constraint';
+  const db = {
+    /* POSTGREST REPORTS A REFUSAL BY RESOLVING WITH {data, error}, never by throwing -- so a
+       double that threw would be testing a failure mode this code will never meet. */
+    from(name) {
+      const q = inner.from(name);
+      if (name !== 'old_stock') return q;
+      const realUpdate = q.update.bind(q);
+      q.update = (patch) => {
+        realUpdate(patch);
+        q.then = (ok) => ok({ data: null, error: { message: REFUSAL } });
+        return q;
+      };
+      return q;
+    },
+    _dump: n => inner._dump(n),
+  };
+  const d = await _FNS.oldStock(db, WRITER, {});
+  /* The list still reads: a location that could not be saved is not a reason to refuse the
+     worklist a van is dispatched from. But the pane SAYS so. */
+  assert.equal(d.rows.length, 1);
+  assert.equal(d.rows[0].location, 'MOROGORO', 'worked out, shown, simply not written down');
+  assert.equal(d.placed, 0);
+  assert.match(d.placeNote, /could not be saved/);
+  assert.match(d.placeNote, /as_of/, 'and repeats what the database actually said');
+});
+
 test('a stated location wins, and a stamp never overwrites one', async () => {
   const db = locDb({
     stock: [{ ...old({ imei: 'Q1', agent: 'ABEL MGANGA' }), location: 'SINGIDA', location_from: 'stated' }],
@@ -581,7 +638,7 @@ test('the cells lead with the figure, and a zero opens nothing', () => {
   const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
   const num = html.slice(html.indexOf('function osNum_('), html.indexOf('function osHolderDrawer('));
   /* EVERY TABLE HERE SORTS ON THE CELL'S TEXT, so a number wrapped in a control has to stay a
-     number FIRST. An icon or a word in front of it and the Kongwe column starts sorting
+     number FIRST. An icon or a word in front of it and the DAYS OFF column starts sorting
      alphabetically -- on the one board read to decide which visit goes first. */
   assert.match(num, /">'\+money\(n\)\+'<\/button>'/,
     'the button closes its tag and the figure is the whole of what is inside it');
@@ -605,7 +662,7 @@ test('the cells lead with the figure, and a zero opens nothing', () => {
 test('the pane opens as a worklist: the round first, then the handsets', () => {
   const src = fnSrc('osPaint_');
   assert.match(src, /Ziara \/ The round/, 'the per-holder board, because a visit is made to a person');
-  assert.match(src, /Kongwe \/ oldest/);
+  assert.match(src, /<th class="r">DAYS OFF<\/th>/);
   assert.match(src, /href="tel:/, 'with the number to ring before setting off');
   assert.match(src, /Simu \/ The handsets/);
   // It says the two panes hand off to each other, so nobody looks for a Done button.
