@@ -3338,6 +3338,21 @@ function devPaint_(m, d, at){
        switch that hands account CREATION back while the lock stands, so this is a counter
        procedure and not a code change.
 
+       CONFIRMED ON A HANDSET, and it closed the one door we had hoped was open:
+         "it says sign in with your work account in all the 3 never allowing creation"
+
+       Settings, Gmail AND Chrome, all three, all the same answer. That kills the browser
+       route this card used to lead with -- and the wording says why it was never going to
+       work: "sign in with your WORK account" is Android Enterprise refusing to make a
+       CONSUMER account on a fully-managed device and asking for an EMM-issued one instead.
+       The block is on the state of the phone, not on which app does the asking, so no app on
+       the handset can get round it. Only being a registered EMM would change that answer, and
+       that is a different way of enrolling the whole fleet, not a fix for a counter.
+
+       SO THE CARD NAMES THE SENTENCE ON SCREEN. The operator reading "sign in with your work
+       account" has no reason to connect it to a loan, and every reason to ring the office.
+       Printing Google's exact words next to what to do about them is what ends that call.
+
        IT IS WRITTEN DOWN HERE BECAUSE THE DANGEROUS FIX IS THE OBVIOUS ONE. Somebody reading
        "the lock stops Gmail" will reach for dropping Device Owner, and that does not weaken
        the lock, it ends it -- every handset in the field becomes an ordinary phone. The desk
@@ -3347,26 +3362,35 @@ function devPaint_(m, d, at){
     +(canLock ? '' :
       '<div class="note" style="font-size:11.5px;margin-bottom:8px">'
       +'<b>Gmail mpya kwenye simu ya mteja / A new Gmail on the customer\'s phone.</b><br>'
-      +'Simu ikiwa bado chini ya mkopo, Google huficha njia ya <b>kufungua akaunti mpya</b> '
-      +'kwenye Mipangilio; <b>kuingia kwa akaunti iliyopo kunafanya kazi</b>. Si hitilafu ya '
-      +'kufuli letu, na hurudi yenyewe simu ikishaachiwa. '
-      +'/ While the phone is still under finance, Google hides <b>create account</b> in '
-      +'Settings; <b>signing in with an account that already exists works</b>. This is not a '
-      +'fault in the lock, and it returns by itself once the phone is released.'
-      +'<div style="margin-top:6px">1. Fungua <b>Chrome</b> kwenye simu ya mteja → '
-      +'<b>accounts.google.com/signup</b> → tengeneza akaunti hapo. '
-      +'/ Open <b>Chrome</b> on the customer\'s own phone and create the account there.</div>'
-      +'<div>2. Kisha <b>Mipangilio → Akaunti → Ongeza akaunti → Google</b> → ingia nayo. '
-      +'/ Then add it under Settings → Accounts → Add account → Google.</div>'
-      /* THE KNOWN-GOOD ROUTE STAYS ON THE CARD. The browser step is the one that saves the
-         second handset, and it is the one nobody at this desk has confirmed yet -- so what
-         the RSMs are already doing successfully is written underneath it rather than
-         replaced by it. A card that offers only the untested route is a card that strands
-         whoever it fails for. */
-      +'<div class="mut" style="margin-top:6px">Ikikataa: tengeneza akaunti kwenye simu '
-      +'nyingine yoyote, kisha ingia nayo hapa — ndiyo njia inayotumika sasa. '
-      +'/ If that is refused: create the account on any other phone and sign in with it here — '
-      +'the route already in use.</div>'
+      +'Simu ikiwa bado chini ya mkopo, <b>akaunti mpya haitengenezwi hapo</b> — Mipangilio, '
+      +'Gmail na Chrome zote hujibu <i>"Sign in with your work account"</i>. '
+      +'<b>Kuingia kwa akaunti iliyopo kunafanya kazi.</b> Si hitilafu ya kufuli letu wala si '
+      +'simu ya kazi; ni sheria ya Google kwa simu iliyo chini ya usimamizi, na hurudi yenyewe '
+      +'simu ikishaachiwa. '
+      +'/ While the phone is under finance <b>a new account cannot be created on it</b> — '
+      +'Settings, Gmail and Chrome all answer <i>"Sign in with your work account"</i>. '
+      +'<b>Signing in with an account that already exists works.</b> This is not a fault in the '
+      +'lock and it is not a work phone: it is Google\'s rule for a managed handset, and it '
+      +'lifts by itself when the phone is released.'
+      /* THE ONLY ROUTE THAT WORKS, and it is now the FIRST thing on the card rather than the
+         fallback under an untested one. "Any device not under finance" rather than "the
+         customer's other phone", because the customer standing at the counter frequently has
+         no other phone -- which is the whole reason this reached the office as a complaint. */
+      +'<div style="margin-top:6px">1. Tengeneza akaunti kwenye <b>kifaa kingine chochote '
+      +'kisicho chini ya mkopo</b> — simu ya muuzaji, kompyuta ya dawati, au simu ya zamani ya '
+      +'mteja: <b>accounts.google.com/signup</b>. '
+      +'/ Create the account on <b>any device that is not under finance</b> — the desk\'s own '
+      +'phone or computer, or the customer\'s old handset.</div>'
+      +'<div>2. Kisha kwenye simu ya mteja: <b>Mipangilio → Akaunti → Ongeza akaunti → '
+      +'Google</b> → ingia nayo. '
+      +'/ Then on the customer\'s phone: Settings → Accounts → Add account → Google → sign in.</div>'
+      /* AND THE ACCOUNT IS THE CUSTOMER'S. A desk that makes it knows the password, which is
+         fine for the five minutes it takes and is not fine for the life of the loan. Saying
+         so on the card is cheaper than explaining it after somebody's mail has been read. */
+      +'<div class="mut" style="margin-top:6px">Akaunti ni ya mteja: mkabidhi jina na neno la '
+      +'siri, na <b>amshauri alibadilishe</b> baada ya kuingia. '
+      +'/ The account belongs to the customer — hand over the details and <b>tell them to '
+      +'change the password</b> once they are signed in.</div>'
       +'</div>')
     +tiles+bar+alarm+actions+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
   wireTiles(m);
