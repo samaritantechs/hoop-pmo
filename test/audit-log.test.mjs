@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { fakeDb } from './fake-db.mjs';
 import { _FNS } from '../api/portal.js';
 import { audited, auditList, auditPrune, AUDIT_KEEP_DAYS } from '../api/_lib/audit.js';
+import { callApi } from '../api/_lib/call-core.js';
 
 /* =========================================================================================
    THE AUDIT LOG -- who did what, when, from where, and what the value was before and after.
@@ -212,6 +213,95 @@ test('an audit_log without the new columns reads, and says what is missing', asy
   assert.equal(d.available, true, 'the log still reads');
   assert.equal(d.rows.length, 1);
   assert.match(d.note, /before\/after columns are missing|RUN-ME-2026-09-13/);
+});
+
+/* =========================================================================================
+   THE OTHER DOOR.
+
+     "i didnt mean sales fraud audit but system audit of system users ... or through app"
+
+   The log watched /api/portal only, so half this system's users -- the ones who work from a
+   handset all day -- did not appear in it at all.
+   ========================================================================================= */
+const appDb = (extra = {}) => fakeDb({
+  audit_log: [], settings: [], followup_status: [], followup_comments: [],
+  call_users: [{ user_id: 'U1', device_id: 'dev-1', name: 'Ainea', role: 'PCO', active: true }],
+  ...extra,
+});
+
+test('a follow-up logged from the app lands in the same log, with the state each side', async () => {
+  const db = appDb({ followup_status: [{ imei: '4471', fu_status: 'hakupatikana', promise_date: null }] });
+  await callApi(db, 'api_callAddComment',
+    ['dev-1', { ref: '4471', team: 'KINONDONI', fu: 'ahadi', comment: 'atalipa Ijumaa',
+      promiseDate: '2026-09-19', promiseAmt: 50000, name: 'Alafati' }],
+    Date.now(), { ip: '41.222.180.9', ua: 'HOOPLOAN/1.4 (Android 13)' });
+
+  const [row] = only(db);
+  assert.equal(row.action, 'callAddComment');
+  assert.equal(row.actor_name, 'Ainea');           // who, read from the register
+  assert.equal(row.actor_role, 'PCO');
+  assert.equal(row.actor_code, 'dev-1', 'the device id IS the credential out there');
+  assert.equal(row.ref, '4471');                   // what it was about
+  assert.equal(row.ip, '41.222.180.9');            // where
+  assert.match(row.subject, /ref=4471/);
+  assert.match(row.subject, /stage=ahadi/);
+  // THE STATE EACH SIDE, which is the one part of a comment that is a value.
+  assert.equal(row.before.fu_status, 'hakupatikana');
+  assert.equal(row.after.fu_status, 'ahadi');
+  assert.equal(row.after.promise_date, '2026-09-19');
+
+  /* AND NOT THE PAYLOAD. The comment's text, the amount promised and any new number live in
+     followup_comments behind team scoping; this table must not become a second copy. */
+  const text = JSON.stringify(row);
+  assert.ok(!/atalipa Ijumaa|50000/.test(text));
+});
+
+test('the name is read from the register, never taken from the request', async () => {
+  /* A name the CLIENT supplied would make the whole log worth nothing. An unregistered device
+     leaves it blank and the entry still lands -- somebody working from a device id nobody
+     granted is exactly the row an audit is opened for. */
+  const db = appDb({ followup_status: [] });
+  await assert.rejects(() => callApi(db, 'api_callAddComment',
+    ['dev-STRANGER', { ref: '9', name: 'Ainea' }], Date.now(), { ip: '1.2.3.4' }));
+  const [row] = only(db);
+  assert.equal(row.ok, false, 'it was refused, and the attempt is the point');
+  assert.equal(row.actor_code, 'dev-STRANGER');
+  assert.equal(row.actor_name, null, 'no name, because no registered user answers to it');
+  assert.match(row.error, /not registered/i);
+});
+
+test('a timer is not a person, and does not flood the log', async () => {
+  /* RULE 1, KEPT RATHER THAN WIDENED. api_callSync runs every five minutes on every handset:
+     seven officers over fifteen days is ten thousand rows of a background heartbeat, burying
+     the entries somebody opened this pane to find. */
+  const src = fs.readFileSync(new URL('../api/_lib/call-core.js', import.meta.url), 'utf8');
+  const spec = src.slice(src.indexOf('const CALL_AUDIT = {'), src.indexOf('const CALL_DIFF'));
+  assert.match(spec, /api_callRegister:/);
+  assert.match(spec, /api_callAddComment:/);
+  for (const quiet of ['api_callSync', 'api_callNotifSeen', 'api_callBoot', 'api_callList']) {
+    assert.ok(!new RegExp('^\\s*' + quiet + ':', 'm').test(spec), quiet + ' must stay out of the log');
+  }
+});
+
+test('registering on the app creates a system user, and the log says so', async () => {
+  /* The door watch answers "who was turned away"; this answers "who is now able to work",
+     which is what an admin asks when a name they do not recognise appears on a deck. */
+  const src = fs.readFileSync(new URL('../api/_lib/call-core.js', import.meta.url), 'utf8');
+  const reg = src.slice(src.indexOf('await noteSignin(db, { ...base, ok: true,'));
+  assert.match(reg.slice(0, 900), /action: 'callRegister'/);
+  assert.match(reg.slice(0, 900), /actorCode: String\(a\[REG_ARG\.device\]/);
+  // Only the successful case: a refused attempt never made a user, and signin_attempts has it.
+  const failPath = src.slice(src.indexOf('catch (e) {', src.indexOf('out = await h(db, a, nowMs);')));
+  assert.ok(!/auditedApp/.test(failPath.slice(0, 200)));
+});
+
+test('the pane says which door each entry came through', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const draw = html.slice(html.indexOf('function drawAudit('), html.indexOf('function drawNewStock('));
+  /* Read off the action rather than stored twice -- every app entry is written under a name
+     this list already owns, and a second column that could disagree with the first is a
+     column that eventually will. */
+  assert.match(draw, /\/\^call\/\.test\(r\.action\|\|''\)\?'App':'Portal'/);
 });
 
 /* ---------------------------------------------------------------------------------------- */

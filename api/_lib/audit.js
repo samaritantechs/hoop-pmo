@@ -278,6 +278,46 @@ const pick_ = (row, fields) => {
   return out;
 };
 
+/** THE OTHER DOOR. Everything above wraps a call to /api/portal; this wraps one to /api/call,
+    so the same pane answers "who did what" whether somebody worked from the office or from a
+    handset in the field.
+
+    IT TAKES THE SAME SHAPE AND MAKES THE SAME PROMISES: only calls that CHANGE something, only
+    the fields a spec names, never the payload, and it can never break the thing it watches.
+
+    WHO IS DIFFERENT, AND HONESTLY SO. There is no access code out there -- the device id IS the
+    credential -- so that is what lands in actor_code, with the name and role read off the
+    registered user. Anonymising it as "the app" would put a hundred officers' work under one
+    name, which is the opposite of an audit. */
+export async function auditedApp(db, entry, run) {
+  const started = Date.now();
+  const spec = entry.diff || null;
+  const before = spec ? await auditRowOf(db, spec, entry.args) : null;
+  const base = {
+    actor_code: short(entry.actorCode),
+    actor_name: short(entry.actorName),
+    actor_role: short(entry.actorRole),
+    action: entry.action,
+    ref: short(entry.ref),
+    team: short(entry.team),
+    subject: short(entry.subject),
+    ip: short(entry.ip),
+    ua: short(entry.ua),
+  };
+  try {
+    const out = await run();
+    const d = spec ? auditDiff(before, await auditRowOf(db, spec, entry.args), spec.fields) : null;
+    await auditWrite(db, { ...base, ok: true, error: null, ms: Date.now() - started,
+      before: d ? d.before : null, after: d ? d.after : null });
+    return out;
+  } catch (e) {
+    await auditWrite(db, { ...base, ok: false, error: short(e && e.message) || 'failed',
+      ms: Date.now() - started,
+      before: before && spec ? pick_(before, spec.fields) : null, after: null });
+    throw e;
+  }
+}
+
 /* =======================================================================================
    FIFTEEN DAYS, AND THE APP IS WHAT DELETES.
 
