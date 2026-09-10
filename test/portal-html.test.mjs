@@ -1129,9 +1129,22 @@ test('portal.html: drawDevices fetches, devPaint_ draws, and only one of them ca
   assert.match(fetchFn, /paneFailed\(m,e\)/, 'a failed read still reports as a failed pane');
 
   const paint = src.slice(src.indexOf('function devPaint_(m, d, at){'),
-                          src.indexOf('function devVisibleTicks_'));
+                          src.indexOf('/* THE WHOLE-REGISTER HALF OF THE SEARCH'));
   assert.ok(paint.length > 3000, 'the paint half is the body that used to live in the .then');
   assert.ok(!/srv\(/.test(paint), 'drawing must never itself go to the server');
+
+  /* THE SEARCH IS THE THIRD PARTY, and it keeps the split rather than breaking it. A keystroke
+     paints from rows in hand; the request that follows the pause is its own function, so the
+     paint half still never reaches the network and the fetch half still never draws. */
+  assert.match(paint, /devSearchFetch_\(m\)/, 'the paint half delegates the asking');
+  const search = src.slice(src.indexOf('function devSearchFetch_(m){'),
+                           src.indexOf('/* TICK ALL, AND THE COUNT BESIDE THE BUTTONS'));
+  assert.match(search, /srv\('deviceList',\{state:DEV\.filter,q:DEV\.q\}\)/);
+  assert.match(search, /devPaint_\(m, d, Date\.now\(\)\)/, 'and hands its answer back to the paint half');
+  /* AND IT DOES NOT BLANK THE PANE. That is the whole difference from drawDevices: mid-search
+     the rows on screen are the ones the operator is reading. */
+  assert.ok(!/innerHTML|paneFailed/.test(search),
+    'a search never replaces the fleet with a skeleton or an error page');
 });
 
 test('portal.html: a flag tile repaints, a state tile re-reads', () => {
@@ -1141,7 +1154,7 @@ test('portal.html: a flag tile repaints, a state tile re-reads', () => {
   const paint = src.slice(src.indexOf('function devPaint_(m, d, at){'),
                           src.indexOf('function devVisibleTicks_'));
 
-  const flag = paint.slice(paint.indexOf('var byFlag='), paint.indexOf("var tiles='"));
+  const flag = paint.slice(paint.indexOf('var byFlag='), paint.indexOf('var tiles=qLive'));
   assert.match(flag, /devPaint_\(m, d, at\)/, 'the flag tiles repaint from rows already loaded');
   /* The one case that still must fetch: clearing a live state chip WIDENS what the server
      would send, and the extra rows are by definition not in hand. */
