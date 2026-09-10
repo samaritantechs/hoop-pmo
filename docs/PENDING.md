@@ -1018,3 +1018,22 @@ drawer, by name, saying "na nyingine N" when twenty is not all of them.
 And deviceSetState now carries the same 500 ceiling deviceEnrol has, because a paste is no longer
 bounded by what fits on a screen and a too-long `in(...)` fails as a transport error rather than as
 an answer about phones.
+
+## 32. SHIPPED 2026-09-10: bulk lock, so both desks work from lists
+
+"As achia has bulk and enroll has bulk, lock need bulk too at locking."
+
+**Do:** nothing. It is on the `devlock` pane already ticked for the store role.
+
+The store bench already pasted a list to ENROL a consignment. Locking that same consignment was
+the one step still asking for four hundred clicks, so the bulk button is now on both desks --
+Funga kwa wingi on locking, Achia kwa wingi on unlocking. Which order the button gives is the
+desk's own, so a store bench still cannot paste its way to a release; the server refuses it from
+the other side too.
+
+ONE FORM, TWO ORDERS, BUT NOT ONE WARNING. Everything that makes a bulk order safe is the same
+work, so there is one form. What the order COSTS is not the same: Achia cannot be undone from the
+office, and Funga can -- by general duty, in a second. Calling a lock irreversible would be a lie
+that makes the real warning next door mean less. So the locking sheet says what is true instead:
+every phone on the list goes dark to whoever holds it until general duty opens it, and one reason
+is recorded against all of them.
