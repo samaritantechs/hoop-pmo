@@ -1600,9 +1600,9 @@ var NAV=[
   /* LOSS AND DAMAGE: four SOPs point at one process (Finance H, Store C.7, RSM F, CSM G) and
      none of them could open a case. `lossreq` opens one and reads its own; `loss` is Finance's
      desk, where the price list lives and the money is chased. */
-  { g:'mauzo', t:'lossreq',  nav:'lossreq',    sw:'Toa taarifa ya upotevu', en:'Report a loss',
+  { g:'stock', t:'lossreq',  nav:'lossreq',    sw:'Toa taarifa ya upotevu', en:'Report a loss',
     ic:'<path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>' },
-  { g:'mauzo', t:'loss',     nav:'loss',       sw:'Upotevu na uharibifu', en:'Loss and damage',
+  { g:'stock', t:'loss',     nav:'loss',       sw:'Upotevu na uharibifu', en:'Loss and damage',
     ic:'<path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/><path d="M19 3v4M21 5h-4"/>' },
 
   /* COMMISSION: Finance builds and pays, the Administration approval group signs off.
@@ -6648,7 +6648,15 @@ function nsTopBottom(ns){
           +'/ Only one agent has sold this week, so there is no bottom to name.</div>')
       : '<div class="mut" style="font-size:11.5px;padding:6px 0">Hakuna mauzo wiki hii. / No sales this week.</div>')
     +'<div class="mut" style="font-size:10px;margin-top:4px">kati ya maajenti '+money(ns.ranked||0)
-    +' walioamiliana wiki hii / of the '+money(ns.ranked||0)+' agents who sold this week</div>'
+    +' walioUZA wiki hii / of the '+money(ns.ranked||0)+' agents who sold this week</div>'
+    /* THE ONES WHO SOLD NOTHING, which is who "bottom" is really about. They are counted and a
+       few are named, never ranked: they are all equally bottom, and picking one of them as the
+       week's worst would be an arbitrary accusation. */
+    +((ns.idle||0)?'<div class="note bad" style="font-size:10.5px;margin-top:6px">'
+      +'<b>'+money(ns.idle)+'</b> hawajauza kabisa wiki hii'
+      +((ns.idleNames||[]).length?': '+esc(ns.idleNames.join(', '))
+        +(ns.idle>ns.idleNames.length?' … +'+money(ns.idle-ns.idleNames.length):''):'')
+      +' / <b>'+money(ns.idle)+'</b> sold nothing at all this week.</div>':'')
     +'</div>';
 }
 function drawNewStock(m){

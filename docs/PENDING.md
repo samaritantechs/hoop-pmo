@@ -1181,3 +1181,23 @@ sentence under our own logo; it now reads "Mfumo wa ufuatiliaji wa simu".
 STILL CARRYING IT, named rather than quietly changed: `APP.MOTTO` in `api/_lib/call-core.js`, which
 is the CALLS app's own header (call.html), not the portal's. Say the word and it goes too -- it is
 one line, but it is a different surface and was not what the ask named.
+
+## 38. SHIPPED 2026-09-11: loss to Stock, one brand everywhere, and the agents who sold nothing
+
+**Do:** nothing.
+
+LOSS AND DAMAGE MOVED TO STOCK. It travelled to Sales with the range named by its endpoints;
+it is about handsets going missing, so it sits with the handsets. Both `lossreq` and `loss`. The
+grouping is a label and not a grant -- every nav key is untouched.
+
+ONE BRAND IN THE CALLS APP TOO. `APP.MOTTO` was 'WATU SIMU' hard-coded into every boot payload the
+calls app asks for -- the same second brand the portal header lost, one surface over. It is a
+SETTING now (`CALL_MOTTO`) rather than a deleted field: the payload keeps its shape for anything
+reading it, its neighbours `CALL_BRAND` and `CALL_LOGO_URL` are already settings, and empty is the
+honest default, because a slogan nobody chose is exactly what this replaced.
+
+THE AGENTS WHO SOLD NOTHING now sit under the top-and-bottom card. The card was ranking only
+sellers, so it could name somebody with one sale as the week's bottom while three people sold
+nothing at all -- the opposite of what it is read for. They are counted and a few are named, never
+ranked: they are all equally bottom, and picking one of several zeros as the worst performer is an
+arbitrary accusation. Active Field_Officers only.

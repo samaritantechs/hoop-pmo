@@ -1534,11 +1534,25 @@ function newStockAgents(rows, from, to) {
   return [...by.values()].sort((x, y) => (y.sales - x.sales) || (y.amount - x.amount)
     || String(x.name).localeCompare(String(y.name)));
 }
-function newStockSales(rows, nowMs) {
+function newStockSales(rows, nowMs, roster) {
   const today = todayKey(nowMs);
   const week = weekMondayKey(nowMs);
   const month = today.slice(0, 7) + '-01';
   const ranked = newStockAgents(rows, week, today);
+  /* AND THE ONES WHO SOLD NOTHING, which is who "bottom" is really about.
+     -------------------------------------------------------------------------------------
+     These rows are sales, so an agent with none of them is not in them -- and a card ranking
+     only sellers can name somebody with one sale as the week's bottom while three people sold
+     nothing at all. That is the opposite of what the card is read for.
+
+     They are COUNTED rather than named. Picking one of several zeros as "the bottom" would be
+     arbitrary -- they are all equally bottom -- and naming an arbitrary person as the worst
+     performer of the week is a thing a screen should not do. So the two named rows stay
+     definite, and the number beside them says how many are below both. */
+  const sold = new Set(ranked.map(a => K(a.name)));
+  const idle = (roster || [])
+    .filter(a => a && a.name && a.active !== false && tierOf(a.role) === TARGET_TIERS.length - 1)
+    .filter(a => !sold.has(K(a.name)));
   return {
     week: newStockPeriod(rows, week, today),
     month: newStockPeriod(rows, month, today),
@@ -1548,6 +1562,9 @@ function newStockSales(rows, nowMs) {
     top: ranked[0] || null,
     bottom: ranked.length > 1 ? ranked[ranked.length - 1] : null,
     ranked: ranked.length,
+    idle: idle.length,
+    // A few names, so "12 sold nothing" is a list somebody can act on rather than a number.
+    idleNames: idle.slice(0, 8).map(a => a.name),
   };
 }
 
@@ -5966,7 +5983,7 @@ const FNS = {
 
     const count = st => rows.filter(r => r.status === st).length;
     return { ok: true, notReady, noDevices, hasLoc,
-      newSales: newStockSales(rows, now),
+      newSales: newStockSales(rows, now, agents),
       notReadyNote: notReady ? NEWSTOCK_NOT_READY : '',
       asOf: now, stamped,
       rows: shown.slice(0, 2000), shown: shown.length,

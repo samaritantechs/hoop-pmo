@@ -196,17 +196,23 @@ test('the form says the month rule before the button, and disables it', () => {
   assert.match(src, /b\.disabled=false;\s*\n\s*\/\/[\s\S]*?ruleLine\(\);/);
 });
 
-test('top-up through commission sign-off sit under Sales, and advances keep their own group', () => {
+test('top-up and commission sit under Sales, loss under Stock, advances on their own', () => {
   /* "Request topup to commission sigoff should be moved to sales segment in the nav pane, not
-     advances." The range the owner named, by its endpoints, as it stood on their screen. */
+     advances." The range the owner named, by its endpoints, as it stood on their screen --
+     and then "[move loss and damage to stock segment]", which is where a pane about handsets
+     going missing belongs anyway. */
   const cat = HTML.slice(HTML.indexOf('var NAV='), HTML.indexOf('var GROUPS='));
   const groupOf = nav => {
     const m = new RegExp("\\{ g:'([a-z]+)',\\s+t:'[a-z]+',\\s+nav:'" + nav + "'").exec(cat);
     assert.ok(m, nav + ' is not in the nav catalog');
     return m[1];
   };
-  for (const nav of ['topupreq', 'topups', 'lossreq', 'loss', 'commission', 'commappr']) {
+  for (const nav of ['topupreq', 'topups', 'commission', 'commappr']) {
     assert.equal(groupOf(nav), 'mauzo', nav + ' belongs to Sales now');
+  }
+  // Loss and damage travelled with the range at first and then moved on: it is about stock.
+  for (const nav of ['lossreq', 'loss']) {
+    assert.equal(groupOf(nav), 'stock', nav + ' is about handsets, so it sits with them');
   }
   for (const nav of ['advreq', 'advappr', 'advrep']) {
     assert.equal(groupOf(nav), 'adv', nav + ' is what the Salary advance group is for');
