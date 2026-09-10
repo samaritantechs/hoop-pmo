@@ -2201,3 +2201,42 @@ test('portal.html: a module with no file that day reads as a cross, per day', ()
   const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
   assert.match(lbl[0], /\bitrep:'[^']+'/);
 });
+
+/* =========================================================================================
+   THE TWO DEVICE PANES. One drawDevices, two doors -- so the halves cannot drift into
+   disagreeing about the fleet, and neither offers a button whose whole answer would be 403.
+   ========================================================================================= */
+test('portal.html: the locking pane has no unlocking button, and the POS pane has no lock', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('devPaint_', html);
+  assert.match(fn, /var canLock=DEVMODE!=='unlock'/);
+  // The bench's orders sit on one side of the branch and the POS desk's on the other.
+  const bar = /\+\(BOOT\.readOnly \? [\s\S]*?data-dvs="released"[^)]*\)\)/.exec(fn)[0];
+  const lockHalf = bar.slice(bar.indexOf('canLock'), bar.indexOf(': \''));
+  assert.ok(/data-dvs="locked"/.test(lockHalf) && /data-dvs="lost"/.test(lockHalf),
+    'Funga and Imepotea belong to the locking bench');
+  assert.ok(!/data-dvs="enrolled"/.test(lockHalf) && !/data-dvs="released"/.test(lockHalf),
+    'and the locking bench is never shown Fungua or Achia');
+  // Provisioning is bench work; the per-row eraser and credential go with it.
+  for (const guard of ['BOOT.readOnly||!canLock?\'\':\'<button class="btn sm" data-dvlock=',
+    'BOOT.readOnly||!canLock?\'\':\'<button class="btn sm ghost" data-dvt=',
+    'BOOT.readOnly||!canLock?\'\':\'<button class="btn sm" id="dvEnrol"']) {
+    assert.ok(fn.includes(guard) || IMP_SRC('devPaint_', html).includes(guard), guard + ' is gated on canLock');
+  }
+  assert.match(fn, /data-dvopen=/, 'and the POS desk gets its own one-row Fungua');
+  // Both halves say which desk they are, because both show every phone.
+  assert.match(fn, /Dawati la stoo/);
+  assert.match(fn, /Dawati la kufungua/);
+});
+
+test('portal.html: the mode is read off TAB, so it can never point at the pane you just left', () => {
+  const html = read('portal.html');
+  assert.match(IMP_SRC('drawDevices', html), /DEVMODE = \(TAB==='devunlock'\) \? 'unlock' : 'lock'/);
+  const draw0 = html.indexOf('function draw()');
+  const dispatch = html.slice(draw0, html.indexOf('\n}', draw0));
+  assert.match(dispatch, /TAB==='devlock'\) return drawDevices\(/);
+  assert.match(dispatch, /TAB==='devunlock'\) return drawDevices\(/);
+  const lbl = /var lbl=\{dashboard:[\s\S]*?\}\[k\]\|\|k;/.exec(html);
+  for (const k of ['devlock', 'devunlock']) assert.match(lbl[0], new RegExp('\\b' + k + ":'[^']+'"));
+  assert.ok(!/\bdevices:'/.test(lbl[0]), 'the old single grant is no longer offered to tick');
+});
