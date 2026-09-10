@@ -177,6 +177,41 @@ rather than an answer about phones. A paste is no longer bounded by what fits on
 `deviceSetState` now carries **the same 500 limit `deviceEnrol` already has** — one ceiling to
 remember, and above the 500 rows `deviceList` shows, so tick-all on a full table still fits.
 
+## Finding one handset, fast
+
+> *"Add a search at unlocking before the Achia kwa wingi button. General duty need to unlock phones
+> by application and finding a single phone in fast speed is hard, so if they search imei there it
+> remains itself on the below list."*
+
+A search box and a 🔍, immediately before the bulk button, on **both** desks — the store bench hunts
+for single IMEIs too. Type digits, press Enter, and the table below is that phone.
+
+**It is the server's search, not the browser's**, and that is the whole of it. The pane holds the
+newest 500 rows; the register is bigger than that and growing. A filter over what is already on
+screen would answer *"no such phone"* about a handset sitting in the operator's hand — the one
+answer this box must never give.
+
+**Digits only, because an IMEI is digits.** A paste of `IMEI: 3519 2993 7378 664` finds the phone —
+somebody reading off a sticker types what they see — and it also means `%` and `_` can never reach
+the LIKE pattern, so the escaping question does not arise at all. A partial works: the last six
+digits are what people read off a screen.
+
+**A search outranks the state chip.** The desk is holding one phone and wants that row; if the pane
+happened to be filtered to *tayari* and the handset is locked, an obedient search would report
+nothing found about a phone the operator can see.
+
+**While a search is live the tiles are replaced by a banner.** They count the fleet and they are
+also how you filter it — during a search the server has answered about one phone, so every number
+in them would describe the search result while still reading as "the fleet". The banner says what
+is being searched and carries the way out.
+
+**An empty search leaves no trap.** The action bar used to render only when there were rows: type
+one wrong digit, get none, and the box you would clear the search in went with them. It now survives
+a search that found nothing.
+
+A search is a **read**. Finding a handset on the wrong desk still does not let you order anything
+about it — the gate is on the transition, as everywhere here.
+
 ## Files
 
 | file | what changed |
@@ -184,5 +219,5 @@ remember, and above the 500 rows `deviceList` shows, so tick-all on a full table
 | `api/portal.js` | `DEVICE_STATE_NAV`; `devlock`/`devunlock` in `NAV_TABS`; the legacy expansion in `navsFor`; the gates on `deviceList`, `deviceHistory`, `deviceEnrol`, `deviceToken`, `deviceDelete`, `deviceSetState`; the 500 ceiling |
 | `public/portal.html` | two catalog entries, `DEVMODE`, the per-mode action bar and row buttons, the per-row **Fungua**, the desk-aware row panel, `devParseImeis_`, `DEVBULK`/`devBulkForm`, `devUnknownDrawer_` |
 | `test/device-split.test.mjs` | seven tests, one of them entirely about the field contract |
-| `test/device-bulk.test.mjs` | ten tests — the desk split run in both modes, the parser, both bulk orders, the ceiling, the named strangers |
+| `test/device-bulk.test.mjs` | fifteen tests — the desk split run in both modes, the parser, both bulk orders, the ceiling, the named strangers, the search |
 | `api/_lib/device-core.js`, `api/device.js`, `android/` | **untouched** |

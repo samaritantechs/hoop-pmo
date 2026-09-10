@@ -1201,3 +1201,25 @@ sellers, so it could name somebody with one sale as the week's bottom while thre
 nothing at all -- the opposite of what it is read for. They are counted and a few are named, never
 ranked: they are all equally bottom, and picking one of several zeros as the worst performer is an
 arbitrary accusation. Active Field_Officers only.
+
+## 39. SHIPPED 2026-09-11: find one handset, fast
+
+"Add a search at unlocking before the Achia kwa wingi button. General duty need to unlock phones by
+application and finding a single phone in fast speed is hard, so if they search imei there it
+remains itself on the below list."
+
+**Do:** nothing.
+
+A search box and a magnifier sit immediately before the bulk button, on BOTH desks -- the store
+bench hunts for single IMEIs too. Type digits, press Enter, and the list below is that phone.
+
+IT IS THE SERVER'S SEARCH, not the browser's. The pane holds the newest 500 rows and the register
+is bigger than that; a filter over what is already on screen would answer "no such phone" about a
+handset sitting in the operator's hand, which is the one answer this box must never give.
+
+Digits only, because an IMEI is digits: a paste of "IMEI: 3519 2993 7378 664" finds it, and `%`
+and `_` can never reach the LIKE pattern so the escaping question does not arise. A partial works.
+
+A search outranks the state chip -- the desk is holding that phone. While a search is live the
+tiles are replaced by a banner, because they count the fleet and the server has just answered about
+one phone. And an empty search no longer hides the box that caused it.

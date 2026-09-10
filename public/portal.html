@@ -2923,7 +2923,7 @@ function drawRecoveryTrend(){
 /* filter = a STATE the server can select on; flag = a per-row judgement (neverSeen, stale)
    that only exists once a row is drawn. Never both at once: they are two different questions
    and answering both leaves a screen nobody can read the count off. */
-var DEV={filter:'',flag:''};
+var DEV={filter:'',flag:'',q:''};
 /** True when the server had more rows than it sent. `total` counts the whole register;
     `rows` is what fits the wire. Kept as one function so the notice and any future caller
     cannot end up with two different ideas of "there is more". */
@@ -2935,7 +2935,7 @@ var DEVMODE='lock';
 function drawDevices(m){
   DEVMODE = (TAB==='devunlock') ? 'unlock' : 'lock';
   m.innerHTML='<div class="card"><h2>Devices</h2><div class="sk"></div></div>';
-  srv('deviceList',{state:DEV.filter}).then(function(d){
+  srv('deviceList',{state:DEV.filter,q:DEV.q}).then(function(d){
     devPaint_(m, d, Date.now());
   }).catch(function(e){ paneFailed(m,e); });
 }
@@ -2990,7 +2990,18 @@ function devPaint_(m, d, at){
       DEV.flag=(DEV.flag===f?'':f); DEV.filter='';
       if(widening) drawDevices(m); else devPaint_(m, d, at);
     } }; };
-  var tiles='<div class="tiles">'
+  /* WHILE A SEARCH IS LIVE THE TILES GO. They count the fleet and they are also how you filter
+     it -- and during a search the server has answered about one phone, so every number in them
+     would describe the search result while still reading as "the fleet". A banner saying what
+     is being searched, with the way out on it, is the honest thing in that space. */
+  var tiles=d.searching
+    ? '<div class="note" style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+      +'<span>&#128269; Utafutaji: <b style="font-family:ui-monospace,monospace">'+esc(d.q||'')+'</b>'
+      +' &mdash; '+money(rows.length)+' simu / '+money(rows.length)+' found'
+      +(rows.length?'':'. Hakuna simu yenye tarakimu hizi. / No handset carries those digits.')
+      +'</span><span style="flex:1"></span>'
+      +'<button class="btn sm" id="dvClear">Onyesha zote / Show all</button></div>'
+    : '<div class="tiles">'
     +tile('Zimesajiliwa',money(c.enrolled||0),'tayari, hazijafungwa',byState('enrolled'))
     +tile('Zimefungwa',money(c.locked||0),
       ((c.lockPending||0)?money(c.lockPending)+' bado hazijathibitisha':'zote zimethibitisha'),
@@ -3068,7 +3079,10 @@ function devPaint_(m, d, at){
     +'refused because an account was signed in. Do not ship them. '
     +'<button class="btn sm danger" id="dvAlarm" style="margin-left:6px">Nionyeshe / Show me</button>'
     +'</div>' : '';
-  var actions=!rows.length ? '' :
+  /* THE BAR SURVIVES AN EMPTY SEARCH. It used to render only when there were rows, which is
+     fine for an empty register and a trap for a search: type one wrong digit, get no rows, and
+     the box you would clear the search in has gone with them. */
+  var actions=(!rows.length && !d.searching) ? '' :
     '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0;align-items:center">'
     +'<b style="font-size:12px">Zilizochaguliwa: <span id="dvCount">0</span></b>'
     /* A view-only code cannot change a device, and every one of these buttons answered that
@@ -3108,9 +3122,15 @@ function devPaint_(m, d, at){
        selection: the selection has nothing to do with it. Two controls that look like a set and
        read different inputs is how somebody ticks three rows and presses this one expecting
        those three. */
+    /* THE SEARCH SITS WITH THE ORDERS, not up with the chips, because it is part of the same
+       motion: a customer puts a handset on the counter, you find it and you open it. Pushed
+       right, immediately before the bulk button, which is where the ask put it. */
+    +'<span style="flex:1"></span>'
+    +'<input id="dvQ" inputmode="numeric" placeholder="Tafuta IMEI / find an IMEI" '
+      +'value="'+esc(d.q||'')+'" style="width:170px;font-family:ui-monospace,monospace;font-size:12px">'
+    +'<button class="btn sm ghost" id="dvFind" title="Tafuta / search">🔍</button>'
     +(BOOT.readOnly ? ''
-      : '<span style="flex:1"></span>'
-        +'<button class="btn sm ghost" id="dvBulk" data-dvbulk="'+(canLock?'locked':'released')+'" '
+      : '<button class="btn sm ghost" id="dvBulk" data-dvbulk="'+(canLock?'locked':'released')+'" '
         +'title="Bandika orodha ya IMEI / paste a list of IMEIs">'
         +(canLock?'Funga kwa wingi / Lock bulk':'Achia kwa wingi / Release bulk')+'</button>')
     +'</div>';
@@ -3204,6 +3224,17 @@ function devPaint_(m, d, at){
   $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
   var al=$('#dvAlarm'); if(al) al.onclick=function(){ DEV.flag='lockedNeverSpoke'; DEV.filter=''; devPaint_(m, d, at); };
   var rf=$('#dvRefresh'); if(rf) rf.onclick=function(){ drawDevices(m); };
+  /* Enter searches, because the operator is typing digits off a handset and reaching for the
+     mouse afterwards is the slow half of "finding a single phone in fast speed". Emptying the
+     box and pressing Enter is one way back; the banner's own button is the other. */
+  var qBox=$('#dvQ'), qGo=function(){
+    var v=String(qBox?qBox.value:'').replace(/\D/g,'');
+    if(v===String(DEV.q||'')) return;              // nothing changed: do not re-read for nothing
+    DEV.q=v; DEV.flag=''; drawDevices(m);
+  };
+  if(qBox) qBox.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); qGo(); } };
+  var fb=$('#dvFind'); if(fb) fb.onclick=qGo;
+  var cb=$('#dvClear'); if(cb) cb.onclick=function(){ DEV.q=''; DEV.flag=''; drawDevices(m); };
   var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
   /* The order comes off the button rather than out of DEVMODE a second time: one place decides
      which desk this is, and everything else reads that decision instead of re-making it. */
