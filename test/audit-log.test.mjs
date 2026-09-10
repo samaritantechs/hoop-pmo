@@ -297,7 +297,7 @@ test('registering on the app creates a system user, and the log says so', async 
 
 test('the pane says which door each entry came through', () => {
   const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
-  const draw = html.slice(html.indexOf('function drawAudit('), html.indexOf('function drawNewStock('));
+  const draw = html.slice(html.indexOf('function drawSysAudit('), html.indexOf('function drawNewStock('));
   /* Read off the action rather than stored twice -- every app entry is written under a name
      this list already owns, and a second column that could disagree with the first is a
      column that eventually will. */
@@ -323,7 +323,7 @@ test('it is a nav, ticked like any other, and it is a read', async () => {
 
 test('the pane asks the five questions in the order somebody asks them', () => {
   const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
-  const draw = html.slice(html.indexOf('function drawAudit('), html.indexOf('function drawNewStock('));
+  const draw = html.slice(html.indexOf('function drawSysAudit('), html.indexOf('function drawNewStock('));
   const at = t => { const i = draw.indexOf(t); assert.ok(i > 0, 'missing: ' + t); return i; };
   assert.ok(at('Lini / when') < at('Nani / who'));
   assert.ok(at('Nani / who') < at('Alifanya nini / what'));
@@ -341,4 +341,70 @@ test('the pane asks the five questions in the order somebody asks them', () => {
   // A refused attempt keeps its reason and is not dressed as an ordinary row.
   assert.match(draw, /r\.ok===false/);
   assert.match(draw, /imekataliwa \/ refused/);
+});
+
+/* ==========================================================================================
+   THE COLLISION THAT SWALLOWED THIS PANE.
+   ==========================================================================================
+     "Audit log (system actions) is not fraud audit (matching sales)"
+
+   THIS PANE SHIPPED UNREACHABLE. It was `function drawAudit(m)`, and so was the fraud audit
+   several thousand lines further down. Two declarations of one name are legal JavaScript --
+   the later one silently replaces the earlier -- so `if(TAB==='audit') return drawAudit(m)`
+   opened the FRAUD pane, and the nav looked like it worked because what it opened is also a
+   table of things that happened.
+
+   NOT ONE TEST FAILED, and that is the part worth guarding. Every check above reads this file
+   as text and finds the function defined exactly where it expects it; nothing that reads one
+   definition can see that another one wins. The defect exists only in the PAIR.
+
+   SO THE CHECK IS OVER THE WHOLE FILE, not over these two names: any two top-level draw
+   functions sharing a name means one pane is unreachable, whichever pair it happens to be
+   next time. And every tab the dispatcher names must resolve to a function that exists --
+   the other half of the same question, which a rename would otherwise break silently.
+   ========================================================================================== */
+test('no two panes share a function name, and every dispatched pane exists', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const seen = new Map();
+  const dupes = [];
+  const re = /^function (draw[A-Za-z0-9_]*)\s*\(/gm;
+  let m;
+  while ((m = re.exec(html))) {
+    if (seen.has(m[1])) dupes.push(m[1] + ' (first at ' + seen.get(m[1]) + ', again at ' + m.index + ')');
+    else seen.set(m[1], m.index);
+  }
+  assert.deepEqual(dupes, [], 'a duplicate draw function makes one pane unreachable');
+
+  /* AND THE DISPATCH POINTS AT SOMETHING REAL. `if(TAB==='x') return drawX(m)` is the only
+     way a nav is opened, so a draw function renamed without its dispatch is a dead tab.
+
+     ANCHORED TO THE START OF A LINE, because the note above drawSysAudit quotes the broken
+     dispatch verbatim -- and that comment is the record of why the code is shaped this way.
+     A check a comment can fail is a check that gets satisfied by editing the record, which
+     is the wrong half of the pair to change. */
+  const disp = /^[ \t]*if\(TAB===['"]([a-z0-9]+)['"]\)\s*return\s+(draw[A-Za-z0-9_]*)\(/gm;
+  let d, checked = 0;
+  while ((d = disp.exec(html))) {
+    assert.ok(seen.has(d[2]), 'TAB ' + d[1] + ' dispatches to ' + d[2] + ', which is not defined');
+    checked++;
+  }
+  assert.ok(checked > 20, 'the dispatcher should have been found: ' + checked);
+
+  // The two that collided, now named for their subjects and pointing at their own panes.
+  assert.match(html, /if\(TAB==='audit'\) return drawSysAudit\(m\);/);
+  assert.match(html, /if\(TAB==='fraud'\) return drawFraudAudit\(m\);/);
+});
+
+test('both audits say which one they are, in the rail and on the pane', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  // The nav rail: one word of subject is the difference between the right tick and the wrong one.
+  assert.match(html, /sw:'Nani alifanya nini', en:'System audit log'/);
+  // The role editor, which is where the wrong box actually gets ticked.
+  assert.match(html, /fraud:'Fraud audit — sales matched against the decks'/);
+  assert.match(html, /audit:'System audit log — what users of this system did, and the value before'/);
+  // And each pane points at the other, for somebody who opened the wrong one anyway.
+  const sys = html.slice(html.indexOf('function drawSysAudit('), html.indexOf('function drawNewStock('));
+  assert.match(sys, /Sales › Fraud audit/);
+  const fraud = html.slice(html.indexOf('function drawFraudAudit('));
+  assert.match(fraud.slice(0, 4000), /Admin › System audit log/);
 });

@@ -73,6 +73,32 @@ sent.
 somebody to the wrong town, which costs a day. A tile counts how many are still unknown, because a
 pivot by place is only as good as how many rows have one.
 
+### The pivot itself — a column and a filter are not one
+
+> *"you added about locations nice but the pivot data not yet."*
+
+A column and a filter both answer *"where is **this** one"*, asked a row at a time. Planning a round
+asks the opposite question — how much is in this town, how many people, and whose — and the only way
+to get that out of a filter is to pick each place in turn and write the totals down on paper.
+
+So **Mahali / By location** is its own chip: one row per town, with **holders**, **pieces**, **DAYS
+OFF** and **90+**, and the RSMs whose people are in it, because a town's round crossing three RSMs is
+who has to be rung before a van goes anywhere.
+
+**Counted from the handsets, never from the holder board.** That board takes one location per
+person; a holder whose rows disagree — one handset with a place written on it, the rest worked out —
+would otherwise be counted whole into whichever place it saw first, and a van sent for four phones to
+a town holding one.
+
+**The unplaced pile is a row, kept last.** Leaving it out would make a pivot whose bars do not add up
+to the tile above them. It is not a destination, so it never sorts as one.
+
+**The three numbers open what they count** — same control and same drawer as the round, with the
+place's list naming whose each handset is. **Holders is deliberately not one of them:** it counts
+people and the drawer lists handsets, and a number that opens a list of something else is worse than
+a number that opens nothing. Pressing the **place** instead drops the pane's own filter onto it and
+opens the handsets — the two steps somebody does by hand next, every time.
+
 ### And it is stamped, because the book underneath deletes
 
 > *"if such data is permanent stamp it permanent rather always fetching yet watu deletes the data
@@ -184,7 +210,7 @@ door that looks shut and is not.
 | `db/migrations/RUN-ME-2026-09-12-old-stock.sql` | `old_stock` |
 | `db/migrations/RUN-ME-2026-09-14-old-stock-location.sql` | `location`, `location_from` |
 | `db/RUN-ME-2026-09-12-sipho-september-load.sql` | the September list: staff + stock |
-| `api/portal.js` | `oldStockIndex`, `daysApart`, `ageToday`, the `oldStock` fn, the `oldstock` nav, NEW STOCK's sold-but-never-locked join, `stockAgingIndex` repointed |
-| `public/portal.html` | the catalog entry, `OSQ`/`osAge`/`drawOldStock`, `nsCell` collapsed to name+number |
+| `api/portal.js` | `oldStockIndex`, `daysApart`, `ageToday`, the `oldStock` fn (with `byPlace`), `oldStockHolder` opening a holder **or** a place, the `oldstock` nav, NEW STOCK's sold-but-never-locked join, `stockAgingIndex` repointed |
+| `public/portal.html` | the catalog entry, `OSQ`/`osAge`/`drawOldStock`, the four chips and the pivot, `nsCell` collapsed to name+number |
 | `public/upload.html` | the aged-stock chip disabled, and the sniffer no longer routes to it |
 | `test/old-stock.test.mjs` | twenty-four tests |

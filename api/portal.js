@@ -6205,6 +6205,50 @@ const FNS = {
       .sort((x, y) => String(x.rsm || '').localeCompare(String(y.rsm || ''))
         || (y.pieces - x.pieces)
         || String(x.agent || '').localeCompare(String(y.agent || '')));
+    /* AND THE PIVOT BY PLACE ITSELF, which is what the location column was asked for.
+       -------------------------------------------------------------------------------------
+         "add location column in old stock since this operation to visit it is better when we
+          can pivot by not just RSM but location too"
+
+       A COLUMN AND A FILTER ARE NOT A PIVOT. Both of those answer "where is THIS one", asked
+       one row at a time. Planning a round asks the opposite question -- "how much is in this
+       town, how many people, and whose are they" -- and the only way to get that out of a
+       filter is to pick each place in turn and write the totals down on paper.
+
+       COUNTED FROM THE HANDSETS, never from the holder board. A place is a bag of phones; the
+       holder board takes ONE location per person, so a holder whose rows disagree (one handset
+       with a place written on it, the rest worked out) would be counted whole into whichever
+       one that board happened to see first.
+
+       THE RSMs RIDE ALONG because a town's round crossing three RSMs is the exact thing this
+       pivot exists to show -- they are who has to be rung before a van goes anywhere.
+
+       AND THE UNPLACED PILE IS A ROW, kept last. Leaving it out would make a pivot whose bars
+       do not add up to the total on the tile above it, which is how a board stops being
+       believed. It sorts last wherever its size would have put it, because it is not a
+       destination. */
+    const placeTally = new Map();
+    for (const r of open) {
+      const k = r.location || '';
+      let g = placeTally.get(k);
+      if (!g) {
+        g = { key: k, location: r.location || '', pieces: 0, oldest: 0, over90: 0,
+          holderSet: new Set(), rsmSet: new Set() };
+        placeTally.set(k, g);
+      }
+      g.pieces++;
+      if (r.age != null && r.age > g.oldest) g.oldest = r.age;
+      if (r.age != null && r.age >= 90) g.over90++;
+      g.holderSet.add(nameKey(r.agent) || '?');
+      if (r.rsm) g.rsmSet.add(r.rsm);
+    }
+    const placeRows = [...placeTally.values()].map(g => ({
+      key: g.key, location: g.location, pieces: g.pieces, oldest: g.oldest, over90: g.over90,
+      holders: g.holderSet.size, rsms: [...g.rsmSet].sort(),
+    })).sort((x, y) => (x.location ? 0 : 1) - (y.location ? 0 : 1)   // the unplaced pile last
+      || y.pieces - x.pieces                                          // then the biggest trip
+      || y.oldest - x.oldest
+      || String(x.location).localeCompare(String(y.location)));
     const band = (lo, hi) => open.filter(r => r.age != null && r.age >= lo && (hi == null || r.age < hi)).length;
     return { ok: true, notReady: idx.notReady,
       notReadyNote: idx.notReady ? OLDSTOCK_NOT_READY : '',
@@ -6215,6 +6259,7 @@ const FNS = {
       rsms: [...new Set(open.map(r => r.rsm).filter(Boolean))].sort(),
       locations: [...new Set(open.map(r => r.location).filter(Boolean))].sort(),
       byAgent: [...byAgent.values()].sort((x, y) => y.oldest - x.oldest || y.pieces - x.pieces),
+      byPlace: placeRows,
       byNoPlace: noPlace,
       counts: {
         open: open.length,
@@ -6269,14 +6314,30 @@ const FNS = {
     const idx = await oldStockIndex(db);
     const key = String(a.key == null ? '' : a.key);
     const min = (a.min == null || a.min === '') ? null : num(a.min);
-    const mine = idx.open.filter(r => (nameKey(r.agent) || '?') === key);
+    /* A GROUP IS A HOLDER OR A PLACE, and this is the same question either way: the outstanding
+       handsets in that group, at least this old. The pivot by location grew the identical three
+       numbers, and giving them their own endpoint would be a second way of answering a question
+       this one already answers -- which is how two boards start disagreeing.
+
+       SAID AS A SCOPE RATHER THAN INFERRED FROM THE VALUE, because the unplaced pile IS a
+       group and its key is the empty string. Guessing "no place given, so they must mean a
+       holder" would open the wrong list on the one row that matters most. */
+    const scope = String(a.scope || '') === 'place' ? 'place' : 'holder';
+    const place = String(a.place == null ? '' : a.place);
+    const mine = scope === 'place'
+      ? idx.open.filter(r => K(r.location || '') === K(place))
+      : idx.open.filter(r => (nameKey(r.agent) || '?') === key);
     const rows = mine
       .filter(r => min == null || (r.age != null && r.age >= min))
       .sort((x, y) => (y.age == null ? -1 : y.age) - (x.age == null ? -1 : x.age)
         || String(x.imei).localeCompare(String(y.imei)));
     const first = mine[0] || null;
     return { ok: true, notReady: idx.notReady,
-      key, min,
+      key, min, scope, place,
+      /* HOW MANY PEOPLE ARE IN IT, which is meaningless for one holder and is the first thing
+         asked of a town: a hundred handsets across four holders is four visits. */
+      holders: scope === 'place'
+        ? new Set(mine.map(r => nameKey(r.agent) || '?')).size : 1,
       agent: first ? (first.agent || '') : '',
       phone: first ? (first.agentPhone || '') : '',
       rsm: first ? (first.rsm || '') : '',
