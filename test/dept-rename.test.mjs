@@ -40,6 +40,9 @@ test('the new name is matched, and every old spelling still is', () => {
     assert.ok(CREDIT_ROLES.has(old), 'a live spelling was dropped: ' + old);
   }
   assert.ok(CREDIT_ROLES.has('PORTFOLIO AND COMPLIANCE OFFICER'), 'the CEO\'s name is matched');
+  /* PCO is what the office says and what every screen now prints, so it is what somebody
+     will type into the register -- the long title alone would not have caught them. */
+  assert.ok(CREDIT_ROLES.has('PCO'), 'the everyday name is matched too');
   // The two shorter forms somebody will inevitably type into the register.
   assert.ok(CREDIT_ROLES.has('PORTFOLIO AND COMPLIANCE'));
   assert.ok(CREDIT_ROLES.has('PORTFOLIO & COMPLIANCE'));
@@ -50,13 +53,14 @@ test('a follow-up person under either name is dealt a share', async () => {
     call_users: [
       { user_id: 'U1', name: 'Ainea', role: 'CREDIT', active: true },
       { user_id: 'U2', name: 'Baraka', role: 'PORTFOLIO AND COMPLIANCE OFFICER', active: true },
+      { user_id: 'U4', name: 'Cecilia', role: 'PCO', active: true },
       // Not a follow-up desk at all, under either name, and must not join the roster.
       { user_id: 'U3', name: 'Sipho', role: 'STORE', active: true },
     ],
     call_suspend: [],
   });
   const r = await rosterFull(db);
-  assert.deepEqual(r.ids.sort(), ['U1', 'U2'],
+  assert.deepEqual(r.ids.sort(), ['U1', 'U2', 'U4'],
     'the rename does not split one desk into two rosters');
 });
 
@@ -82,36 +86,51 @@ test('nothing on a screen still says the old names', () => {
   const portal = read('portal.html');
   const upload = read('upload.html');
 
-  /* THE PAGE NAMES THEM ONCE. They were literals in a dozen sentences, which is exactly how
-     the NEXT rename would get half done and stay that way. */
-  assert.match(portal, /var DEPT=\{SC:'Sales Coordinator',PC:'Portfolio and Compliance Officer'\}/);
+  /* THE PAGE NAMES THEM ONCE, in two registers: the everyday name almost every screen wants,
+     and the full title for the few places naming a JOB rather than a desk. */
+  assert.match(portal, /SC:'Sales Co\.', PCO:'PCO'/);
+  assert.match(portal, /SC_FULL:'Sales Coordinator', PCO_FULL:'Portfolio and Compliance Officer'/);
 
   /* WHAT A PERSON READS, WHICH IS NOT WHAT A DEVELOPER READS.
      Block comments are stripped before this check, deliberately and in both directions:
 
-       they must NOT be rewritten -- most of the ones naming the old desk are VERBATIM
+       they must NOT be rewritten -- most of the ones naming the old desks are VERBATIM
        QUOTES of the owner's own requests ("we now want storekeeper to always lock and
-       general duty will be unlocking at customer screening-pos"). Editing a quotation to
-       say something the person never said is a worse lie than a stale name, and it destroys
-       the one record of why the code is shaped the way it is.
+       general duty will be unlocking at customer screening-pos"). Editing a quotation to say
+       something the person never said is a worse lie than a stale name, and it destroys the
+       one record of why the code is shaped the way it is.
 
        and they must not be CHECKED -- a fence that failed on its own explanation of the
        rename would be a fence nobody could leave in place.
 
-     The stored key GENERAL_DUTY survives the strip on purpose: it appears in the settings
-     help text, which tells the owner what to type into ISSUES_EMAIL, and it is a key. */
-  const screen = s => s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/GENERAL_DUTY/g, ' ');
+     THE BAN IS ON PHRASES, NOT ON THE WORD. Three things legitimately still read "credit"
+     and none of them is the department:
+
+       drawCreditRecovery, d.credits, r.credit   identifiers and a server field
+       CREDIT= and CREDIT:                       the STORED key, in the ISSUES_EMAIL help
+                                                 the owner types and in the label map
+       "Sellers the shop CREDITS"                the verb -- to credit somebody with a sale
+
+     A blanket /credit/ would have to be defeated for all three, and defeating it is how a
+     fence stops catching anything. */
+  const BANNED = [/credit team/i, /\(credit\)/i, /Credit\s*[—-]/, /kila credit/i,
+    /na credits\b/i, /general[ -]duty/i, /credit user/i];
+  const screen = s => s.replace(/\/\*[\s\S]*?\*\//g, ' ');
   for (const [file, html] of [['portal.html', portal], ['upload.html', upload]]) {
-    const hits = (screen(html).match(/general[ -]duty/gi) || []);
-    assert.deepEqual(hits, [], file + ' still says "general duty" on a screen: ' + hits.join(', '));
+    for (const re of BANNED) {
+      const hit = screen(html).match(re);
+      assert.equal(hit, null, file + ' still says "' + (hit && hit[0]) + '" on a screen');
+    }
   }
 
   // The desks that name each other name the new one.
   assert.match(portal, /var pivots=\[\['general',DEPT\.SC\]/, 'the sales pivot');
-  assert.match(portal, /GENERAL_DUTY:DEPT\.SC/, 'the issue department label');
-  assert.match(portal, /CREDIT:'Mikopo \/ '\+DEPT\.PC/);
+  assert.match(portal, /GENERAL_DUTY:DEPT\.SC_FULL/, 'the department picker names the job');
+  assert.match(portal, /CREDIT:DEPT\.PCO_FULL/);
   assert.match(portal, /Kufungua kunafanywa na <b>'\+DEPT\.SC/, 'the locking bench');
-  assert.match(portal, /the sales coordinator at the POS/, 'the nav catalogue');
+  assert.match(portal, /devunlock:'Unlocking \('\+DEPT\.SC\+' at the POS\)'/, 'the nav catalogue');
+  assert.match(portal, /<h2>'\+DEPT\.PCO\+' — 7\+ recovery kwa wiki/, 'the recovery card');
+  assert.match(portal, /<th>'\+DEPT\.PCO\+'<\/th>/, 'the customers column');
 });
 
 test('the new names are what a new access code is offered', () => {

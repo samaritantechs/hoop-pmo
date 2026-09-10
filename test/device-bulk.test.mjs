@@ -241,7 +241,7 @@ test('one form, two orders, and the warning is not written once for both', () =>
      copy of the name would keep passing through the next rename while the screen said
      something else. */
   const dept = HTML.slice(HTML.indexOf('var DEPT={'), HTML.indexOf(';', HTML.indexOf('var DEPT={')) + 1);
-  assert.ok(dept.length > 10 && dept.length < 200, 'DEPT is one line at the top of the script');
+  assert.ok(dept.length > 10 && dept.length < 900, 'DEPT is one block at the top of the script');
   const t = new Function(dept + '\n' + HTML.slice(HTML.indexOf('var DEVBULK={'),
     HTML.indexOf('\n};', HTML.indexOf('var DEVBULK={')) + 3) + '\nreturn DEVBULK;')();
   assert.deepEqual(Object.keys(t).sort(), ['locked', 'released']);
@@ -257,7 +257,7 @@ test('one form, two orders, and the warning is not written once for both', () =>
   assert.ok(!/njia moja|one-way|irreversible/i.test(t.locked.warn),
     'locking is not a one-way door and must not borrow the sentence of the one that is');
   assert.match(t.locked.warn, /gizani|dark/, 'it says what a lock actually costs the holder');
-  assert.match(t.locked.warn, /Sales Coordinator/i, 'and who can undo it, since this desk cannot');
+  assert.match(t.locked.warn, /Sales Co\./, 'and who can undo it, since this desk cannot');
   assert.ok(!/general duty/i.test(t.locked.warn), 'under the name that desk now has');
   // The reason devAct_ will demand is announced, not sprung after the paste is typed.
   assert.match(t.locked.warn, /sababu|reason/);
