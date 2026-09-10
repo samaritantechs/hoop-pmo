@@ -6765,7 +6765,29 @@ function nsThree(title, sub, p){
    nothing this week is not on these rows at all, so the card says how many agents it is
    ranking rather than implying it ranked the whole company. With a single seller the two rows
    would be one person printed twice as if that were two facts, so it says that instead. */
+/* THE ONE CARD THAT SLIDES, AND THE ONE CARD THAT EXPORTS.
+   =========================================================================================
+     "this widget should have excel button within, so that we can export the current weeks
+      sales data just from there, with back and forward buttons for previous and forward week
+      preview/excel download on the single widget, not changing the other widgets nor the
+      page's data"
+
+   NSWK IS THE CARD'S OWN STATE, and it is deliberately not part of NSQ. The pane's filter and
+   search decide what the TABLE shows; this decides which week one card is describing. Putting
+   them together is how a week arrow ends up reloading a table nobody asked it to touch.
+
+   THE ARROWS REDRAW THIS CARD ALONE. nsBoardGo_ asks the server for the same pane with a week
+   offset on it and paints the answer into #nsBoard -- the table, the tiles and the two
+   progress cards keep the bytes they already have. That is the ask, said plainly: the other
+   widgets do not move.
+
+   FORWARD IS DISABLED AT THIS WEEK rather than absent, so the pair of arrows stays a pair and
+   the one that has stopped working says why in its tooltip. */
+var NSWK=0;
 function nsTopBottom(ns){
+  var b=ns.board||{off:0,from:(ns.week||{}).from,to:(ns.week||{}).to,atWeek:true,totals:ns.week,sales:[]};
+  var when=b.atWeek?'wiki hii / this week'
+    :(b.off===-1?'wiki iliyopita / last week':money(-b.off)+' wiki nyuma / weeks back');
   var row=function(tag, cls, a){
     if(!a) return '';
     return '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px;align-items:baseline;padding:4px 0">'
@@ -6773,9 +6795,30 @@ function nsTopBottom(ns){
       +'<div style="font-size:14px">'+money(a.sales)+' <span class="mut" style="font-size:10px">mauzo</span></div>'
       +'<div style="font-size:14px">'+money(a.amount)+'</div></div>';
   };
-  return '<div class="card" style="padding:12px">'
+  var t=b.totals||{};
+  return '<div class="card" style="padding:12px" id="nsBoard">'
+    +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
     +'<div style="font-weight:600;font-size:12.5px">Juu na chini / Top and bottom</div>'
-    +'<div class="mut" style="font-size:10px;margin-bottom:6px">wiki hii · '+esc(ns.week.from)+' → '+esc(ns.week.to)+'</div>'
+    +'<span style="flex:1"></span>'
+    +'<button class="btn sm ghost" id="nsPrev" title="Wiki iliyopita / previous week" '
+      +'style="padding:2px 8px;font-size:12px">‹</button>'
+    +'<button class="btn sm ghost" id="nsNext" title="'
+      +(b.atWeek?'Hii ndiyo wiki hii / this is the current week':'Wiki inayofuata / next week')+'" '
+      +(b.atWeek?'disabled ':'')+'style="padding:2px 8px;font-size:12px'+(b.atWeek?';opacity:.45':'')+'">›</button>'
+    /* THE EXPORT TAKES THE WEEK, NOT THE SCREEN. Every other table in the system exports what
+       you can see, which is right for a table; this card has no table, and what it is about is
+       a week. So the file is the week's sales as the server counted them -- the same rows
+       behind the two names above it. */
+    +'<button class="btn sm ghost" id="nsXl" title="Pakua mauzo ya wiki hii / download this week\'s sales" '
+      +'style="padding:2px 8px;font-size:11.5px">⤓ Excel</button>'
+    +'</div>'
+    +'<div class="mut" style="font-size:10px;margin-bottom:6px">'+esc(when)+' · '
+      +esc(b.from||'')+' → '+esc(b.to||'')+'</div>'
+    /* THE WEEK'S OWN THREE FIGURES, so an arrow moves an answer and not just two names. They
+       are the same three the card above shows for this week -- read for whichever week is on
+       the board. */
+    +'<div class="mut" style="font-size:10.5px;margin-bottom:4px">'
+      +money(t.sales||0)+' simu · '+money(t.customers||0)+' wateja · <b>'+money(t.amount||0)+'</b></div>'
     +(ns.top
       ? row('JUU','ok',ns.top)+row('CHINI','bad',ns.bottom)
         +(ns.bottom?'':'<div class="mut" style="font-size:10.5px;padding:4px 0">Ajenti mmoja tu ameuza wiki hii. '
@@ -6792,6 +6835,63 @@ function nsTopBottom(ns){
         +(ns.idle>ns.idleNames.length?' … +'+money(ns.idle-ns.idleNames.length):''):'')
       +' / <b>'+money(ns.idle)+'</b> sold nothing at all this week.</div>':'')
     +'</div>';
+}
+/* THE CARD'S OWN WIRING, re-applied every time it redraws itself. */
+function nsBoardWire_(){
+  var p=$('#nsPrev'); if(p) p.onclick=function(){ nsBoardGo_(NSWK-1); };
+  var n=$('#nsNext'); if(n) n.onclick=function(){ nsBoardGo_(NSWK+1); };
+  var x=$('#nsXl'); if(x) x.onclick=function(){ nsBoardXl_(); };
+}
+/* ONE CARD, ONE REQUEST, ONE REPAINT.
+   The pane is asked again with a week offset on it -- the server is the only thing that knows
+   the whole week, because the page holds at most 2000 rows and only the ones that passed its
+   filter -- and ONLY #nsBoard is replaced with the answer. Nothing else on screen is touched,
+   which is the difference between this and pressing a tile.
+
+   THE ANSWER IS KEPT for the export, so pressing Excel does not ask a third time and cannot
+   hand back a different week from the one being read. */
+var NSBOARD=null;
+function nsBoardGo_(off){
+  var card=$('#nsBoard'); if(!card) return;
+  var was=NSWK;
+  NSWK=Math.max(-104, Math.min(0, off));
+  if(NSWK===was && NSBOARD) return;
+  card.style.opacity='.5';
+  srv('newStock',{status:NSQ.status,q:NSQ.q,wk:NSWK}).then(function(d){
+    var ns=d.newSales||{};
+    NSBOARD=ns;
+    var host=$('#nsBoard'); if(!host) return;
+    /* outerHTML rather than innerHTML: nsTopBottom returns the whole card, id and all, so
+       writing it inside itself would nest a second card in the first. */
+    host.outerHTML=nsTopBottom(ns);
+    nsBoardWire_();
+  }).catch(function(e){
+    NSWK=was;
+    var host=$('#nsBoard'); if(host) host.style.opacity='';
+    toast(safeErr(e), true);
+  });
+}
+/* THE WEEK'S SALES AS A FILE. Built from the rows the server counted rather than from the
+   screen, and given the week in its name so two downloads cannot be told apart only by the
+   time they were taken. */
+function nsBoardXl_(){
+  var ns=NSBOARD, b=ns&&ns.board;
+  if(!b||!(b.sales||[]).length){ toast('Hakuna mauzo wiki hiyo / no sales that week', true); return; }
+  var head=['TAREHE','IMEI','RSM','SIMU YA RSM','AJENTI','SIMU YA AJENTI','MTEJA','SIMU YA MTEJA',
+    'MDHAMINI','SIMU YA MDHAMINI','BEI','TAWI','MODEL','HALI'];
+  var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
+  var lines=[head.map(q).join(',')];
+  (b.sales||[]).forEach(function(r){
+    lines.push([r.saleDate, r.imei, r.rsm, r.rsmPhone, r.agent, r.agentPhone,
+      r.customer, r.customerPhone, r.guarantor, r.guarantorPhone,
+      (r.price==null?'':r.price), r.branch, r.model,
+      /* The four words the register uses, and the fifth for a handset we never locked -- the
+         one thing a sales sheet must not quietly present as ours. */
+      (r.neverLocked?'HAIJAFUNGWA':String(r.status||''))].map(q).join(','));
+  });
+  // The BOM is what makes Excel open Swahili text clean, the same as every other export here.
+  saveFile_('HOOPLOAN-mauzo-'+String(b.from||'')+'-'+String(b.to||'')+'.csv',
+    'text/csv;charset=utf-8', '﻿'+lines.join('\r\n'));
 }
 /* ============================== OLD STOCK ==================================================
      "For an OLD STOCK new nav pane for all those stock that imei no does not exist in our new
@@ -6888,7 +6988,10 @@ function drawOldStock(m){
 
 function drawNewStock(m){
   m.innerHTML='<div class="card"><h2>NEW STOCK</h2><div class="sk"></div></div>';
-  srv('newStock',NSQ).then(function(d){
+  /* THE BOARD'S WEEK RIDES ALONG, so a tile press or a search redraws the table without
+     yanking that one card back to this week -- it keeps its own state the way the filter
+     keeps the table's. */
+  srv('newStock',{status:NSQ.status,q:NSQ.q,wk:NSWK}).then(function(d){
     var c=d.counts||{}, rows=d.rows||[];
     var ns=d.newSales||{week:{},month:{},top:null,bottom:null,ranked:0};
     var pick=function(k){ return {on:NSQ.status===k,cta:'chuja ›',
@@ -6986,6 +7089,10 @@ function drawNewStock(m){
       +'</div>'
       +tiles+head+bar+table+'</div>';
     wireTiles(m);
+    /* The server clamps the offset, so the card follows ITS answer rather than what was asked
+       for: press forward at this week and the number does not drift past a week that exists. */
+    NSBOARD=ns; NSWK=(ns.board&&ns.board.off)||0;
+    nsBoardWire_();
     var go=function(){ NSQ.q=$('#nsQ').value; drawNewStock(m); };
     $('#nsGo').onclick=go;
     $('#nsQ').onkeydown=function(e){ if(e.key==='Enter') go(); };

@@ -1668,11 +1668,32 @@ function newStockAgents(rows, from, to) {
   return [...by.values()].sort((x, y) => (y.sales - x.sales) || (y.amount - x.amount)
     || String(x.name).localeCompare(String(y.name)));
 }
-function newStockSales(rows, nowMs, roster) {
+function newStockSales(rows, nowMs, roster, weekOff) {
   const today = todayKey(nowMs);
   const week = weekMondayKey(nowMs);
   const month = today.slice(0, 7) + '-01';
-  const ranked = newStockAgents(rows, week, today);
+  /* THE BOARD'S OWN WEEK, WHICH SLIDES WHILE THE REST OF THE PANE STANDS STILL.
+     -------------------------------------------------------------------------------------
+       "back and forward buttons for previous and forward week preview/excel download on the
+        single widget, not changing the other widgets nor the page's data"
+
+     `week` and `month` above are "this week" and "this month" BY DEFINITION -- the two cards
+     that carry them are progress figures, and a progress figure that has quietly moved to a
+     window nobody chose is worse than no figure at all. So the offset reaches exactly one
+     card: its own from and to, its own ranking, its own idle list, and the rows behind them.
+
+     FORWARD STOPS AT THIS WEEK. Nothing has been sold next week, and a card that could be
+     scrolled into an empty future would read as a collapse in sales rather than as a date
+     nobody has reached yet. Back is bounded too, at two years, so a stuck key cannot ask the
+     server for the week of 1970. */
+  const asked = Math.round(num(weekOff));
+  const off = Math.max(-104, Math.min(0, isNaN(asked) ? 0 : asked));
+  const from = addDaysKey(week, off * 7);
+  /* THIS week runs to TODAY -- it is progress so far, not a promise about Sunday -- and every
+     week behind it is whole. Using Monday+6 for the current week would date the card's own
+     heading into the future. */
+  const to = off === 0 ? today : addDaysKey(from, 6);
+  const ranked = newStockAgents(rows, from, to);
   /* AND THE ONES WHO SOLD NOTHING, which is who "bottom" is really about.
      -------------------------------------------------------------------------------------
      These rows are sales, so an agent with none of them is not in them -- and a card ranking
@@ -1688,17 +1709,51 @@ function newStockSales(rows, nowMs, roster) {
     .filter(a => a && a.name && a.active !== false && tierOf(a.role) === TARGET_TIERS.length - 1)
     .filter(a => !sold.has(K(a.name)));
   return {
+    /* THESE TWO NEVER MOVE. They are "this week" and "this month", whatever the board beside
+       them has been slid to. */
     week: newStockPeriod(rows, week, today),
     month: newStockPeriod(rows, month, today),
-    /* Top and bottom of the SAME week the tiles above describe. With one seller they are the
-       same person, and the screen says so rather than printing one row twice as if it were
-       two facts. */
+    /* Top and bottom of the BOARD'S week. With one seller they are the same person, and the
+       screen says so rather than printing one row twice as if it were two facts. */
     top: ranked[0] || null,
     bottom: ranked.length > 1 ? ranked[ranked.length - 1] : null,
     ranked: ranked.length,
     idle: idle.length,
     // A few names, so "12 sold nothing" is a list somebody can act on rather than a number.
     idleNames: idle.slice(0, 8).map(a => a.name),
+    /* THE BOARD'S OWN WINDOW, and the sales inside it.
+       -----------------------------------------------------------------------------------
+       `totals` is the same three figures the "this week" card shows, worked out for whichever
+       week is on the board -- so sliding back a week answers the question that card answers,
+       for that week, rather than leaving the arrows with nothing but two names to change.
+
+       `sales` is the export. It is built here rather than on the page because the page holds
+       at most 2000 rows and only the ones that passed its filter and its search: exporting
+       from the screen would hand somebody a file that silently omits whatever the pane
+       happened to be narrowed to, under a heading naming the whole week. */
+    board: {
+      off, from, to,
+      atWeek: off === 0,
+      totals: newStockPeriod(rows, from, to),
+      sales: rows
+        .filter(r => r.saleDate && r.saleDate >= from && r.saleDate <= to)
+        .sort((x, y) => String(x.saleDate).localeCompare(String(y.saleDate))
+          || String(x.agent || '').localeCompare(String(y.agent || ''))
+          || String(x.imei).localeCompare(String(y.imei)))
+        .map(r => ({
+          saleDate: r.saleDate, imei: r.imei,
+          rsm: r.rsm || '', rsmPhone: r.rsmPhone || '',
+          agent: r.agent || '', agentPhone: r.agentPhone || '',
+          customer: r.customer || '', customerPhone: r.customerPhone || '',
+          guarantor: r.guarantor || '', guarantorPhone: r.guarantorPhone || '',
+          price: r.price == null ? null : num(r.price),
+          branch: r.branch || '', model: r.model || '',
+          /* Whether we hold the lock on it. A week's sales sheet that does not say which
+             handsets we never controlled is the sheet that makes the ground visits look
+             unnecessary. */
+          status: r.status, neverLocked: r.neverLocked === true,
+        })),
+    },
   };
 }
 
@@ -6269,7 +6324,9 @@ const FNS = {
 
     const count = st => rows.filter(r => r.status === st).length;
     return { ok: true, notReady, noDevices, hasLoc,
-      newSales: newStockSales(rows, now, agents),
+      /* `wk` slides the top-and-bottom board only -- never the table, the tiles or the two
+         progress cards, which is why it is read here and nowhere else in this function. */
+      newSales: newStockSales(rows, now, agents, a.wk),
       notReadyNote: notReady ? NEWSTOCK_NOT_READY : '',
       asOf: now, stamped,
       rows: shown.slice(0, 2000), shown: shown.length,
