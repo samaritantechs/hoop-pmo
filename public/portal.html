@@ -7088,11 +7088,44 @@ function osPaint_(m, d){
         +(d.shown>rows.length?'<div class="note" style="margin-top:8px">Jedwali linaonyesha '
           +money(rows.length)+' kati ya '+money(d.shown)+'. / Showing '+money(rows.length)+' of '+money(d.shown)+'.</div>':'')
       : '<div class="mut" style="margin-top:12px">Hakuna simu kwenye kundi hili. / Nothing here.</div>';
+    /* WHO NOBODY CAN PLACE, and therefore who to ring. Sorted by RSM and then by size,
+       because it is worked down by asking each RSM where their people are -- so their names
+       have to sit together, which is the one thing the round's own ordering does not do.
+       The numbers open the handsets behind them, exactly as they do on the round. */
+    var noplace=(d.byNoPlace||[]).length
+      ? '<div class="note" style="margin:10px 0;font-size:11.5px">'
+        +'Hawa hawana tawi kwenye rejista wala mauzo kwenye deki, kwa hiyo hakuna pa kupata '
+        +'mahali. <b>Weka tawi lao kwenye Wafanyakazi</b> — simu zao zote zitachukua mahali '
+        +'hapo zitakapofunguliwa tena. / Neither a branch on the staff register nor sales in '
+        +'the deck, so there is nothing to work a location out from. <b>Set their branch on '
+        +'the Staff pane</b> and every handset they hold takes it on the next open.</div>'
+        +'<div class="scroll"><table><thead><tr>'
+        +'<th>RSM</th><th>Mwenye nazo / holder</th><th class="r">Simu / pieces</th>'
+        +'<th class="r">DAYS OFF</th><th class="r">90+</th></tr></thead><tbody>'
+        +d.byNoPlace.map(function(g){
+          return '<tr><td style="font-size:11.5px">'+esc(g.rsm||'—')
+            +(g.rsmPhone?'<div class="mut" style="font-size:10px">'+esc(g.rsmPhone)+'</div>':'')+'</td>'
+            +'<td><b>'+esc(g.agent)+'</b>'
+            +(g.phone?'<div class="mut" style="font-size:10px"><a href="tel:'+esc(g.phone)+'">'+esc(g.phone)+'</a></div>':'')+'</td>'
+            +'<td class="r">'+osNum_(g.pieces,g.key,'','simu zote / all pieces')+'</td>'
+            +'<td class="r"'+(g.oldest>=180?' style="color:var(--bad);font-weight:700"':'')+'>'
+              +osNum_(g.oldest,g.key,g.oldest,'kongwe kuliko zote / the oldest piece')+'</td>'
+            +'<td class="r">'+(g.over90?osNum_(g.over90,g.key,90,'siku 90+ / 90 days and over')
+              :'<span class="mut">—</span>')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+      /* THE EMPTY STATE IS A RESULT, not a blank. This list finishing is the whole point of
+         it existing, so it says so rather than looking broken. */
+      : '<div class="mut" style="margin-top:12px">Kila mwenye simu anajulikana alipo. '
+        +'/ Every holder has a location. Nothing to fill in.</div>';
     /* THE COUNT RIDES ON THE CHIP, so the choice can be made without opening either list --
        and it is the count of the whole outstanding round, never of the filtered page, because
        that is what the chip is naming. */
     var SECS=[['round','Ziara / The round',(d.counts||{}).holders||0],
-              ['handsets','Simu / The handsets',(d.counts||{}).open||0]];
+              ['handsets','Simu / The handsets',(d.counts||{}).open||0],
+              /* THE THIRD LIST IS A WORKLIST OF PEOPLE, not of handsets: the branch is set on
+                 a person and one edit answers every phone they carry, so the count is holders
+                 and the chip disappears when the map is finished. */
+              ['noplace','Hazijulikani zilipo / No location',(d.counts||{}).noPlaceHolders||0]];
     var chips='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
       +SECS.map(function(x){
         return '<button class="btn sm'+(OSSEC===x[0]?'':' ghost')+'" data-ossec="'+x[0]+'">'
@@ -7110,7 +7143,7 @@ function osPaint_(m, d){
          write the database was rejecting every single time -- which reads exactly like nothing
          NEEDED stamping, and that is why it went unnoticed. */
       +(d.placeNote?'<div class="note bad">'+esc(d.placeNote)+'</div>':'')
-      +tiles+bar+chips+(OSSEC==='round'?board:table)+'</div>';
+      +tiles+bar+chips+(OSSEC==='round'?board:OSSEC==='noplace'?noplace:table)+'</div>';
     wireTiles(m);
     var go=function(){ OSQ={q:$('#osQ').value,agent:$('#osAgent').value,rsm:$('#osRsm').value,
       location:$('#osLoc').value}; drawOldStock(m); };

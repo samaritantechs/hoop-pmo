@@ -6197,6 +6197,14 @@ const FNS = {
       if (r.age != null && r.age > g.oldest) g.oldest = r.age;
       if (r.age != null && r.age >= 90) g.over90++;
     }
+    /* THE HOLDERS NOBODY CAN PLACE, which is a worklist of PEOPLE and not of handsets: the
+       branch is set on a person, and one edit answers every phone they carry. Sorted by RSM
+       and then by size, because it is worked down by ringing each RSM and asking where their
+       people are -- so their names need to sit together. */
+    const noPlace = [...byAgent.values()].filter(g => !g.location)
+      .sort((x, y) => String(x.rsm || '').localeCompare(String(y.rsm || ''))
+        || (y.pieces - x.pieces)
+        || String(x.agent || '').localeCompare(String(y.agent || '')));
     const band = (lo, hi) => open.filter(r => r.age != null && r.age >= lo && (hi == null || r.age < hi)).length;
     return { ok: true, notReady: idx.notReady,
       notReadyNote: idx.notReady ? OLDSTOCK_NOT_READY : '',
@@ -6207,6 +6215,7 @@ const FNS = {
       rsms: [...new Set(open.map(r => r.rsm).filter(Boolean))].sort(),
       locations: [...new Set(open.map(r => r.location).filter(Boolean))].sort(),
       byAgent: [...byAgent.values()].sort((x, y) => y.oldest - x.oldest || y.pieces - x.pieces),
+      byNoPlace: noPlace,
       counts: {
         open: open.length,
         /* HOW THE VISITS ARE GOING. A list that only shrinks says nothing about WHY: these two
@@ -6222,6 +6231,9 @@ const FNS = {
            one, and that number should be visible rather than discovered by adding the bars up
            and finding they fall short. */
         noPlace: open.filter(r => !r.location).length,
+        /* HOW MANY PEOPLE, not how many phones. The fix is one edit per HOLDER, so that is
+           the number that says how much work is left. */
+        noPlaceHolders: noPlace.length,
         places: new Set(open.map(r => r.location).filter(Boolean)).size,
       } };
   },
