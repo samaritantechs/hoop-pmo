@@ -90,8 +90,12 @@ here — and is not stamped either.
 **Tiles:** all · locked · unlocked · achia · not reporting (with *silent 7+* underneath). Clicking
 one filters the table; the tiles always count the **whole** fleet, never the filtered slice.
 
-**Columns**, in the order they were dictated: IMEI · RSM · RSM no · Agent · Agent no · Customer ·
-Customer no · Price · Guarantor · Guarantor no · Status · By · Last read.
+**Columns**, in the order they were dictated, with the disbursement date second: IMEI ·
+**Tarehe / disb date** · RSM · RSM no · Agent · Agent no · Customer · Customer no · Price ·
+Guarantor · Guarantor no · Status · By · Last read.
+
+The date cell prints the day **as stored**. An ISO day sorts as text exactly the way it sorts as a
+date; prettifying it to "13 Jul" would put August above July on every click.
 
 Every table on this page sorts itself on a header click — which is the entire ask, *"so that we
 could always sort locked and sort by sync"*. The **Last read** cell leads with the number of days
@@ -131,6 +135,31 @@ rows *gained new detail on this read*, and how many still have blanks. On the mo
 upload, the first number is the point of opening the pane; the second should be falling, and a
 gap count that never falls means a feed is not arriving — invisible on a table of blanks, obvious
 as one number.
+
+## NEW SALES — the week, the month, and who is carrying them
+
+Three cards above the register:
+
+| card | what it shows |
+|---|---|
+| **NEW SALES · this week** | agents · customers · price, with the period underneath |
+| **NEW SALES · this month** | the same three, month to date |
+| **Juu na chini / Top and bottom** | 3×2 — name, sales, price, for the best and worst of the week |
+
+**Counted from this pane's own stamped rows**, not from a fresh read of the deck. That is the point
+rather than a shortcut: these are sales of handsets *we locked*, so the widget and the table under it
+can never disagree. A card reading `watu_loans` directly would count phones this audit has never
+heard of.
+
+- **A customer is a phone number where there is one.** Two receipts spelling a name differently are
+  one buyer; two buyers can share a name.
+- **The bottom agent is the lowest who sold**, never the highest who did not — somebody who sold
+  nothing is not on these rows at all, so the card says *how many agents it ranked* rather than
+  implying it ranked the company.
+- **One seller is not two rows.** With a single seller the card says so instead of printing the same
+  person twice as if that were two facts.
+- **A sale with no agent named still counts in the totals** — a total that does not match the board
+  is a total nobody trusts — but it cannot become the week's top agent.
 
 ## What it costs
 

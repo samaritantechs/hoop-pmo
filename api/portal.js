@@ -1489,6 +1489,68 @@ function newStockFill(imei, was, ctx) {
   return { row, src, hits };
 }
 
+/* NEW SALES -- the week and the month, off the audit's own stamped rows.
+   =========================================================================================
+     "Add NEW SALES widgets at top of weekly and monthly progress showing 3: 1-no of agents,
+      2-no of customers, 3-price. And another card showing top and bottom agent at once as
+      weekly progress 3x2: 1-agent name, 2-no of sales, 3-price."
+
+   COUNTED FROM THIS PANE'S OWN ROWS, not from a fresh read of the deck, and that is the point
+   rather than a shortcut: these are sales OF HANDSETS WE LOCKED, stamped and kept. A widget
+   reading watu_loans directly would count phones this audit has never heard of and quietly
+   disagree with the table underneath it.
+
+   A CUSTOMER IS A PHONE NUMBER WHERE THERE IS ONE. Two receipts spelling a name differently
+   are one buyer; two buyers can share a name. Falling back to the name is right for a row the
+   feeds never gave a number, and counting it as its own customer is the honest reading of
+   "we do not know who this was".
+
+   THE BOTTOM AGENT IS THE LOWEST WHO SOLD, never the highest who did not. Nobody who sold
+   nothing is on these rows at all, so the card cannot and does not claim to rank them -- it
+   says how many agents it is ranking, and the screen says the same. */
+function newStockPeriod(rows, from, to) {
+  const inIt = rows.filter(r => r.saleDate && r.saleDate >= from && r.saleDate <= to);
+  const agents = new Set(), customers = new Set();
+  let amount = 0;
+  for (const r of inIt) {
+    if (r.agent) agents.add(K(r.agent));
+    const who = r.customerPhone || r.customer;
+    if (who) customers.add(K(who));
+    amount += num(r.price);
+  }
+  return { from, to, sales: inIt.length, agents: agents.size, customers: customers.size, amount };
+}
+/** Per-agent totals for one window, best first. Used for the top-and-bottom card. */
+function newStockAgents(rows, from, to) {
+  const by = new Map();
+  for (const r of rows) {
+    if (!r.saleDate || r.saleDate < from || r.saleDate > to) continue;
+    if (!r.agent) continue;                 // an unattributed sale ranks nobody
+    const k = K(r.agent);
+    const g = by.get(k) || { name: r.agent, sales: 0, amount: 0 };
+    g.sales++; g.amount += num(r.price);
+    by.set(k, g);
+  }
+  return [...by.values()].sort((x, y) => (y.sales - x.sales) || (y.amount - x.amount)
+    || String(x.name).localeCompare(String(y.name)));
+}
+function newStockSales(rows, nowMs) {
+  const today = todayKey(nowMs);
+  const week = weekMondayKey(nowMs);
+  const month = today.slice(0, 7) + '-01';
+  const ranked = newStockAgents(rows, week, today);
+  return {
+    week: newStockPeriod(rows, week, today),
+    month: newStockPeriod(rows, month, today),
+    /* Top and bottom of the SAME week the tiles above describe. With one seller they are the
+       same person, and the screen says so rather than printing one row twice as if it were
+       two facts. */
+    top: ranked[0] || null,
+    bottom: ranked.length > 1 ? ranked[ranked.length - 1] : null,
+    ranked: ranked.length,
+  };
+}
+
 /** The row as the table takes it. first_at is carried from the existing stamp rather than
     re-derived: it says when this handset first appeared in the audit, and a row that gains a
     column today did not appear today. Both timestamps are written explicitly because a column
@@ -5904,6 +5966,7 @@ const FNS = {
 
     const count = st => rows.filter(r => r.status === st).length;
     return { ok: true, notReady, noDevices, hasLoc,
+      newSales: newStockSales(rows, now),
       notReadyNote: notReady ? NEWSTOCK_NOT_READY : '',
       asOf: now, stamped,
       rows: shown.slice(0, 2000), shown: shown.length,

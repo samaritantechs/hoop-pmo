@@ -489,3 +489,157 @@ test('a missing location column never reads as a missing register', async () => 
   assert.ok(!dl.notReady, 'the whole Devices pane must not go dark over one absent column');
   assert.equal(dl.rows.length, 1);
 });
+
+/* =========================================================================================
+   NEW SALES -- the week, the month, and who is carrying them.
+
+     "Add NEW SALES widgets at top of weekly and monthly progress showing 3: 1-no of agents,
+      2-no of customers, 3-price. And another card showing top and bottom agent at once as
+      weekly progress 3x2: 1-agent name, 2-no of sales, 3-price."
+
+   COUNTED FROM THIS PANE'S OWN STAMPED ROWS, so the widget and the table under it can never
+   disagree. A card reading the deck directly would count phones this audit has never heard of.
+   ========================================================================================= */
+import { todayKey, addDaysKey, weekMondayKey } from '../api/_lib/time.js';
+const TODAY = todayKey();
+const WEEK = weekMondayKey();
+const MONTH1 = TODAY.slice(0, 7) + '-01';
+/** A locked handset whose sale is already stamped, so the widget has something to count. */
+const sold = (imei, agent, day, price, cust) => ({
+  imei, rsm: null, rsm_phone: null, agent, agent_phone: null,
+  customer: cust || ('Mteja ' + imei), customer_phone: cust ? null : '07120000' + String(imei).slice(-2),
+  price, guarantor: null, guarantor_phone: null, branch: null, model: 'A07',
+  sale_date: day, src: {}, first_at: '2026-09-01T00:00:00Z', stamped_at: '2026-09-01T00:00:00Z',
+});
+const salesDb = audit => fakeDb({
+  stock_audit: audit,
+  devices: audit.map(a => dev({ imei: a.imei })),
+  watu_loans: [], hoop_sales: [], hoop_agents: [], hoop_aged_stock: [],
+});
+
+test('the week and the month each answer the three numbers asked for', async () => {
+  const db = salesDb([
+    sold('A1', 'JUMA G', TODAY, 450000),
+    sold('A2', 'JUMA G', WEEK, 500000),
+    sold('A3', 'ASHA M', TODAY, 300000),
+    // Earlier in the month but before this week: counts in the month, not in the week.
+    sold('A4', 'ELIA C', MONTH1, 200000),
+    // Last year: neither.
+    sold('A5', 'ELIA C', '2025-01-05', 999000),
+  ]);
+  const ns = (await _FNS.newStock(db, STORE, {})).newSales;
+  assert.equal(ns.week.agents, 2, 'JUMA and ASHA sold this week');
+  assert.equal(ns.week.customers, 3);
+  assert.equal(ns.week.amount, 1250000);
+  assert.equal(ns.week.sales, 3);
+  assert.equal(ns.week.from, WEEK);
+  assert.equal(ns.week.to, TODAY, 'and the period is on the card, so the figure can be checked');
+
+  assert.ok(ns.month.agents >= ns.week.agents);
+  assert.equal(ns.month.from, MONTH1);
+  // Last year's sale is in neither window.
+  assert.ok(ns.month.amount < 999000 + 1250000);
+});
+
+test('a customer is a phone number where there is one', async () => {
+  /* Two receipts spelling a name differently are one buyer; two buyers can share a name. The
+     number is the identity wherever a feed gave one. */
+  const one = { ...sold('B1', 'JUMA G', TODAY, 100000), customer: 'Alafati Selemani', customer_phone: '0716548153' };
+  const same = { ...sold('B2', 'JUMA G', TODAY, 100000), customer: 'ALAFATI K SELEMANI', customer_phone: '0716548153' };
+  const db = salesDb([one, same]);
+  const ns = (await _FNS.newStock(db, STORE, {})).newSales;
+  assert.equal(ns.week.customers, 1, 'one number, one buyer, however the name was typed');
+  assert.equal(ns.week.sales, 2, 'but two handsets');
+});
+
+test('top and bottom are the highest and lowest who SOLD, and it says how many it ranked', async () => {
+  const db = salesDb([
+    sold('C1', 'JUMA G', TODAY, 500000), sold('C2', 'JUMA G', TODAY, 500000),
+    sold('C3', 'JUMA G', TODAY, 500000),
+    sold('C4', 'ASHA M', TODAY, 400000), sold('C5', 'ASHA M', TODAY, 400000),
+    sold('C6', 'ELIA C', TODAY, 100000),
+  ]);
+  const ns = (await _FNS.newStock(db, STORE, {})).newSales;
+  assert.equal(ns.top.name, 'JUMA G');
+  assert.equal(ns.top.sales, 3);
+  assert.equal(ns.top.amount, 1500000);
+  assert.equal(ns.bottom.name, 'ELIA C');
+  assert.equal(ns.bottom.sales, 1);
+  assert.equal(ns.bottom.amount, 100000);
+  /* THE BOTTOM IS THE LOWEST WHO SOLD, never the highest who did not -- somebody who sold
+     nothing is not on these rows at all, so the card says the size of what it ranked. */
+  assert.equal(ns.ranked, 3);
+});
+
+test('one seller is not two rows, and no sales is not a top of nobody', async () => {
+  const one = salesDb([sold('D1', 'JUMA G', TODAY, 500000)]);
+  const ns1 = (await _FNS.newStock(one, STORE, {})).newSales;
+  assert.equal(ns1.top.name, 'JUMA G');
+  assert.equal(ns1.bottom, null, 'printing the same person twice would read as two facts');
+  assert.equal(ns1.ranked, 1);
+
+  const none = salesDb([sold('D2', 'JUMA G', '2025-01-05', 500000)]);
+  const ns0 = (await _FNS.newStock(none, STORE, {})).newSales;
+  assert.equal(ns0.top, null);
+  assert.equal(ns0.ranked, 0);
+  assert.equal(ns0.week.amount, 0);
+});
+
+test('a sale nobody is named for counts in the totals but ranks nobody', async () => {
+  /* A total that does not match the board is a total nobody trusts, so the handset still
+     counts -- but it cannot make an empty name the week's top agent. */
+  const db = salesDb([
+    { ...sold('E1', 'JUMA G', TODAY, 500000) },
+    { ...sold('E2', null, TODAY, 700000), agent: null },
+  ]);
+  const ns = (await _FNS.newStock(db, STORE, {})).newSales;
+  assert.equal(ns.week.sales, 2);
+  assert.equal(ns.week.amount, 1200000, 'both handsets are in the money');
+  assert.equal(ns.week.agents, 1, 'but only one agent is named');
+  assert.equal(ns.ranked, 1);
+  assert.equal(ns.top.name, 'JUMA G');
+});
+
+test('the pane opens on the three cards, and the date column sorts as a date', () => {
+  const src = fnSrc('drawNewStock');
+  assert.match(src, /nsThree\('NEW SALES · wiki hii/);
+  assert.match(src, /nsThree\('NEW SALES · mwezi huu/);
+  assert.match(src, /nsTopBottom\(ns\)/);
+  // They wrap to one column on a phone rather than forcing the page sideways.
+  assert.match(src, /minmax\(240px,1fr\)/);
+
+  /* SORTABLE BY DATE IS THE WHOLE ASK, so the cell prints the day AS STORED: an ISO day sorts
+     as text exactly the way it sorts as a date, and prettifying it to "13 Jul" would put
+     August above July on every click. */
+  assert.match(src, /<th>Tarehe \/ disb date<\/th>/);
+  assert.match(src, /r\.saleDate\?esc\(r\.saleDate\)/);
+
+  const three = fnSrc('nsThree');
+  for (const lab of ['Maajenti / agents', 'Wateja / customers', 'Thamani / price']) {
+    assert.ok(three.includes(lab), 'the card is missing "' + lab + '"');
+  }
+  assert.match(three, /repeat\(3,1fr\)/, 'three across, as asked');
+
+  const tb = fnSrc('nsTopBottom');
+  assert.match(tb, /JUU/); assert.match(tb, /CHINI/);
+  assert.match(tb, /1\.4fr 1fr 1fr/, 'name, count, value -- three columns, two rows');
+  assert.match(tb, /Only one agent has sold this week/);
+  assert.match(tb, /agents who sold this week/, 'it never claims to have ranked the whole company');
+});
+
+test('the daily board prints the amount, instead of hiding it in a tooltip', () => {
+  /* "Daily sales performance progress is showing QTY without amounts."
+     The value was always there -- in `title`, which needs a mouse. The pane is read on a
+     handset, where a tooltip is nothing at all. */
+  const src = fnSrc('salesRender');
+  const cell = src.slice(src.indexOf('var cell=function(c)'), src.indexOf('body=\'<div class="scroll">'));
+  assert.match(cell, /money\(c\.count\)/);
+  assert.match(cell, /money\(c\.amount\)[\s\S]{0,40}<\/div><\/td>/,
+    'the value is drawn in the cell, under the count');
+  assert.match(cell, /title="'\+money\(c\.amount\)/, 'and the tooltip stays: it costs nothing');
+  // The totals row answers the same question in the same two numbers.
+  assert.match(src, /money\(colA\[dd\]\)\+'<\/div>'/);
+  // The legend no longer tells somebody to hover for a number that is now printed.
+  assert.ok(!/gusa\/weka kishale/.test(src));
+  assert.match(src, /handsets on top, value in TZS underneath/);
+});
