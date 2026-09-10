@@ -953,3 +953,33 @@ target. The role tab is a SOURCE, not a scoreboard — nothing is measured again
 The board also gained: everybody the ladder gives a target to is on it even if they sold nothing;
 a leader's row shows what everybody beneath adds up to (an override below shows as a mismatch);
 and Remove is offered only for a target somebody typed, because a share is not a row.
+
+## 30. SHIPPED 2026-09-10: an issue goes to a role, and optionally to one person in it
+
+"They choose who to report to by choosing role and next (option) user in the role, so on the desks
+every user sees what they have on desk." The full story is
+[`docs/ISSUE-ROUTING.md`](ISSUE-ROUTING.md); the short version:
+
+**Do:** run `db/migrations/RUN-ME-2026-09-10-issue-routing.sql`. Nothing else — existing issues
+keep working and stay visible.
+
+The department was a fixed list of eight names in code with no relationship to the roles the owner
+actually creates, so an issue could be filed to "IT" while the person doing IT work holds a role
+called something else. A role is what the owner already maintains — the same list they tick navs
+on — so routing needs no second vocabulary that will drift.
+
+Blank is the feature: `to_name` empty means anybody holding the role, and a name means that one
+desk. The raise form puts the blank option FIRST because it is the ordinary answer, and the people
+list comes from the server so nobody is addressed by a spelling that matches no desk.
+
+NOTHING FALLS OFF A DESK. An issue with no role on it was filed when the desk WAS one queue, so it
+stays on everybody's. Matching the old department against somebody's role would have been a guess,
+and a wrong guess means old issues vanishing from every desk on deploy day.
+
+The desk opens on MY DESK, except for ADMIN and AUDITOR (supervision that sees only its own desk
+is not supervision) and except before the migration (nothing is routed, so "my desk" would read as
+the log having emptied). The server answers which view it chose.
+
+The access codes never travel: `issueTargets` returns a name and a role and nothing that could
+sign anybody in, and there is deliberately no `to_code` column — it would have put a credential in
+a table more people can read.

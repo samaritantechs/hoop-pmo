@@ -1602,9 +1602,15 @@ test('portal.html: the raise form sends the parts of an issue and never who rais
   const wire = IMP_SRC('issueRaiseWire', html);
   const call = /srv\('issueRaise',\{([\s\S]*?)\}\)/.exec(wire);
   assert.ok(call, 'the form submits through srv(issueRaise)');
-  for (const k of ['department', 'kind', 'subjectType', 'subject', 'title', 'details', 'contact']) {
+  /* WHO IT IS BEING REPORTED TO is now a ROLE and, optionally, a PERSON in it -- the owner's
+     amendment. The department is no longer chosen: the server derives it where the role
+     happens to be one of the eight names this log was born with. */
+  for (const k of ['toRole', 'toName', 'kind', 'subjectType', 'subject', 'title', 'details', 'contact']) {
     assert.match(call[1], new RegExp('\\b' + k + ':'), k + ' is sent');
   }
+  assert.match(wire, /whoSel\.innerHTML='<option value="">Yeyote kwenye wadhifa/,
+    'and the blank person is FIRST: "anybody in the role" is the ordinary answer');
+  assert.match(wire, /roleSel\.onchange=onRole/, 'the people list follows the role');
   for (const k of ['status', 'staffName', 'staffCode', 'verified', 'assignedTo']) {
     assert.ok(!new RegExp('\\b' + k + ':').test(call[1]), k + ' is the server\'s to stamp, never the form\'s to send');
   }
@@ -1637,7 +1643,10 @@ test('portal.html: the desk is one queue with a department chip, and the report 
   const html = read('portal.html');
   const desk = IMP_SRC('drawIssues', html);
   assert.match(desk, /srv\('issueQueue',ISSUEQ\)/);
-  assert.match(html, /var ISSUEQ=\{department:'',state:''\};/, 'unresolved, every department, by default');
+  /* `view` is blank on purpose -- the SERVER picks the default, because it is the only one
+     that knows whether routing exists yet and whether this code is a supervisor. */
+  assert.match(html, /var ISSUEQ=\{department:'',state:'',view:''\};/,
+    'unresolved, every department, and the desk view left to the server');
   assert.match(desk, /\(d\.departments\|\|\[\]\)\.map\(function\(k\)\{ return chip\(k,issueDept\(k\),byDept\[k\]\|\|0\); \}\)/, 'one chip per department, with its open count');
   assert.match(desk, /ISSUEQ\.state=\(ISSUEQ\.state==='all'\?'':'all'\)/, 'resolved ones are a toggle away, not gone');
   const rep = IMP_SRC('drawIssueRep', html);
@@ -2357,4 +2366,42 @@ test('portal.html: the role scope is a source, not a scoreboard', () => {
     'a role has no sales of its own, so it gets its own columns');
   assert.match(fn, /Halipimwi hapa/, 'and says plainly that it is measured on each person instead');
   assert.match(/var TGT_SCOPE_LABEL=\{[^}]*\}/.exec(html)[0], /role:'[^']+'/);
+});
+
+/* =========================================================================================
+   AN ISSUE GOES TO A ROLE, AND OPTIONALLY TO ONE PERSON IN IT.
+   ========================================================================================= */
+test('portal.html: the raise form picks a role, then optionally a person in it', () => {
+  const html = read('portal.html');
+  const form = IMP_SRC('issueRaiseHtml', html);
+  assert.match(form, /Wadhifa unaohusika \/ Role \*/);
+  assert.match(form, /Mtu \(si lazima\) \/ Person \(optional\)/,
+    'the person is optional, and the label says so');
+  assert.match(form, /Yeyote kwenye wadhifa \/ anybody in the role/,
+    'and the blank option is first: that is the ordinary answer');
+  assert.ok(!/Idara inayohusika/.test(form), 'the department is no longer chosen by hand');
+  const wire = IMP_SRC('issueRaiseWire', html);
+  assert.match(wire, /ISSUE_TARGETS\|\|\[\]/, 'the people come from the server, never typed');
+});
+
+test('portal.html: the desk opens on my desk, with the whole log one click away', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawIssues', html);
+  assert.match(fn, /var mineOn=\(d\.view\|\|'mine'\)!=='all'/,
+    'which view is live comes from the server, which decided the default');
+  assert.match(fn, /Kwenye dawati langu/, 'the desk tile is what is on THIS person’s desk');
+  assert.match(fn, /\(c\.directed\|\|0\)\?money\(c\.directed\)/,
+    'and how many were addressed to them by name');
+  assert.match(fn, /yameelekezwa kwangu mimi binafsi/);
+  assert.match(fn, /ISSUEQ\.view=mineOn\?'all':'mine'/, 'the whole log is one click away');
+  assert.match(fn, /d\.routeNote\?'<div class="note bad">/,
+    'and before the migration it says routing is off rather than showing an empty desk');
+  // Both panes fetch the roles and the people, because both can raise.
+  for (const pane of ['drawIssues', 'drawIssueReq']) {
+    assert.match(IMP_SRC(pane, html), /srv\('issueTargets',\{\}\)/, pane + ' loads the targets');
+  }
+  const tbl = IMP_SRC('issueTable', html);
+  assert.match(tbl, /KWA NANI \/ TO/, 'the table says whose desk each issue is on');
+  assert.match(tbl, /r\.directed\?'<div class="mut"[^>]*>\\u2192 '\+esc\(r\.toName\)/,
+    'and names the person where one was named');
 });

@@ -215,9 +215,18 @@ test('issues: the desk is ONE queue -- unresolved by default, a department chip 
   ] });
   const q = await _FNS.issueQueue(d, DESK, {});
   assert.deepEqual(q.rows.map(x => x.id), [uid('q5'), uid('q2'), uid('q1'), uid('q3')], 'not resolved, newest first');
-  assert.deepEqual(q.counts, { open: 2, waiting: 1, escalated: 1, resolved: 1,
-    byDept: { STORE: 1, FINANCE: 0, IT: 2, HR: 0, CREDIT: 1, SALES: 0, GENERAL_DUTY: 0, ADMIN: 0 } },
+  for (const [k, n] of [['open', 2], ['waiting', 1], ['escalated', 1], ['resolved', 1]]) {
+    assert.equal(q.counts[k], n, k + ' counted over the whole table');
+  }
+  assert.deepEqual(q.counts.byDept,
+    { STORE: 1, FINANCE: 0, IT: 2, HR: 0, CREDIT: 1, SALES: 0, GENERAL_DUTY: 0, ADMIN: 0 },
     'the chips count what is still to do, per department, over the whole table');
+  /* Since routing, the desk also says what is on THIS person's desk. Every one of these rows
+     was filed before routing existed, so all four unresolved ones are -- an old issue must
+     never quietly fall off every desk in the company on deploy day. */
+  assert.equal(q.counts.mine, 4);
+  assert.equal(q.counts.directed, 0, 'and none of them was addressed to one person by name');
+  assert.deepEqual(q.counts.byRole, {}, 'nothing here carries a role yet');
   assert.equal((await _FNS.issueQueue(d, DESK, { department: 'it' })).rows.length, 2, 'the label, case-insensitively');
   assert.equal((await _FNS.issueQueue(d, DESK, { department: 'credit' })).rows.length, 1, 'the resolved one stays hidden');
   assert.equal((await _FNS.issueQueue(d, DESK, { department: 'credit', state: 'all' })).rows.length, 2);
