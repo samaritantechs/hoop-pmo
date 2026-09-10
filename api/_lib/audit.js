@@ -147,6 +147,7 @@ const AUDIT_DIFF = {
   staffManager:    { table: 'hoop_agents', key: a => ({ phone: a.phone }), fields: ['manager'] },
   staffChannelSave:{ table: 'hoop_agents', key: a => ({ phone: a.phone }),
                      fields: ['role', 'manager', 'branch'] },
+  staffBranchSave: { table: 'hoop_agents', key: a => ({ phone: a.phone }), fields: ['branch'] },
 
   /* MONEY, AND ONLY ITS DECISION. `status` is who let it through; the amount stays in
      staff_advances behind the advrep nav, where it belongs. */
