@@ -318,7 +318,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    the safe direction. A missing case that defaulted to "allowed" is how a nav split quietly
    stops splitting anything. */
 const DEVICE_STATE_NAV = { locked: 'devlock', lost: 'devlock', enrolled: 'devunlock', released: 'devunlock' };
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'oldstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'oldstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'audit', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -6111,6 +6111,58 @@ const FNS = {
   },
 
   /* =====================================================================================
+     THE ROUND, AS A FILE SOMEBODY TAKES OUT WITH THEM.
+     =====================================================================================
+       "pieces, oldest and 90+ card should have excel button on top"
+
+     The generic export above every table in this system copies WHAT IS ON SCREEN, which is
+     right for a table and not enough for this one: the round is five summary columns per
+     holder, and a team driving out to collect handsets needs the IMEIs, not the count of
+     them. Handing them the summary would mean printing it and then going back to the pane to
+     look up each holder one at a time -- which is the job this pane already saves them.
+
+     So one row per HANDSET, carrying its holder's totals alongside it. That shape opens in
+     Excel as a list you can read straight down, and it pivots back into the summary in two
+     clicks if that is what somebody wanted after all.
+
+     UNFILTERED, like the board it belongs to. The pane's filter narrows the table underneath;
+     the round has always described the whole outstanding list, and an export that quietly
+     obeyed a filter the card ignores would be a file that disagrees with the number that
+     produced it. */
+  async oldStockRound(db, user, args) {
+    requireNav(user, 'oldstock');
+    const idx = await oldStockIndex(db);
+    const open = idx.open;
+    /* The same grouping the board does, from the same index, so the totals on every line are
+       the ones the card showed. */
+    const by = new Map();
+    for (const r of open) {
+      const k = nameKey(r.agent) || '?';
+      let g = by.get(k);
+      if (!g) g = { key: k, pieces: 0, oldest: 0, over90: 0 };
+      g.pieces++;
+      if (r.age != null && r.age > g.oldest) g.oldest = r.age;
+      if (r.age != null && r.age >= 90) g.over90++;
+      by.set(k, g);
+    }
+    const rows = open.slice().sort((x, y) => {
+      const gx = by.get(nameKey(x.agent) || '?'), gy = by.get(nameKey(y.agent) || '?');
+      return (gy.oldest - gx.oldest)                      // worst trip first, as the board sorts
+        || String(x.agent || '').localeCompare(String(y.agent || ''))
+        || ((y.age == null ? -1 : y.age) - (x.age == null ? -1 : x.age))
+        || String(x.imei).localeCompare(String(y.imei));
+    }).map(r => {
+      const g = by.get(nameKey(r.agent) || '?');
+      return { agent: r.agent || '', agentPhone: r.agentPhone || '',
+        rsm: r.rsm || '', rsmPhone: r.rsmPhone || '',
+        pieces: g.pieces, oldest: g.oldest, over90: g.over90,
+        imei: r.imei, item: r.item || '', age: r.age, asOf: r.asOf };
+    });
+    return { ok: true, notReady: idx.notReady, todayK: idx.todayK,
+      holders: by.size, pieces: open.length, rows };
+  },
+
+  /* =====================================================================================
      NEW STOCK -- the sale behind every handset we have locked.
      =====================================================================================
        "An audit of our existing imeis since we started locking on our own -- Imei, Rsm, rsm
@@ -8189,7 +8241,7 @@ const FNS = {
     /* 'sales' and 'devices' are stored ALIASES, not panes: each expands in navsFor. They stay
        allowed so a role saved under one keeps every door it had -- dropping an alias on save
        would quietly take a pane away from everybody holding that role. */
-    const ALLOWED = new Set([...NAV_TABS, 'upload', 'audit', 'sales', 'devices']);
+    const ALLOWED = new Set([...NAV_TABS, 'upload', 'sales', 'devices']);
     const tabs = (Array.isArray(args && args.tabs) ? args.tabs : [])
       .map(t => String(t).toLowerCase()).filter(t => ALLOWED.has(t));
     const { error } = await db.from('roles').upsert({ role, tabs }, { onConflict: 'role' });
@@ -9052,9 +9104,32 @@ const FNS = {
     return { ok: true, sent: true, to: mail.to, watch: watch.length };
   },
 
+  /* =====================================================================================
+     THE AUDIT LOG -- who did what, when, from where, and what the value was before and after.
+     =====================================================================================
+       "Implement audit log tab too at admin - who did what what, when, where, value b4 and
+        after {auto-delete history of 15 days+}"
+
+     IT IS A NAV NOW, NOT A SETTINGS SIDE-DOOR. It used to be gated on requireSettings, which
+     meant the only way to let a supervisor read the log was to hand them the pane that edits
+     every setting in the system -- exactly backwards for a screen whose whole job is
+     oversight. `audit` joins NAV_TABS, so it is ticked like everything else and ADMIN has it
+     already.
+
+     A READ, AND ONLY A READ. There is deliberately no way to delete a row from here: a log
+     whose readers can edit it is not a log. The fifteen-day window is the only thing that
+     removes anything, and it removes by age alone.
+     ===================================================================================== */
   async audit(db, user, args) {
-    requireSettings(user);
-    return { ok: true, ...(await auditList(db, { limit: 200 })) };
+    requireNav(user, 'audit');
+    const a = args || {};
+    return { ok: true, ...(await auditList(db, {
+      limit: a.limit || 300,
+      actor: a.actor || null,
+      action: a.action || null,
+      from: a.from || null,
+      to: a.to || null,
+    })) };
   },
 };
 
@@ -9087,5 +9162,9 @@ export default withApi(async (req) => {
      hold a circular reference and JSON.stringify threw. A 500 by luck is not a boundary. */
   const h = Object.prototype.hasOwnProperty.call(FNS, fn) ? FNS[fn] : null;
   if (typeof h !== 'function') { const e = new Error('Unknown portal fn: ' + fn); e.status = 400; throw e; }
-  return audited(supabase, user, fn, args, () => h(supabase, user, args));
+  /* WHERE THE CALL CAME FROM travels with it. The dispatcher is the only place that still
+     holds the request, and the audit row is written three frames down -- so it is passed
+     rather than reached for, which is also what keeps audited() testable without a req. */
+  return audited(supabase, user, fn, args, () => h(supabase, user, args),
+    { ip: ipOf(req), ua: uaOf(req) });
 });

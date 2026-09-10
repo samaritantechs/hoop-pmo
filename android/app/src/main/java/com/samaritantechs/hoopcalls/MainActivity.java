@@ -109,6 +109,26 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);          // localStorage holds the access code, device id, list cache
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
         s.setAllowFileAccess(false);           // the page never needs file:// -- keep it shut
+        /* A LINK THAT ASKS FOR A NEW WINDOW MUST REACH US AT ALL.
+           -------------------------------------------------------------------------------
+             "opening location works only in browser - app too should open via phone browser
+              and not failing to open location link"
+
+           The forwarding below is correct and was never being CALLED. With multiple windows
+           off -- the default -- a WebView handles `target="_blank"` by quietly dropping the
+           click: shouldOverrideUrlLoading does not fire, no page loads, nothing happens. The
+           map pin looked dead for exactly that reason, and no amount of fixing the forwarding
+           rules could have shown it, because the click never got that far.
+
+           Turning multiple windows ON does not mean this app grows tabs: it means the WebView
+           has to ASK, through onCreateWindow below, and there we take the URL and hand it to
+           the phone. The page has been fixed to navigate at the top level as well, so a
+           handset that never updates past this build is not waiting on it -- but a page is
+           served fresh and an APK is not, and this side must not be the half that is missing.
+
+           setJavaScriptCanOpenWindowsAutomatically stays FALSE: a window opened by a click is
+           a person asking for something, one opened by a script is not. */
+        s.setSupportMultipleWindows(true);
         /* TWO NAMES FOR ONE BRIDGE, while the rename crosses over. HoopLoan is what the
            page reaches for first; HopeCalls stays so that a page deployed before this APK
            reaches a phone -- or after it, on a handset that has not updated -- still finds
@@ -158,12 +178,7 @@ public class MainActivity extends Activity {
                     String host = u.getHost() == null ? "" : u.getHost();
                     String mine = Uri.parse(startUrl()).getHost();
                     if (mine != null && !mine.isEmpty() && !host.equalsIgnoreCase(mine)) {
-                        try {
-                            startActivity(new Intent(Intent.ACTION_VIEW, u));
-                            return true;
-                        } catch (Exception ignored) {
-                            return false;       // nothing to hand it to; keep it in-app
-                        }
+                        return openOutside(u);  // false if nothing will take it: keep it in-app
                     }
                 }
                 return false;                   // the portal itself stays inside the app
@@ -197,6 +212,57 @@ public class MainActivity extends Activity {
         });
 
         web.setWebChromeClient(new WebChromeClient() {
+            /* THE NEW WINDOW IS NEVER OPENED HERE -- IT IS HANDED TO THE PHONE.
+               ---------------------------------------------------------------------------
+               With multiple windows on, a `target="_blank"` click arrives here instead of
+               being dropped. This app has one window and wants one, so the answer is not to
+               make a second WebView and keep it: it is to find out where the click was going
+               and let the browser have it.
+
+               A WebView cannot tell us the URL directly, so the standard move is to give it
+               a throwaway view whose only job is to report the address it is asked to load.
+               Nothing is ever displayed in it and it is destroyed the moment it has spoken.
+
+               Falling through to `false` matters: it means "no window was created", so a
+               click we could not place leaves the page exactly as it was rather than opening
+               a blank view the officer has to work out how to leave. */
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture,
+                                          android.os.Message resultMsg) {
+                final WebView probe = new WebView(MainActivity.this);
+                /* DESTROYED AFTER THE CALLBACK RETURNS, never inside it. Tearing a WebView
+                   down while it is still delivering one of its own callbacks crashes on some
+                   builds, and a crash here would be strictly worse than the dead link this
+                   whole path exists to fix. */
+                final Runnable drop = new Runnable() {
+                    @Override public void run() { probe.destroy(); }
+                };
+                probe.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
+                        openOutside(req.getUrl());
+                        v.post(drop);
+                        return true;
+                    }
+                    /* BOTH OVERLOADS, because minSdk is 23 and the WebResourceRequest one
+                       arrived in 24. On an older handset the framework calls only this, and
+                       without it the probe would sit there holding a click that never became
+                       anything -- which is the exact bug this whole path exists to end. */
+                    @Override
+                    @SuppressWarnings("deprecation")
+                    public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                        openOutside(Uri.parse(url));
+                        v.post(drop);
+                        return true;
+                    }
+                });
+                android.webkit.WebView.WebViewTransport t =
+                        (android.webkit.WebView.WebViewTransport) resultMsg.obj;
+                t.setWebView(probe);
+                resultMsg.sendToTarget();
+                return true;
+            }
+
             @Override
             public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (pendingFileCallback != null) pendingFileCallback.onReceiveValue(null);
@@ -285,6 +351,29 @@ public class MainActivity extends Activity {
      * ".../call" is additionally rewritten to the site root rather than simply discarded, so a
      * genuinely different domain typed in the field survives the upgrade.
      */
+    /**
+     * Hand a link to the phone. ONE PLACE, because there are now two ways in -- a top-level
+     * navigation through shouldOverrideUrlLoading, and a `target="_blank"` click through
+     * onCreateWindow -- and the map pin was broken for a year by the two of them disagreeing
+     * about whether anything happened at all.
+     *
+     * Returns true when something took it. False means nothing on the handset can open this,
+     * and the caller keeps the link in-app rather than leaving the officer with a dead tap.
+     */
+    private boolean openOutside(Uri u) {
+        if (u == null) return false;
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, u);
+            /* A window this app did not open must not come back into this app's task, or
+               pressing Back from the map lands somewhere nobody navigated to. */
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private String startUrl() {
         String saved = prefs.getString("startUrl", null);
         if (saved == null) return BuildConfig.START_URL;

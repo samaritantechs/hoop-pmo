@@ -545,14 +545,43 @@ function agoMins(n){ return n==null?'':n<1?'sasa hivi':n<60?money(n)+' dk':money
 
    Nothing at all when there is no fix, rather than a dash or an empty link: a row that has
    never reported a position should look like a row with one fact in it, not two. */
+/* A LINK THAT LEAVES THE SYSTEM, FROM INSIDE THE APP AS WELL AS FROM A BROWSER.
+   =========================================================================================
+     "opening location works only in browser - app too should open via phone browser and not
+      failing to open location link"
+
+   `target="_blank"` IS THE WHOLE BUG. A WebView with multiple windows off -- the default, and
+   what every handset in the field is running -- answers a blank-target click by dropping it:
+   no navigation, no error, nothing at all. The wrapper's own rule for handing outside links to
+   the phone's browser was correct the entire time and was simply never reached, because the
+   click died one step before it.
+
+   SO THE PAGE STOPS ASKING FOR A WINDOW when it is inside the app, and navigates at the top
+   level instead -- which the wrapper does see, and forwards. In a browser nothing changes: the
+   anchor keeps its href and its target, so the status bar still shows where the link goes, a
+   long-press still copies it, and a middle-click still opens a tab.
+
+   THE PAGE IS THE HALF THAT CAN BE FIXED TODAY. The APK is fixed too, but an APK reaches an
+   officer when they accept an update and a page reaches them on the next tap. */
+function openOut_(url){
+  if(window.HoopLoan||window.HopeCalls){ try{ window.location.href=url; return; }catch(e){} }
+  var w=null;
+  try{ w=window.open(url,'_blank','noopener'); }catch(e){}
+  // A blocked pop-up is not a reason to lose the tap: go there in this tab instead.
+  if(!w){ try{ window.location.href=url; }catch(e){} }
+}
 function devWhere(r){
   if(r.lat==null||r.lng==null) return '';
   var q=Number(r.lat).toFixed(6)+','+Number(r.lng).toFixed(6);
+  var url='https://www.google.com/maps?q='+encodeURIComponent(q);
   var when=r.locAt?clock(r.locAt):'';
   var acc=(r.locAcc!=null&&r.locAcc>=500)?' ±'+money(Math.round(r.locAcc/1000*10)/10)+'km':'';
+  /* The href stays real. It is what a browser opens, what a long-press copies and what the
+     status bar shows; the handler only takes over the ordinary left click, and only to route
+     it somewhere that works. */
   return '<div style="font-size:10px;margin-top:2px">'
-    +'<a href="https://www.google.com/maps?q='+encodeURIComponent(q)+'" target="_blank" '
-    +'rel="noopener noreferrer">ilipo / map</a>'
+    +'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer" '
+    +'onclick="openOut_(this.href);return false;">ilipo / map</a>'
     +(when?'<span class="mut"> · '+esc(when)+esc(acc)+'</span>':'')
     +'</div>';
 }
@@ -1693,6 +1722,12 @@ var NAV=[
   { g:'admin', t:'itrep',    nav:'itrep',      sw:'Ripoti ya IT',     en:'Weekly IT report',
     ic:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/>' },
 
+  /* WHO DID WHAT. A nav rather than a corner of Settings: the only way to let a supervisor
+     read the log used to be handing them the pane that edits every setting in the system,
+     which is exactly backwards for a screen whose whole job is oversight. */
+  { g:'admin', t:'audit',    nav:'audit',      sw:'Nani alifanya nini', en:'Audit log',
+    ic:'<path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/>' },
+
   { g:'admin', t:'staff',    nav:'staff',      sw:'Wafanyakazi',      en:'Staff',
     ic:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
   { g:'admin', t:'codes',    nav:'codes',      sw:'Misimbo ya kuingia', en:'Access codes',
@@ -1827,6 +1862,7 @@ function draw(){
   if(TAB==='strep') return drawStockRep(m);
   if(TAB==='newstock') return drawNewStock(m);
   if(TAB==='oldstock') return drawOldStock(m);
+  if(TAB==='audit') return drawAudit(m);
   /* ONE PANE, TWO DOORS -- the same drawDevices either way, so the two halves cannot drift
      into disagreeing about the fleet. Which orders it offers is read off TAB inside. */
   if(TAB==='devlock') return drawDevices(m);
@@ -6923,15 +6959,36 @@ function nsBoardXl_(){
    and the server adds the days since on every read, so a handset nobody has been to see gets
    visibly worse without anything having to be re-uploaded. */
 var OSQ={q:'',agent:'',rsm:''};
+/* WHICH OF THE TWO LISTS IS OPEN.
+   =========================================================================================
+     "Ziara / The round and Simu / The handsets should be chipped that the list opens once
+      clicked like the chipping feature i've been using in hopepmo"
+
+   This pane carries two thousand handsets and a board of two hundred holders, one above the
+   other, so reaching the second used to mean scrolling past the whole of the first -- the
+   same complaint that put chips on Stock movement ("finding the next report requires a lot
+   of scrolling"). One chip, one list, and the counts ride ON the chips so the choice is made
+   without opening either.
+
+   THE ROUND OPENS FIRST because it is what the pane is for: a ground visit is made to a
+   person, and the handset list is the reference you drop into afterwards. Remembered across
+   redraws, so filtering does not throw you back to the other list. */
+var OSSEC='round';
 function osAge(r){
   if(r.age==null) return '<span class="mut">—</span>';
   var cls=r.age>=180?'style="color:var(--bad);font-weight:700"':r.age>=90?'style="color:var(--bad)"':'';
   return '<span '+cls+'>'+money(r.age)+'</span>'
     +'<div class="mut" style="font-size:9.5px">tangu '+esc(r.asOf||'')+': '+money(r.ageStart||0)+'</div>';
 }
+/* FETCHING AND DRAWING ARE TWO THINGS, and a chip is only ever the second of them.
+   Both lists arrive in ONE answer, so switching between them must not cost a round trip or
+   blank the pane -- the same split the devices pane already runs on, for the same reason. */
 function drawOldStock(m){
   m.innerHTML='<div class="card"><h2>OLD STOCK</h2><div class="sk"></div></div>';
-  srv('oldStock',OSQ).then(function(d){
+  srv('oldStock',OSQ).then(function(d){ osPaint_(m, d); }).catch(function(e){ paneFailed(m,e); });
+}
+function osPaint_(m, d){
+  {
     var c=d.counts||{}, rows=d.rows||[];
     var tiles='<div class="tiles">'
       +tile('Hazijafungwa',money(c.open||0),'kati ya '+money(c.listed||0)+' kwenye orodha',
@@ -6955,8 +7012,16 @@ function drawOldStock(m){
     /* THE HOLDER BOARD IS THE ROUND. Sorted by the oldest piece, because that is the visit
        that has been waiting longest -- not by how many, which is a bigger van, not a worse
        problem. */
+    /* THE ROUND'S OWN EXPORT, on its heading rather than in the generic bar above the table.
+       The bar every table gets copies WHAT IS ON SCREEN, which here is five summary columns
+       per holder -- a team driving out to collect handsets needs the IMEIs, not the count of
+       them, and would otherwise have to come back to this pane holder by holder. */
     var board=(d.byAgent||[]).length
-      ? '<h3 style="margin:14px 0 6px">Ziara / The round</h3><div class="scroll"><table><thead><tr>'
+      ? '<div style="display:flex;gap:8px;align-items:center;margin:10px 0 6px">'
+        +'<span style="flex:1"></span>'
+        +'<button class="btn sm ghost" id="osRoundXl" style="padding:2px 8px;font-size:11.5px" '
+        +'title="Pakua ziara na IMEI zote / download the round with its handsets">⤓ Excel</button>'
+        +'</div><div class="scroll"><table><thead><tr>'
         +'<th>Mwenye nazo / holder</th><th>RSM</th><th class="r">Simu / pieces</th>'
         +'<th class="r">Kongwe / oldest</th><th class="r">90+</th></tr></thead><tbody>'
         +d.byAgent.map(function(g){
@@ -6974,7 +7039,7 @@ function drawOldStock(m){
         }).join('')+'</tbody></table></div>'
       : '';
     var table=rows.length
-      ? '<h3 style="margin:14px 0 6px">Simu / The handsets</h3><div class="scroll"><table><thead><tr>'
+      ? '<div class="scroll"><table><thead><tr>'
         +'<th>IMEI</th><th>Bidhaa / item</th><th>Mwenye nazo / holder</th><th>RSM</th>'
         +'<th class="r">Umri leo / age today</th></tr></thead><tbody>'
         +rows.map(function(r){
@@ -6988,6 +7053,16 @@ function drawOldStock(m){
         +(d.shown>rows.length?'<div class="note" style="margin-top:8px">Jedwali linaonyesha '
           +money(rows.length)+' kati ya '+money(d.shown)+'. / Showing '+money(rows.length)+' of '+money(d.shown)+'.</div>':'')
       : '<div class="mut" style="margin-top:12px">Hakuna simu kwenye kundi hili. / Nothing here.</div>';
+    /* THE COUNT RIDES ON THE CHIP, so the choice can be made without opening either list --
+       and it is the count of the whole outstanding round, never of the filtered page, because
+       that is what the chip is naming. */
+    var SECS=[['round','Ziara / The round',(d.counts||{}).holders||0],
+              ['handsets','Simu / The handsets',(d.counts||{}).open||0]];
+    var chips='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
+      +SECS.map(function(x){
+        return '<button class="btn sm'+(OSSEC===x[0]?'':' ghost')+'" data-ossec="'+x[0]+'">'
+          +esc(x[1])+' <b>'+money(x[2])+'</b></button>';
+      }).join('')+'</div>';
     m.innerHTML='<div class="card"><h2>OLD STOCK — hazijawahi kufungwa</h2>'
       +'<div class="mut" style="margin-bottom:8px">Simu tulizonazo ambazo hazijawahi kuingizwa kwenye '
       +'kufuli letu. <b>Ikifungwa au ikiuzwa, inatoka hapa yenyewe</b> na kuonekana NEW STOCK — '
@@ -6996,7 +7071,7 @@ function drawOldStock(m){
       +'takes it off this list by itself</b> and it appears in NEW STOCK; nothing has to be '
       +'ticked off. The age keeps climbing for every day it stays un-enrolled.</div>'
       +(d.notReady?'<div class="note bad">'+esc(d.notReadyNote)+'</div>':'')
-      +tiles+bar+board+table+'</div>';
+      +tiles+bar+chips+(OSSEC==='round'?board:table)+'</div>';
     wireTiles(m);
     var go=function(){ OSQ={q:$('#osQ').value,agent:$('#osAgent').value,rsm:$('#osRsm').value}; drawOldStock(m); };
     $('#osGo').onclick=go;
@@ -7006,7 +7081,13 @@ function drawOldStock(m){
       osHolderDrawer(b.getAttribute('data-osh'), b.getAttribute('data-osmin'),
         b.getAttribute('data-oslab'));
     }; });
-  }).catch(function(e){ paneFailed(m,e); });
+    var rx=$('#osRoundXl'); if(rx) rx.onclick=function(){ osRoundXl_(this); };
+    /* A CHIP CHANGES WHAT IS DRAWN, never what was asked for: both lists arrived in the same
+       answer, so switching between them must not cost a round trip or blank the pane. */
+    $all('[data-ossec]').forEach(function(b){ b.onclick=function(){
+      OSSEC=b.getAttribute('data-ossec'); osPaint_(m, d);
+    }; });
+  }
 }
 
 /* A NUMBER THAT OPENS WHAT IT COUNTS.
@@ -7028,6 +7109,35 @@ function osNum_(n, key, min, label){
     +'data-oslab="'+esc(label)+'" title="Fungua orodha / open the list" '
     +'style="padding:0;border:0;background:none;font:inherit;color:inherit;'
     +'text-decoration:underline;text-underline-offset:3px;cursor:pointer">'+money(n)+'</button>';
+}
+/* THE ROUND AS A FILE, one line per HANDSET with its holder's totals beside it.
+   =========================================================================================
+   Read from the server rather than off the table: the card summarises the whole outstanding
+   list, the table under it holds at most 2000 rows and only what passed the filter, and an
+   export that quietly obeyed a filter the card ignores would be a file that disagrees with
+   the number that produced it.
+
+   The button says what it is doing while it does it -- this is two thousand rows over a phone
+   connection, and a control that looks unpressed for four seconds gets pressed again. */
+function osRoundXl_(btn){
+  var was=btn?btn.textContent:'';
+  if(btn){ btn.disabled=true; btn.textContent='\u2026'; }
+  var done=function(){ if(btn){ btn.disabled=false; btn.textContent=was; } };
+  srv('oldStockRound',{}).then(function(d){
+    var rows=d.rows||[];
+    if(!rows.length){ done(); toast('Hakuna simu / nothing outstanding', true); return; }
+    var head=['MWENYE NAZO','SIMU YAKE','RSM','SIMU YA RSM','JUMLA YA SIMU','KONGWE','90+',
+      'IMEI','BIDHAA','UMRI LEO','ORODHA YA','ILIVYOSOMWA'];
+    var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
+    var lines=[head.map(q).join(',')];
+    rows.forEach(function(r){
+      lines.push([r.agent,r.agentPhone,r.rsm,r.rsmPhone,r.pieces,r.oldest,r.over90,
+        r.imei,r.item,(r.age==null?'':r.age),r.asOf,d.todayK].map(q).join(','));
+    });
+    saveFile_('HOOPLOAN-ziara-'+String(d.todayK||'')+'.csv','text/csv;charset=utf-8',
+      '\ufeff'+lines.join('\r\n'));
+    done();
+  }).catch(function(e){ done(); toast(safeErr(e), true); });
 }
 /* THE LIST BEHIND THE NUMBER, in a drawer rather than in the pane.
    The board is not filtered, so this is not either -- a count of five that opened a list of
@@ -7058,6 +7168,96 @@ function osHolderDrawer(key, min, label){
             +'/ Showing '+money(rows.length)+' of '+money(d.shown)+' — filter the pane itself for all of them.</div>':'')
         : '<div class="mut">Hakuna simu. / Nothing here.</div>'));
   }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
+}
+
+/* ============================== THE AUDIT LOG ==============================================
+     "Implement audit log tab too at admin - who did what what, when, where, value b4 and
+      after {auto-delete history of 15 days+}"
+
+   FIVE QUESTIONS, FIVE COLUMNS, in the order somebody asks them: when, who, what, where, and
+   what the value was before and after. Nothing is collapsed into a tooltip -- this pane is
+   opened when something has gone wrong and the reader is not in a mood to hover.
+
+   A REFUSED ATTEMPT IS THE MOST INTERESTING ROW ON THE SCREEN, so it is red and it keeps its
+   reason. Somebody trying to delete a team they may not touch is precisely what this exists
+   to show, and a log that only recorded successes would be a log that hid exactly that.
+
+   IT IS A READ. There is no delete button and there will not be one: a log whose readers can
+   edit it is not a log. Age is the only thing that removes a row.
+   ========================================================================================= */
+var AUDQ={actor:'',action:'',from:'',to:''};
+/** before → after on one line, or nothing at all when a save rewrote nothing -- which is the
+    honest answer rather than two empty columns implying the log lost something. */
+function audDiff_(r){
+  var b=r.before||null, a=r.after||null;
+  if(!b&&!a) return '<span class="mut">—</span>';
+  var keys={}, k;
+  for(k in (b||{})) keys[k]=1;
+  for(k in (a||{})) keys[k]=1;
+  var out=[];
+  for(k in keys){
+    var was=(b&&b[k]!=null&&b[k]!=='')?String(b[k]):'—';
+    var now=(a&&a[k]!=null&&a[k]!=='')?String(a[k]):'—';
+    out.push('<div style="font-size:11px;line-height:1.35"><span class="mut">'+esc(k)+'</span> '
+      +'<span style="text-decoration:line-through;opacity:.65">'+esc(was)+'</span> '
+      +'<span class="mut">→</span> <b>'+esc(now)+'</b></div>');
+  }
+  return out.length?out.join(''):'<span class="mut">—</span>';
+}
+function drawAudit(m){
+  m.innerHTML='<div class="card"><h2>Nani alifanya nini / Audit log</h2><div class="sk"></div></div>';
+  srv('audit',AUDQ).then(function(d){
+    var rows=d.rows||[];
+    var opts=function(list,sel){ return '<option value="">— zote / all —</option>'
+      +(list||[]).map(function(x){ return '<option value="'+esc(x)+'"'+(x===sel?' selected':'')+'>'+esc(x)+'</option>'; }).join(''); };
+    var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<select id="auAct" style="min-width:170px">'+opts(d.actions,AUDQ.action)+'</select>'
+      +'<input id="auFrom" class="inp" type="date" style="width:auto" value="'+esc(AUDQ.from||'')+'">'
+      +'<input id="auTo" class="inp" type="date" style="width:auto" value="'+esc(AUDQ.to||'')+'">'
+      +'<button class="btn sm" id="auGo">Chuja / Filter</button>'
+      +'<button class="btn sm ghost" id="auClr">Yote / All</button>'
+      +'<span style="flex:1"></span>'
+      +'<button class="btn sm ghost" id="auRef" title="Soma upya / re-read">↻</button></div>';
+    var table=rows.length
+      ? '<div class="scroll"><table><thead><tr><th>Lini / when</th><th>Nani / who</th>'
+        +'<th>Alifanya nini / what</th><th>Wapi / where</th>'
+        +'<th>Ilikuwa → imekuwa / before → after</th></tr></thead><tbody>'
+        +rows.map(function(r){
+          var when=String(r.at||'').replace('T',' ').slice(0,19);
+          return '<tr'+(r.ok===false?' style="background:var(--bad-bg,rgba(220,0,0,.06))"':'')+'>'
+            +'<td style="font-size:11px;white-space:nowrap">'+esc(when)+'</td>'
+            +'<td><b style="font-size:12px">'+esc(r.actor_name||r.actor_code||'—')+'</b>'
+              +'<div class="mut" style="font-size:10px">'+esc(r.actor_code||'')
+              +(r.actor_role?' · '+esc(r.actor_role):'')+'</div></td>'
+            +'<td style="font-size:11.5px">'+esc(r.action||'')
+              +(r.subject?'<div class="mut" style="font-size:10px">'+esc(r.subject)+'</div>':'')
+              /* THE REFUSAL, IN FULL. A row that says only "failed" makes the reader open the
+                 server logs, which is the thing this pane exists to save them. */
+              +(r.ok===false?'<div style="font-size:10px;color:var(--bad)">✖ '
+                +esc(r.error||'imekataliwa / refused')+'</div>':'')+'</td>'
+            +'<td style="font-size:10.5px">'+esc(r.ip||'—')
+              +(r.ua?'<div class="mut" style="font-size:9.5px;max-width:210px;overflow:hidden;'
+                +'text-overflow:ellipsis;white-space:nowrap" title="'+esc(r.ua)+'">'+esc(r.ua)+'</div>':'')
+            +'</td>'
+            +'<td>'+audDiff_(r)+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+      : '<div class="mut">Hakuna kumbukumbu kwenye kipindi hiki. / Nothing recorded in this window.</div>';
+    m.innerHTML='<div class="card"><h2>Nani alifanya nini / Audit log</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Kila kitendo kinachobadilisha kitu, na thamani '
+      +'kabla na baada yake. Kumbukumbu <b>zinafutwa zenyewe baada ya siku '+money(d.keepDays||15)+'</b>. '
+      +'/ Every call that CHANGES something, with the value before and after it. Entries older '
+      +'than '+money(d.keepDays||15)+' days are deleted automatically.</div>'
+      +(d.note?'<div class="note bad">'+esc(d.note)+'</div>':'')
+      +bar+table+'</div>';
+    var go=function(){
+      AUDQ.action=$('#auAct').value; AUDQ.from=$('#auFrom').value; AUDQ.to=$('#auTo').value;
+      drawAudit(m);
+    };
+    $('#auGo').onclick=go;
+    $('#auAct').onchange=go;
+    $('#auClr').onclick=function(){ AUDQ={actor:'',action:'',from:'',to:''}; drawAudit(m); };
+    $('#auRef').onclick=function(){ drawAudit(m); };
+  }).catch(function(e){ paneFailed(m,e); });
 }
 
 function drawNewStock(m){
@@ -9082,6 +9282,7 @@ function drawCodes(m){
             enrol:'Enrolment (IT: the details, the check, the RSM being told)',
             security:'Sign-in security (IT: who was turned away at the door)',
             itrep:'Weekly IT report (IT \u2192 GM)',
+            audit:'Audit log (who did what, and what the value was before)',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
             +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';

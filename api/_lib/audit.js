@@ -100,6 +100,114 @@ export function subjectOf(args) {
   return bits.length ? bits.join(' ').slice(0, 240) : null;
 }
 
+/* =======================================================================================
+   WHAT THE VALUE WAS BEFORE, AND WHAT IT IS NOW.
+
+     "who did what what, when, where, value b4 and after"
+
+   THE DIFF IS DECLARED, NEVER DISCOVERED. Each entry names the table a call changes, how to
+   find the row it changes, and WHICH FIELDS may be recorded. Everything else about that row
+   is invisible to this log -- which is rule 2 kept rather than abandoned: a field nobody
+   listed is not written, so adding one is a deliberate line of code rather than an accident
+   of a handler gaining a column.
+
+   That is why this is a list of tables and not a `select *`. Storing the whole row would turn
+   audit_log into a second, unguarded copy of whatever it watched -- the payroll, the customer
+   book -- readable by everyone the audit nav is ever ticked for.
+
+   ONLY THE FIELDS THAT MOVED are kept. A save that rewrote nothing writes no diff at all,
+   which is the honest answer: somebody pressed Save and the row is as it was.
+
+   AND ONLY WHERE A ROW CAN BE NAMED. A bulk call that touches four hundred handsets has no
+   single before and after; those entries still record who, what, when and where, and the
+   count they changed is in the handler's own answer. A diff that quietly described one of
+   four hundred rows would be worse than none. */
+const AUDIT_DIFF = {
+  /* Settings are configuration, not payload, and "who pointed the CEO's imprest mail
+     somewhere else, and where was it before" is the single most useful line this log holds. */
+  settingSet:      { table: 'settings', key: a => ({ key: a.key }), fields: ['value'] },
+  settingDelete:   { table: 'settings', key: a => ({ key: a.key }), fields: ['value'] },
+
+  /* PERMISSIONS. What a role or a code may reach is the thing an audit is opened for after
+     somebody saw a pane they should not have. */
+  saveRole:        { table: 'roles', key: a => ({ role: K_(a.role) }), fields: ['tabs'] },
+  deleteRole:      { table: 'roles', key: a => ({ role: K_(a.role) }), fields: ['tabs'] },
+  saveAccessCode:  { table: 'access_codes', key: a => ({ code: a.code }),
+                     fields: ['name', 'role', 'teams', 'tabs', 'active'] },
+  deleteAccessCode:{ table: 'access_codes', key: a => ({ code: a.code }),
+                     fields: ['name', 'role', 'teams', 'tabs', 'active'] },
+  renameAccessCode:{ table: 'access_codes', key: a => ({ code: a.code }), fields: ['name'] },
+  accessCodeSuspend:{ table: 'access_codes', key: a => ({ code: a.code }),
+                     fields: ['suspend_from', 'suspend_to'] },
+  officerActive:   { table: 'access_codes', key: a => ({ code: a.code }), fields: ['active'] },
+
+  /* WHO WORKS HERE, and under whom. staffActive shuts a login; staffManager moves somebody
+     onto a different RSM, which moves every target and every commission that hangs off it. */
+  staffActive:     { table: 'hoop_agents', key: a => ({ phone: a.phone }), fields: ['active'] },
+  staffManager:    { table: 'hoop_agents', key: a => ({ phone: a.phone }), fields: ['manager'] },
+  staffChannelSave:{ table: 'hoop_agents', key: a => ({ phone: a.phone }),
+                     fields: ['role', 'manager', 'branch'] },
+
+  /* MONEY, AND ONLY ITS DECISION. `status` is who let it through; the amount stays in
+     staff_advances behind the advrep nav, where it belongs. */
+  advDecide:       { table: 'staff_advances', key: a => ({ id: a.id }), fields: ['status'] },
+  advPay:          { table: 'staff_advances', key: a => ({ id: a.id }), fields: ['status'] },
+  impDecide:       { table: 'imprest_requests', key: a => ({ id: a.id }), fields: ['status'] },
+  impRetire:       { table: 'imprest_requests', key: a => ({ id: a.id }), fields: ['status'] },
+  leaveDecide:     { table: 'leave_requests', key: a => ({ id: a.id }), fields: ['status'] },
+  topupUpdate:     { table: 'topups', key: a => ({ id: a.id }), fields: ['status'] },
+  stockDecide:     { table: 'stock_requests', key: a => ({ id: a.id }), fields: ['status'] },
+  stockIssue:      { table: 'stock_requests', key: a => ({ id: a.id }), fields: ['status'] },
+  commDecide:      { table: 'commission_runs', key: a => ({ id: a.id }), fields: ['status'] },
+  commPay:         { table: 'commission_runs', key: a => ({ id: a.id }), fields: ['status'] },
+  lossUpdate:      { table: 'loss_cases', key: a => ({ id: a.id }), fields: ['status'] },
+  issueUpdate:     { table: 'issues', key: a => ({ id: a.id }),
+                     fields: ['status', 'to_role', 'to_code'] },
+
+  /* ONE HANDSET, ONE ORDER. deviceSetState takes a LIST and is deliberately absent: a diff
+     that described one of four hundred phones would be a lie about the other 399. */
+  deviceDelete:    { table: 'devices', key: a => ({ imei: a.imei }), fields: ['state', 'holder'] },
+};
+const K_ = s => String(s == null ? '' : s).trim().toUpperCase();
+
+/** Read the one row a call is about, or null. Never throws: a diff is a nicety and the save
+    it accompanies is not. */
+async function auditRowOf(db, spec, args) {
+  try {
+    const where = spec.key(args || {});
+    for (const v of Object.values(where)) if (v == null || v === '') return null;
+    let q = db.from(spec.table).select(spec.fields.join(', '));
+    for (const [k, v] of Object.entries(where)) q = q.eq(k, v);
+    const { data, error } = await q.limit(1);
+    if (error || !data || !data.length) return null;
+    return data[0];
+  } catch (e) { return null; }
+}
+
+/** What actually moved, as two objects holding the SAME keys. Values are shortened, because a
+    tabs array can be forty entries long and a log is read by a person. */
+function auditDiff(before, after, fields) {
+  if (!before && !after) return null;
+  const b = {}, a = {};
+  let moved = 0;
+  for (const f of fields) {
+    const x = before ? before[f] : undefined;
+    const y = after ? after[f] : undefined;
+    if (JSON.stringify(x === undefined ? null : x) === JSON.stringify(y === undefined ? null : y)) continue;
+    b[f] = auditVal(x); a[f] = auditVal(y); moved++;
+  }
+  return moved ? { before: b, after: a } : null;
+}
+/** One value, made readable and made small. An array becomes a joined string because that is
+    how a tab list is read; anything longer than a line is cut, with the cut made visible. */
+function auditVal(v) {
+  if (v === undefined || v === null) return null;
+  if (Array.isArray(v)) v = v.join(' ');
+  if (typeof v === 'object') { try { v = JSON.stringify(v); } catch (e) { v = '?'; } }
+  const s = String(v);
+  return s.length > 300 ? s.slice(0, 300) + '…' : s;
+}
+
 const short = v => (v == null ? null : String(v).replace(/\s+/g, ' ').trim().slice(0, 240) || null);
 
 /** Awaited, but incapable of failing. Returns a promise that ALWAYS resolves, and throws
@@ -126,7 +234,7 @@ export function auditWrite(db, row) {
 
 /** Wraps one dispatched call. The handler's own result and its own errors pass straight
     through; this only watches. */
-export async function audited(db, user, fn, args, run) {
+export async function audited(db, user, fn, args, run, where) {
   if (!AUDITED.has(fn)) return run();
   const started = Date.now();
   const base = {
@@ -137,27 +245,99 @@ export async function audited(db, user, fn, args, run) {
     ref: short(args && args.ref),
     team: short(args && args.team),
     subject: subjectOf(args),
+    /* WHERE, as far as a server can honestly know it: what came with the request. Not a place
+       on a map -- what tells an admin that a code was used from an address it has never been
+       used from before. */
+    ip: short(where && where.ip),
+    ua: short(where && where.ua),
   };
+  /* THE ROW AS IT STANDS, read BEFORE the handler runs, because afterwards it is gone. Only
+     for the calls AUDIT_DIFF names, only the fields it names, and never at the cost of the
+     save: auditRowOf swallows everything. */
+  const spec = AUDIT_DIFF[fn] || null;
+  const before = spec ? await auditRowOf(db, spec, args) : null;
   try {
     const out = await run();
-    await auditWrite(db, { ...base, ok: true, error: null, ms: Date.now() - started });
+    const d = spec ? auditDiff(before, await auditRowOf(db, spec, args), spec.fields) : null;
+    await auditWrite(db, { ...base, ok: true, error: null, ms: Date.now() - started,
+      before: d ? d.before : null, after: d ? d.after : null });
     return out;
   } catch (e) {
-    await auditWrite(db, { ...base, ok: false, error: short(e && e.message) || 'failed', ms: Date.now() - started });
+    /* A REFUSED ATTEMPT CHANGED NOTHING, so there is no "after" -- and saying so is the point.
+       `before` still rides along: what somebody tried to overwrite is half of what a refused
+       attempt is worth reading for. */
+    await auditWrite(db, { ...base, ok: false, error: short(e && e.message) || 'failed',
+      ms: Date.now() - started,
+      before: before && spec ? pick_(before, spec.fields) : null, after: null });
     throw e;   // the handler's own error, unchanged: auditWrite cannot reject
   }
+}
+const pick_ = (row, fields) => {
+  const out = {};
+  for (const f of fields) out[f] = auditVal(row[f]);
+  return out;
+};
+
+/* =======================================================================================
+   FIFTEEN DAYS, AND THE APP IS WHAT DELETES.
+
+     "{auto-delete history of 15 days+}"
+
+   THERE IS NO SCHEDULER IN THIS PROJECT, and a retention rule that depends on a cron nobody
+   set up is a retention rule that silently does not exist -- the worst possible state for a
+   promise about deleting data. So the deleting happens on the two occasions this table is
+   already being touched:
+
+     when the pane is opened   whoever looks at the log gets a pruned log, every time
+     behind a write            at most once an hour per running instance, so a busy morning
+                               costs one small delete rather than one per save
+
+   IT CAN NEVER BREAK A SAVE OR A READ. Every failure is swallowed, exactly like auditWrite:
+   an audit log that could fail the thing it was watching is a worse system than none.
+
+   THE WINDOW IS A SETTING so fifteen days can become thirty without a deploy, and it is read
+   only here -- a prune is rare; a write is not, and it must not cost an extra read. */
+export const AUDIT_KEEP_DAYS = 15;
+let lastPruneMs = 0;
+const PRUNE_EVERY_MS = 60 * 60 * 1000;
+
+async function keepDays(db) {
+  try {
+    const { data } = await db.from('settings').select('value').eq('key', 'AUDIT_KEEP_DAYS').maybeSingle();
+    const n = parseInt((data && data.value) || '', 10);
+    /* A floor of one day, because a zero or a minus read out of a settings row somebody typed
+       by hand would delete the log the moment it was opened. */
+    return (isFinite(n) && n >= 1) ? Math.min(3650, n) : AUDIT_KEEP_DAYS;
+  } catch (e) { return AUDIT_KEEP_DAYS; }
+}
+
+/** Delete everything past the window. Returns the cutoff it used, or null if it did nothing.
+    Never throws. */
+export async function auditPrune(db, { force = false, nowMs = Date.now() } = {}) {
+  if (!force && nowMs - lastPruneMs < PRUNE_EVERY_MS) return null;
+  lastPruneMs = nowMs;
+  try {
+    const days = await keepDays(db);
+    const cutoff = new Date(nowMs - days * 86400000).toISOString();
+    const { error } = await db.from('audit_log').delete().lt('at', cutoff);
+    return error ? null : cutoff;
+  } catch (e) { return null; }   // no table, no permission: the log still reads
 }
 
 /** The tab. Newest first, one page at a time -- a log is read from the top and the whole of it
     is never the question. */
 export async function auditList(db, { limit = 200, actor = null, action = null, from = null, to = null } = {}) {
   const n = Math.max(1, Math.min(1000, parseInt(limit, 10) || 200));
+  /* PRUNED ON THE WAY IN, forced: somebody has opened the log, so this is the one moment the
+     window is certain to be honest when it is read. */
+  await auditPrune(db, { force: true });
+  const days = await keepDays(db);
   let rows = [];
   let available = true;
   try {
     rows = await fetchAll(() => {
       let q = db.from('audit_log')
-        .select('at, actor_code, actor_name, actor_role, action, ref, team, subject, ok, error, ms')
+        .select('at, actor_code, actor_name, actor_role, action, ref, team, subject, ok, error, ms, ip, ua, before, after')
         .order('at', { ascending: false }).limit(n);
       if (actor) q = q.eq('actor_code', actor);
       if (action) q = q.eq('action', action);
@@ -166,18 +346,44 @@ export async function auditList(db, { limit = 200, actor = null, action = null, 
       return q;
     });
   } catch (e) {
-    available = false;                 // the migration has not been run yet
+    /* THE COLUMN CHECK COMES FIRST, and the order is the whole of it -- the same trap the
+       devices pane fell into. An audit_log that predates the before/after columns must read
+       as "run the newer migration", not as "there is no audit log", which would send an admin
+       hunting for a table that is sitting right there full of rows. */
+    if (/\b(ip|ua|before|after)\b/.test(String(e && e.message || ''))) {
+      try {
+        rows = await fetchAll(() => {
+          let q = db.from('audit_log')
+            .select('at, actor_code, actor_name, actor_role, action, ref, team, subject, ok, error, ms')
+            .order('at', { ascending: false }).limit(n);
+          if (actor) q = q.eq('actor_code', actor);
+          if (action) q = q.eq('action', action);
+          if (from) q = q.gte('at', from);
+          if (to) q = q.lte('at', to + 'T23:59:59.999Z');
+          return q;
+        });
+        rows = rows.slice(0, n);
+        return { rows, count: rows.length, available: true, keepDays: days,
+          note: 'Safu za thamani ya awali na mpya hazipo bado — endesha '
+            + 'db/migrations/RUN-ME-2026-09-13-audit-log.sql. / The before/after columns are '
+            + 'missing: run that migration and new entries will carry them.',
+          actors: [...new Set(rows.map(r => r.actor_name).filter(Boolean))].sort(),
+          actions: [...new Set(rows.map(r => r.action).filter(Boolean))].sort() };
+      } catch (ignored) { /* fall through to unavailable */ }
+    }
+    available = false;                 // the migration has not been run at all
   }
   rows = rows.slice(0, n);
   return {
     rows,
     count: rows.length,
     available,
+    keepDays: days,
     /* Told plainly rather than shown as an empty table, which reads as "nobody has done
        anything" -- the one conclusion an audit log must never invite by accident. */
     note: available ? null
-      : 'Kumbukumbu bado haijaanzishwa — endesha db/migrations/2026-08-09c-audit-log.sql. '
-        + '/ The audit table does not exist yet — run db/migrations/2026-08-09c-audit-log.sql.',
+      : 'Kumbukumbu bado haijaanzishwa — endesha db/migrations/RUN-ME-2026-09-13-audit-log.sql. '
+        + '/ The audit table does not exist yet — run that migration.',
     actors: [...new Set(rows.map(r => r.actor_name).filter(Boolean))].sort(),
     actions: [...new Set(rows.map(r => r.action).filter(Boolean))].sort(),
   };
