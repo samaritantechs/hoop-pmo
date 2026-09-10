@@ -805,3 +805,29 @@ reading seven titles.
 Also here: the wiring test that checks every sidebar tab reaches a draw function was reading a
 fixed 2,000 characters after `function draw()`, so it had quietly stopped covering the last few
 tabs as panes were added. It now reads the whole dispatch.
+
+## 25. SHIPPED 2026-09-10: two device desks — locking and unlocking
+
+The store keeper always locks; general duty unlocks at customer screening/POS. The full story is
+[`docs/DEVICE-DESKS.md`](DEVICE-DESKS.md); the short version:
+
+| nav | pane | may order |
+|---|---|---|
+| `devlock` | Kufunga simu / Locking | Funga, **re-lock**, Imepotea, enrol, token, delete |
+| `devunlock` | Kufungua simu / Unlocking | Fungua, Achia |
+
+**Do:** tick `devlock` on the store role and `devunlock` on general duty, then untick `devices`.
+
+Until you do, nothing changes: `devices` remains as a legacy alias expanded to both halves, the
+same way the retired `sales` key already works. No migration, no SQL.
+
+Both panes show every phone — a store keeper who cannot see whether the handset in their hand is
+locked cannot do the one job they have. What is split is what each may DO, and the gate is on the
+TRANSITION rather than on the pane: `deviceSetState` is one door for all four state changes, and a
+pane that merely hides its unlock button is a suggestion, because curl does not read HTML.
+
+**Nothing a handset observes changed.** A phone learns what to do from `commandFor(state)` over
+`/api/device` with its own token; it has never known what a nav is. The states, the beat contract,
+the token and the offline grace are untouched, and a test asserts that the phone-facing files
+contain no nav at all. Two hundred locked handsets are kilometers away; this had to be a
+permission change and only a permission change.

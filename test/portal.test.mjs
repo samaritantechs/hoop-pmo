@@ -480,10 +480,10 @@ test('locking requires a reason, and every state change lands in the event trail
   assert.ok(d._dump('devices').find(x => x.imei === 'D1').released_at);
 });
 
-test('the devices pane is granted on purpose -- the sales alias does not open it', async () => {
+test('the devices panes are granted on purpose -- the sales alias does not open either one', async () => {
   const d = fakeDb({ devices: [], device_events: [] });
   const salesOnly = { code: 'S', name: 'Sales person', role: 'RSM', tabs: ['sales'], teams: null };
-  await assert.rejects(() => _FNS.deviceList(d, salesOnly, {}), /no access to the devices pane/,
+  await assert.rejects(() => _FNS.deviceList(d, salesOnly, {}), /no access to the devlock pane/,
     'reading a stock report and locking a phone are different powers');
   // ADMIN holds every pane, as everywhere else.
   assert.equal((await _FNS.deviceList(d, ADMIN, {})).ok, true);

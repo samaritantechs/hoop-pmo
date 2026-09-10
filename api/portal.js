@@ -243,10 +243,33 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    THREE first-class panes (the owner's call), each grantable on its own; the retired
    'sales' key remains a stored alias that grants all three, so roles saved under it
    keep every door they had. */
-/* 'devices' is the phone-locking registry's own pane. It is NOT folded into the 'sales'
-   alias below with fraud/scorecards/stock/movement: locking somebody's phone is a
-   different power from reading a stock report, and it is granted on purpose or not at
-   all. ADMIN and AUDITOR still see every pane, as everywhere. */
+/* THE PHONE REGISTRY IS TWO PANES, BECAUSE IT IS TWO DEPARTMENTS.
+   ---------------------------------------------------------------------------------------------
+     "we now want storekeeper to always lock and general duty will be unlocking at customer
+      screening-pos ... all see the devices but no unlocking button in locking .. but the
+      lockers will be able to relock the devices"
+
+   devlock     the store keeper's bench: enrol, lock, RE-lock, write off, mint a token
+   devunlock   general duty at the POS: unlock, and release a finished loan
+
+   BOTH SEE EVERY PHONE. Splitting the READING would leave the store keeper unable to tell
+   whether the handset they are about to ship is locked, which is the one thing they must
+   know. What is split is what each may DO.
+
+   THE GATE IS ON THE TRANSITION, NOT ON THE PANE. deviceSetState is one door for all four
+   state changes, and a pane that merely hides its unlock button is a suggestion -- curl does
+   not read HTML. So the server asks which nav the ASKED-FOR state requires, and the two panes
+   only stop offering what would be refused.
+
+   NOTHING A HANDSET OBSERVES CHANGES. A phone learns what to do from commandFor(state) in
+   device-core.js, over /api/device, with its own per-device token; it has never known what a
+   nav is. Over two hundred locked handsets are in the field, kilometers away -- this is a
+   permission change and must stay one.
+
+   `devices` REMAINS AS A LEGACY GRANT, expanded in navsFor to both. Every code and role that
+   holds it today keeps exactly what it had; the owner re-ticks at leisure, and only then does
+   anybody lose the half they should not have had. ADMIN and AUDITOR see every pane, as
+   everywhere. */
 /* THE THREE SALARY-ADVANCE PANES, granted the ordinary way and to nobody by default.
    -------------------------------------------------------------------------------------
      "i'll grant navs to who performs what so the navs are the roles"   "not roles"
@@ -274,7 +297,20 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    department as a filter rather than a nav each; issuerep is the log book the CEO reads.
      "Log every issue raised by an agent or team leader using the designated complaint
       link/tool, which routes the issue to the appropriate department" (RSM SOP C.1) */
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devices', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'staff', 'codes', 'settings'];
+/* WHICH NAV EACH DEVICE TRANSITION NEEDS (the owner's split: "storekeeper to always lock and
+   general duty will be unlocking at customer screening-pos").
+
+     locked    devlock     the order that shuts a handset -- and re-shuts a released one
+     lost      devlock     a write-off is the bench's own stock accountability
+     enrolled  devunlock   FUNGUA: the customer paid, open the phone
+     released  devunlock   ACHIA: the loan is finished, let it go for good
+
+   Written as data rather than as branches inside the handler, because a fifth state added
+   later with no entry here is refused outright by the hasOwnProperty check above -- which is
+   the safe direction. A missing case that defaulted to "allowed" is how a nav split quietly
+   stops splitting anything. */
+const DEVICE_STATE_NAV = { locked: 'devlock', lost: 'devlock', enrolled: 'devunlock', released: 'devunlock' };
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -298,6 +334,10 @@ function navsFor(user) {
   if (advSeesEveryRole(user)) return NAV_TABS.slice();
   const t = (user.tabs || []).map(x => String(x).toLowerCase());
   if (t.includes('sales')) t.push('fraud', 'scorecards', 'stock', 'movement');
+  /* THE LEGACY DEVICE GRANT. A code or role ticked `devices` before the split gets both
+     halves, so nobody's bench went dark the morning this shipped. Re-ticking is what
+     separates them, and that is the owner's act rather than a deploy's. */
+  if (t.includes('devices')) t.push('devlock', 'devunlock');
   const chosen = NAV_TABS.filter(k => t.includes(k));
   // 'dashboard' and 'settings' were the OLD vocabulary too -- a role carrying only
   // those was saved before panes were choosable and must keep the old defaults, or
@@ -2661,7 +2701,9 @@ const FNS = {
      plus one keyed read per write. No caching -- a lock screen that shows a stale state
      is the one thing this must never do. */
   async deviceList(db, user, args) {
-    requireNav(user, 'devices');
+    /* BOTH PANES SEE EVERY PHONE. A store keeper who cannot tell whether the handset in
+       their hand is locked cannot do the one job they have. */
+    requireAnyNav(user, ['devlock', 'devunlock']);
     const a = args || {};
     const want = String(a.state || '').trim();
     const CORE = 'imei, item, holder, state, state_reason, state_at, state_by, reported, '
@@ -2830,7 +2872,9 @@ const FNS = {
      Idempotent: re-enrolling a phone already on the registry is a no-op that reports
      itself, never a duplicate and never a silent state reset. */
   async deviceEnrol(db, user, args) {
-    requireWrite(user); requireNav(user, 'devices');
+    /* PROVISIONING IS THE BENCH'S OWN WORK: the store keeper puts the app on the phone,
+       so enrolling belongs with locking. */
+    requireWrite(user); requireNav(user, 'devlock');
     const a = args || {};
     const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : String(a.imeis || '').split(/[\s,;]+/))
       .map(x => String(x || '').trim()).filter(Boolean))];
@@ -3029,12 +3073,21 @@ const FNS = {
      act with a person on the other end of it; six months later "why is this locked" has to
      have an answer, and the only reliable moment to capture one is now. */
   async deviceSetState(db, user, args) {
-    requireWrite(user); requireNav(user, 'devices');
+    requireWrite(user);
     const a = args || {};
     const to = String(a.state || '').trim();
-    if (!['enrolled', 'locked', 'released', 'lost'].includes(to)) {
+    if (!Object.prototype.hasOwnProperty.call(DEVICE_STATE_NAV, to)) {
       throw new Error('Hali si sahihi. / Unknown device state: ' + to);
     }
+    /* THE GATE IS ON THE TRANSITION, NOT ON THE PANE.
+       -----------------------------------------------------------------------------------
+       This is ONE door for all four state changes, so a pane that merely hides its unlock
+       button is a suggestion rather than a rule -- curl does not read HTML, and the whole
+       point of the split is that the store keeper cannot unlock somebody's handset. Which
+       nav is required is decided by the state being ASKED FOR, which is also what makes
+       re-locking work: a locker sending `locked` against a released phone is still asking
+       to lock, and that is theirs to ask. */
+    requireNav(user, DEVICE_STATE_NAV[to]);
     const reason = String(a.reason || '').trim();
     if ((to === 'locked' || to === 'lost') && !reason) {
       bad('Sababu inahitajika. / A reason is required to lock or write off a phone.');
@@ -3154,7 +3207,9 @@ const FNS = {
      it. This is what somebody opens when a customer is standing in front of them asking
      why their phone is locked. */
   async deviceHistory(db, user, args) {
-    requireNav(user, 'devices');
+    /* BOTH PANES SEE EVERY PHONE. A store keeper who cannot tell whether the handset in
+       their hand is locked cannot do the one job they have. */
+    requireAnyNav(user, ['devlock', 'devunlock']);
     const imei = String((args && args.imei) || '').trim();
     if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
     /* Columns named rather than `*` for one reason: `*` would carry enrol_token onto this
@@ -3192,7 +3247,8 @@ const FNS = {
      write permission and lands in the audit log with the IMEI attached. Nobody should be
      able to walk the fleet collecting tokens without that being visible afterwards. */
   async deviceToken(db, user, args) {
-    requireWrite(user); requireNav(user, 'devices');
+    /* A token is the credential that lets a handset be provisioned at all -- bench work. */
+    requireWrite(user); requireNav(user, 'devlock');
     const imei = String((args && args.imei) || '').trim();
     if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
     const rows = await fetchAll(() => db.from('devices').select('imei, enrol_token').eq('imei', imei));
@@ -3245,7 +3301,8 @@ const FNS = {
      strand it: locked forever, with nothing on the register to unlock it from. Unlock it
      first, watch it confirm, then delete. */
   async deviceDelete(db, user, args) {
-    requireWrite(user); requireNav(user, 'devices');
+    /* An eraser on the register the bench keeps. */
+    requireWrite(user); requireNav(user, 'devlock');
     const imei = String((args && args.imei) || '').trim();
     if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
     const rows = await fetchAll(() => db.from('devices')
@@ -6407,7 +6464,10 @@ const FNS = {
     if (!role) throw new Error('Role name is required.');
     // Every nav pane is a grantable tab, plus the two ACTIONS (upload, audit). A pane
     // added to NAV_TABS later is automatically grantable here -- one list, everywhere.
-    const ALLOWED = new Set([...NAV_TABS, 'upload', 'audit', 'sales']);   // 'sales' = stored alias for the three
+    /* 'sales' and 'devices' are stored ALIASES, not panes: each expands in navsFor. They stay
+       allowed so a role saved under one keeps every door it had -- dropping an alias on save
+       would quietly take a pane away from everybody holding that role. */
+    const ALLOWED = new Set([...NAV_TABS, 'upload', 'audit', 'sales', 'devices']);
     const tabs = (Array.isArray(args && args.tabs) ? args.tabs : [])
       .map(t => String(t).toLowerCase()).filter(t => ALLOWED.has(t));
     const { error } = await db.from('roles').upsert({ role, tabs }, { onConflict: 'role' });
