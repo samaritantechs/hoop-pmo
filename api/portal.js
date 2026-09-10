@@ -2342,10 +2342,13 @@ const FNS = {
     const [reg, sales, agents] = await Promise.all([
       // BRANCH, not the deck's shop-derived team: "Kinondoni" is a company location, and
       // the real branch rides the offline queue. Pre-migration databases fall back.
+      /* `price` rides along because the deck is now what the SALES half counts too (see
+         below): reading the loan book without it would have made every amount silently zero,
+         which is the kind of nothing that looks like an answer. */
       fetchAll(() => scopeQ(user, db.from('watu_loans')
-        .select('imei, agent, agent_id, team, branch, has_ever_paid, locked4, locked7, days_offline, disbursed_date')))
+        .select('imei, agent, agent_id, team, branch, price, has_ever_paid, locked4, locked7, days_offline, disbursed_date')))
         .catch(() => fetchAll(() => scopeQ(user, db.from('watu_loans')
-          .select('imei, agent, agent_id, team, has_ever_paid, locked4, locked7, days_offline, disbursed_date')))),
+          .select('imei, agent, agent_id, team, price, has_ever_paid, locked4, locked7, days_offline, disbursed_date')))),
       fetchAll(() => db.from('hoop_sales')
         .select('commission_agent, commission_phone, sale_date, price')
         .gte('sale_date', from).lte('sale_date', to)),
@@ -2385,24 +2388,86 @@ const FNS = {
       avgOff: g.offN ? Math.round(g.offSum / g.offN) : null,
       over45: g.over45,
     }; }).sort((x, y) => (y.locked7Pct || 0) - (x.locked7Pct || 0) || y.customers - x.customers);
-    const bySeller = new Map();
-    for (const s of sales) {
-      const key = pnorm(s.commission_phone) || K(s.commission_agent) || '?';
-      let g = bySeller.get(key);
-      if (!g) { g = { names: {}, phone: s.commission_phone || '', sales: 0, amount: 0 }; bySeller.set(key, g); }
-      g.sales++; g.amount += num(s.price);
-      const n = String(s.commission_agent || '').trim();
+    /* WHO SOLD IT IS THE DECK'S ANSWER, NOT THE SHOP'S.
+       -----------------------------------------------------------------------------------
+         "I said we trace sales in the watu deck uploaded by credits"
+
+       This scoreboard used to count SALES out of hoop_sales -- the shop's own book, keyed on
+       the payout phone it wrote against each receipt. That is who the shop intended to PAY,
+       which is a different fact from who the deck says financed the phone, and the two drift.
+       Everywhere else that matters already drives off the deck: targetsView measures against
+       watu_loans, commBuild builds the sheet from watu_loans and treats a shop disagreement as
+       a DISPUTE. The scorecard was the odd one out, so an agent could look busy here on
+       receipts the loan book has never heard of.
+
+       So the deck is the count, and the shop book stays as a CROSS-CHECK beside it rather
+       than being dropped: a gap between the two is the most interesting number on the row,
+       and losing it would trade one blind spot for another. Nothing is silently reconciled.
+
+       Both books are bucketed on the REGISTER'S name for the person, so a payout phone and a
+       deck spelling reach the same row -- the same resolution commBuild uses. */
+    const agByPhone = new Map(agents.map(r => [pnorm(r.phone), r]));
+    const regByNm = new Map(agents.filter(x => x.name).map(x => [nameKey(x.name), x]));
+    /* ONE KEY FOR ONE HUMAN. A register hit wins, because it is the only spelling both books
+       can be pulled onto; otherwise the name each book carries has to stand for itself. */
+    const sellerKey = (name, phone) => {
+      const byPhone = phone ? agByPhone.get(pnorm(phone)) : null;
+      if (byPhone && byPhone.name) return nameKey(byPhone.name);
+      return nameKey(name) || K(name) || '?';
+    };
+    const seller = (map, key, name, phone) => {
+      let g = map.get(key);
+      if (!g) {
+        g = { names: {}, phone: phone || '', sales: 0, amount: 0, shopSales: 0, shopAmount: 0 };
+        map.set(key, g);
+      }
+      if (!g.phone && phone) g.phone = phone;
+      const n = String(name || '').trim();
       if (n) g.names[n] = (g.names[n] || 0) + 1;
+      return g;
+    };
+    const bySeller = new Map();
+    // THE DECK, over the same window the shop book is read for -- one read, filtered here.
+    for (const r of reg) {
+      const day = String(r.disbursed_date || '').slice(0, 10);
+      if (!day || day < from || day > to) continue;
+      const who = String(r.agent || '').trim();
+      const g = seller(bySeller, sellerKey(who, ''), who || '(hakuna ajenti / no agent)', '');
+      g.sales++; g.amount += num(r.price);
+      if (!g.agentId && r.agent_id) g.agentId = r.agent_id;
     }
-    const agBy = new Map(agents.map(r => [pnorm(r.phone), r]));
+    // THE SHOP'S BOOK, beside it. A seller the shop credits and the deck does not is still a
+    // row here -- being paid for phones the loan book has never seen is the whole question.
+    for (const s of sales) {
+      const g = seller(bySeller, sellerKey(s.commission_agent, s.commission_phone),
+        s.commission_agent, s.commission_phone);
+      g.shopSales++; g.shopAmount += num(s.price);
+    }
     const sellers = [...bySeller.entries()].map(([key, g]) => {
-      const reg2 = agBy.get(key) || null;
-      const name = Object.entries(g.names).sort((x, y) => y[1] - x[1]).map(e => e[0])[0] || '';
-      return { name, phone: g.phone, sales: g.sales, amount: g.amount,
+      const reg2 = regByNm.get(key) || agByPhone.get(pnorm(g.phone)) || null;
+      const name = (reg2 && reg2.name)
+        || Object.entries(g.names).sort((x, y) => y[1] - x[1]).map(e => e[0])[0] || '';
+      return { name, phone: g.phone, agentId: g.agentId || '',
+        sales: g.sales, amount: g.amount,
+        shopSales: g.shopSales, shopAmount: g.shopAmount,
+        // Positive: the deck credits them with more than the shop did. Negative: the reverse.
+        drift: g.sales - g.shopSales,
+        // The row worth opening: the shop is paying somebody the loan book cannot account for.
+        shopOnly: g.shopSales > 0 && g.sales === 0,
         reg: reg2 ? { name: reg2.name, role: reg2.role || '', branch: reg2.branch || '',
           kin: reg2.kin_name || '', kinPhone: reg2.kin_phone || '' } : null };
-    }).sort((x, y) => y.sales - x.sales);
-    return { ok: true, from, to, watuAgents: watuAgents.slice(0, 300), sellers: sellers.slice(0, 300) };
+    }).sort((x, y) => y.sales - x.sales || y.shopSales - x.shopSales);
+    return { ok: true, from, to,
+      watuAgents: watuAgents.slice(0, 300), sellers: sellers.slice(0, 300),
+      /* Said out loud on the pane, because a column headed "sales" that quietly changed
+         meaning is worse than one that says which book it came from. */
+      salesSource: 'watu_loans',
+      totals: {
+        deckSales: sellers.reduce((n, r) => n + r.sales, 0),
+        shopSales: sellers.reduce((n, r) => n + r.shopSales, 0),
+        shopOnly: sellers.filter(r => r.shopOnly).length,
+        drifting: sellers.filter(r => r.drift !== 0).length,
+      } };
   },
 
   /** STOO BY HOLDER -- Sipho's aged-stock report grouped per RSM / agent: pieces held,
