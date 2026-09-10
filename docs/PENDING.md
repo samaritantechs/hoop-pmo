@@ -831,3 +831,33 @@ pane that merely hides its unlock button is a suggestion, because curl does not 
 the token and the offline grace are untouched, and a test asserts that the phone-facing files
 contain no nav at all. Two hundred locked handsets are kilometers away; this had to be a
 permission change and only a permission change.
+
+## 26. SHIPPED 2026-09-10: the role's ticks are the grant
+
+"I just assign someone as RSM CREDIT STORE etc and they get the roles I assigned; their navs by
+ticking and not the whole dept." The full story is [`docs/ROLE-GRANT.md`](ROLE-GRANT.md); the
+short version.
+
+**Do:** nothing, unless you want to. Every existing code keeps exactly what it had. To get the
+new behaviour, open Access codes → Roles, tick each role's panes, and hand people the role — the
+form now previews what they are about to get. No migration.
+
+WHAT WAS ACTUALLY HAPPENING. Four nav keys are also old-vocabulary words: dashboard, reports,
+commission and settings. navsFor's guard excluded two of them, hand-written, and went quietly
+wrong the day `commission` became a nav. So a role with nothing ticked handed somebody Dashboard,
+Call reports and COMMISSION — the pane that builds sheets, sets rates and pays agents — and
+ticking only Dashboard handed over Customers, Call reports, Recovery and Staff as well.
+
+Three narrowings. resolveTabs now takes `roleKnown`, the ROW's existence, which is a different
+question from whether the row ticked anything: no row means never configured (old defaults), a
+row with no ticks means somebody answered and the answer is nothing. The ambiguous set is derived
+from the two live lists instead of written out, so it cannot go stale again. And the legacy
+branch fires on a legacy WORD — one this system can no longer offer to tick — rather than on the
+absence of an obvious one.
+
+Both sides hold: a deliberate tick of `commission` still grants Commission, and a
+never-configured code still keeps Customers, Call reports, Recovery and Staff without collecting
+Commission on the way.
+
+One behaviour change worth knowing: a role ticked with ONLY `settings` used to fall through to
+nine panes and now gets Settings. That is the fix working as asked.

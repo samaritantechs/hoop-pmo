@@ -2240,3 +2240,30 @@ test('portal.html: the mode is read off TAB, so it can never point at the pane y
   for (const k of ['devlock', 'devunlock']) assert.match(lbl[0], new RegExp('\\b' + k + ":'[^']+'"));
   assert.ok(!/\bdevices:'/.test(lbl[0]), 'the old single grant is no longer offered to tick');
 });
+
+/* =========================================================================================
+   THE ROLE'S TICKS ARE THE GRANT -- and the page has to say so before somebody is handed a
+   code, not after they sign in and find an empty sidebar.
+   ========================================================================================= */
+test('portal.html: picking a role previews exactly what it opens, including nothing', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawCodes', html);
+  assert.match(fn, /var acPreview=function\(\)/);
+  // The preview reads the roles the SERVER sent -- never a second opinion computed here.
+  assert.match(fn, /\(d\.roles\|\|\[\]\)\.filter\(function\(x\)\{ return String\(x\.role\)===role/);
+  assert.match(fn, /haina nav hata moja/, 'a role that opens nothing says so, loudly');
+  assert.match(fn, /note bad/);
+  assert.match(fn, /inafungua:/, 'and one that opens something lists the panes');
+  assert.match(fn, /\$\('#acRole'\)\.onchange=acPreview/, 'it follows the picker');
+  assert.match(fn, /acPreview\(\);\n\s*\$\('#acCode'\)\.focus\(\)/, 'and follows Hariri filling the form');
+  // ADMIN and AUDITOR are their own answers, not a tick list.
+  assert.match(fn, /up==='ADMIN'/);
+  assert.match(fn, /AUDITOR/);
+});
+
+test('portal.html: a role chip shows what it grants, and shouts when it grants nothing', () => {
+  const html = read('portal.html');
+  const fn = IMP_SRC('drawCodes', html);
+  assert.match(fn, /hakuna nav/, 'an empty role is visible in the list, not only in the preview');
+  assert.match(fn, /\(r\.tabs\|\|\[\]\)\.length\?' \\u00B7 '\+esc\(\(r\.tabs\|\|\[\]\)\.join\('\+'\)\)/);
+});

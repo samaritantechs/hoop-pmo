@@ -7808,6 +7808,12 @@ function drawCodes(m){
       +'<div class="row" style="margin-top:14px"><input class="inp" id="acCode" placeholder="Code (siri)"><input class="inp" id="acName" placeholder="Jina">'
       +'<select class="inp" id="acRole">'+(d.roles||[]).map(function(r){return '<option>'+esc(r.role)+'</option>';}).join('')+'</select>'
       +'<input class="inp" id="acTeams" placeholder="Timu: andika ALL au orodha (comma)"><button class="btn sm" id="acAdd">Ongeza</button></div>'
+      /* WHAT THIS PERSON WILL ACTUALLY GET, said before the code is saved rather than
+         discovered by them at sign-in.
+           "I just assign someone as RSM CREDIT STORE etc and they get the roles I assigned"
+         The role IS the grant, so the one thing this form must show is what the chosen role
+         opens -- and, just as importantly, when it opens nothing at all. */
+      +'<div id="acPrev" class="note" style="font-size:11.5px;margin-top:6px"></div>'
       +'<div class="mut" style="margin-top:6px">ADMIN inapata kila kitu. AUDITOR ni kuangalia tu. '
       +'Hariri hujaza fomu — badilisha chochote (hata Code yenyewe, hata yako) kisha Hifadhi.</div>'
       +'</div>'
@@ -7815,7 +7821,12 @@ function drawCodes(m){
       +'<div class="row" style="flex-wrap:wrap">'+(d.roles||[]).map(function(r){
           return '<span style="display:inline-flex;align-items:center;gap:2px">'
             +'<button class="btn sm ghost" data-rl="'+esc(r.role)+'" data-rltabs="'+esc((r.tabs||[]).join(','))+'">'
-            +esc(r.role)+((r.tabs||[]).length?' \u00B7 '+esc((r.tabs||[]).join('+')):'')
+            +esc(r.role)
+            /* A ROLE WITH NOTHING TICKED NOW GRANTS NOTHING, which is the answer the owner
+               asked for -- and an answer nobody should have to discover by handing somebody a
+               code and watching their sidebar come up empty. */
+            +((r.tabs||[]).length?' \u00B7 '+esc((r.tabs||[]).join('+'))
+              :' \u00B7 <span class="chip bad">hakuna nav</span>')
             +(r.inUse?' \u00B7 <span class="chip">watu '+r.inUse+'</span>':'')+'</button>'
             +(!r.inUse?'<button class="btn sm ghost" data-rldel="'+esc(r.role)+'" title="Futa role hii" style="color:var(--bad);border-color:#F6CFCB;padding:7px 9px">\u00D7</button>':'')
             +'</span>';
@@ -7936,9 +7947,34 @@ function drawCodes(m){
         $('#acRole').value=b.getAttribute('data-role')||'ADMIN';
         $('#acTeams').value=b.getAttribute('data-teams')||'';
         $('#acAdd').textContent='Hifadhi / Save';
+        acPreview();
         $('#acCode').focus();
       };
     });
+    /* THE PREVIEW. Reads the SAME role rows the server sent, so what it promises is what the
+       role actually carries -- never a second opinion computed on the client. It is redrawn
+       whenever the role picker moves, and once now for whatever is selected. */
+    var acPreview=function(){
+      var el=$('#acPrev'); if(!el) return;
+      var role=($('#acRole').value||'').trim();
+      var r=(d.roles||[]).filter(function(x){ return String(x.role)===role; })[0];
+      var up=role.toUpperCase();
+      if(up==='ADMIN'){ el.className='note ok'; el.innerHTML='<b>ADMIN</b> — kila nav, kila wakati. / every pane, always.'; return; }
+      if(['AUDITOR','READONLY','READ ONLY','READ-ONLY'].indexOf(up)>=0){
+        el.className='note'; el.innerHTML='<b>'+esc(role)+'</b> — anaona kila kitu, habadilishi chochote. / sees everything, changes nothing.'; return; }
+      var tabs=(r&&r.tabs)||[];
+      if(!tabs.length){
+        el.className='note bad';
+        el.innerHTML='<b>'+esc(role||'—')+'</b> haina nav hata moja, kwa hiyo mtu huyu hataona kitu. '
+          +'Tick navs kwenye <b>Roles</b> hapa chini kwanza. '
+          +'/ This role opens nothing yet — tick its navs under Roles below first.';
+        return;
+      }
+      el.className='note ok';
+      el.innerHTML='<b>'+esc(role)+'</b> inafungua: '+tabs.map(function(k){ return '<span class="chip">'+esc(k)+'</span>'; }).join(' ');
+    };
+    if($('#acRole')) $('#acRole').onchange=acPreview;
+    acPreview();
     $('#acAdd').onclick=function(){
       var role=$('#acRole').value;
       var tabs=role==='ADMIN'?['upload','settings']:[];
