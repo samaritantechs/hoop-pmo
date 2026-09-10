@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { supabase, fetchAll } from './_lib/supabase.js';
-import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole } from './_lib/auth.js';
+import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole, USER_TABS, EXTRA_TABS } from './_lib/auth.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey, addDaysKey, weekMondayKey, TZ_OFFSET_MS } from './_lib/time.js';
 import { sendMail, noticeHtml } from './_lib/mail.js';
@@ -330,6 +330,29 @@ const advSeesEveryRole = user => isAdminRole(user) || isReadOnly(user);
    that one person, and the tick is the permission. The is_leader column stays in the database,
    because a column that exists harms nothing and a migration that drops one can; nothing reads
    it any more. */
+/* A WORD FROM BEFORE PANES WERE CHOOSABLE. The roles editor can only ever tick a NAV_TABS
+   key, and the two stored ALIASES are expanded above -- so anything else on a row (followup,
+   par, present, weekly, upload, audit) is a word this system can no longer hand out, and can
+   only have been saved back when the vocabulary was different.
+
+   Derived from the live lists rather than written out, so it cannot fall out of step with
+   them: a nav added tomorrow stops counting as legacy the moment it is grantable. */
+const isLegacyWord = k => !NAV_TABS.includes(k) && k !== 'sales' && k !== 'devices';
+
+/* WORDS THAT MEAN BOTH THINGS. A handful of nav keys were ALSO in the old vocabulary, so
+   finding one on a row proves nothing about whether anybody ticked it: dashboard, reports,
+   commission and settings all arrive by themselves on a code saved years ago.
+
+   This list used to be written out as `k !== 'dashboard' && k !== 'settings'` -- correct when
+   it was written, and quietly wrong from the day `commission` was added to NAV_TABS. Nobody
+   revisits a hand-written exclusion list, so the consequence sat there: a code whose role had
+   never been configured resolved to the old vocabulary, `reports` made the guard read it as a
+   deliberate choice, and `commission` came along with it. Somebody nobody had ticked anything
+   for could build a commission sheet and pay agents.
+
+   Derived from the two live lists now, so it cannot go stale again. */
+const AMBIGUOUS_NAVS = new Set(NAV_TABS.filter(k => USER_TABS.includes(k) || EXTRA_TABS.includes(k)));
+
 function navsFor(user) {
   if (advSeesEveryRole(user)) return NAV_TABS.slice();
   const t = (user.tabs || []).map(x => String(x).toLowerCase());
@@ -339,14 +362,29 @@ function navsFor(user) {
      separates them, and that is the owner's act rather than a deploy's. */
   if (t.includes('devices')) t.push('devlock', 'devunlock');
   const chosen = NAV_TABS.filter(k => t.includes(k));
-  // 'dashboard' and 'settings' were the OLD vocabulary too -- a role carrying only
-  // those was saved before panes were choosable and must keep the old defaults, or
-  // yesterday's codes go dark today. Any OTHER nav key means the owner chose deliberately.
-  if (chosen.some(k => k !== 'dashboard' && k !== 'settings')) return chosen;
-  const base = LEGACY_NAVS.slice();
-  if (t.includes('settings')) base.push('codes', 'settings');
-  if (t.includes('settings') || t.includes('upload')) base.push('fraud', 'scorecards', 'stock', 'movement');
-  return base;
+  // A nav that is NOT also an old-vocabulary word can only have been ticked on purpose, so
+  // the moment one appears the list is a deliberate choice and is honoured whole.
+  if (chosen.some(k => !AMBIGUOUS_NAVS.has(k))) return chosen;
+  /* THE TICKS ARE THE GRANT, AND THE OLD VOCABULARY IS HOW WE KNOW THERE WERE NO TICKS.
+     -------------------------------------------------------------------------------------
+       "their navs by ticking and not the whole dept"
+
+     The legacy defaults below exist for one reason: a code saved BEFORE panes were choosable
+     carries the old vocabulary -- followup, par, present, weekly -- and would go dark if that
+     were read as "nothing ticked". LEGACY_VOCAB is exactly those words: in USER_TABS, and not
+     a nav anybody can tick today. So a row carrying one of them is a row from back then.
+
+     Anything else is a deliberate choice and is honoured EXACTLY, including a choice of one
+     pane and including a choice of none. Ticking only Dashboard used to fall through here and
+     quietly hand over Customers, Call reports, Recovery and Staff as well -- which is the
+     "whole dept" the owner is asking us to stop doing. */
+  if (t.some(isLegacyWord)) {
+    const base = LEGACY_NAVS.slice();
+    if (t.includes('settings')) base.push('codes', 'settings');
+    if (t.includes('settings') || t.includes('upload')) base.push('fraud', 'scorecards', 'stock', 'movement');
+    return base;
+  }
+  return chosen;
 }
 /* ---------- SALARY ADVANCE: the shape all three panes agree on ---------- */
 /* THE ONLY AMOUNTS THERE ARE. The owner named four and the request is a dropdown, so this is

@@ -222,12 +222,33 @@ export function isReadOnly(user) {
   return READONLY_ROLES.has(String((user && user.role) || '').trim().toUpperCase());
 }
 
-export function resolveTabs(user, roleTabs) {
+/* THE ROLE'S TICKS ARE THE GRANT.
+   =============================================================================================
+     "Roles enrollment should be like of hopemo -- I just assign someone as RSM CREDIT STORE etc
+      and they get the roles I assigned; their navs by ticking and not the whole dept"
+
+   `roleKnown` is the whole of this change: whether a row for this role EXISTS in the roles
+   table. It is not the same question as whether that row ticked anything, and conflating the
+   two is what made a brand-new role hand out somebody else's pane.
+
+     no row at all      nobody has ever configured this role -- keep the old defaults, or every
+                        code saved before panes were choosable goes dark on deploy day
+     a row, no ticks    somebody configured it and ticked nothing. That is an answer, and the
+                        answer is NOTHING
+
+   WHAT THIS FIXES, plainly: the fallback below used to fire whenever the merged list came back
+   empty, which included a freshly created role. USER_TABS is the OLD vocabulary, and three of
+   its entries are still live nav keys -- dashboard, reports, and COMMISSION. So creating a role
+   called STORE, ticking nothing on it yet, and handing somebody that code gave them the
+   Commission pane: building sheets, setting rates, paying agents. Nobody ticked it and nothing
+   on any screen said so. */
+export function resolveTabs(user, roleTabs, roleKnown) {
   if (String(user.role || '').trim().toUpperCase() === 'ADMIN') return ADMIN_TABS.slice();
   // Everything an admin can SEE, none of what an admin can DO -- upload is a write tool.
   if (isReadOnly(user)) return USER_TABS.concat(['settings', 'audit']);
   const merged = [...new Set([...(user.tabs || []), ...(roleTabs || [])])];
-  return merged.length ? merged : USER_TABS.slice();
+  if (merged.length) return merged;
+  return roleKnown ? [] : USER_TABS.slice();
 }
 
 /** Same as can_() -- checks the role's tab permissions. Extend ROLE_TABS as roles are migrated. */
@@ -251,7 +272,9 @@ export async function can(user, tab) {
 export async function authCodeResolved(code) {
   const user = await authCode(code);
   const { data } = await supabase.from('roles').select('tabs').eq('role', user.role).maybeSingle();
-  user.tabs = resolveTabs(user, data && data.tabs);
+  /* `!!data` -- the ROW's existence, not its contents. See resolveTabs: "configured and
+     ticked nothing" is a different answer from "never configured". */
+  user.tabs = resolveTabs(user, data && data.tabs, !!data);
   // Carried on the user object so every enforcement point reads ONE fact, resolved once.
   user.readOnly = isReadOnly(user);
   return user;
