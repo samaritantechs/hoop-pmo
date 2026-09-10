@@ -3272,13 +3272,33 @@ const FNS = {
     requireAnyNav(user, ['devlock', 'devunlock']);
     const a = args || {};
     const want = String(a.state || '').trim();
+    /* FIND ONE HANDSET, FAST.
+       =====================================================================================
+         "Add a search at unlocking before the Achia kwa wingi button. General duty need to
+          unlock phones by application and finding a single phone in fast speed is hard, so
+          if they search imei there it remains itself on the below list."
+
+       IT HAS TO BE THE SERVER'S SEARCH, not the browser's. This pane holds the newest 500
+       rows; the register is bigger than that and getting bigger. A filter over what is
+       already on screen would answer "no such phone" about a handset that is sitting in the
+       operator's hand, which is the one answer this box must never give.
+
+       DIGITS ONLY, because an IMEI is digits. That means a paste of "IMEI: 3513 8833 4583
+       295" finds the phone -- somebody reading off a handset screen or a sticker types what
+       they see -- and it also means `%` and `_` can never reach the LIKE pattern, so the
+       escaping question does not arise at all. */
+    const find = String(a.q == null ? '' : a.q).replace(/\D/g, '');
     const CORE = 'imei, item, holder, state, state_reason, state_at, state_by, reported, '
       + 'last_seen, app_version, battery, android, sold_ref, customer, enrolled_at';
     const LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
     const build = (cols) => {
-      let q = db.from('devices').select(cols);
-      if (['enrolled', 'locked', 'released', 'lost'].includes(want)) q = q.eq('state', want);
-      return q;
+      const qy = db.from('devices').select(cols);
+      /* A SEARCH OUTRANKS THE STATE CHIP. The desk is holding ONE phone and wants THAT row.
+         If the pane happened to be filtered to "tayari" and the handset is locked, an
+         obedient search would report nothing found about a phone the operator can see. */
+      if (find) return qy.ilike('imei', '%' + find + '%');
+      if (['enrolled', 'locked', 'released', 'lost'].includes(want)) return qy.eq('state', want);
+      return qy;
     };
     /* BEFORE THE MIGRATION IS RUN, this table does not exist, and PostgREST answers with a
        relation-not-found that fetchAll turns into a throw -- which withApi reports as a 500.
@@ -3423,6 +3443,10 @@ const FNS = {
     });
     const count = f => out.filter(f).length;
     return { ok: true, rows: out.slice(0, 500), total: out.length,
+      /* WHAT WAS SEARCHED FOR, back on the wire. The box shows the digits the server actually
+         used rather than what was typed, so "IMEI: 3513 8833" reads back as 35138833 and
+         nobody wonders why the spaces stopped mattering. */
+      q: find, searching: !!find,
       counts: {
         enrolled: count(r => r.state === 'enrolled'),
         locked: count(r => r.state === 'locked'),

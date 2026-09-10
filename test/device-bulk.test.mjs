@@ -204,8 +204,13 @@ test('the last button takes the list, and never the ticks', () => {
      bench that could paste its way to a release would be the nav split undone by a textarea. */
   assert.match(bar, /data-dvbulk="'\+\(canLock\?'locked':'released'\)\+'"/);
   assert.match(bar, /canLock\?'Funga kwa wingi[^']*':'Achia kwa wingi/);
-  // Pushed away from the others, because it does not act on the selection they act on.
-  assert.match(bar, /<span style="flex:1"><\/span>'\s*\+'<button[^']*id="dvBulk"/);
+  /* Pushed away from the others, because it does not act on the selection they act on -- and
+     the search now sits between the spacer and it, which is where the ask put it:
+     "add a search at unlocking BEFORE the Achia kwa wingi button". */
+  const at = t => { const i = bar.indexOf(t); assert.ok(i > 0, 'missing: ' + t); return i; };
+  assert.ok(at('<span style="flex:1"></span>') < at('id="dvQ"'));
+  assert.ok(at('id="dvQ"') < at('id="dvFind"'));
+  assert.ok(at('id="dvFind"') < at('id="dvBulk"'), 'the search comes before the bulk button');
   assert.match(bar, /rb\.onclick[^;]*devBulkForm\(m, rb\.getAttribute\('data-dvbulk'\)\)/,
     'and the order comes off the button rather than out of DEVMODE a second time');
 
@@ -265,4 +270,95 @@ test('the IMEIs the register never heard of are named on screen, not counted', (
   const many = run('devUnknownDrawer_', 'unlock');
   many.fn({ notEnrolled: 33, notEnrolledList: Array.from({ length: 20 }, (_, i) => 'X' + i) });
   assert.match(many.out.html, /na nyingine 13|13 more/);
+});
+
+/* =========================================================================================
+   FINDING ONE HANDSET, FAST.
+
+     "Add a search at unlocking before the Achia kwa wingi button. General duty need to unlock
+      phones by application and finding a single phone in fast speed is hard, so if they search
+      imei there it remains itself on the below list."
+
+   IT IS THE SERVER'S SEARCH, NOT THE BROWSER'S, and that is the whole of it. The pane holds
+   the newest 500 rows; the register is bigger than that and growing. A filter over what is
+   already on screen would answer "no such phone" about a handset sitting in the operator's
+   hand -- the one answer this box must never give.
+   ========================================================================================= */
+test('the search reaches the whole register, not just the rows on screen', async () => {
+  const many = Array.from({ length: 520 }, (_, i) =>
+    dev({ imei: '35100000000' + String(i).padStart(4, '0'), state: 'locked' }));
+  // The one the customer brought in, deliberately last so it is off the end of the 500.
+  many.push(dev({ imei: '351929937378664', state: 'locked' }));
+  const db = devDb(many);
+
+  const all = await _FNS.deviceList(db, DUTY, {});
+  assert.equal(all.rows.length, 500, 'the pane only ever holds 500');
+  assert.equal(all.total, 521);
+
+  const one = await _FNS.deviceList(db, DUTY, { q: '351929937378664' });
+  assert.equal(one.rows.length, 1, 'and the search finds it anyway');
+  assert.equal(one.rows[0].imei, '351929937378664');
+  assert.equal(one.searching, true);
+  assert.equal(one.q, '351929937378664', 'the digits it actually used come back');
+});
+
+test('the digits are what count, so a paste off a sticker still finds the phone', async () => {
+  const db = devDb([dev({ imei: '351929937378664', state: 'locked' })]);
+  for (const typed of ['351929937378664', 'IMEI: 3519 2993 7378 664', '  351929937378664  ',
+    'imei/351929937378664']) {
+    const d = await _FNS.deviceList(db, DUTY, { q: typed });
+    assert.equal(d.rows.length, 1, 'did not find it from: ' + typed);
+  }
+  // A partial is a search: the last six digits are what somebody reads off a screen.
+  assert.equal((await _FNS.deviceList(db, DUTY, { q: '378664' })).rows.length, 1);
+  /* AND THE LIKE WILDCARDS CANNOT REACH THE PATTERN, because they are not digits. A bare `%`
+     would otherwise match the whole fleet and read as a search that found everything. */
+  assert.equal((await _FNS.deviceList(db, DUTY, { q: '%' })).searching, false,
+    'no digits is no search, not a search for everything');
+  assert.equal((await _FNS.deviceList(db, DUTY, { q: '%' })).rows.length, 1, 'so the fleet is shown');
+});
+
+test('a search outranks the state chip, because the desk is holding that phone', async () => {
+  /* If the pane happened to be filtered to "tayari" and the handset is locked, an obedient
+     search would report nothing found about a phone the operator can see. */
+  const db = devDb([
+    dev({ imei: 'AAA111', state: 'locked' }),
+    dev({ imei: 'BBB222', state: 'enrolled' }),
+  ]);
+  assert.deepEqual((await _FNS.deviceList(db, DUTY, { state: 'enrolled' })).rows.map(r => r.imei),
+    ['BBB222'], 'the chip alone narrows to its state');
+  const d = await _FNS.deviceList(db, DUTY, { state: 'enrolled', q: '111' });
+  assert.deepEqual(d.rows.map(r => r.imei), ['AAA111'],
+    'but the search wins: that is the phone that was asked for');
+});
+
+test('both desks can search, and it changes nothing about who may act', async () => {
+  const db = devDb([dev({ imei: 'AAA111', state: 'locked' })]);
+  const BOSS = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
+  const AUDIT = { code: 'V1', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['devlock'], readOnly: true };
+  for (const who of [STORE, DUTY, BOSS, AUDIT]) {
+    assert.equal((await _FNS.deviceList(db, who, { q: '111' })).rows.length, 1,
+      (who.name || who.code) + ' can find a handset');
+  }
+  /* A SEARCH IS A READ. Finding a phone on the wrong desk still does not let you order
+     anything about it -- the gate is on the transition, as it has been throughout. */
+  await assert.rejects(() => _FNS.deviceSetState(db, STORE, { imeis: ['AAA111'], state: 'enrolled' }),
+    /no access to the devunlock pane/);
+});
+
+test('an empty search leaves no trap: the box that caused it is still on screen', () => {
+  const bar = src('devPaint_');
+  /* The action bar used to render only when there were rows. Type one wrong digit, get no
+     rows, and the box you would clear the search in went with them. */
+  assert.match(bar, /var actions=\(!rows\.length && !d\.searching\) \? '' :/);
+  // While a search is live the tiles are replaced: they count the fleet, and the server has
+  // just answered about one phone.
+  assert.match(bar, /var tiles=d\.searching/);
+  assert.match(bar, /id="dvClear"/, 'and the banner carries the way out');
+  assert.match(bar, /No handset carries those digits/);
+
+  const wire = src('devPaint_');
+  assert.match(wire, /qBox\.onkeydown[\s\S]{0,120}Enter/, 'Enter searches: the hands are on the keys');
+  assert.match(wire, /if\(v===String\(DEV\.q\|\|''\)\) return;/,
+    'and an unchanged box does not re-read the register for nothing');
 });
