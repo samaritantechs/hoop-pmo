@@ -671,7 +671,7 @@ test('the pane opens as a worklist: the round first, then the handsets', () => {
   assert.match(age, /tangu '\+esc\(r\.asOf/, 'and each age says what it started at, and when');
 });
 
-test('the two lists are chips, and only the chosen one is drawn', () => {
+test('the three lists are chips, and only the chosen one is drawn', () => {
   /* "Ziara / The round and Simu / The handsets should be chipped that the list opens once
       clicked like the chipping feature i've been using in hopepmo"
 
@@ -680,11 +680,12 @@ test('the two lists are chips, and only the chosen one is drawn', () => {
   const src = fnSrc('osPaint_');
   assert.match(src, /var SECS=\[\['round','Ziara \/ The round'/);
   assert.match(src, /\['handsets','Simu \/ The handsets'/);
+  assert.match(src, /\['noplace','Hazijulikani zilipo \/ No location'/);
   assert.match(src, /data-ossec="/, 'each list is a chip');
   assert.match(src, /OSSEC===x\[0\]\?'':' ghost'/, 'and the open one reads as the live one');
   /* ONE AT A TIME, which is the whole point: the other list is not drawn at all rather than
      drawn and hidden, so a pane holding 2,000 rows does not build both of them. */
-  assert.match(src, /\+chips\+\(OSSEC==='round'\?board:table\)/);
+  assert.match(src, /\+chips\+\(OSSEC==='round'\?board:OSSEC==='noplace'\?noplace:table\)/);
 
   /* A CHIP REPAINTS, IT DOES NOT RE-READ. Both lists came in the same answer, so switching
      must not cost a round trip or blank the pane -- the same split the devices pane runs on. */
@@ -708,4 +709,60 @@ test('the aged-stock upload is off but not gone, and auto-detect will not route 
   assert.ok(!/return 'agedstock';/.test(UP), 'auto-detect must not route there while it is off');
   // The parser and the endpoint are untouched behind it -- turning it back on is one attribute.
   assert.match(UP, /agedstock: \{ label: 'Aged Stock'/);
+});
+
+/* =========================================================================================
+   THE THIRD LIST: WHO NOBODY CAN PLACE.
+
+     "i liked this, add the third chip button as u did for [Ziara / The round | Simu / The
+      handsets] so that we can always view current pivoted report"
+
+   The query that produced it was run by hand once. This is the same answer, on the pane, kept
+   current -- and it is a worklist of PEOPLE rather than of handsets, because the branch is set
+   on a person and one edit answers every phone they carry.
+   ========================================================================================= */
+test('the unplaced holders are a list of people, sorted the way it is worked down', async () => {
+  const db = locDb({
+    stock: [
+      old({ imei: 'X1', agent: 'ADAM OMARY', rsm: 'AYUBU BWANGA', age: 138 }),
+      old({ imei: 'X2', agent: 'ADAM OMARY', rsm: 'AYUBU BWANGA', age: 100 }),
+      old({ imei: 'X3', agent: 'ADAM OMARY', rsm: 'AYUBU BWANGA', age: 12 }),
+      old({ imei: 'Y1', agent: 'JUSTIN KISARE', rsm: 'AYUBU BWANGA', age: 110 }),
+      old({ imei: 'Z1', agent: 'ALLY MTUMBUKA', rsm: 'ANORD SAWE', age: 41 }),
+      // This one CAN be placed, so it is not on the list at all.
+      old({ imei: 'P1', agent: 'PLACED ONE', rsm: 'ANORD SAWE', age: 9 }),
+    ],
+    agents: [{ name: 'PLACED ONE', phone: '09', role: 'Field_Officer', branch: 'MWANZA', active: true }],
+  });
+  const d = await _FNS.oldStock(db, WRITER, {});
+  /* SORTED BY RSM AND THEN BY SIZE. It is worked down by ringing each RSM and asking where
+     their people are, so their names have to sit together -- which is the one thing the
+     round's own ordering (oldest piece first) does not do. */
+  assert.deepEqual(d.byNoPlace.map(g => g.agent),
+    ['ALLY MTUMBUKA', 'ADAM OMARY', 'JUSTIN KISARE']);
+  assert.equal(d.byNoPlace[1].pieces, 3);
+  assert.equal(d.byNoPlace[1].oldest, 138);
+  assert.ok(!d.byNoPlace.some(g => g.agent === 'PLACED ONE'), 'somebody placed is not on it');
+  // HOW MANY PEOPLE, not how many phones: the fix is one edit per holder.
+  assert.equal(d.counts.noPlaceHolders, 3);
+  assert.equal(d.counts.noPlace, 5, 'and the handset count is still there, separately');
+});
+
+test('the third chip empties itself as the map is filled in', async () => {
+  const db = locDb({
+    stock: [old({ imei: 'Q1', agent: 'SOMEBODY' })],
+    agents: [{ name: 'SOMEBODY', phone: '01', role: 'Field_Officer', branch: 'TABORA', active: true }],
+  });
+  const d = await _FNS.oldStock(db, WRITER, {});
+  assert.deepEqual(d.byNoPlace, []);
+  assert.equal(d.counts.noPlaceHolders, 0);
+
+  const paint = fnSrc('osPaint_');
+  /* THE EMPTY STATE IS A RESULT, not a blank: this list finishing is the whole point of it
+     existing, so it says so rather than looking broken. */
+  assert.match(paint, /Every holder has a location/);
+  // It names the fix, because a worklist that does not say what to do is a complaint.
+  assert.match(paint, /Set their branch on the <b>?Staff pane|Staff pane<\/b>/);
+  // And its numbers open the handsets behind them, exactly as the round's do.
+  assert.match(paint, /osNum_\(g\.pieces,g\.key,''/);
 });
