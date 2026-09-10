@@ -643,3 +643,45 @@ test('the daily board prints the amount, instead of hiding it in a tooltip', () 
   assert.ok(!/gusa\/weka kishale/.test(src));
   assert.match(src, /handsets on top, value in TZS underneath/);
 });
+
+test('the agents who sold nothing are counted, and never ranked', async () => {
+  /* THE BOTTOM CARD WAS HIDING THE PEOPLE IT IS READ FOR. These rows are sales, so an agent
+     with none of them is not in them -- and a card ranking only sellers can name somebody with
+     one sale as the week's bottom while three others sold nothing at all.
+
+     They are COUNTED and a few are NAMED, never ranked: they are all equally bottom, and
+     picking one of several zeros as "the worst performer of the week" is an arbitrary
+     accusation a screen should not make. */
+  const db = fakeDb({
+    stock_audit: [sold('F1', 'JUMA G', TODAY, 500000), sold('F2', 'ELIA C', TODAY, 100000)],
+    devices: [dev({ imei: 'F1' }), dev({ imei: 'F2' })],
+    watu_loans: [], hoop_sales: [], hoop_aged_stock: [],
+    hoop_agents: [
+      staff('JUMA G', 'Field_Officer', 'Dar es salaam', '0700000001'),
+      staff('ELIA C', 'Field_Officer', 'Dar es salaam', '0700000002'),
+      staff('ASHA M', 'Field_Officer', 'Dar es salaam', '0700000003'),
+      staff('NEEMA K', 'Field_Officer', 'Dar es salaam', '0700000004'),
+      // A team leader is not an agent, and a former agent is not this week's problem.
+      staff('ATHUMANI D', 'Team_Leader', 'Dar es salaam', '0700000005'),
+      { ...staff('MSTAAFU X', 'Field_Officer', 'Dar es salaam', '0700000006'), active: false },
+    ],
+  });
+  const ns = (await _FNS.newStock(db, STORE, {})).newSales;
+  assert.equal(ns.top.name, 'JUMA G');
+  assert.equal(ns.bottom.name, 'ELIA C', 'the lowest who sold is still a definite answer');
+  assert.equal(ns.idle, 2, 'ASHA and NEEMA sold nothing at all');
+  assert.deepEqual(ns.idleNames.sort(), ['ASHA M', 'NEEMA K'],
+    'named, so the number is a list somebody can act on');
+  assert.ok(!ns.idleNames.includes('ATHUMANI D'), 'a team leader is not one of the agents');
+  assert.ok(!ns.idleNames.includes('MSTAAFU X'), 'nor is somebody who has left');
+});
+
+test('the card says who sold nothing, and does not rank them', () => {
+  const tb = fnSrc('nsTopBottom');
+  assert.match(tb, /ns\.idle/);
+  assert.match(tb, /hawajauza kabisa wiki hii/);
+  assert.match(tb, /sold nothing at all this week/);
+  assert.match(tb, /ns\.idleNames/, 'a few names, so the number can be acted on');
+  // It is a note, not a third ranked row: they are all equally bottom.
+  assert.ok(!/CHINI[\s\S]{0,80}idle/.test(tb));
+});

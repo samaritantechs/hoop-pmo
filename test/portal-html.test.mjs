@@ -2472,3 +2472,26 @@ test('portal.html: the nav header carries one brand, and it is ours', () => {
   // And nowhere else in the page picked it up.
   assert.ok(!/WATU SIMU/i.test(html), 'the other brand is gone from the portal entirely');
 });
+
+test('call-core: the calls app carries our brand and no second one', () => {
+  /* The portal header lost WATU SIMU; the calls app was the same fact one surface over -- a
+     second company's name hard-coded into every boot payload. It is a SETTING now rather than
+     a deleted field: the payload keeps its shape for anything reading it, its neighbours
+     (CALL_BRAND, CALL_LOGO_URL) are already settings, and empty is the honest default because
+     a slogan nobody chose is exactly what this replaced. */
+  const src = fs.readFileSync(new URL('../api/_lib/call-core.js', import.meta.url), 'utf8');
+  /* The name survives in exactly one place: the sentence saying it was removed. That is worth
+     keeping -- the next reader is entitled to know what MOTTO used to be -- so the guard pins
+     it to that sentence rather than banning the letters, which would have deleted the only
+     explanation of why the field is empty. */
+  const hits = src.match(/WATU SIMU/gi) || [];
+  assert.equal(hits.length, 1, 'the other brand appears once, in the note about removing it');
+  assert.match(src, /MOTTO used to read 'WATU SIMU'/);
+  assert.ok(!/MOTTO: 'WATU SIMU'/.test(src), 'and never again as a value');
+  assert.match(src, /MOTTO: ''/);
+  assert.match(src, /BRAND: 'HOOPLOAN'/, 'ours stays');
+  assert.match(src, /setting\('CALL_MOTTO'\)/);
+  assert.match(src, /settingGet\(db, 'CALL_MOTTO'\)/);
+  // The field still travels, so nothing that reads it starts seeing undefined.
+  assert.match(src, /teams: \[\], brand, motto, logo, systemOpen/);
+});

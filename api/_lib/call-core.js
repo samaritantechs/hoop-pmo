@@ -30,7 +30,17 @@ import { noteSignin, outcomeOf } from './signin.js';
    except the leader report, which is date-bounded and team-scoped at the database.
    ===================================================================================== */
 
-export const APP = { BRAND: 'HOOPLOAN', MOTTO: 'WATU SIMU' };
+/* ONE BRAND, AND IT IS OURS.
+   MOTTO used to read 'WATU SIMU' -- a second company's name, hard-coded, travelling in every
+   boot payload the calls app asks for. The portal's header carried the same pair and lost it;
+   this is the same fact one surface over.
+
+   It is a SETTING now rather than a deleted field, for two reasons. The field stays in the
+   payload, so nothing that reads it starts seeing `undefined`; and its neighbours -- the brand
+   and the logo -- are already settings, so a tagline the office wants tomorrow is a row in a
+   table rather than a deploy. Empty by default: no tagline is the honest state, and a slogan
+   nobody chose is what this is replacing. */
+export const APP = { BRAND: 'HOOPLOAN', MOTTO: '' };
 
 /* The follow-up vocabulary of THIS trade: a locked phone, a promise, a new number. Same
    behaviour wiring as Hope -- a promise opens a date, a new number opens a number box,
@@ -182,10 +192,11 @@ async function boot(db, [dev], nowMs) {
     })(),
   ]);
   const brand = setting('CALL_BRAND') || APP.BRAND;
+  const motto = String(setting('CALL_MOTTO') || APP.MOTTO || '').trim();
   const logo = setting('CALL_LOGO_URL') || '';
   const systemOpen = await isSystemOpen(db, nowMs);
   if (!cu) return { ok: false, error: accountOff ? 'ACCOUNT_OFF' : 'DEVICE_NOT_REGISTERED',
-    teams: [], brand, motto: APP.MOTTO, logo, systemOpen };
+    teams: [], brand, motto, logo, systemOpen };
   const today = todayKey(nowMs);
   const logs = await fetchAll(() => db.from('call_logs').select('duration, portfolio')
     .eq('user_id', cu.user_id).eq('call_date', today));
@@ -204,7 +215,7 @@ async function boot(db, [dev], nowMs) {
     ...fuStatusShape(parseFuStatuses(setting(FU_STATUS_KEY))),
     // What to SAY. Blank means the card shows no script panel at all.
     callScript: String(setting('CALL_SCRIPT') || '').trim(),
-    brand, motto: APP.MOTTO, logo,
+    brand, motto, logo,
     dataVersion: setting('DATA_VERSION') || '',
     offlinePack: ['YES', 'TRUE', '1', 'ON'].includes(K(setting('OFFLINE_PACK'))),
     syncEverySec: (!syncSec || isNaN(syncSec)) ? 300 : Math.max(60, Math.min(3600, syncSec)),
@@ -1258,7 +1269,8 @@ async function callNotifSeen(db, [dev], nowMs) {
 /* ---------- brand / team code / announcement (unauthenticated by design) ---------- */
 async function brand(db) {
   return { brand: (await settingGet(db, 'CALL_BRAND')) || APP.BRAND,
-    motto: APP.MOTTO, logo: (await settingGet(db, 'CALL_LOGO_URL')) || '' };
+    motto: String((await settingGet(db, 'CALL_MOTTO')) || APP.MOTTO || '').trim(),
+    logo: (await settingGet(db, 'CALL_LOGO_URL')) || '' };
 }
 async function teamCode(db, [code]) {
   const c = K(String(code == null ? '' : code)).replace(/[^0-9A-Z]/g, '');

@@ -153,9 +153,13 @@ heard of.
 
 - **A customer is a phone number where there is one.** Two receipts spelling a name differently are
   one buyer; two buyers can share a name.
-- **The bottom agent is the lowest who sold**, never the highest who did not — somebody who sold
-  nothing is not on these rows at all, so the card says *how many agents it ranked* rather than
-  implying it ranked the company.
+- **The bottom agent is the lowest who sold**, and **the ones who sold nothing are counted
+  beneath it** — that is who "bottom" is really about. These rows are sales, so an agent with none
+  of them is not in them; a card ranking only sellers would name somebody with one sale as the
+  week's bottom while three people sold nothing at all. They are counted and a few are **named**,
+  never ranked: they are all equally bottom, and picking one of several zeros as the worst
+  performer is an arbitrary accusation a screen should not make. Active `Field_Officer`s only —
+  a team leader is not one of the agents, and somebody who has left is not this week's problem.
 - **One seller is not two rows.** With a single seller the card says so instead of printing the same
   person twice as if that were two facts.
 - **A sale with no agent named still counts in the totals** — a total that does not match the board
