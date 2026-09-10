@@ -1165,3 +1165,19 @@ THE DAILY SALES BOARD NOW PRINTS THE AMOUNT. It always carried both numbers -- t
 `title` tooltip, which needs a mouse, and that pane is read on a handset. The count leads each cell
 and the value sits under it, in the totals row too. The tooltip stays; the legend no longer tells
 anybody to hover for a number that is now on screen.
+
+## 37. SHIPPED 2026-09-11: one brand in the nav header, and it is ours
+
+"Remove the WATU SIMU brand name on top left of our system nav header: fit the logo with only our
+own brand name, not two."
+
+**Do:** nothing.
+
+The sidebar read HOOPLOAN with WATU SIMU under it -- a second company's name in the one place a
+system says whose it is. The mark and the word are now one lockup, sized to sit with the logo rather
+than as a label stuck beside a picture. The sign-in screen carried the same second name in a
+sentence under our own logo; it now reads "Mfumo wa ufuatiliaji wa simu".
+
+STILL CARRYING IT, named rather than quietly changed: `APP.MOTTO` in `api/_lib/call-core.js`, which
+is the CALLS app's own header (call.html), not the portal's. Say the word and it goes too -- it is
+one line, but it is a different surface and was not what the ask named.
