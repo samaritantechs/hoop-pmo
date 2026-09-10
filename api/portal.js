@@ -4130,7 +4130,34 @@ const FNS = {
 
      Treated as a WRITE even though it reads: it discloses a credential, so it takes the
      write permission and lands in the audit log with the IMEI attached. Nobody should be
-     able to walk the fleet collecting tokens without that being visible afterwards. */
+     able to walk the fleet collecting tokens without that being visible afterwards.
+
+     AND THERE IS NO "MINT A NEW ONE" BUTTON. THAT ABSENCE IS THE FEATURE.
+     =====================================================================================
+       "so the tokens should be autoupdated"
+       "i fear to disturb tokens for unlocking and achia / we have stock at ground you know"
+
+     He is right to be afraid, and the second instinct is the correct one. A token lives in
+     TWO places -- this row, and the handset's own SharedPreferences -- and the phone's copy
+     can only be changed with the phone in your hands. Re-mint here and the pair no longer
+     match, which is not a small thing on a handset that is out with a customer:
+
+       1. every beat 403s, so the office can no longer lock it, unlock it OR release it;
+       2. if it is UNLOCKED, enforceGrace self-locks it once graceHours of silence have
+          passed -- a week by default -- and nobody alive can open it, because unlocking
+          travels through the token that no longer matches;
+       3. it frees itself only after FOURTEEN CONTINUOUS DAYS of 403 (noteNotEnrolled).
+
+     So one rotation is a paying customer's phone dead for a fortnight, and the register
+     cannot take it back. Rotation is a BENCH operation -- the -e current recovery broadcast,
+     cable attached -- and there must be no screen that offers it for a phone in the field.
+
+     WHICH IS ALSO WHY A LEAKED TOKEN IS NOT WORTH THAT TRADE. It authorises exactly one
+     thing: speaking as that handset on /api/device. It cannot lock, unlock or release
+     anything -- those are decisions taken in this portal by a signed-in person and merely
+     RELAYED to whoever presents the token. The worst it buys is a lie about one phone's
+     battery, position or screen state. Stranding the handset to close that is the more
+     expensive mistake, and it is the one that would be made in a hurry. */
   async deviceToken(db, user, args) {
     /* A token is the credential that lets a handset be provisioned at all -- bench work. */
     requireWrite(user); requireNav(user, 'devlock');

@@ -701,6 +701,53 @@ genuinely serve our origin already owns the server and can simply mark the phone
 
 ---
 
+## Never rotate a token on a phone that is in the field
+
+> *"so the tokens should be autoupdated"*
+> *"i fear to disturb tokens for unlocking and achia"* · *"we have stock at ground you know"*
+
+**The fear is the correct instinct, and this is the rule it deserves.**
+
+A token lives in **two** places: the `devices` row, and the handset's own SharedPreferences. The
+handset's copy can only be changed with the phone **in your hands** — the `-e current` recovery
+broadcast over a cable. Re-mint the register's copy on its own and the two stop matching. For a
+handset out with a customer that is not an inconvenience, it is a fortnight:
+
+1. every beat gets a **403**, so the office can no longer lock it, unlock it **or release it**;
+2. if it is **unlocked**, `enforceGrace` self-locks it once `graceHours` of silence have passed —
+   a week by default — and nobody can open it, because unlocking travels through the token that no
+   longer matches;
+3. it frees itself only after **fourteen continuous days** of 403 (`noteNotEnrolled`).
+
+So one automatic rotation is a paying customer's phone dead for two weeks, with the register unable
+to take it back. **There is deliberately no "new token" button in the portal**, and the Token drawer
+says so where somebody would look for one.
+
+### Which is why a leaked token is not worth that trade
+
+A token authorises exactly one thing: **speaking as that handset on `/api/device`.** It cannot lock,
+unlock or release anything — those are decisions taken in the portal by a signed-in person and
+merely *relayed* to whoever presents the token. The worst it buys is a lie about one phone's
+battery, position, or whether its screen is up. Worth knowing about; not worth stranding a handset
+for a fortnight in a hurry.
+
+**A phone on the bench is different** — it is in your hands, so rotate it there: `-e token` with the
+new one and `-e current` naming the one it holds now.
+
+### Re-enrolling after achia needs none of this
+
+It already works in one command. `achia` leaves the token alone on both sides, so the enrol
+broadcast finds them matching, skips the `-e current` guard entirely, and answers *"ENROLLED —
+already held this token; re-armed and reporting in now."* That re-arm is what clears `RETIRED`, the
+flag that would otherwise keep an owned handset silent for good.
+
+**Download the APK fresh every time.** A handset back from the field has already self-updated, so an
+older file on the laptop is refused with `INSTALL_FAILED_VERSION_DOWNGRADE` — and because the
+station's one-liner joins its steps with `&&`, the enrol broadcast then never runs at all. At the
+bench that reads as "re-enrolling is broken" when the only stale thing is the file.
+
+---
+
 ## The way back out, over the cable
 
 Everything above needs a handset the office can still reach. This is what to do when it

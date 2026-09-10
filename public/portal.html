@@ -4210,8 +4210,34 @@ function devToken(imei){
       +'<div class="sub"><b>Bandika kwenye cmd, bonyeza enter. Ndiyo yote.</b> '
       +'/ Paste into the black cmd window, press enter. That is all. '
       +'Pakua APK kwanza kutoka <a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a> '
-      +'(inaenda Downloads). Usiisambaze — ndani mna token ya simu hii. '
-      +'/ It carries this handset\'s token; do not share it.</div>'
+      /* ALWAYS THE FRESH FILE, never the one already in Downloads. A handset that has been in
+         the field has SELF-UPDATED, so an older APK on the laptop is refused with
+         INSTALL_FAILED_VERSION_DOWNGRADE and the && stops the whole line before the enrol
+         broadcast ever runs -- which reads at the bench as "re-enrolling is broken". */
+      +'(kila mara upya — simu za shambani zimeshajiupdate). '
+      +'Usiisambaze — ndani mna token ya simu hii. '
+      +'/ Download it fresh every time — a handset back from the field has already '
+      +'self-updated, and an older file is refused as a downgrade. It carries this handset\'s '
+      +'token; do not share it.</div>'
+      /* WHY THERE IS NO "NEW TOKEN" BUTTON, said where somebody would look for one.
+         ---------------------------------------------------------------------------------
+           "so the tokens should be autoupdated"
+           "i fear to disturb tokens for unlocking and achia / we have stock at ground"
+
+         A token lives here AND on the handset, and the handset's copy changes only with the
+         phone in your hands. Re-mint it for a phone in the field and the pair stop matching:
+         every beat 403s, an unlocked one self-locks after its grace week with nobody able to
+         open it, and it comes back only after fourteen days of refusal. The absence of the
+         button is the protection -- so the pane says so rather than leaving the next person
+         to wonder whether it was simply never built. */
+      +'<div class="note" style="font-size:11px">Token haibadilishwi kwa simu iliyoko '
+      +'shambani. Ikibadilishwa hapa, simu haitakusikia tena: haiwezi kufunguliwa wala '
+      +'kuachiwa, na ikiwa wazi itajifunga yenyewe baada ya wiki. Kuibadilisha ni kazi ya '
+      +'benchi, simu ikiwa mkononi. '
+      +'/ A token is never changed for a handset that is in the field. Change it here and the '
+      +'phone stops matching: it can no longer be unlocked or released, and if it is open it '
+      +'self-locks after its grace week with no way in. Rotating one is bench work, with the '
+      +'phone in your hands.</div>'
       +'<textarea id="dvOneCmd" readonly rows="5" style="width:100%;font-family:ui-monospace,monospace;font-size:11px">'
       +esc(devOneLiner(r.token))+'</textarea>'
       +'<button class="btn w" id="dvOneCmdCopy">Nakili amri / Copy the command</button>'
