@@ -733,7 +733,14 @@ var CODE='', BOOT=null, TAB='dash';
    typed as literals in a dozen places, which is how the NEXT rename would have got half done
    and stayed that way. The stored keys -- GENERAL_DUTY, CREDIT -- are untouched: a rename is
    a change of name, and the name is what a person reads, never what a row holds. */
-var DEPT={SC:'Sales Coordinator',PC:'Portfolio and Compliance Officer'};
+var DEPT={
+  /* The everyday name, which is what almost every screen wants: a heading, a column, a chip.
+     "so credit into PCO" / "gENEREAL duty into Sales Co." */
+  SC:'Sales Co.', PCO:'PCO',
+  /* And the full title, for the few places naming a JOB rather than a desk -- the department
+     picker on an issue, the role offered when a code is minted. */
+  SC_FULL:'Sales Coordinator', PCO_FULL:'Portfolio and Compliance Officer'
+};
 /* EVERY TABLE EXPORTS TO EXCEL: a button injected above each table automatically, so
    every report in every tab -- including tabs added later -- is born exportable.
    CSV with a BOM: Excel opens it clean, Swahili characters intact. Hidden rows
@@ -1868,7 +1875,7 @@ function drawDash(m){
         go:function(){ goWith('recovery',function(){ REC.kind='off'; }); } })
     +tile('Ndani ya siku 45',n(s.inWindow),'dirisha la Hoop',
       { go:function(){ goWith('cust',function(){ CUST.list='leo45'; }); }, cta:'wateja ›' })
-    +tile('Simu leo',n(s.calls),'credit team',
+    +tile('Simu leo',n(s.calls),DEPT.PCO,
       { go:function(){ goWith('ripoti',function(){ RIP.sort='calls'; }); }, cta:'ripoti ›' })
     +tile('Reached — yesterday',(s.reached&&s.reached.pct!=null?pct(s.reached.pct):'—'),
       (s.reached&&s.reached.den?money(s.reached.num)+' / '+money(s.reached.den)+' · ':'')
@@ -1883,9 +1890,9 @@ function drawDash(m){
     +'<div class="card"><h2>Locked 7+ — wiki hii / this week</h2>'
     +'<div class="mut" style="margin-bottom:6px">Kila siku ya upload: wateja waliowekwa <b>Locked 7+ Days</b> kwenye faili la Watu, ndani ya dirisha la siku 45. Kupanda = mzigo unaongezeka.</div>'
     +'<div id="trendBox"><div class="sk"></div></div></div>'
-    +'<div class="card"><h2>Credit — 7+ recovery kwa wiki / this week</h2>'
+    +'<div class="card"><h2>'+DEPT.PCO+' — 7+ recovery kwa wiki / this week</h2>'
     +'<div class="mut" style="margin-bottom:6px">Waliowekwa Locked 7+ kwenye faili la Watu, ndani ya siku 45. '
-    +'Kila credit, kila siku: waliopewa OFF JANA (7+ siku jana) na wangapi kati yao walipungua leo.</div>'
+    +'Kila afisa wa '+DEPT.PCO+', kila siku: waliopewa OFF JANA (7+ siku jana) na wangapi kati yao walipungua leo.</div>'
     +'<div id="credRecBox"><div class="sk"></div></div></div>'
     +'</div>'
     /* SALES AND STOCK, BELOW. Summaries only -- the number and the one thing wrong with it,
@@ -1913,7 +1920,7 @@ function drawDash(m){
     +'<div class="card"><h2>Leo unafanyaje / Today’s path</h2>'
     +'<ol class="road" style="margin:0;padding-left:20px">'
     +'<li><a href="/upload">Pakia orodha ya Watu ya leo</a> — Excel kutoka Watu, kama ilivyo.</li>'
-    +'<li>Credit team wanafungua <a href="/call">HOOPLOAN Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
+    +'<li>Timu ya '+DEPT.PCO+' wanafungua <a href="/call">HOOPLOAN Calls</a> kwenye simu zao — orodha inajipanga kwa timu, wanaanza kupiga.</li>'
     +'<li>Kesho asubuhi: pakia ya kesho, kisha angalia <b>Recovery</b> — nani amelipa baada ya simu zetu.</li>'
     +'</ol></div>';
   wireTiles(m);
@@ -2340,7 +2347,7 @@ function drawCreditRecovery(){
       +'align-items:end;background:var(--b50);border:1px solid var(--line);'
       +'border-radius:9px 9px 0 0;padding:7px 6px;margin-bottom:0">'
       +'<div style="font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;'
-      +'letter-spacing:.03em">Credit</div>'
+      +'letter-spacing:.03em">'+DEPT.PCO+'</div>'
       +pts.map(function(pt){
         var any=pt.offJana, isToday=(pt.date===today);
         return '<div style="text-align:center;'
@@ -2506,11 +2513,11 @@ function ripSorted(users){
   });
 }
 function drawRipoti(m){
-  m.innerHTML='<div class="card"><h2>Call reports — simu za credit team</h2><div class="sk"></div></div>';
+  m.innerHTML='<div class="card"><h2>Call reports — simu za '+DEPT.PCO+'</h2><div class="sk"></div></div>';
   srv('report',{from:RIP.from,to:RIP.to,team:RIP.team}).then(function(d){
     var t=d.totals||{};
     m.innerHTML=
-      '<div class="card"><h2>Call reports — simu za credit team</h2>'
+      '<div class="card"><h2>Call reports — simu za '+DEPT.PCO+'</h2>'
       +'<div class="row"><input class="inp" type="date" id="rF" value="'+RIP.from+'"><input class="inp" type="date" id="rT" value="'+RIP.to+'">'
       +'<select class="inp" id="rTeam"><option value="">Timu zote</option>'
       +(d.teams||[]).map(function(x){return '<option'+(x.team===RIP.team?' selected':'')+'>'+esc(x.team)+'</option>';}).join('')
@@ -2883,7 +2890,7 @@ function credDayOpen(date, dayShort){
                  :' \u00B7 ikilinganishwa na upload ya '+esc(d.next||'\u2014'))+'</div></div>'
       +'<button class="btn sm" id="credDayClose">Funga</button></div>'
       +'<div style="overflow-x:auto;max-height:340px;overflow-y:auto"><table>'
-      +'<thead><tr><th>Mteja</th><th>Branch</th><th>Credit</th>'
+      +'<thead><tr><th>Mteja</th><th>Branch</th><th>'+DEPT.PCO+'</th>'
       +'<th class="r">OFF jana</th><th class="r">OFF leo</th><th></th></tr></thead><tbody>'
       +rows.map(function(r){
         return '<tr><td>'+esc(r.name||'—')
@@ -7248,8 +7255,8 @@ function issueNotReady(){
    literal in a dozen sentences across this page, which is exactly why a rename at the next
    meeting would have missed half of them. */
 var ISSUE_DEPT_LABEL={STORE:'Stoo / Store',FINANCE:'Fedha / Finance',IT:'IT',HR:'HR',
-  CREDIT:'Mikopo / '+DEPT.PC,
-  SALES:'Mauzo / Sales',GENERAL_DUTY:DEPT.SC,ADMIN:'Admin'};
+  CREDIT:DEPT.PCO_FULL,
+  SALES:'Mauzo / Sales',GENERAL_DUTY:DEPT.SC_FULL,ADMIN:'Admin'};
 var ISSUE_KIND_LABEL={issue:'Suala / Issue',complaint:'Malalamiko ya mteja / Customer complaint',document:'Nyaraka inayodaiwa / Missing document',
   performance:'Utendaji wa ajenti / Agent performance',system:'Mfumo · ukarabati / System · repair'};
 var ISSUE_SUBJECT_LABEL={'':'Hakuna / None',imei:'IMEI ya mteja / Customer IMEI',agent:'Ajenti / Agent',receipt:'Risiti / Receipt no.',
@@ -8185,7 +8192,7 @@ function drawAgents(m){
          cross-check, because the GAP between the two is the most interesting number here and
          dropping the shop column would trade one blind spot for another. */
       +'<div class="card"><h2>Sellers — deki ya Watu ('+esc(d.from)+' → '+esc(d.to)+')</h2>'
-      +'<div class="mut" style="margin-bottom:8px">Mauzo yanahesabiwa kwenye <b>deki ya Watu</b> iliyopakiwa na credits. '
+      +'<div class="mut" style="margin-bottom:8px">Mauzo yanahesabiwa kwenye <b>deki ya Watu</b> iliyopakiwa na '+DEPT.PCO+'. '
       +'Safu ya <b>duka</b> ni kitabu cha hoopltd.shop, kwa kulinganisha tu. '
       +'/ Sales are counted from the Watu deck; the shop column is the shop’s own book, for comparison.</div>'
       +((t.shopOnly||0)?'<div class="note bad" style="margin-bottom:8px">Wauzaji '+money(t.shopOnly)
@@ -9067,8 +9074,8 @@ function drawCodes(m){
       +'<button class="btn sm" id="rlSave">Save role</button></div>'
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
-          var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',oldstock:'OLD STOCK (held, never locked)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking (the sales coordinator at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
+          var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report ('+DEPT.PCO+' → GM)',recovery:'Recovery',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',oldstock:'OLD STOCK (held, never locked)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking ('+DEPT.SC+' at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',
@@ -9093,7 +9100,7 @@ function drawCodes(m){
           +'<td class="mut">'+(o.lastSync?esc(String(o.lastSync).slice(0,16).replace('T',' ')):'—')+'</td>'
           +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td>'
           +'<td class="r"><button class="btn sm ghost" data-tg="'+esc(o.userId)+'" data-on="'+(o.active?1:0)+'">'+(o.active?'Zima':'Washa')+'</button></td></tr>';
-      }).join(''):'<tr><td colspan="6" class="mut">No app users yet — the credit team registers from the app with a team code.</td></tr>')
+      }).join(''):'<tr><td colspan="6" class="mut">No app users yet — the '+DEPT.PCO+' team registers from the app with a team code.</td></tr>')
       +'</tbody></table></div></div>'
       +'</tbody></table></div></div>'
       +(function(){
@@ -9114,7 +9121,7 @@ function drawCodes(m){
             +'</div>';
         };
         return card('HOOP','App sign-in code — staff',
-            'ONE code for the whole company — every credit user registers on HOOPLOAN Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.',
+            'ONE code for the whole company — every '+DEPT.PCO+' registers on HOOPLOAN Calls with it; the workload deal does the rest. Rotating it stops NEW registrations with the old code; to sign an existing person out, use Zima above.',
             'Create the company code')
           +card('AGENT','App sign-in code — agents',
             'ONE shared code for ALL sales agents — share it in the WhatsApp group and rotate it here when somebody leaves. An agent signs in with just their registered phone number and this code; their name and branch are read from the agents register, and the app shows them ONLY the customers they sold. A number that is not on the register cannot sign in at all.',
