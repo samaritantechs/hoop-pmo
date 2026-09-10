@@ -1870,17 +1870,66 @@ test('portal.html: the target drawer sends the parts, and removing is not the sa
   assert.match(IMP_SRC('targetNotReady', html), /RUN-ME-2026-09-09-targets\.sql/);
 });
 
-test('portal.html: the staff register shows who each agent reports to, and says blank means the branch', () => {
+test('portal.html: the staff register is edited from the leader’s side, not the subordinate’s', () => {
+  /* "I needed the staff panel to be like of hope pmo -- DON'T PUT REPORT TO. But each person
+     gets there by role, and clicking their panel needs filling who their channel data."
+
+     The column underneath is the same `manager` the target cascade walks. What changed is
+     which end of the question the screen asks: a leader's panel lists the rank below and you
+     tick it, instead of opening each subordinate and typing their leader's name. */
   const html = read('portal.html');
   const fn = IMP_SRC('drawStaff', html);
-  assert.match(fn, /<th>Reports to<\/th>/);
+  assert.match(fn, /<th>Chaneli \/ Channel<\/th>/);
+  assert.ok(!/Reports to/.test(fn), 'the reports-to column is what this replaced');
+  assert.ok(!/data-mgr=/.test(fn), 'and the per-person pencil with it');
+  // A leader opens their channel; an agent has no rank below, so their cell states the fallback.
+  assert.match(fn, /data-chan="/);
   assert.match(fn, /o\.manager\?esc\(o\.manager\):'<span class="mut">kwa tawi \/ by branch<\/span>'/,
     'blank is a stated fallback, not an empty cell');
-  assert.match(fn, /srv\('staffManager',\{phone:phone, manager:\$\('#mgrV'\)\.value\}\)/);
-  assert.match(fn, /BOOT\.readOnly\?'':' <button class="btn sm ghost" data-mgr=/,
-    'a view-only code gets no pencil');
-  // The picker offers the RSMs the register knows, so nobody types a name nothing matches.
-  assert.match(fn, /REGIONAL\|COUNTRY_SALES/);
+  // A view-only code gets neither the switch nor a save.
+  assert.match(fn, /BOOT\.readOnly\?'':' <button class="btn sm ghost" data-act=/);
+
+  const dr = IMP_SRC('staffChannelDrawer', html);
+  assert.match(dr, /srv\('staffChannel',\{phone:phone\}\)/);
+  assert.match(dr, /srv\('staffChannelSave',\{phone:phone, members:want\}\)/);
+  /* WHAT THE BRANCH DERIVES IS SHOWN BUT NOT TICKABLE. A tick that changes nothing and an
+     untick that cannot be honoured are both worse than a line of text saying how they got
+     there. */
+  assert.match(dr, /x\.branch\) return/);
+  assert.match(dr, /kwa tawi \/ by branch/);
+  assert.match(dr, /BOOT\.readOnly\?'':'<button class="btn w" id="chSave"/);
+});
+
+test('portal.html: deactivating says it shuts the door, before it does', () => {
+  /* "If deactivated even their login attempts can't work." One button reaching two registers,
+     so the confirmation names the second one before the click and the toast says what actually
+     happened at the door afterwards -- including "no code matched", which is an ordinary
+     answer and not a failure. */
+  const html = read('portal.html');
+  const fn = IMP_SRC('staffActiveToggle', html);
+  assert.match(fn, /confirm\(/);
+  assert.match(fn, /msimbo wake wa kuingia utasimamishwa[\s\S]*suspends any portal code/);
+  assert.match(fn, /srv\('staffActive',\{phone:phone, active:on\}\)/);
+  assert.match(fn, /hakuna msimbo wa jina hili[\s\S]*no portal code in that name/,
+    'the two registers are joined by name and nothing else, so a miss must be said out loud');
+  assert.match(fn, /r\.doorKnown/, 'and an un-migrated door is a third answer, not a silent yes');
+});
+
+test('portal.html: the three ranks the owner named, and nobody falls out of the list', () => {
+  const html = read('portal.html');
+  const tiers = html.slice(html.indexOf('var STAFF_TIERS='), html.indexOf('function staffTierOf'));
+  for (const k of ['rsm', 'tl', 'fo', 'other']) assert.match(tiers, new RegExp("k:'" + k + "'"));
+  const of = new Function(html.slice(html.indexOf('function staffTierOf'),
+    html.indexOf('\n}', html.indexOf('function staffTierOf')) + 2) + '\nreturn staffTierOf;')();
+  assert.equal(of('Regional_Manager'), 'rsm');
+  assert.equal(of('team leader'), 'tl', 'however the register happens to spell it');
+  assert.equal(of('Field_Officer'), 'fo');
+  /* The country manager is off the tabs as asked -- "this is company admin, no need to be in
+     the list" -- but lands in Wengine rather than nowhere. A staff register that silently
+     drops rows is how somebody disappears from the company without anybody deciding they
+     should. */
+  assert.equal(of('Country_Sales_Manager'), 'other');
+  assert.equal(of(''), 'other');
 });
 
 /* =========================================================================================

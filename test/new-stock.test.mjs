@@ -351,7 +351,9 @@ test('the pane is the owner’s column list, in the owner’s order', () => {
     'Hali / status', 'Nani / by', 'Iliongea lini / last read'];
   let at = 0;
   for (const h of want) {
-    const i = src.indexOf('<th>' + h + '</th>', at);
+    // Matched on the header's opening rather than the whole cell: Hali carries a second line
+    // naming the location that rides under it, and that is a caption, not a fourteenth column.
+    const i = src.indexOf('<th>' + h, at);
     assert.ok(i > 0, 'the "' + h + '" column is missing from the table');
     at = i;
   }
@@ -390,4 +392,100 @@ test('provenance rides the cell, because that is where it is asked', () => {
   assert.match(cell, /from\?/, 'which feed answered is drawn under the value');
   assert.match(cell, /phone\?'<a href="tel:/, 'and a number is a call, on the pane that chases people');
   assert.match(cell, /—/, 'an unanswered column reads as unanswered, never as an empty cell');
+});
+
+/* ---------------------------------------------------------------------------------------- */
+test('the last ping’s coordinates ride under the status, and survive Achia', async () => {
+  /* "Add the second in one [location coordinate link] so that we can click to view where the
+     phone is... so even if achia we'll always find the latest ping coordinate location."
+
+     THE STAMPING WAS ALREADY HAPPENING -- every beat writes the handset's last known position.
+     What matters here is that RELEASING one does not erase it: a phone let go is a phone
+     nobody is tracking any more, and its final fix is all that is left of it. */
+  const withLoc = { ...dev({ imei: 'D1', state: 'locked' }),
+    last_lat: -6.7924, last_lng: 39.2083, last_loc_acc: 25, last_loc_at: hoursAgo(5) };
+  const db = fakeDb({ stock_audit: [], devices: [withLoc], watu_loans: [], hoop_sales: [],
+    hoop_agents: [], hoop_aged_stock: [] });
+  const r = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(r.lat, -6.7924);
+  assert.equal(r.lng, 39.2083);
+  assert.equal(r.locAcc, 25);
+  assert.ok(r.locAt > 0);
+
+  // Now let it go. deviceSetState writes state, reason, who and when -- and nothing else.
+  await _FNS.deviceSetState(db, { code: 'G', name: 'ASHA', role: 'GENERAL DUTY', teams: null,
+    tabs: ['devunlock'], readOnly: false }, { imeis: ['D1'], state: 'released' });
+  const after = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(after.status, 'achia');
+  assert.equal(after.lat, -6.7924, 'the last place it was seen outlives the release');
+  assert.equal(after.lng, 39.2083);
+  assert.equal(after.locAcc, 25);
+});
+
+test('the fix has its own age, and a handset that never sent one says so', async () => {
+  /* The phone reports its LAST KNOWN position rather than waking the GPS on every beat, so the
+     two timestamps must never be collapsed: one that beat a minute ago can be carrying a fix
+     from Tuesday. */
+  const db = fakeDb({ stock_audit: [],
+    devices: [{ ...dev({ imei: 'OLDFIX', seen: hoursAgo(1) }),
+      last_lat: -6.79, last_lng: 39.2, last_loc_acc: 1800, last_loc_at: hoursAgo(72) },
+    dev({ imei: 'NOFIX' })],
+    watu_loans: [], hoop_sales: [], hoop_agents: [], hoop_aged_stock: [] });
+  const d = await _FNS.newStock(db, STORE, {});
+  const by = Object.fromEntries(d.rows.map(r => [r.imei, r]));
+  assert.ok(by.OLDFIX.locAt < by.OLDFIX.seenAt,
+    'the fix is older than the beat that carried it, and the row keeps both');
+  assert.equal(by.NOFIX.lat, null);
+  assert.equal(by.NOFIX.locAt, null);
+  assert.equal(d.hasLoc, true);
+});
+
+test('before the location migration the audit still opens', async () => {
+  /* PostgREST refuses a whole select over one unknown column. Naming last_lat on a deployment
+     that has not run that migration would take the entire audit dark over a column nobody had
+     asked for last week. */
+  const db = fakeDb({ stock_audit: [], devices: [dev({})], watu_loans: [], hoop_sales: [],
+    hoop_agents: [], hoop_aged_stock: [] },
+  { missingColumns: { devices: ['last_lat', 'last_lng', 'last_loc_acc', 'last_loc_at'] } });
+  const d = await _FNS.newStock(db, STORE, {});
+  assert.equal(d.ok, true);
+  assert.equal(d.hasLoc, false, 'and it says the map is not available rather than showing blanks');
+  assert.equal(d.rows.length, 1);
+  assert.equal(d.rows[0].lat, null);
+});
+
+test('the coordinate is a link, with its accuracy and never a bare pin', () => {
+  const fn = fnSrc('nsWhere');
+  assert.match(fn, /google\.com\/maps\?q=/);
+  assert.match(fn, /encodeURIComponent/, 'a coordinate is put in a URL, so it is encoded for one');
+  assert.match(fn, /target="_blank" rel="noopener"/);
+  /* A 2,000m fix is a suburb, not an address. Drawing it as a pin with no radius is how
+     somebody drives to the wrong building, so a vague one is marked as vague. */
+  assert.match(fn, /r\.locAcc>500/);
+  assert.match(fn, /±/);
+  // The age shown is the FIX's, not the beat's -- collapsing them is the lie this avoids.
+  assert.match(fn, /r\.locAt/);
+  assert.ok(!/r\.seenAt/.test(fn), 'the beat’s time must not stand in for the fix’s');
+  assert.match(fn, /hakuna eneo \/ no location/, 'no fix reads as no fix, never as an empty cell');
+});
+
+test('a missing location column never reads as a missing register', async () => {
+  /* THE BUG THIS PINS. tableMissing() matches a missing COLUMN as well as a missing table --
+     deliberately, because for most callers both mean "run the migration". Asked before the
+     location check, it answered an absent `last_lat` with "the devices register does not
+     exist", offering the wrong migration on the pane somebody opens when stock has gone
+     missing. Both panes that read the position now ask the narrower question first. */
+  const opts = { missingColumns: { devices: ['last_lat', 'last_lng', 'last_loc_acc', 'last_loc_at'] } };
+  const db = fakeDb({ stock_audit: [], devices: [dev({})], watu_loans: [], hoop_sales: [],
+    hoop_agents: [], hoop_aged_stock: [], device_events: [], settings: [] }, opts);
+  const ns = await _FNS.newStock(db, STORE, {});
+  assert.equal(ns.noDevices, false, 'the register is plainly there: it just has no map columns');
+  assert.equal(ns.hasLoc, false);
+  assert.equal(ns.rows.length, 1);
+
+  // The devices pane itself had the same ordering, and the same false alarm.
+  const LOCKER = { code: 'S9', name: 'SIPHO', role: 'STORE', teams: null, tabs: ['devlock'], readOnly: false };
+  const dl = await _FNS.deviceList(db, LOCKER, {});
+  assert.ok(!dl.notReady, 'the whole Devices pane must not go dark over one absent column');
+  assert.equal(dl.rows.length, 1);
 });
