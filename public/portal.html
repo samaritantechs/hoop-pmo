@@ -9192,6 +9192,45 @@ function staffWireChannel(m){
   });
 }
 
+/* WHERE SOMEBODY WORKS, set from the staff pane.
+   =========================================================================================
+   This is what fills in the last of the OLD STOCK map. The branch was read-only here and
+   empty for most of the register, which is exactly why 532 handsets had no location: their
+   holder has no branch on the register and no sales in the deck to borrow one from.
+
+   ONE EDIT ANSWERS EVERY HANDSET THEY CARRY, because OLD STOCK derives the place from the
+   HOLDER and stamps it on the next open. Setting it on the person is also where the rest of
+   the system already looks.
+
+   THE PLACES ALREADY IN USE ARE OFFERED, and that matters more than it looks: every distinct
+   spelling is its own bar on the pivot, so "MWANZA" and "Mwanza " are two towns as far as a
+   ground visit is concerned. The list is a datalist rather than a dropdown, because a branch
+   that genuinely is new must still be typeable. */
+function staffBranchDrawer(m, phone, name, current, options){
+  drawer('<h3 style="margin-bottom:2px">'+esc(name||phone)+'</h3>'
+    +'<div class="mut" style="font-size:11px;margin-bottom:8px">Mahali anapofanyia kazi. '
+    +'Simu zote alizonazo kwenye OLD STOCK zitachukua mahali hapa. '
+    +'/ Where they work. Every handset they hold on OLD STOCK takes this place.</div>'
+    +'<input id="brInp" class="inp w" list="brList" value="'+esc(current||'')+'" '
+    +'placeholder="Mfano / e.g. MWANZA" autocomplete="off">'
+    +'<datalist id="brList">'
+    +(options||[]).map(function(x){ return '<option value="'+esc(x)+'"></option>'; }).join('')
+    +'</datalist>'
+    /* SAYING WHAT AN EMPTY BOX DOES, because clearing a wrong town is a real thing somebody
+       needs to do and guessing at it is how they leave a wrong one in place. */
+    +'<div class="mut" style="font-size:10.5px;margin-top:6px">Ukiacha wazi, mahali panafutwa. '
+    +'/ Leaving it empty clears the location.</div>'
+    +'<button class="btn w" id="brSave" style="margin-top:8px">Hifadhi / Save</button>');
+  var inp=$('#brInp'); if(inp) inp.focus();
+  var go=function(){
+    var b=$('#brSave'); if(b) b.disabled=true;
+    srv('staffBranchSave',{phone:phone, branch:$('#brInp').value}).then(function(){
+      closeDrawer(); toast('Imehifadhiwa / Saved'); drawStaff(m);
+    }).catch(function(e){ if(b) b.disabled=false; toast(safeErr(e), true); });
+  };
+  $('#brSave').onclick=go;
+  if(inp) inp.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); go(); } };
+}
 function drawStaff(m){
   m.innerHTML='<div class="card"><h2>Staff</h2><div class="sk"></div></div>';
   srv('staffDirectory').then(function(d){
@@ -9217,7 +9256,19 @@ function drawStaff(m){
       +((d.staff||[]).length?(d.staff||[]).map(function(o){
         var leaf=staffTierOf(o.role)==='fo';
         return '<tr data-role="'+esc(o.role||'')+'" data-tierk="'+esc(staffTierOf(o.role))+'"><td><b>'+esc(o.name)+'</b>'+(o.joined?'<div class="mut" style="font-size:10px">since '+esc(o.joined)+'</div>':'')+'</td>'
-          +'<td>'+esc(o.role||'—')+'</td><td>'+esc(o.branch||'—')+'</td>'
+          +'<td>'+esc(o.role||'—')+'</td>'
+          /* THE BRANCH IS EDITABLE, and that is what closes the last gap on OLD STOCK: a
+             holder is in one place and carries many phones, so one edit here answers every
+             one of them on the next open. A blank reads as unknown rather than as a dash
+             that might be a value, because a van is dispatched on this. */
+          +'<td>'+(BOOT.readOnly
+            ? (o.branch?esc(o.branch):'<span class="mut">—</span>')
+            : '<button class="btn sm ghost" data-brn="'+esc(o.phone||'')+'" '
+              +'data-brnn="'+esc(o.name||'')+'" data-brnv="'+esc(o.branch||'')+'" '
+              +'style="padding:1px 7px;font:inherit;font-size:11.5px" '
+              +'title="Weka mahali anapofanyia kazi / set where they work">'
+              +(o.branch?esc(o.branch):'<span class="mut">weka / set</span>')+'</button>')
+          +'</td>'
           +'<td style="font-size:11.5px">'
           +(leaf
             ? (o.manager?esc(o.manager):'<span class="mut">kwa tawi / by branch</span>')
@@ -9231,6 +9282,12 @@ function drawStaff(m){
       }).join(''):'<tr><td colspan="7" class="mut">No staff yet — upload the Agents Register page (saved HTML) at /upload.</td></tr>')
       +'</tbody></table></div></div><div id="salaryBox"></div><div id="staffCust"></div>';
     staffWireChannel(m);
+    /* The list of places already in use rides along, so a new spelling is a decision rather
+       than a typo -- every distinct one becomes its own bar on the OLD STOCK pivot. */
+    $all('[data-brn]').forEach(function(b){ b.onclick=function(){
+      staffBranchDrawer(m, b.getAttribute('data-brn'), b.getAttribute('data-brnn'),
+        b.getAttribute('data-brnv'), d.branches||[]);
+    }; });
     drawSalaries();
     /* The rank chips are FILTERS: click one to see just that rank, click again for all.
        The search box and the chip compose -- both must match. */

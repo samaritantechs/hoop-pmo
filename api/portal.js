@@ -89,6 +89,7 @@ AUDITED.add('staffManager');
    decisions a person makes about another person, which is what this log is for. */
 AUDITED.add('staffChannelSave');
 AUDITED.add('staffActive');
+AUDITED.add('staffBranchSave');
 /* COMMISSION: money leaving the company. Who built a cycle, who signed it off, who paid it,
    and who changed a rate -- all four, because A.6 exists to stop a second payment and the log
    is how anybody proves which of them happened first. */
@@ -8274,7 +8275,51 @@ const FNS = {
     }).sort((a, b) => rank(a.role) - rank(b.role) || (a.name < b.name ? -1 : 1));
     const byRole = {};
     staff.forEach(r => { const k = r.role || '—'; byRole[k] = (byRole[k] || 0) + 1; });
-    return { ok: true, total: staff.length, byRole, staff: staff.slice(0, 1500) };
+    /* THE BRANCHES THAT ALREADY EXIST, offered so a new one is a DECISION rather than a
+       typo. Every distinct spelling becomes its own bar on the OLD STOCK pivot, so "MWANZA"
+       and "Mwanza " are two towns as far as a ground visit is concerned. Read from both the
+       register and the loan book, because the office already talks in the deck's names. */
+    const places = new Set(staff.map(r => r.branch).filter(Boolean));
+    try {
+      for (const l of await fetchAll(() => db.from('watu_loans').select('branch'))) {
+        const b = String(l.branch == null ? '' : l.branch).trim();
+        if (b) places.add(b);
+      }
+    } catch (ignored) { /* no deck, or no branch column: the register's own list will do */ }
+    return { ok: true, total: staff.length, byRole, staff: staff.slice(0, 1500),
+      branches: [...places].sort() };
+  },
+
+  /* =====================================================================================
+     WHERE SOMEBODY WORKS, set by hand.
+     =====================================================================================
+     The branch was read-only on this pane and empty for most of the register, which is what
+     left 532 handsets on OLD STOCK with no location: their holder has no branch here and no
+     sales in the deck to borrow one from.
+
+     SET IT ON THE PERSON, NOT ON THE HANDSET. A holder is in one place and carries many
+     phones, so one edit here answers every one of them -- OLD STOCK stamps them all on its
+     next open -- and the answer lands where the rest of the system already looks for it.
+     ===================================================================================== */
+  async staffBranchSave(db, user, args) {
+    requireNav(user, 'staff');
+    requireWrite(user);
+    const a = args || {};
+    const phone = String(a.phone || '').trim();
+    if (!phone) bad('Mfanyakazi hajachaguliwa. / No staff member chosen.');
+    /* TRIMMED, because a trailing space makes a second town on every pivot that reads this.
+       Not upper-cased: the register's own spelling is what the office recognises. */
+    const branch = String(a.branch == null ? '' : a.branch).trim().slice(0, 80);
+    const { data: who, error: rErr } = await db.from('hoop_agents')
+      .select('phone, name, branch').eq('phone', phone).maybeSingle();
+    if (rErr) throw new Error(rErr.message);
+    if (!who) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    /* AN EMPTY BOX CLEARS IT, deliberately: somebody who was put in the wrong town must be
+       able to be put back to unknown rather than to a second wrong guess. */
+    const { error } = await db.from('hoop_agents')
+      .update({ branch: branch || null }).eq('phone', phone);
+    if (error) throw new Error(error.message);
+    return { ok: true, phone, name: who.name || '', branch, was: who.branch || '' };
   },
 
   async officers(db, user) {

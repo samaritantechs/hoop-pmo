@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { fakeDb } from './fake-db.mjs';
 import { _FNS } from '../api/portal.js';
 import { todayKey } from '../api/_lib/time.js';
@@ -273,4 +274,94 @@ test('before the manager migration the panel reads, and the save says which file
   await assert.rejects(
     () => _FNS.staffChannelSave(db, HR, { phone: '0683875152', members: ['0670306780'] }),
     /RUN-ME-2026-09-09-targets\.sql/);
+});
+
+/* =========================================================================================
+   WHERE SOMEBODY WORKS, SET FROM THIS PANE.
+
+   The branch was read-only here and empty for most of the register, which is exactly why 532
+   handsets sat on OLD STOCK with no location: their holder has no branch on the register and
+   no sales in the deck to borrow one from.
+
+   ONE EDIT ANSWERS EVERY HANDSET THEY CARRY, because OLD STOCK derives the place from the
+   HOLDER and stamps it on the next open. Setting it on the person is also where the rest of
+   the system already looks.
+   ========================================================================================= */
+const brDb = (agents, loans = []) => fakeDb({
+  hoop_agents: agents, watu_loans: loans, audit_log: [], settings: [],
+  old_stock: [], devices: [], hoop_aged_stock: [], stock_audit: [], hoop_sales: [],
+});
+const AN_AGENT = { name: 'ABEL MGANGA', phone: '0789473000', role: 'Field_Officer',
+  branch: null, manager: 'ANORD SAWE', active: true };
+
+test('setting a branch on the register fills in every handset that holder carries', async () => {
+  const db = brDb([AN_AGENT]);
+  const r = await _FNS.staffBranchSave(db, HR, { phone: '0789473000', branch: '  MWANZA ' });
+  assert.equal(r.ok, true);
+  /* TRIMMED, because a trailing space makes a second town on every pivot that reads this --
+     and each distinct spelling is its own bar. Not upper-cased: the register's own spelling
+     is what the office recognises. */
+  assert.equal(r.branch, 'MWANZA');
+  assert.equal(db._dump('hoop_agents')[0].branch, 'MWANZA');
+  assert.equal(r.was, '', 'and it says what was there before');
+});
+
+test('an empty box clears the place rather than leaving a wrong one', async () => {
+  /* Somebody put in the wrong town has to be able to go back to unknown. Without this the
+     only way out is a second guess, and a guess is what sends a van to the wrong place. */
+  const db = brDb([{ ...AN_AGENT, branch: 'WRONG TOWN' }]);
+  const r = await _FNS.staffBranchSave(db, HR, { phone: '0789473000', branch: '   ' });
+  assert.equal(r.branch, '');
+  assert.equal(r.was, 'WRONG TOWN');
+  assert.equal(db._dump('hoop_agents')[0].branch, null);
+});
+
+test('it refuses a phone the register does not know, rather than inventing a row', async () => {
+  const db = brDb([AN_AGENT]);
+  await assert.rejects(() => _FNS.staffBranchSave(db, HR, { phone: '0700000000', branch: 'X' }),
+    /not in the register/);
+  await assert.rejects(() => _FNS.staffBranchSave(db, HR, { branch: 'X' }), /No staff member/);
+  assert.equal(db._dump('hoop_agents').length, 1);
+});
+
+test('a view-only code cannot move anybody, and it is audited when somebody does', async () => {
+  const db = brDb([AN_AGENT]);
+  await assert.rejects(() => _FNS.staffBranchSave(db, VIEWER, { phone: '0789473000', branch: 'X' }));
+  /* WHERE SOMEBODY WORKS DECIDES WHERE A VAN GOES, so changing it is a thing the log holds --
+     with the value each side, like every other watched call. */
+  const { AUDITED } = await import('../api/_lib/audit.js');
+  assert.ok(AUDITED.has('staffBranchSave'));
+  const audit = await import('../api/_lib/audit.js');
+  const src = fs.readFileSync(new URL('../api/_lib/audit.js', import.meta.url), 'utf8');
+  assert.match(src, /staffBranchSave: \{ table: 'hoop_agents'[\s\S]{0,80}fields: \['branch'\]/);
+  assert.ok(audit);
+});
+
+test('the pane offers the places already in use, from both the register and the deck', async () => {
+  /* A new spelling should be a DECISION, not a typo: every distinct one becomes its own bar
+     on the OLD STOCK pivot. The deck's names count because that is what the office says. */
+  const db = brDb(
+    [{ ...AN_AGENT, branch: 'MWANZA' }, { ...AN_AGENT, phone: '02', name: 'B', branch: 'TABORA' }],
+    [{ imei: 's1', agent: 'X', branch: 'ARUSHA' }, { imei: 's2', agent: 'Y', branch: 'MWANZA' }]);
+  const d = await _FNS.staffDirectory(db, HR);
+  assert.deepEqual(d.branches, ['ARUSHA', 'MWANZA', 'TABORA'], 'both sources, de-duplicated');
+});
+
+test('the branch cell is a control, and a blank one says it is unset', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  /* From drawStaff to whatever function follows it -- drawSalaries is defined ABOVE this one,
+     so slicing to it gives nothing at all and every assertion below would pass on an empty
+     string. A fence that reads the wrong half of the file is not a fence. */
+  const at = html.indexOf('function drawStaff(');
+  const draw = html.slice(at, html.indexOf('\nfunction ', at + 10));
+  assert.ok(draw.length > 500, 'the slice must actually hold drawStaff');
+  assert.match(draw, /data-brn="/, 'the branch opens an editor');
+  assert.match(draw, /weka \/ set/, 'and an empty one invites being filled in');
+  assert.match(draw, /BOOT\.readOnly\s*\n?\s*\?/, 'a view-only code reads it and cannot press it');
+
+  const dr = html.slice(html.indexOf('function staffBranchDrawer('), at);
+  assert.match(dr, /list="brList"/, 'a datalist, so a genuinely new branch is still typeable');
+  assert.match(dr, /Leaving it empty clears the location/,
+    'clearing a wrong town is a real thing somebody needs to do, and guessing at it leaves the wrong one');
+  assert.match(dr, /srv\('staffBranchSave'/);
 });
