@@ -239,17 +239,36 @@ dropping Device Owner. That does not weaken the lock, it *ends* it: every handse
 an ordinary phone, and there is no way back without each one in your hands. That is why this is
 written down rather than left as counter folklore.
 
+### Confirmed on a handset, and it closed the last door
+
+> *"it says sign in with your work account in all the 3 never allowing creation"*
+
+Settings, Gmail **and Chrome** — all three, all the same answer. That kills the browser route this
+card first led with, and Google's wording says why it was never going to work: *"sign in with your
+**work** account"* is Android Enterprise refusing to create a **consumer** account on a fully-managed
+device and asking for an EMM-issued one instead.
+
+**The block is on the state of the phone, not on which app does the asking.** No app on the handset
+can get round it. Only becoming a registered EMM would change that answer — and that is a different
+way of enrolling the whole fleet, not a fix for a counter.
+
 ### What the desk does instead
 
-The unlocking pane — the POS desk, where the customer is standing — carries the steps:
+The unlocking pane — the POS desk, where the customer is standing — carries the only route that
+works, and Google's exact sentence next to it, because an operator reading *"sign in with your work
+account"* has no reason to connect it to a loan and every reason to ring the office:
 
-1. Open **Chrome** on the customer's own phone → `accounts.google.com/signup` → create the account.
-2. **Settings → Accounts → Add account → Google** → sign in with it.
+1. Create the account on **any device that is not under finance** — the desk's own phone or computer,
+   or the customer's old handset — at `accounts.google.com/signup`.
+2. On the customer's phone: **Settings → Accounts → Add account → Google** → sign in with it.
 
-Step 1 is the one that saves fetching a second handset, and it is the one **nobody at a desk has
-confirmed yet** — so the route the RSMs are already using successfully (create on any other phone,
-then sign in here) stays printed underneath it rather than being replaced by it. A card offering only
-the untested route strands whoever it fails for.
+**"Any device not under finance", not "the customer's other phone".** The customer standing at the
+counter frequently has no other phone, which is the whole reason this reached the office as a
+complaint rather than being solved on the spot.
+
+**And the account is the customer's.** A desk that creates it knows the password, which is fine for
+the five minutes it takes and not fine for the life of the loan — so the card says to hand over the
+details and tell them to change it. Cheaper on the card than after somebody's mail has been read.
 
 ## Files
 

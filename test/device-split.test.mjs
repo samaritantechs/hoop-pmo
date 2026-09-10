@@ -206,17 +206,33 @@ test('the POS desk carries the Gmail steps, and the store bench does not', () =>
   // On the unlocking pane only: that is the desk with the customer standing at it.
   assert.match(draw.slice(0, 30000), /\+\(canLock \? '' :\s*\n?\s*'<div class="note"/,
     'the card is gated to the POS desk');
-  assert.match(draw, /accounts\.google\.com\/signup/);
-  assert.match(draw, /Mipangilio → Akaunti → Ongeza akaunti → Google/);
-  /* THE KNOWN-GOOD ROUTE STAYS PRINTED. The browser step saves fetching a second handset and
-     is the one nobody at a desk has confirmed; a card offering only the untested route
-     strands whoever it fails for. */
-  assert.match(draw, /Ikikataa:/);
-  assert.match(draw, /create the account on any other phone and sign in with it here/i);
-  /* And it says whose rule this is, so nobody goes looking for a switch in our code. Matched in
-     the halves the SOURCE has: this sentence crosses a concat boundary, and a regex written the
-     way the customer reads it would fail on a card that is perfectly correct. */
-  assert.match(draw, /Si hitilafu ya /);
-  assert.match(draw, /kufuli letu, na hurudi yenyewe simu ikishaachiwa/);
-  assert.match(draw, /fault in the lock/);
+  /* READ THE CARD THE WAY THE OPERATOR DOES. This pane is built by concatenating string
+     literals, so a sentence on screen is spread over several of them in the source -- and a
+     regex written the way somebody at the counter reads it then fails on a card that is
+     perfectly correct. Every assertion below has been bitten by that once already. Joining
+     adjacent literals first is the fix, and it is the right one: what is being asserted here
+     is the WORDS THE DESK SEES, not how the file happens to wrap them. */
+  const card = draw.replace(/'\s*\+\s*'/g, '');
+  assert.match(card, /accounts\.google\.com\/signup/);
+  assert.match(card, /Mipangilio → Akaunti → Ongeza akaunti → Google/);
+  /* GOOGLE'S EXACT SENTENCE IS ON THE CARD.
+       "it says sign in with your work account in all the 3 never allowing creation"
+     An operator reading "sign in with your work account" has no reason to connect it to a
+     loan and every reason to ring the office. Printing the words they are looking at, next to
+     what to do about them, is what ends that call -- so it is asserted, not paraphrased. */
+  assert.equal(card.split('Sign in with your work account').length - 1, 2,
+    'once in the Swahili half and once in the English');
+  /* AND THE ONLY ROUTE THAT WORKS LEADS. The browser step was tried on a handset and refused
+     in all three apps, so it is gone -- the card must never send anybody back to it. */
+  assert.ok(!/Fungua <b>Chrome<\/b> kwenye simu ya mteja/.test(card),
+    'the browser route was confirmed refused and must not be printed as a step');
+  /* "Any device not under finance", never "the customer's other phone": the customer at the
+     counter frequently has no other phone, which is how this became a complaint at all. */
+  assert.match(card, /kisicho chini ya mkopo/);
+  assert.match(card, /any device that is not under finance/i);
+  // The account is the customer's, and the desk that made it knows the password.
+  assert.match(card, /change the password/i);
+  // And it says whose rule this is, so nobody goes looking for a switch in our own code.
+  assert.match(card, /Si hitilafu ya kufuli letu wala si simu ya kazi/);
+  assert.match(card, /This is not a fault in the lock and it is not a work phone/);
 });
