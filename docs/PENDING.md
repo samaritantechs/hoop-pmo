@@ -1106,3 +1106,38 @@ NAV: top-up, loss and commission moved from **Advance** to **Sales**. Loss and d
 them because it sits inside the range named ("request topup to commission sigoff"); say the word
 and it moves to Stock instead. The grouping is a label, not a grant -- every nav key is unchanged,
 so nobody's access moved.
+
+## 35. SHIPPED 2026-09-11: the staff pane, and the last ping on NEW STOCK
+
+**Do:** nothing to run. Both columns the staff pane writes already exist — `manager` came with the
+targets migration and `suspend_from`/`suspend_to` with access-suspend. If either has not been run,
+the pane says which file and keeps working meanwhile.
+
+THE STAFF PANE EDITS FROM THE LEADER'S SIDE. The full story is [`docs/STAFF-PANE.md`](STAFF-PANE.md).
+Same `manager` column the target cascade walks; what changed is which end of the question the screen
+asks. Open an RSM, tick their team leaders. Open a team leader, tick their agents. An agent has no
+rank below and the panel says so. Only the rank DIRECTLY below can be ticked, and a phone that is
+not on it is refused rather than dropped.
+
+What the branch derives is shown greyed and is not tickable -- a tick that stores nothing and an
+untick that cannot be honoured are both worse than a line of text saying how somebody got there. One
+leader's save never releases another leader's people.
+
+Tabs are RSM / Viongozi wa timu / Maajenti / Wengine. Country_Sales_Manager is off the named tabs as
+asked but lands in Wengine, because a register that silently drops rows is how somebody disappears
+from the company without anybody deciding they should.
+
+ZIMA SHUTS THE DOOR. `hoop_agents.active` says who works here and `access_codes` is what opens the
+door; nothing joined them until now, so an inactive person could sign in all afternoon. Off marks
+them inactive AND suspends any portal code in their name, open ended; On lifts it. The two registers
+are joined BY NAME and nothing else, so "no portal code in that name" is an answer this reports. An
+ADMIN code is never suspended from here -- it is the way back for everybody else.
+
+THE LAST PING'S COORDINATES are now under the status on NEW STOCK: a map link, the accuracy, and the
+age of the FIX (not of the beat -- the phone reports its last known position rather than waking the
+GPS every time, and collapsing the two would have the register claim a phone is somewhere it left
+days ago). Achia does not erase it, which is the case it was asked for.
+
+FIXED IN PASSING: a missing location column read as a missing devices register on both this pane and
+the Devices pane, because `tableMissing()` matches an absent column as well as an absent table. Both
+now ask the narrower question first, so one un-run migration cannot take the whole register dark.

@@ -84,6 +84,11 @@ AUDITED.add('stockIssue');
 AUDITED.add('targetSave');
 AUDITED.add('targetDelete');
 AUDITED.add('staffManager');
+/* THE STAFF PANE'S TWO ACTS. Who is in whose channel decides whose sales roll up to whom, and
+   deactivating somebody shuts a door they were signing in through this morning -- both are
+   decisions a person makes about another person, which is what this log is for. */
+AUDITED.add('staffChannelSave');
+AUDITED.add('staffActive');
 /* COMMISSION: money leaving the company. Who built a cycle, who signed it off, who paid it,
    and who changed a rate -- all four, because A.6 exists to stop a second payment and the log
    is how anybody proves which of them happened first. */
@@ -469,6 +474,19 @@ async function advSameMonth(db, code, applyDate) {
       .eq('staff_code', code).neq('status', 'declined'));
     return rows.filter(r => monthOf(r.apply_date) === month);
   } catch (e) { return []; }
+}
+/** The staff register, with `manager` where the column exists. One reader for every pane that
+    needs the hierarchy, so the directory, the channel editor and the save can never be looking
+    at three different shapes of the same table. */
+async function staffAgents(db) {
+  const WIDE = 'name, phone, role, branch, manager, active, joined_date';
+  const NARROW = 'name, phone, role, branch, active, joined_date';
+  try {
+    return await fetchAll(() => db.from('hoop_agents').select(WIDE));
+  } catch (e) {
+    if (!/manager/i.test(String(e && e.message))) throw e;
+    return await fetchAll(() => db.from('hoop_agents').select(NARROW));
+  }
 }
 /** The monthly salary on file for one access code, or null when HR has not entered one. */
 async function salaryOf(db, code) {
@@ -3194,18 +3212,23 @@ const FNS = {
     let rows;
     try { rows = await fetchAll(() => build(CORE + LOC)); }
     catch (e) {
-      if (tableMissing(e)) {
+      /* THE LOCATION COLUMNS MAY NOT BE THERE YET, which is a different failure from a missing
+         table and must not look like one. PostgREST refuses an entire select for a single
+         unknown column, so naming last_lat on a deployment whose migration has not been run
+         would take the WHOLE Devices pane dark -- every phone, every state, every lock button
+         -- over a feature nobody had asked for yet. The register without a map is the
+         register; the register without itself is an outage. So it drops back and carries on.
+
+         AND IT IS ASKED FIRST, because tableMissing() matches a missing COLUMN as well as a
+         missing table (deliberately: for most callers both mean "run the migration"). Asked
+         the other way round, a database with the devices table but no last_lat answered
+         "the devices table has not been created yet" and offered the wrong migration. */
+      if (/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) {
+        rows = await fetchAll(() => build(CORE));
+      } else if (tableMissing(e)) {
         return { ok: true, rows: [], total: 0, notReady: true,
           counts: { enrolled: 0, locked: 0, lockPending: 0, released: 0, lost: 0, neverSeen: 0, stale: 0 } };
-      }
-      /* AND THE LOCATION COLUMNS MAY NOT BE THERE YET, which is a different failure and must
-         not look like the one above. PostgREST refuses an entire select for a single unknown
-         column, so naming last_lat on a deployment whose migration has not been run would
-         take the WHOLE Devices pane dark -- every phone, every state, every lock button --
-         over a feature nobody had asked for yet. The register without a map is the register;
-         the register without itself is an outage. So it drops back and carries on. */
-      if (!/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) throw e;
-      rows = await fetchAll(() => build(CORE));
+      } else throw e;
     }
     const now = Date.now();
     const HOURS = 36 * 3600 * 1000;      // silent longer than this and it is worth asking why
@@ -5730,14 +5753,44 @@ const FNS = {
 
     /* THE POPULATION IS THE REGISTER, not the sales books: "our existing imeis since we
        started locking on our own". A phone nobody locked is somebody else's audit. */
+    /* WHERE IT WAS WHEN IT LAST SPOKE, on the same row as what it is doing.
+       -----------------------------------------------------------------------------------
+         "At hali/status column, below status, add the second in one [location coordinate
+          link] so that we can click to view where the phone is, and always stamp the latest
+          read coordinates whenever the phone pings the system. So even if achia we'll always
+          find the latest ping coordinate location."
+
+       NOTHING NEW IS STAMPED HERE, because the handset has been doing it since the location
+       migration: every beat writes last_lat/last_lng and, separately, WHEN that fix was taken.
+       The two timestamps are never collapsed -- a phone that beat a minute ago can be carrying
+       a fix from Tuesday -- so the pane shows the fix's own age rather than the beat's.
+
+       AND ACHIA DOES NOT ERASE IT. deviceSetState writes state, reason, who and when; it has
+       never touched the position columns, so the last place a released handset was seen
+       survives the release. That is the case the owner asked about and the one that matters
+       most: a phone let go is a phone nobody is tracking any more, and its last fix is all
+       that is left of it. */
+    const DEV_CORE = 'imei, item, holder, state, state_by, state_at, last_seen, customer';
+    const DEV_LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
     let devs = [];
     let noDevices = false;
+    let hasLoc = true;
     try {
-      devs = await fetchAll(() => db.from('devices')
-        .select('imei, item, holder, state, state_by, state_at, last_seen, customer'));
+      devs = await fetchAll(() => db.from('devices').select(DEV_CORE + DEV_LOC));
     } catch (e) {
-      if (!tableMissing(e)) throw e;
-      noDevices = true;
+      /* THE COLUMN CHECK COMES FIRST, and the order is the whole of it. tableMissing() matches
+         a missing COLUMN as well as a missing table -- deliberately, because for most callers
+         both mean "run the migration" -- so asking it first would answer a missing `last_lat`
+         with "the devices register does not exist". That is a false alarm about the wrong
+         thing, on the pane somebody opens when stock has gone missing. */
+      if (/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) {
+        /* The audit without a map is still the audit; the audit without itself is an outage.
+           PostgREST refuses a whole select over one unknown column, so a deployment that has
+           not run the location migration drops back rather than going dark. */
+        hasLoc = false;
+        devs = await fetchAll(() => db.from('devices').select(DEV_CORE));
+      } else if (tableMissing(e)) noDevices = true;
+      else throw e;
     }
 
     /* THE FEEDS, ALL BEST-EFFORT. A missing one costs its columns and nothing else -- an audit
@@ -5799,6 +5852,15 @@ const FNS = {
            one number this audit is read for. */
         status: NEWSTOCK_STATE[String(d.state || '')] || String(d.state || ''),
         by: d.state_by || '', atMs: d.state_at ? Date.parse(d.state_at) : null,
+        /* The position rides under the status because they answer one question together --
+           what is this handset doing, and where. `locAt` is the fix's OWN age, not the beat's:
+           collapsing them would let the register claim a phone is somewhere it left days ago.
+           `locAcc` travels too, because a 2,000m fix is a suburb and drawing it as a pin sends
+           somebody to the wrong building. */
+        lat: d.last_lat == null ? null : Number(d.last_lat),
+        lng: d.last_lng == null ? null : Number(d.last_lng),
+        locAcc: d.last_loc_acc == null ? null : Number(d.last_loc_acc),
+        locAt: d.last_loc_at ? Date.parse(d.last_loc_at) : null,
         seenAt: seen, neverSeen: !seen,
         silentDays: seen ? Math.max(0, Math.floor((now - seen) / 86400000)) : null,
         gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
@@ -5841,7 +5903,7 @@ const FNS = {
     });
 
     const count = st => rows.filter(r => r.status === st).length;
-    return { ok: true, notReady, noDevices,
+    return { ok: true, notReady, noDevices, hasLoc,
       notReadyNote: notReady ? NEWSTOCK_NOT_READY : '',
       asOf: now, stamped,
       rows: shown.slice(0, 2000), shown: shown.length,
@@ -6720,6 +6782,188 @@ const FNS = {
   /** WHO AN AGENT REPORTS TO (RSM SOP D, CSM SOP J). The one field of the register the office
       maintains by hand; everything else about an agent comes from the SyscoPos upload. Blank
       clears the override and the branch fallback takes over again. */
+  /* =====================================================================================
+     THE STAFF PANE: each rank, and each leader's own channel.
+     =====================================================================================
+       "I needed the staff panel to be like of hope pmo -- don't put report to. But each
+        person gets there by role, and clicking their panel needs filling who their channel
+        data, like we start with 3: rsm, agent and team leader."
+
+       "Country_Sales_Manager -- this is company admin, no need to be in the list.
+        Regional_Manager -- these are the rsm, and on the staff pane we can activate or
+        deactivate them; if deactivated even their login attempts can't work.
+        Team_Leader -- we expect to have them again.  Field_Officer -- the agents."
+
+     THE EDIT RUNS THE OTHER WAY ROUND, and that is the whole of "don't put report to". The
+     column is the same one -- `manager`, which the target cascade already walks -- but it was
+     only ever editable from the SUBORDINATE's row: open a field officer, type their leader's
+     name. That is the wrong end of the question. Nobody sits down to decide who one agent
+     reports to; they sit down with an RSM and decide who is in that RSM's channel. So the
+     leader's panel lists the rank below and you tick your way down it, and the server writes
+     `manager` on each person that changed.
+
+     WHAT IS DERIVED IS SHOWN BUT NOT TICKABLE. Where `manager` is blank the cascade falls back
+     to the branch, and that is right for almost everybody -- so those people appear on the
+     leader's panel as "kwa tawi / by branch", greyed, with no checkbox. Making them tickable
+     would mean a tick that changes nothing and an untick that cannot be honoured.
+     ===================================================================================== */
+  async staffChannel(db, user, args) {
+    requireNav(user, 'staff');
+    const phone = String((args && args.phone) || '').trim();
+    if (!phone) bad('Mfanyakazi hajachaguliwa. / No staff member chosen.');
+    const agents = await staffAgents(db);
+    const leader = agents.find(r => String(r.phone) === phone);
+    if (!leader) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+
+    const tree = salesTree(agents);
+    const myKey = nameKey(leader.name);
+    const myTier = tierOf(leader.role);
+    /* THE RANK DIRECTLY BELOW. An RSM fills in team leaders, a team leader fills in agents.
+       Reaching further down would let one tick put an agent under an RSM with a team leader
+       standing between them, which is a hierarchy the roll-up cannot then explain. */
+    const below = agents.filter(r => tierOf(r.role) === myTier + 1);
+    const members = below.map(r => {
+      const k = nameKey(r.name);
+      const named = nameKey(r.manager || '');
+      return {
+        name: r.name, phone: r.phone || '', role: r.role || '', branch: r.branch || '',
+        active: r.active !== false,
+        /* Three states, and the difference between the first two is what makes this pane
+           honest: `mine` was typed by a person, `branch` was worked out by the system. */
+        mine: !!named && named === myKey,
+        branch: !named && tree.parentOf(k) === myKey,
+        elsewhere: named && named !== myKey ? (tree.of(named) ? tree.of(named).name : r.manager) : '',
+        // How many sit under them in turn, so an RSM can see the size of a channel at a glance.
+        under: tree.descendants(k).length,
+      };
+    }).sort((a, b) => (b.mine ? 1 : 0) - (a.mine ? 1 : 0)
+      || (b.branch ? 1 : 0) - (a.branch ? 1 : 0)
+      || String(a.name).localeCompare(String(b.name)));
+
+    return { ok: true,
+      leader: { name: leader.name, phone: leader.phone || '', role: leader.role || '',
+        branch: leader.branch || '', active: leader.active !== false,
+        tier: myTier, under: tree.descendants(myKey).length },
+      // A field officer has no rank below them; the pane says so rather than showing an empty box.
+      leaf: myTier >= TARGET_TIERS.length - 1,
+      members,
+      counts: { mine: members.filter(m => m.mine).length,
+        branch: members.filter(m => m.branch).length, all: members.length } };
+  },
+
+  /** Who is in this leader's channel, written as `manager` on each person that changed.
+      Only the rank directly below can be named, and only explicit assignments are touched --
+      a person who lands here by branch has nothing stored and nothing to clear. */
+  async staffChannelSave(db, user, args) {
+    requireNav(user, 'staff');
+    requireWrite(user);
+    const a = args || {};
+    const phone = String(a.phone || '').trim();
+    if (!phone) bad('Mfanyakazi hajachaguliwa. / No staff member chosen.');
+    const agents = await staffAgents(db);
+    const leader = agents.find(r => String(r.phone) === phone);
+    if (!leader) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    const myKey = nameKey(leader.name);
+    const myTier = tierOf(leader.role);
+    const want = new Set((Array.isArray(a.members) ? a.members : [])
+      .map(x => String(x || '').trim()).filter(Boolean));
+
+    const below = agents.filter(r => tierOf(r.role) === myTier + 1);
+    const byPhone = new Map(below.map(r => [String(r.phone), r]));
+    /* A PHONE THAT IS NOT ON THE RANK BELOW IS REFUSED, not ignored. The pane cannot send one,
+       but the pane is not the only thing that can call this, and silently dropping it would
+       report a save that did not happen. */
+    for (const p of want) {
+      if (!byPhone.has(p)) {
+        bad('Mtu huyu si wa ngazi inayofuata. / That person is not on the rank below this one.');
+      }
+    }
+    const add = [], drop = [];
+    for (const r of below) {
+      const p = String(r.phone);
+      const named = nameKey(r.manager || '');
+      if (want.has(p) && named !== myKey) add.push(p);
+      // Only ever clears an assignment that points HERE. Somebody else's people are not ours
+      // to un-assign from this screen, and a branch-derived one has nothing stored at all.
+      if (!want.has(p) && named === myKey) drop.push(p);
+    }
+    const at = new Date().toISOString();
+    const write = async (phones, manager) => {
+      if (!phones.length) return;
+      const { error } = await db.from('hoop_agents')
+        .update({ manager, updated_at: at }).in('phone', phones);
+      /* POSTGREST REFUSES BY RESOLVING. A channel that reported itself saved while the column
+         was missing would leave an RSM believing their team was assigned. */
+      if (error) {
+        if (/manager/i.test(String(error.message))) bad(TARGET_NOT_READY);
+        throw new Error(error.message);
+      }
+    };
+    await write(add, leader.name);
+    await write(drop, null);
+    return { ok: true, phone, added: add.length, removed: drop.length };
+  },
+
+  /* ACTIVATE OR DEACTIVATE, AND THE DOOR WITH IT.
+     -------------------------------------------------------------------------------------
+       "On the staff pane we can activate or deactivate them; if deactivated even their login
+        attempts can't work."
+
+     TWO REGISTERS, ONE ACT. `hoop_agents.active` says whether somebody works here;
+     `access_codes` is what opens the door, and until now nothing joined them -- so a person
+     marked inactive in the staff register could still sign in all afternoon. This does both,
+     and REPORTS WHICH CODES IT TOUCHED rather than doing it quietly: an act that reaches a
+     second table needs to say so on screen.
+
+     The codes are matched BY NAME, because that is the only thing the two registers share.
+     That is worth saying out loud rather than hiding: where nothing matches, the answer is
+     "deactivated in the register, no portal code matched" -- never a silent half-success.
+
+     ADMIN IS NEVER SHUT OUT. The standing rule, and here it is also the lockout guard: an
+     admin code suspended by this pane would leave nobody able to lift it. */
+  async staffActive(db, user, args) {
+    requireNav(user, 'staff');
+    requireWrite(user);
+    const a = args || {};
+    const phone = String(a.phone || '').trim();
+    if (!phone) bad('Mfanyakazi hajachaguliwa. / No staff member chosen.');
+    const active = a.active === true || a.active === 'true';
+    const at = new Date().toISOString();
+    const { data, error } = await db.from('hoop_agents')
+      .update({ active, updated_at: at }).eq('phone', phone).select('phone, name');
+    if (error) throw new Error(error.message);
+    if (!data || !data.length) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    const name = data[0].name || '';
+
+    const codes = [];
+    let doorKnown = true;
+    try {
+      const rows = await fetchAll(() => db.from('access_codes').select('code, name, role'));
+      const mine = rows.filter(r => nameKey(r.name) === nameKey(name));
+      for (const r of mine) {
+        if (isAdminRole({ role: r.role })) { codes.push({ code: r.code, skipped: 'admin' }); continue; }
+        const patch = active
+          ? { suspend_from: null, suspend_to: null }
+          // Open-ended: suspendedOn reads a `from` with no `to` as "from that day until lifted".
+          : { suspend_from: todayKey(), suspend_to: null };
+        const { error: sErr } = await db.from('access_codes').update(patch).eq('code', r.code);
+        if (sErr) {
+          if (/suspend_from|suspend_to/i.test(String(sErr.message))) { doorKnown = false; break; }
+          throw new Error(sErr.message);
+        }
+        codes.push({ code: r.code, skipped: '' });
+      }
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      doorKnown = false;
+    }
+    return { ok: true, phone, name, active,
+      /* What actually happened at the door, in the caller's hands rather than assumed. */
+      doorKnown,
+      codes: codes.filter(c => !c.skipped).length,
+      adminSkipped: codes.filter(c => c.skipped === 'admin').length };
+  },
+
   async staffManager(db, user, args) {
     requireNav(user, 'staff');
     requireWrite(user);

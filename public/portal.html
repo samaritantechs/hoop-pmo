@@ -1426,6 +1426,9 @@ var NO_RETRY={portalAddComment:1, advRequest:1, advDecide:1,
   stockRequest:1, stockDecide:1, stockIssue:1,
   // Targets: a re-sent save would be harmless (it upserts) but a re-sent delete is not.
   targetSave:1, targetDelete:1, staffManager:1,
+  // Staff: a re-sent channel save would re-apply the same ticks harmlessly, but a re-sent
+  // deactivation could land after somebody had already switched the person back on.
+  staffChannelSave:1, staffActive:1,
   // Commission: a re-sent build would rewrite a sheet somebody is reading; a re-sent PAY is
   // the one thing SOP A.6 exists to prevent.
   commBuild:1, commDecide:1, commPay:1, commRateSave:1, commRateDelete:1,
@@ -6565,6 +6568,38 @@ function nsCell(v, from, phone){
   return (phone?'<a href="tel:'+esc(v)+'">'+esc(v)+'</a>':esc(v))
     +(from?'<div class="mut" style="font-size:9.5px">'+esc(from)+'</div>':'');
 }
+/* WHERE THE PHONE WAS, UNDER WHAT IT IS DOING.
+   =========================================================================================
+     "At hali/status column, below status, add the second in one [location coordinate link] so
+      that we can click to view where the phone is, and always stamp the latest read
+      coordinates whenever the phone pings the system. So even if achia we'll always find the
+      latest ping coordinate location."
+
+   THE STAMPING WAS ALREADY HAPPENING. Every beat writes the handset's last known position, and
+   Achia has never touched those columns -- so a released phone keeps the last place it was
+   seen, which is exactly the case this is wanted for: a phone let go is a phone nobody is
+   tracking any more, and its final fix is all that is left of it.
+
+   THE FIX HAS ITS OWN AGE, and it is not the beat's. The handset reports its LAST KNOWN
+   position rather than waking the GPS every time, so a phone that beat a minute ago can be
+   carrying a fix from Tuesday. Showing the beat's time next to a coordinate would have the
+   register quietly claiming a phone is somewhere it left days earlier, so the age printed here
+   is the FIX's, and an old one is greyed rather than dressed up.
+
+   AND THE ACCURACY IS PART OF THE ANSWER. A 2,000m fix is a suburb, not an address; drawing it
+   as a pin with no radius is how somebody drives to the wrong building. */
+function nsWhere(r){
+  if(r.lat==null||r.lng==null) return '<div class="mut" style="font-size:9.5px">hakuna eneo / no location</div>';
+  var q=r.lat+','+r.lng;
+  var age=agoMins(r.locAt?Math.round((Date.now()-r.locAt)/60000):null);
+  var vague=r.locAcc!=null&&r.locAcc>500;
+  return '<div style="font-size:9.5px;margin-top:2px">'
+    +'<a href="https://www.google.com/maps?q='+encodeURIComponent(q)+'" target="_blank" rel="noopener">📍 '
+    +esc(Number(r.lat).toFixed(5))+', '+esc(Number(r.lng).toFixed(5))+'</a>'
+    +(r.locAcc!=null?' <span class="'+(vague?'chip warn':'mut')+'">±'+money(r.locAcc)+'m</span>':'')
+    +(age?'<div class="mut">'+esc(age)+'</div>':'')
+    +'</div>';
+}
 function drawNewStock(m){
   m.innerHTML='<div class="card"><h2>NEW STOCK</h2><div class="sk"></div></div>';
   srv('newStock',NSQ).then(function(d){
@@ -6608,7 +6643,8 @@ function drawNewStock(m){
         +'<th>IMEI</th><th>RSM</th><th>RSM no</th><th>Ajenti / agent</th><th>Agent no</th>'
         +'<th>Mteja / customer</th><th>Customer no</th><th>Bei / price</th>'
         +'<th>Mdhamini / guarantor</th><th>Guarantor no</th>'
-        +'<th>Hali / status</th><th>Nani / by</th><th>Iliongea lini / last read</th></tr></thead><tbody>'
+        +'<th>Hali / status<div class="mut" style="font-size:9px;font-weight:400">+ eneo / location</div></th>'
+        +'<th>Nani / by</th><th>Iliongea lini / last read</th></tr></thead><tbody>'
         +rows.map(function(r){
           var s=r.src||{};
           /* THE SILENCE LEADS THE CELL so the column sorts by it: a phone that has never spoken
@@ -6626,7 +6662,8 @@ function drawNewStock(m){
             +'<td>'+nsCell(r.customer,s.customer)+'</td><td>'+nsCell(r.customerPhone,s.customer_phone,true)+'</td>'
             +'<td>'+(r.price==null?'<span class="mut">—</span>':money(r.price))+'</td>'
             +'<td>'+nsCell(r.guarantor,s.guarantor)+'</td><td>'+nsCell(r.guarantorPhone,s.guarantor_phone,true)+'</td>'
-            +'<td><span class="chip '+(NS_CLS[r.status]||'')+'">'+esc(NS_LABEL[r.status]||r.status||'—')+'</span></td>'
+            +'<td><span class="chip '+(NS_CLS[r.status]||'')+'">'+esc(NS_LABEL[r.status]||r.status||'—')+'</span>'
+              +nsWhere(r)+'</td>'
             +'<td>'+(r.by?esc(r.by):'<span class="mut">—</span>')
             +(r.atMs?'<div class="mut" style="font-size:9.5px">'+esc(clock(r.atMs))+'</div>':'')+'</td>'
             +'<td>'+last+'</td></tr>';
@@ -8267,6 +8304,121 @@ function drawSecurity(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* THE THREE RANKS THE OWNER NAMED, and the fourth nobody should be able to fall out of.
+   ===========================================================================================
+     "Country_Sales_Manager -- this is company admin, no need to be in the list.
+      Regional_Manager -- these are the rsm.  Team_Leader -- we expect to have them again.
+      Field_Officer -- the agents."
+
+   The country manager is left off the tabs as asked. Everybody the ladder does not name --
+   them included -- lands in Wengine, because a register that quietly hides rows is how a
+   person disappears from the company without anybody deciding they should. */
+var STAFF_TIERS=[
+  { k:'rsm', sw:'RSM', en:'Regional managers' },
+  { k:'tl',  sw:'Viongozi wa timu', en:'Team leaders' },
+  { k:'fo',  sw:'Maajenti', en:'Agents' },
+  { k:'other', sw:'Wengine', en:'Others' },
+];
+function staffTierOf(role){
+  var k=String(role||'').toUpperCase().replace(/[\s-]+/g,'_');
+  if(k==='REGIONAL_MANAGER') return 'rsm';
+  if(k==='TEAM_LEADER') return 'tl';
+  if(k==='FIELD_OFFICER'||k==='FIELD_OFFICERS') return 'fo';
+  return 'other';
+}
+/* ONE LEADER'S CHANNEL, filled in from the leader's side.
+   -----------------------------------------------------------------------------------------
+   A tick writes `manager` on that person; an untick clears it, and only ever where it pointed
+   HERE. The people the branch already puts under this leader are listed too, greyed and
+   without a checkbox: a tick that changes nothing and an untick that cannot be honoured are
+   both worse than a line of text saying how they got there. */
+function staffChannelDrawer(m, phone, name){
+  drawer('<h3>Chaneli / Channel</h3><div class="sub">'+esc(name)+'</div><div class="sk"></div>');
+  srv('staffChannel',{phone:phone}).then(function(d){
+    var L=d.leader||{}, ms=d.members||[], c=d.counts||{};
+    if(d.leaf){
+      drawer('<h3>Chaneli / Channel</h3><div class="sub">'+esc(L.name||name)+'</div>'
+        +'<div class="note">Ajenti hana ngazi chini yake. Anapangwa kwenye chaneli ya kiongozi '
+        +'wa timu yake. / An agent has no rank below them — they are placed from their team '
+        +'leader’s channel.</div>');
+      return;
+    }
+    var pick=ms.filter(function(x){ return x.mine; });
+    drawer('<h3>Chaneli / Channel</h3>'
+      +'<div class="sub">'+esc(L.name||'')+' · '+esc(L.role||'')+(L.branch?' · '+esc(L.branch):'')+'</div>'
+      +'<div class="mut" style="font-size:11.5px;margin-bottom:8px">Chagua walio kwenye chaneli yake. '
+      +'Ukiacha bila kuchagua, mfumo hutumia tawi — ambayo ndiyo sahihi kwa wengi. '
+      +'/ Tick who is in this channel. Left unticked, the branch decides — which is right for '
+      +'most people.</div>'
+      +'<div class="card" style="padding:8px;max-height:46vh;overflow:auto">'
+      +(ms.length?ms.map(function(x){
+        if(x.branch) return '<div class="mut" style="font-size:12px;padding:3px 0">'
+          +esc(x.name)+' <span class="chip">kwa tawi / by branch</span>'
+          +(x.under?' <span class="mut">· '+money(x.under)+' chini yake</span>':'')+'</div>';
+        return '<label style="display:flex;gap:8px;align-items:flex-start;padding:3px 0;font-size:12.5px">'
+          +'<input type="checkbox" class="chm" value="'+esc(x.phone)+'"'+(x.mine?' checked':'')+'>'
+          +'<span>'+esc(x.name)+(x.active?'':' <span class="chip bad">OFF</span>')
+          +(x.elsewhere?'<div class="mut" style="font-size:10px">yuko kwa '+esc(x.elsewhere)+' / currently under '+esc(x.elsewhere)+'</div>':'')
+          +(x.under?'<div class="mut" style="font-size:10px">'+money(x.under)+' chini yake / under them</div>':'')
+          +'</span></label>';
+      }).join(''):'<div class="mut">Hakuna wa ngazi inayofuata bado. / Nobody on the rank below yet.</div>')
+      +'</div>'
+      +'<div class="mut" style="font-size:11px;margin-top:6px">Sasa: '+money(c.mine||0)+' waliochaguliwa'
+      +(c.branch?', '+money(c.branch)+' kwa tawi':'')+'. / Now: '+money(c.mine||0)+' assigned'
+      +(c.branch?', '+money(c.branch)+' by branch':'')+'.</div>'
+      +(BOOT.readOnly?'':'<button class="btn w" id="chSave" style="margin-top:10px">Hifadhi / Save</button>'));
+    var sv=$('#chSave');
+    if(sv) sv.onclick=function(){
+      var b=this; b.disabled=true;
+      var want=$all('.chm').filter(function(x){ return x.checked; }).map(function(x){ return x.value; });
+      srv('staffChannelSave',{phone:phone, members:want}).then(function(r){
+        toast('Imehifadhiwa · +'+money(r.added)+' / −'+money(r.removed));
+        closeDrawer(); if(TAB==='staff') drawStaff(m);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+    if(pick.length===0 && ms.length===0) return;
+  }).catch(function(e){ drawer('<h3>Chaneli / Channel</h3><div class="note bad">'+esc(safeErr(e))+'</div>'); });
+}
+/* ZIMA / WASHA -- and the door with it.
+   -----------------------------------------------------------------------------------------
+     "If deactivated even their login attempts can't work."
+
+   The confirmation says what will happen in the OTHER register, before it happens, because
+   this is one button reaching two tables. Afterwards the toast says what actually happened at
+   the door -- including "no code matched", which is a real outcome and not a failure. */
+function staffActiveToggle(m, phone, name, wasActive){
+  var on=!wasActive;
+  if(!confirm((on?'Washa ':'Zima ')+name+'?\n\n'
+    +(on
+      ? 'Ataonekana tena kwenye register, na msimbo wake wa kuingia utafunguliwa.\n\n'
+        +'Reactivates them in the staff register and lifts the suspension on any portal code in their name.'
+      : 'Hataonekana kama mfanyakazi, NA msimbo wake wa kuingia utasimamishwa — hataweza kuingia kabisa.\n\n'
+        +'Marks them inactive AND suspends any portal code in their name: they will not be able to sign in at all.'))) return;
+  srv('staffActive',{phone:phone, active:on}).then(function(r){
+    /* WHAT REALLY HAPPENED AT THE DOOR. The two registers are joined by NAME and nothing else,
+       so "no code matched" is an ordinary answer and has to be said rather than assumed. */
+    var door=!r.doorKnown
+      ? ' · misimbo haijabadilishwa (endesha migration ya suspend) / codes unchanged'
+      : (r.codes
+        ? ' · misimbo '+money(r.codes)+' '+(on?'imefunguliwa / lifted':'imesimamishwa / suspended')
+        : ' · hakuna msimbo wa jina hili / no portal code in that name');
+    toast((on?'Imewashwa: ':'Imezimwa: ')+name+door
+      +(r.adminSkipped?' · ADMIN haiguswi / admin code left alone':''));
+    if(TAB==='staff') drawStaff(m);
+  }).catch(function(e){ toast(safeErr(e), true); });
+}
+function staffWireChannel(m){
+  $all('[data-chan]').forEach(function(b){
+    b.onclick=function(){ staffChannelDrawer(m, b.getAttribute('data-chan'), b.getAttribute('data-chann')); };
+  });
+  $all('[data-act]').forEach(function(b){
+    b.onclick=function(){
+      staffActiveToggle(m, b.getAttribute('data-act'), b.getAttribute('data-actn'),
+        b.getAttribute('data-actv')==='1');
+    };
+  });
+}
+
 function drawStaff(m){
   m.innerHTML='<div class="card"><h2>Staff</h2><div class="sk"></div></div>';
   srv('staffDirectory').then(function(d){
@@ -8274,61 +8426,56 @@ function drawStaff(m){
     m.innerHTML='<div class="card"><h2>Staff — the whole office ('+money(d.total)+')</h2>'
       +'<div class="mut" style="margin-bottom:8px">From the agents register: agents, team leaders, RSMs. System logins (portal codes, app users) live under Access codes.</div>'
       +'<div class="row"><input class="inp" id="staffQ" placeholder="Search: name, phone, role, branch, IMEI, agent…"></div>'
-      +'<div class="row" style="gap:6px">'+Object.keys(d.byRole||{}).map(function(k){return '<button class="chip" data-rf="'+esc(k)+'" style="border:1px solid transparent;cursor:pointer">'+esc(k)+' · '+money(d.byRole[k])+'</button>';}).join('')+'</div>'
-      /* REPORTS TO is the one column of this register the office keeps by hand -- everything
-         else comes from the SyscoPos upload. It is what lets an agent's sales be added to
-         their RSM's on the targets pane; blank means "the branch decides", which is right for
-         almost everybody, so the column shows that rather than an empty cell. */
-      +'<div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Reports to</th><th>Phone</th>'+(canKin?'<th>Next of kin</th>':'')+'<th>Status</th></tr></thead><tbody>'
+      /* EACH PERSON GETS THERE BY ROLE. Three ranks, in the order the ladder runs, so somebody
+         opening this pane is looking at a shape of the company rather than an alphabet.
+         Country_Sales_Manager is deliberately not one of them -- "this is company admin, no
+         need to be in the list" -- but anybody the ladder does not name still appears under
+         Wengine, because a staff register that silently drops rows is how people go missing. */
+      +'<div class="row" style="gap:6px">'+STAFF_TIERS.map(function(t){
+        var n=(d.staff||[]).filter(function(x){ return staffTierOf(x.role)===t.k; }).length;
+        return '<button class="chip" data-tier="'+esc(t.k)+'" style="border:1px solid transparent;cursor:pointer">'
+          +esc(t.sw)+' · '+money(n)+'</button>';
+      }).join('')+'</div>'
+      /* WHO IS IN THEIR CHANNEL, edited from the LEADER rather than from each subordinate.
+         The column underneath is the same `manager` the target cascade walks; what changed is
+         which end of the question the screen asks. Blank still means "the branch decides",
+         which is right for almost everybody, so the cell says that rather than sitting empty. */
+      +'<div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Chaneli / Channel</th><th>Phone</th>'+(canKin?'<th>Next of kin</th>':'')+'<th>Status</th></tr></thead><tbody>'
       +((d.staff||[]).length?(d.staff||[]).map(function(o){
-        return '<tr data-role="'+esc(o.role||'')+'"><td><b>'+esc(o.name)+'</b>'+(o.joined?'<div class="mut" style="font-size:10px">since '+esc(o.joined)+'</div>':'')+'</td>'
+        var leaf=staffTierOf(o.role)==='fo';
+        return '<tr data-role="'+esc(o.role||'')+'" data-tierk="'+esc(staffTierOf(o.role))+'"><td><b>'+esc(o.name)+'</b>'+(o.joined?'<div class="mut" style="font-size:10px">since '+esc(o.joined)+'</div>':'')+'</td>'
           +'<td>'+esc(o.role||'—')+'</td><td>'+esc(o.branch||'—')+'</td>'
-          +'<td style="font-size:11.5px">'+(o.manager?esc(o.manager):'<span class="mut">kwa tawi / by branch</span>')
-          +(BOOT.readOnly?'':' <button class="btn sm ghost" data-mgr="'+esc(o.phone||'')+'" data-mgrv="'+esc(o.manager||'')+'" data-mgrn="'+esc(o.name||'')+'">✎</button>')+'</td>'
+          +'<td style="font-size:11.5px">'
+          +(leaf
+            ? (o.manager?esc(o.manager):'<span class="mut">kwa tawi / by branch</span>')
+            : '<button class="btn sm ghost" data-chan="'+esc(o.phone||'')+'" data-chann="'+esc(o.name||'')+'">Chaneli / Channel ›</button>')
+          +'</td>'
           +'<td>'+esc(o.phone||'')+'</td>'
           +(canKin?'<td class="mut" style="font-size:11px">'+esc(o.kin||'—')+(o.kinPhone?' · '+esc(o.kinPhone):'')+'</td>':'')
-          +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td></tr>';
+          +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')
+          +(BOOT.readOnly?'':' <button class="btn sm ghost" data-act="'+esc(o.phone||'')+'" data-actn="'+esc(o.name||'')+'" data-actv="'+(o.active?'1':'0')+'">'
+            +(o.active?'Zima / Off':'Washa / On')+'</button>')+'</td></tr>';
       }).join(''):'<tr><td colspan="7" class="mut">No staff yet — upload the Agents Register page (saved HTML) at /upload.</td></tr>')
       +'</tbody></table></div></div><div id="salaryBox"></div><div id="staffCust"></div>';
+    staffWireChannel(m);
     drawSalaries();
-    var rsmNames=(d.staff||[]).filter(function(x){ return /REGIONAL|COUNTRY_SALES/.test(String(x.role||'').toUpperCase().replace(/\s+/g,'_')); })
-      .map(function(x){ return x.name; }).filter(Boolean).sort();
-    [].slice.call(m.querySelectorAll('[data-mgr]')).forEach(function(b){
-      b.onclick=function(){
-        var phone=b.getAttribute('data-mgr');
-        drawer('<h3>Anaripoti kwa nani / Reports to</h3>'
-          +'<div class="sub">'+esc(b.getAttribute('data-mgrn'))+'</div>'
-          +'<label class="lbl">RSM</label>'
-          +'<input id="mgrV" class="inp" list="mgrList" value="'+esc(b.getAttribute('data-mgrv'))+'" placeholder="Acha wazi ili itumike ya tawi / blank = use the branch">'
-          +'<datalist id="mgrList">'+rsmNames.map(function(n){ return '<option value="'+esc(n)+'">'; }).join('')+'</datalist>'
-          +'<div class="mut" style="font-size:11.5px;margin-top:6px">Ukiacha wazi, mfumo hutumia Regional_Manager wa tawi lake. Jaza tu pale mtu anaporipoti nje ya tawi lake. '
-          +'/ Blank derives the RSM from the branch; fill it only where somebody reports across a branch line.</div>'
-          +'<button class="btn w" id="mgrSave" style="margin-top:10px">Hifadhi / Save</button>');
-        $('#mgrSave').onclick=function(){
-          var sb=this; sb.disabled=true;
-          srv('staffManager',{phone:phone, manager:$('#mgrV').value})
-          .then(function(){ toast('Imehifadhiwa / Saved'); closeDrawer(); if(TAB==='staff') drawStaff(m); })
-          .catch(function(e){ sb.disabled=false; toast(safeErr(e), true); });
-        };
-      };
-    });
-    /* The role chips are FILTERS: click one to see just that rank, click again for all.
+    /* The rank chips are FILTERS: click one to see just that rank, click again for all.
        The search box and the chip compose -- both must match. */
-    var ROLEF='';
+    var TIERF='';
     function applyStaffFilter(){
       var q=($('#staffQ')?$('#staffQ').value.trim().toUpperCase():'');
       $all('tbody tr', $('#main')).forEach(function(tr){
         var okQ=!q||tr.textContent.toUpperCase().indexOf(q)>=0;
-        var okR=!ROLEF||tr.getAttribute('data-role')===ROLEF;
+        var okR=!TIERF||tr.getAttribute('data-tierk')===TIERF;
         tr.style.display=(okQ&&okR)?'':'none';
       });
-      $all('[data-rf]',m).forEach(function(c){
-        c.style.borderColor=(c.getAttribute('data-rf')===ROLEF)?'var(--b700)':'transparent';
-        c.style.background=(c.getAttribute('data-rf')===ROLEF)?'var(--b100)':'';
+      $all('[data-tier]',m).forEach(function(c){
+        c.style.borderColor=(c.getAttribute('data-tier')===TIERF)?'var(--b700)':'transparent';
+        c.style.background=(c.getAttribute('data-tier')===TIERF)?'var(--b100)':'';
       });
     }
-    $all('[data-rf]',m).forEach(function(c){
-      c.onclick=function(){ ROLEF=(ROLEF===c.getAttribute('data-rf'))?'':c.getAttribute('data-rf'); applyStaffFilter(); };
+    $all('[data-tier]',m).forEach(function(c){
+      c.onclick=function(){ TIERF=(TIERF===c.getAttribute('data-tier'))?'':c.getAttribute('data-tier'); applyStaffFilter(); };
     });
     wireSearch_('#staffQ','#staffCust',function(){ applyStaffFilter(); });
   }).catch(function(e){ paneFailed(m,e); });

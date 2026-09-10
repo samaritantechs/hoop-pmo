@@ -99,6 +99,33 @@ and carries the timestamp underneath, so the sort means what the reader thinks i
 that has never spoken sorts above every silence that has an end. Phone numbers are `tel:` links,
 on the pane where somebody is chasing people.
 
+### Where it was, under what it is doing
+
+> *"At hali/status column, below status, add the second in one [location coordinate link] so that
+> we can click to view where the phone is, and always stamp the latest read coordinates whenever
+> the phone pings the system. So even if achia we'll always find the latest ping coordinate
+> location."*
+
+**The stamping was already happening.** Every heartbeat writes the handset's last known position
+(`last_lat` / `last_lng` / `last_loc_acc` / `last_loc_at`), and `deviceSetState` has never touched
+those columns — so **Achia does not erase it**. That is the case this is wanted for: a released
+phone is one nobody is tracking any more, and its final fix is all that is left of it.
+
+Under the status chip: a **📍 coordinate link** that opens the map, the accuracy, and the age of
+the fix.
+
+- **The fix has its own age, and it is not the beat's.** The handset reports its *last known*
+  position rather than waking the GPS on every ping, so a phone that beat a minute ago can carry a
+  fix from Tuesday. The two timestamps are never collapsed — the age shown is the fix's.
+- **The accuracy is part of the answer.** A 2,000m fix is a suburb, not an address; anything over
+  500m is marked as vague, because drawing it as a bare pin is how somebody drives to the wrong
+  building.
+- No fix reads as **hakuna eneo / no location**, never as an empty cell.
+
+Before the location migration the audit still opens and says the map is unavailable — a missing
+column must never read as a missing register, which is a bug this pass also fixed on the Devices
+pane itself.
+
 **The stamp is invisible, so the pane says it happened.** Under the tiles: when it read, how many
 rows *gained new detail on this read*, and how many still have blanks. On the morning after a Watu
 upload, the first number is the point of opening the pane; the second should be falling, and a
@@ -134,4 +161,4 @@ that looks complete.
 | `db/migrations/RUN-ME-2026-09-11-new-stock.sql` | `stock_audit` |
 | `api/portal.js` | `NEWSTOCK_*`, `unanswered`, `rsmAbove`, `newStockOffers`, `newStockFill`, `newStockRow`, the `newStock` fn, the `newstock` nav |
 | `public/portal.html` | the catalog entry, `NSQ`/`NS_LABEL`/`nsCell`/`drawNewStock` |
-| `test/new-stock.test.mjs` | eighteen tests |
+| `test/new-stock.test.mjs` | twenty-three tests |
