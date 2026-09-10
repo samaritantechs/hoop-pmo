@@ -97,7 +97,7 @@ about which half of the registry somebody is standing on. It is tested by **runn
 modes, not by grepping for a button string — a button that is written down is not the same as a
 button that is drawn.
 
-## Achia kwa wingi — the fourth button
+## The paste: both desks work from lists
 
 > *"Add the 4th on the right 'Release/Achia Bulk' so that the general duty can paste a list of imeis
 > as we paste at enrolling bulk … since sales are many they can't just tick one by one imei, so they
@@ -108,11 +108,32 @@ front of you — a bench of twenty, a hub, a customer at the counter. It is the 
 of a selling day, when the desk is holding a list that came out of somewhere else entirely and
 turning it into ticks means hunting each IMEI through a register of hundreds.
 
-So the fourth button takes **the list itself** — the same door the bench already uses to enrol a
-batch, read from the other end of the handset's life. It sits apart from the other three, pushed
-right, because the selection has nothing to do with it: two controls that look like a set and read
-different inputs is how somebody ticks three rows, presses the fourth button, and expects those
-three.
+> *"As achia has bulk and enroll has bulk, lock need bulk too at locking."*
+
+So the last button takes **the list itself** — the same door the bench already uses to enrol a
+batch. **Both desks get one**, because both work from lists: the store bench already pastes to
+enrol a consignment, and pasting to *lock* that same consignment was the one step still asking for
+four hundred clicks.
+
+Which order the button gives is the desk's own, read from the same `DEVMODE` that decides every
+other control on the pane — so a store bench cannot paste its way to a release, and a server test
+holds that from the other side too. It sits apart from the rest, pushed right, because the
+selection has nothing to do with it: two controls that look like a set and read different inputs is
+how somebody ticks three rows, presses this one, and expects those three.
+
+### One form, two orders — but not one warning
+
+Everything that makes a bulk order safe is the same work for either desk, so there is one form. What
+is **not** the same is what the order costs, and a warning copied across would be false on one of
+the two screens:
+
+| | what the screen says |
+|---|---|
+| **Achia** | one-way — the handset drops Device Owner, stops reporting, and the way back is a cable, per phone |
+| **Funga** | every phone on the list goes dark to whoever holds it until **general duty** opens it; you will be asked for one reason, recorded against all of them |
+
+Calling a lock irreversible would be a lie that makes the real warning next door mean less. A test
+asserts the locking sheet never borrows the one-way sentence.
 
 **The count under the box is the whole safety of the screen, and it is deliberately not a
 validation.** It says live what the paste *parsed to* — how many IMEIs, the first one, how many were
@@ -161,7 +182,7 @@ remember, and above the 500 rows `deviceList` shows, so tick-all on a full table
 | file | what changed |
 |---|---|
 | `api/portal.js` | `DEVICE_STATE_NAV`; `devlock`/`devunlock` in `NAV_TABS`; the legacy expansion in `navsFor`; the gates on `deviceList`, `deviceHistory`, `deviceEnrol`, `deviceToken`, `deviceDelete`, `deviceSetState`; the 500 ceiling |
-| `public/portal.html` | two catalog entries, `DEVMODE`, the per-mode action bar and row buttons, the per-row **Fungua**, the desk-aware row panel, `devParseImeis_`, `devRelBulkForm`, `devUnknownDrawer_` |
+| `public/portal.html` | two catalog entries, `DEVMODE`, the per-mode action bar and row buttons, the per-row **Fungua**, the desk-aware row panel, `devParseImeis_`, `DEVBULK`/`devBulkForm`, `devUnknownDrawer_` |
 | `test/device-split.test.mjs` | seven tests, one of them entirely about the field contract |
-| `test/device-bulk-release.test.mjs` | eight tests — the desk split run in both modes, the parser, the ceiling, the named strangers |
+| `test/device-bulk.test.mjs` | ten tests — the desk split run in both modes, the parser, both bulk orders, the ceiling, the named strangers |
 | `api/_lib/device-core.js`, `api/device.js`, `android/` | **untouched** |

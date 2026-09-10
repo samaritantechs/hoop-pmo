@@ -90,12 +90,36 @@ test('a pasted list releases many at once, and the strangers come back by name',
   assert.equal(await stateOf(db, 'D2'), 'released');
 });
 
-test('the paste is still the unlocking desk’s order, however long the list is', async () => {
+test('a pasted list locks a whole consignment, and still costs one reason', async () => {
+  /* "as achia has bulk and enroll has bulk lock need bulk too at locking" -- the bench already
+     pastes to enrol a batch, and locking that same batch was the one step still asking for
+     four hundred clicks. */
+  const db = devDb([
+    dev({ imei: 'D1' }), dev({ imei: 'D2' }), dev({ imei: 'D3', state: 'locked' }),
+  ]);
+  const r = await _FNS.deviceSetState(db, STORE, {
+    imeis: ['D1', 'D2', 'D3', 'GHOST'], state: 'locked', reason: 'mzigo mpya',
+  });
+  assert.equal(r.changed, 2);
+  assert.equal(r.alreadyThere, 1, 'one was already shut');
+  assert.deepEqual(r.notEnrolledList, ['GHOST']);
+  assert.equal(await stateOf(db, 'D1'), 'locked');
+  /* THE REASON IS NOT WAIVED BY THE LIST BEING LONG. It is the same door, so a paste that
+     forgot it is refused exactly as one ticked row would be -- and the form says so up front
+     rather than springing it after eighty IMEIs have been typed. */
+  await assert.rejects(() => _FNS.deviceSetState(db, STORE, { imeis: ['D1'], state: 'locked' }),
+    /Sababu inahitajika|reason is required/);
+});
+
+test('the paste is still each desk’s own order, however long the list is', async () => {
   const db = devDb([dev({ imei: 'D1', state: 'locked' })]);
-  /* The gate is on the TRANSITION, so pasting instead of ticking changes nothing about who
-     may give the order -- curl does not read HTML, and neither does a textarea. */
+  /* The gate is on the TRANSITION, so pasting instead of ticking changes nothing about who may
+     give the order -- curl does not read HTML, and neither does a textarea. A store bench that
+     could paste its way to a release would be the whole nav split undone by one form. */
   await assert.rejects(() => _FNS.deviceSetState(db, STORE, { imeis: ['D1'], state: 'released' }),
     /no access to the devunlock pane/);
+  await assert.rejects(() => _FNS.deviceSetState(db, DUTY, { imeis: ['D1'], state: 'locked', reason: 'x' }),
+    /no access to the devlock pane/);
   assert.equal(await stateOf(db, 'D1'), 'locked');
 });
 
@@ -173,30 +197,55 @@ test('the bulk bar is partitioned by the same one word', () => {
     'Funga and Imepotea on one side, Fungua and Achia on the other');
 });
 
-test('the fourth button takes the list, and never the ticks', () => {
+test('the last button takes the list, and never the ticks', () => {
   const bar = src('devPaint_');
-  assert.match(bar, /BOOT\.readOnly\|\|canLock \? ''/,
-    'it belongs to the unlocking desk, and a view-only code is offered nothing');
-  assert.match(bar, /id="dvRelBulk"/);
-  // Pushed away from the other three, because it does not act on the selection they act on.
-  assert.match(bar, /<span style="flex:1"><\/span>'\s*\+'<button[^']*id="dvRelBulk"/);
-  assert.match(bar, /rb\.onclick[^;]*devRelBulkForm\(m\)/, 'and it is wired to the paste form');
+  assert.match(bar, /BOOT\.readOnly \? ''/, 'a view-only code is offered nothing');
+  /* BOTH DESKS WORK FROM LISTS, so both get one -- and each gets only its own order. A store
+     bench that could paste its way to a release would be the nav split undone by a textarea. */
+  assert.match(bar, /data-dvbulk="'\+\(canLock\?'locked':'released'\)\+'"/);
+  assert.match(bar, /canLock\?'Funga kwa wingi[^']*':'Achia kwa wingi/);
+  // Pushed away from the others, because it does not act on the selection they act on.
+  assert.match(bar, /<span style="flex:1"><\/span>'\s*\+'<button[^']*id="dvBulk"/);
+  assert.match(bar, /rb\.onclick[^;]*devBulkForm\(m, rb\.getAttribute\('data-dvbulk'\)\)/,
+    'and the order comes off the button rather than out of DEVMODE a second time');
 
-  const form = src('devRelBulkForm');
+  const form = src('devBulkForm');
   /* THE INPUT IS THE TEXTAREA. Reading devPicked() here as well would make one button answer
      to two inputs -- tick three rows, paste eighty, press, and nobody can say what happened. */
   assert.ok(!/devPicked|dvck|dvCount/.test(form), 'the paste form does not read the tick boxes');
   assert.match(form, /devParseImeis_/);
-  assert.match(form, /devAct_\(m, p\.list, 'released'\)/,
-    'the order goes through the same door as every other, so the one-way-door confirmation is '
-    + 'the one already proven rather than a second copy of it');
+  assert.match(form, /devAct_\(m, p\.list, state\)/,
+    'the order goes through the same door as every other, so the reason prompt, the one-way-door '
+    + 'confirmation and the not-listening refusal are the ones already proven');
   /* THE COUNT UNDER THE BOX is the whole safety of the screen, and it must be live: a paste
      that arrived as one unbroken token reads 1, and a header row that came along reads "IMEI"
-     as the first one -- both before the confirmation rather than after the phones are gone. */
+     as the first one -- both before the order rather than after the phones have gone dark. */
   assert.match(form, /ta\.oninput\s*=\s*recount/);
   assert.match(form, /ya kwanza/, 'it shows the first IMEI back, so a mis-parse is visible as itself');
-  // And it says out loud what Achia costs, on the screen where a list makes it cheap to press.
-  assert.match(form, /mlango wa njia moja[\s\S]*one-way/);
+});
+
+test('one form, two orders, and the warning is not written once for both', () => {
+  /* Everything that makes a bulk order safe is the same work for either desk, so there is one
+     form. What is NOT the same is what the order costs, and a warning copied across would be
+     false on one of the two screens. */
+  const t = new Function(HTML.slice(HTML.indexOf('var DEVBULK={'),
+    HTML.indexOf('\n};', HTML.indexOf('var DEVBULK={')) + 3) + '\nreturn DEVBULK;')();
+  assert.deepEqual(Object.keys(t).sort(), ['locked', 'released']);
+
+  // Achia cannot be undone from the office: the way back is a cable, per phone.
+  assert.match(t.released.warn, /mlango wa njia moja[\s\S]*one-way/);
+  assert.match(t.released.warn, /kebo|cable/);
+
+  /* Funga CAN be undone -- by general duty, in a second -- so calling it irreversible would be
+     a lie that makes the real warning next door mean less. What is true is that every phone on
+     the list goes dark to whoever is holding it, which on a pasted list is a number nobody
+     counted. */
+  assert.ok(!/njia moja|one-way|irreversible/i.test(t.locked.warn),
+    'locking is not a one-way door and must not borrow the sentence of the one that is');
+  assert.match(t.locked.warn, /gizani|dark/, 'it says what a lock actually costs the holder');
+  assert.match(t.locked.warn, /General duty/, 'and who can undo it, since this desk cannot');
+  // The reason devAct_ will demand is announced, not sprung after the paste is typed.
+  assert.match(t.locked.warn, /sababu|reason/);
 });
 
 test('the IMEIs the register never heard of are named on screen, not counted', () => {
