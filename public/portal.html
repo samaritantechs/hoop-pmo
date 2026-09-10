@@ -545,14 +545,43 @@ function agoMins(n){ return n==null?'':n<1?'sasa hivi':n<60?money(n)+' dk':money
 
    Nothing at all when there is no fix, rather than a dash or an empty link: a row that has
    never reported a position should look like a row with one fact in it, not two. */
+/* A LINK THAT LEAVES THE SYSTEM, FROM INSIDE THE APP AS WELL AS FROM A BROWSER.
+   =========================================================================================
+     "opening location works only in browser - app too should open via phone browser and not
+      failing to open location link"
+
+   `target="_blank"` IS THE WHOLE BUG. A WebView with multiple windows off -- the default, and
+   what every handset in the field is running -- answers a blank-target click by dropping it:
+   no navigation, no error, nothing at all. The wrapper's own rule for handing outside links to
+   the phone's browser was correct the entire time and was simply never reached, because the
+   click died one step before it.
+
+   SO THE PAGE STOPS ASKING FOR A WINDOW when it is inside the app, and navigates at the top
+   level instead -- which the wrapper does see, and forwards. In a browser nothing changes: the
+   anchor keeps its href and its target, so the status bar still shows where the link goes, a
+   long-press still copies it, and a middle-click still opens a tab.
+
+   THE PAGE IS THE HALF THAT CAN BE FIXED TODAY. The APK is fixed too, but an APK reaches an
+   officer when they accept an update and a page reaches them on the next tap. */
+function openOut_(url){
+  if(window.HoopLoan||window.HopeCalls){ try{ window.location.href=url; return; }catch(e){} }
+  var w=null;
+  try{ w=window.open(url,'_blank','noopener'); }catch(e){}
+  // A blocked pop-up is not a reason to lose the tap: go there in this tab instead.
+  if(!w){ try{ window.location.href=url; }catch(e){} }
+}
 function devWhere(r){
   if(r.lat==null||r.lng==null) return '';
   var q=Number(r.lat).toFixed(6)+','+Number(r.lng).toFixed(6);
+  var url='https://www.google.com/maps?q='+encodeURIComponent(q);
   var when=r.locAt?clock(r.locAt):'';
   var acc=(r.locAcc!=null&&r.locAcc>=500)?' ±'+money(Math.round(r.locAcc/1000*10)/10)+'km':'';
+  /* The href stays real. It is what a browser opens, what a long-press copies and what the
+     status bar shows; the handler only takes over the ordinary left click, and only to route
+     it somewhere that works. */
   return '<div style="font-size:10px;margin-top:2px">'
-    +'<a href="https://www.google.com/maps?q='+encodeURIComponent(q)+'" target="_blank" '
-    +'rel="noopener noreferrer">ilipo / map</a>'
+    +'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer" '
+    +'onclick="openOut_(this.href);return false;">ilipo / map</a>'
     +(when?'<span class="mut"> · '+esc(when)+esc(acc)+'</span>':'')
     +'</div>';
 }
@@ -6955,8 +6984,16 @@ function drawOldStock(m){
     /* THE HOLDER BOARD IS THE ROUND. Sorted by the oldest piece, because that is the visit
        that has been waiting longest -- not by how many, which is a bigger van, not a worse
        problem. */
+    /* THE ROUND'S OWN EXPORT, on its heading rather than in the generic bar above the table.
+       The bar every table gets copies WHAT IS ON SCREEN, which here is five summary columns
+       per holder -- a team driving out to collect handsets needs the IMEIs, not the count of
+       them, and would otherwise have to come back to this pane holder by holder. */
     var board=(d.byAgent||[]).length
-      ? '<h3 style="margin:14px 0 6px">Ziara / The round</h3><div class="scroll"><table><thead><tr>'
+      ? '<div style="display:flex;gap:8px;align-items:center;margin:14px 0 6px">'
+        +'<h3 style="margin:0">Ziara / The round</h3><span style="flex:1"></span>'
+        +'<button class="btn sm ghost" id="osRoundXl" style="padding:2px 8px;font-size:11.5px" '
+        +'title="Pakua ziara na IMEI zote / download the round with its handsets">⤓ Excel</button>'
+        +'</div><div class="scroll"><table><thead><tr>'
         +'<th>Mwenye nazo / holder</th><th>RSM</th><th class="r">Simu / pieces</th>'
         +'<th class="r">Kongwe / oldest</th><th class="r">90+</th></tr></thead><tbody>'
         +d.byAgent.map(function(g){
@@ -7006,6 +7043,7 @@ function drawOldStock(m){
       osHolderDrawer(b.getAttribute('data-osh'), b.getAttribute('data-osmin'),
         b.getAttribute('data-oslab'));
     }; });
+    var rx=$('#osRoundXl'); if(rx) rx.onclick=function(){ osRoundXl_(this); };
   }).catch(function(e){ paneFailed(m,e); });
 }
 
@@ -7028,6 +7066,35 @@ function osNum_(n, key, min, label){
     +'data-oslab="'+esc(label)+'" title="Fungua orodha / open the list" '
     +'style="padding:0;border:0;background:none;font:inherit;color:inherit;'
     +'text-decoration:underline;text-underline-offset:3px;cursor:pointer">'+money(n)+'</button>';
+}
+/* THE ROUND AS A FILE, one line per HANDSET with its holder's totals beside it.
+   =========================================================================================
+   Read from the server rather than off the table: the card summarises the whole outstanding
+   list, the table under it holds at most 2000 rows and only what passed the filter, and an
+   export that quietly obeyed a filter the card ignores would be a file that disagrees with
+   the number that produced it.
+
+   The button says what it is doing while it does it -- this is two thousand rows over a phone
+   connection, and a control that looks unpressed for four seconds gets pressed again. */
+function osRoundXl_(btn){
+  var was=btn?btn.textContent:'';
+  if(btn){ btn.disabled=true; btn.textContent='\u2026'; }
+  var done=function(){ if(btn){ btn.disabled=false; btn.textContent=was; } };
+  srv('oldStockRound',{}).then(function(d){
+    var rows=d.rows||[];
+    if(!rows.length){ done(); toast('Hakuna simu / nothing outstanding', true); return; }
+    var head=['MWENYE NAZO','SIMU YAKE','RSM','SIMU YA RSM','JUMLA YA SIMU','KONGWE','90+',
+      'IMEI','BIDHAA','UMRI LEO','ORODHA YA','ILIVYOSOMWA'];
+    var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
+    var lines=[head.map(q).join(',')];
+    rows.forEach(function(r){
+      lines.push([r.agent,r.agentPhone,r.rsm,r.rsmPhone,r.pieces,r.oldest,r.over90,
+        r.imei,r.item,(r.age==null?'':r.age),r.asOf,d.todayK].map(q).join(','));
+    });
+    saveFile_('HOOPLOAN-ziara-'+String(d.todayK||'')+'.csv','text/csv;charset=utf-8',
+      '\ufeff'+lines.join('\r\n'));
+    done();
+  }).catch(function(e){ done(); toast(safeErr(e), true); });
 }
 /* THE LIST BEHIND THE NUMBER, in a drawer rather than in the pane.
    The board is not filtered, so this is not either -- a count of five that opened a list of

@@ -6111,6 +6111,58 @@ const FNS = {
   },
 
   /* =====================================================================================
+     THE ROUND, AS A FILE SOMEBODY TAKES OUT WITH THEM.
+     =====================================================================================
+       "pieces, oldest and 90+ card should have excel button on top"
+
+     The generic export above every table in this system copies WHAT IS ON SCREEN, which is
+     right for a table and not enough for this one: the round is five summary columns per
+     holder, and a team driving out to collect handsets needs the IMEIs, not the count of
+     them. Handing them the summary would mean printing it and then going back to the pane to
+     look up each holder one at a time -- which is the job this pane already saves them.
+
+     So one row per HANDSET, carrying its holder's totals alongside it. That shape opens in
+     Excel as a list you can read straight down, and it pivots back into the summary in two
+     clicks if that is what somebody wanted after all.
+
+     UNFILTERED, like the board it belongs to. The pane's filter narrows the table underneath;
+     the round has always described the whole outstanding list, and an export that quietly
+     obeyed a filter the card ignores would be a file that disagrees with the number that
+     produced it. */
+  async oldStockRound(db, user, args) {
+    requireNav(user, 'oldstock');
+    const idx = await oldStockIndex(db);
+    const open = idx.open;
+    /* The same grouping the board does, from the same index, so the totals on every line are
+       the ones the card showed. */
+    const by = new Map();
+    for (const r of open) {
+      const k = nameKey(r.agent) || '?';
+      let g = by.get(k);
+      if (!g) g = { key: k, pieces: 0, oldest: 0, over90: 0 };
+      g.pieces++;
+      if (r.age != null && r.age > g.oldest) g.oldest = r.age;
+      if (r.age != null && r.age >= 90) g.over90++;
+      by.set(k, g);
+    }
+    const rows = open.slice().sort((x, y) => {
+      const gx = by.get(nameKey(x.agent) || '?'), gy = by.get(nameKey(y.agent) || '?');
+      return (gy.oldest - gx.oldest)                      // worst trip first, as the board sorts
+        || String(x.agent || '').localeCompare(String(y.agent || ''))
+        || ((y.age == null ? -1 : y.age) - (x.age == null ? -1 : x.age))
+        || String(x.imei).localeCompare(String(y.imei));
+    }).map(r => {
+      const g = by.get(nameKey(r.agent) || '?');
+      return { agent: r.agent || '', agentPhone: r.agentPhone || '',
+        rsm: r.rsm || '', rsmPhone: r.rsmPhone || '',
+        pieces: g.pieces, oldest: g.oldest, over90: g.over90,
+        imei: r.imei, item: r.item || '', age: r.age, asOf: r.asOf };
+    });
+    return { ok: true, notReady: idx.notReady, todayK: idx.todayK,
+      holders: by.size, pieces: open.length, rows };
+  },
+
+  /* =====================================================================================
      NEW STOCK -- the sale behind every handset we have locked.
      =====================================================================================
        "An audit of our existing imeis since we started locking on our own -- Imei, Rsm, rsm

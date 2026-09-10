@@ -898,18 +898,31 @@ test('the devices pane still works before the location migration is run', () => 
 });
 
 /* =========================================================================================
-   A LINK THAT LEAVES THE SYSTEM MUST LEAVE THE APP.
+   A LINK THAT LEAVES THE SYSTEM MUST LEAVE THE APP -- AND THE CLICK HAS TO ARRIVE AT ALL.
 
      "opening map via app lands on failure because it doesn't redirect into browser app"
+     "opening location works only in browser - app too should open via phone browser and not
+      failing to open location link"
+
+   TWO BUGS, ONE SYMPTOM, AND THE SECOND ONE HID THE FIRST'S FIX.
 
    The wrapper kept every http(s) URL inside its WebView, which is right for the portal and
-   wrong for everything the portal links OUT to. The map pin was the first one to matter and
-   it fails in the most confusing way available: Google will not serve Maps to a bare
-   WebView, so the officer taps a location and gets an error page.
+   wrong for everything the portal links OUT to. Google will not serve Maps to a bare WebView,
+   so the officer taps a location and gets an error page. That was fixed by deciding on the
+   HOST and handing anything else to the phone -- and the map pin still did nothing.
 
-   `target="_blank"` does not rescue it. With multiple windows off -- the default, and what
-   this app uses -- the link loads in the same view and hits the same wall, so the fix has to
-   be in shouldOverrideUrlLoading and nowhere else.
+   Because the pin carries `target="_blank"`, and a WebView with multiple windows off -- the
+   default -- answers a blank-target click by DROPPING it. shouldOverrideUrlLoading never
+   fires. No navigation, no error, nothing. The forwarding rule was correct the whole time and
+   was never once called, which is why "it works in the browser" was the only symptom.
+
+   So it is fixed on both sides, and both sides are pinned here:
+
+     the page   stops asking for a window when the bridge is present and navigates at the top
+                level, which the wrapper does see. This is the half that reaches a handset on
+                the next tap rather than on the next APK anybody accepts.
+     the app    turns multiple windows ON so a blank-target click has to ASK, and answers by
+                handing the URL out -- so a page that still uses target="_blank" works too.
    ========================================================================================= */
 test('the wrapper hands an off-site link to the browser instead of eating it', () => {
   const main = javaCode('app/src/main/java/com/samaritantechs/hoopcalls/MainActivity.java');
@@ -923,13 +936,53 @@ test('the wrapper hands an off-site link to the browser instead of eating it', (
     'the decision must be made on the HOST: is this still the system, or somebody else');
   assert.match(body, /startUrl\(\)/,
     'and compared against OUR host, not a hardcoded domain -- the start URL is configurable');
-  assert.match(body, /ACTION_VIEW[\s\S]{0,120}return true/,
-    'an off-site link must be handed out and reported as handled');
+  assert.match(body, /openOutside\(u\)/,
+    'an off-site link is handed out through the one place that does it');
 
+  /* ONE PLACE, because there are now two ways in -- a top-level navigation and a blank-target
+     click -- and this pin was broken for months by two paths disagreeing about whether
+     anything happened. */
+  const out = main.slice(main.indexOf('private boolean openOutside('));
+  assert.match(out, /ACTION_VIEW/);
+  assert.match(out, /FLAG_ACTIVITY_NEW_TASK/,
+    'the map must not come back into this app’s task, or Back lands nowhere');
   /* The floor stays where it was: a phone with no browser registered keeps showing the page
      in-app rather than doing nothing at all, which is worse than the bug being fixed. */
-  assert.match(body, /catch \(Exception ignored\) \{\s*\n\s*return false;/,
+  assert.match(out, /catch \(Exception ignored\) \{\s*\n\s*return false;/,
     'if nothing will take the link, fall back to the old in-app behaviour');
+});
+
+test('a blank-target click reaches the wrapper at all', () => {
+  /* THE BUG THAT HID THE FIX. Without multiple windows the click is dropped before any of the
+     forwarding above runs, which is why the pin worked in a browser and nowhere else. */
+  const main = javaCode('app/src/main/java/com/samaritantechs/hoopcalls/MainActivity.java');
+  assert.match(main, /setSupportMultipleWindows\(true\)/,
+    'or target="_blank" is silently swallowed and shouldOverrideUrlLoading never fires');
+  assert.ok(!/setJavaScriptCanOpenWindowsAutomatically\(true\)/.test(main),
+    'a window opened by a click is a person asking; one opened by a script is not');
+
+  const win = main.slice(main.indexOf('onCreateWindow'));
+  assert.match(win.slice(0, win.indexOf('onShowFileChooser')), /openOutside\(req\.getUrl\(\)\)/,
+    'the asked-for window is never opened here -- its address is handed to the phone');
+});
+
+test('the page stops asking for a window when it is inside the app', () => {
+  /* THE HALF THAT SHIPS TODAY. An APK reaches an officer when they accept an update; a page
+     reaches them on the next tap, and every handset in the field is running the old one. */
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const open = html.slice(html.indexOf('function openOut_('), html.indexOf('function devWhere('));
+  assert.match(open, /window\.HoopLoan\|\|window\.HopeCalls/,
+    'both bridge names, for as long as both builds are out there');
+  assert.match(open, /window\.location\.href=url;\s*return;/,
+    'inside the app it navigates at the top level, which the wrapper sees');
+  assert.match(open, /window\.open\(url,'_blank','noopener'\)/, 'and a browser still gets a tab');
+  assert.match(open, /if\(!w\)\{ try\{ window\.location\.href=url/,
+    'a blocked pop-up is not a reason to lose the tap');
+
+  const where = html.slice(html.indexOf('function devWhere('), html.indexOf('function telHref('));
+  assert.match(where, /onclick="openOut_\(this\.href\);return false;"/);
+  assert.match(where, /href="'\+esc\(url\)\+'"/,
+    'the href stays real: it is what a long-press copies and what the status bar shows');
 });
 
 /* =========================================================================================

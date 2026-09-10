@@ -368,6 +368,44 @@ test('a holder with no name still opens, and a sold piece is not in the list', a
     'and it is not in the list either: one index answers both');
 });
 
+test('the round exports the handsets behind it, not the summary on screen', async () => {
+  /* "pieces, oldest and 90+ card should have excel button on top"
+
+     The generic export above every table copies WHAT IS ON SCREEN, which here is five summary
+     columns per holder -- and a team driving out to collect handsets needs the IMEIs. */
+  const db = osDb({ stock: [
+    old({ imei: 'E1', agent: 'ABEL MGANGA', age: 200 }),
+    old({ imei: 'E2', agent: 'ABEL MGANGA', age: 40 }),
+    old({ imei: 'F1', agent: 'ANOLD RUBBEN', age: 300 }),
+    old({ imei: 'G1', agent: 'ZUHURA S', age: 10 }),
+  ] });
+  const d = await _FNS.oldStockRound(db, STORE, {});
+  assert.equal(d.pieces, 4, 'one line per handset');
+  assert.equal(d.holders, 3);
+  /* WORST TRIP FIRST, the same order the board sorts by -- an older pile is a worse problem
+     than a bigger one, and the file has to agree with the card that produced it. */
+  assert.deepEqual(d.rows.map(r => r.imei), ['F1', 'E1', 'E2', 'G1']);
+  // Every line carries its HOLDER'S totals, so the file pivots back into the board.
+  const e1 = d.rows.find(r => r.imei === 'E1');
+  assert.equal(e1.pieces, 2); assert.equal(e1.oldest, 200); assert.equal(e1.over90, 1);
+  assert.equal(e1.agentPhone, '0789473000', 'and the number to ring before setting off');
+});
+
+test('the round export ignores the pane’s filter, because the card does', async () => {
+  const db = osDb({ stock: [
+    old({ imei: 'H1', agent: 'ABEL MGANGA', rsm: 'ANORD SAWE', age: 200 }),
+    old({ imei: 'H2', agent: 'ABEL MGANGA', rsm: 'ANORD SAWE', age: 20 }),
+  ] });
+  /* A file that quietly obeyed a filter the card ignores would disagree with the number that
+     produced it -- and somebody would drive out with two thirds of a list. */
+  const d = await _FNS.oldStockRound(db, { ...STORE }, { rsm: 'AYUBU BWANGA', q: '999' });
+  assert.equal(d.pieces, 2);
+  // And a handset that has since been locked or sold is not on the round at all.
+  const gone = osDb({ stock: [old({ imei: 'H1' }), old({ imei: 'H3' })],
+    devices: [{ imei: 'H3', state: 'locked' }] });
+  assert.deepEqual((await _FNS.oldStockRound(gone, STORE, {})).rows.map(r => r.imei), ['H1']);
+});
+
 test('the cells lead with the figure, and a zero opens nothing', () => {
   const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
   const num = html.slice(html.indexOf('function osNum_('), html.indexOf('function osHolderDrawer('));
