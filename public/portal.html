@@ -7024,16 +7024,31 @@ function osPaint_(m, d){
         (c.noPlace||0)?money(c.noPlace)+' hazijulikani zilipo':'zote zinajulikana zilipo',
         Object.assign({color:((c.noPlace||0)?'bad':'ok')},{on:false,cta:'',go:function(){}}))
       +'</div>';
-    var opts=function(list,sel){ return '<option value="">— zote / all —</option>'
+    /* THE UNSET OPTION NAMES ITS OWN COLUMN.
+       -------------------------------------------------------------------------------------
+         "the filters at oldstock have no headings"
+
+       Three dropdowns sat in a row all reading "— zote / all —", which is the same sentence
+       three times and says nothing about which is which. Two things fix it and both are
+       needed: a heading above each, and the empty option naming its own column -- because on
+       a phone the row wraps and the heading can end up on a different line from the control
+       it belongs to, and because a closed dropdown showing only "all" is the state this pane
+       spends most of its life in. */
+    var opts=function(list,sel,what){ return '<option value="">'+esc(what)+' — zote / all</option>'
       +(list||[]).map(function(x){ return '<option value="'+esc(x)+'"'+(x===sel?' selected':'')+'>'+esc(x)+'</option>'; }).join(''); };
-    var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
-      +'<select id="osRsm" style="min-width:150px">'+opts(d.rsms,d.rsm)+'</select>'
-      +'<select id="osAgent" style="min-width:170px">'+opts(d.agents,d.agent)+'</select>'
+    /* Label and control travel together so a wrap can never separate them -- which is exactly
+       how a heading ends up sitting over the wrong dropdown. */
+    var fld=function(label,html){ return '<label style="display:flex;flex-direction:column;gap:2px;margin:0">'
+      +'<span class="mut" style="font-size:10px;text-transform:uppercase;letter-spacing:.03em">'+esc(label)+'</span>'
+      +html+'</label>'; };
+    var bar='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin:10px 0">'
+      +fld('RSM','<select id="osRsm" style="min-width:150px">'+opts(d.rsms,d.rsm,'RSM')+'</select>')
+      +fld('Mwenye nazo / holder','<select id="osAgent" style="min-width:170px">'+opts(d.agents,d.agent,'Mwenye nazo')+'</select>')
       /* PIVOT BY WHERE IT IS, not only by whose it is: an RSM's round can cross three towns and
          a town's round can cross three RSMs, which is the whole reason this was asked for. */
-      +'<select id="osLoc" style="min-width:150px">'+opts(d.locations,d.location)+'</select>'
-      +'<input id="osQ" inputmode="numeric" placeholder="Tafuta IMEI / find" value="'+esc(d.q||'')+'" '
-      +'style="width:160px;font-family:ui-monospace,monospace;font-size:12px">'
+      +fld('Mahali / location','<select id="osLoc" style="min-width:150px">'+opts(d.locations,d.location,'Mahali')+'</select>')
+      +fld('IMEI','<input id="osQ" inputmode="numeric" placeholder="Tafuta / find" value="'+esc(d.q||'')+'" '
+        +'style="width:160px;font-family:ui-monospace,monospace;font-size:12px">')
       +'<button class="btn sm" id="osGo">Chuja / Filter</button>'
       +'<span style="flex:1"></span>'
       +'<span class="mut" style="font-size:11px">Ilisomwa '+esc(clock(d.asOf))
@@ -7285,12 +7300,17 @@ function drawAudit(m){
   m.innerHTML='<div class="card"><h2>Nani alifanya nini / Audit log</h2><div class="sk"></div></div>';
   srv('audit',AUDQ).then(function(d){
     var rows=d.rows||[];
-    var opts=function(list,sel){ return '<option value="">— zote / all —</option>'
+    /* THE SAME HEADINGS THIS PANE'S FILTERS WERE MISSING. Two bare date boxes side by side are
+       indistinguishable, and the one thing somebody needs to know is which end is which. */
+    var opts=function(list,sel,what){ return '<option value="">'+esc(what)+' — zote / all</option>'
       +(list||[]).map(function(x){ return '<option value="'+esc(x)+'"'+(x===sel?' selected':'')+'>'+esc(x)+'</option>'; }).join(''); };
-    var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
-      +'<select id="auAct" style="min-width:170px">'+opts(d.actions,AUDQ.action)+'</select>'
-      +'<input id="auFrom" class="inp" type="date" style="width:auto" value="'+esc(AUDQ.from||'')+'">'
-      +'<input id="auTo" class="inp" type="date" style="width:auto" value="'+esc(AUDQ.to||'')+'">'
+    var fld=function(label,html){ return '<label style="display:flex;flex-direction:column;gap:2px;margin:0">'
+      +'<span class="mut" style="font-size:10px;text-transform:uppercase;letter-spacing:.03em">'+esc(label)+'</span>'
+      +html+'</label>'; };
+    var bar='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin:10px 0">'
+      +fld('Kitendo / action','<select id="auAct" style="min-width:170px">'+opts(d.actions,AUDQ.action,'Kitendo')+'</select>')
+      +fld('Kuanzia / from','<input id="auFrom" class="inp" type="date" style="width:auto" value="'+esc(AUDQ.from||'')+'">')
+      +fld('Hadi / to','<input id="auTo" class="inp" type="date" style="width:auto" value="'+esc(AUDQ.to||'')+'">')
       +'<button class="btn sm" id="auGo">Chuja / Filter</button>'
       +'<button class="btn sm ghost" id="auClr">Yote / All</button>'
       +'<span style="flex:1"></span>'

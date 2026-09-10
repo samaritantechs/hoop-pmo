@@ -620,7 +620,18 @@ test('the pane shows the place, offers it as a filter, and says which kind of an
   const paint = fnSrc('osPaint_');
   assert.match(paint, /<th>Mahali \/ location<\/th>/);
   assert.match(paint, /id="osLoc"/, 'a dropdown, beside RSM and holder');
-  assert.match(paint, /opts\(d\.locations,d\.location\)/);
+  assert.match(paint, /opts\(d\.locations,d\.location,'Mahali'\)/);
+  /* EVERY FILTER SAYS WHAT IT FILTERS, twice over: a heading above it, and the unset option
+     naming its own column. Three dropdowns reading "— zote / all —" are the same sentence
+     three times, and on a phone the row wraps so a heading can land over the wrong control --
+     which is why the label and its control travel together in one element. */
+  assert.match(paint, /fld\('RSM',/);
+  assert.match(paint, /fld\('Mwenye nazo \/ holder',/);
+  assert.match(paint, /fld\('Mahali \/ location',/);
+  assert.match(paint, /fld\('IMEI',/);
+  assert.match(paint, /var fld=function\(label,html\)\{ return '<label/,
+    'label and control in ONE element, so a wrap can never separate them');
+  assert.match(paint, /'<option value="">'\+esc\(what\)\+' — zote \/ all<\/option>'/);
   assert.match(paint, /location:\$\('#osLoc'\)\.value/, 'and the filter reads it');
   // The round carries it too: a visit is planned to a person IN a place.
   assert.match(paint, /osPlace_\(g\)/);

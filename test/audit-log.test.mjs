@@ -332,6 +332,12 @@ test('the pane asks the five questions in the order somebody asks them', () => {
   // The retention is stated on the pane, in the number the server actually uses.
   assert.match(draw, /d\.keepDays\|\|15/);
   assert.match(draw, /zinafutwa zenyewe baada ya siku/);
+  /* AND EVERY FILTER SAYS WHAT IT FILTERS. Two bare date boxes side by side are
+     indistinguishable, and which end is which is the one thing somebody needs to know. */
+  assert.match(draw, /fld\('Kitendo \/ action',/);
+  assert.match(draw, /fld\('Kuanzia \/ from',/);
+  assert.match(draw, /fld\('Hadi \/ to',/);
+
   // A refused attempt keeps its reason and is not dressed as an ordinary row.
   assert.match(draw, /r\.ok===false/);
   assert.match(draw, /imekataliwa \/ refused/);
