@@ -85,7 +85,7 @@ aside.side{width:236px;flex:0 0 auto;background:var(--b900);color:#cfe0ff;
   display:flex;flex-direction:column;padding:14px 12px;min-height:0}
 /* Neither of these may be squeezed: the brand anchors the top and the foot holds Logout. */
 .side .brand,.side .foot{flex:0 0 auto}
-.side .brand{display:flex;align-items:center;gap:9px;color:#fff;font-weight:800;font-size:14px;line-height:1.3}
+.side .brand{display:flex;align-items:center;gap:9px;color:#fff;font-weight:800;font-size:15.5px;line-height:1.15;letter-spacing:.01em}
 .side .brand svg{width:40px;flex:0 0 40px}
 .side .brand small{display:block;color:var(--b300);font-weight:500;font-size:10.5px;margin-top:2px;letter-spacing:.04em}
 
@@ -379,7 +379,7 @@ body.dark .tabs button.on{background:var(--b700);color:#fff}
   <div class="incard">
     <svg class="mark" viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#EFF6FF"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
     <h1>HOOPLOAN</h1>
-    <p>Mfumo wa ufuatiliaji — watu simu. Ingia na msimbo wako. / Sign in with your access code.</p>
+    <p>Mfumo wa ufuatiliaji wa simu. Ingia na msimbo wako. / Sign in with your access code.</p>
     <input class="inp" type="password" id="inCode" placeholder="Access code" autocomplete="off">
     <div class="err" id="inErr"></div>
     <button class="btn w" id="inBtn">Ingia / Sign in</button>
@@ -408,7 +408,7 @@ body.dark .tabs button.on{background:var(--b700);color:#fff}
     <aside class="side">
       <div class="brand">
         <svg viewBox="0 0 64 40"><rect width="64" height="40" rx="9" fill="#fff"/><text x="32" y="21" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="-1" fill="#2E2B7A" font-family="Arial">HOOP</text><path d="M22 26 A 11 11 0 0 0 42 26" fill="none" stroke="#35A8E1" stroke-width="4" stroke-linecap="round"/></svg>
-        <div>HOOPLOAN<small>WATU SIMU</small></div>
+        <div>HOOPLOAN</div>
       </div>
       <!-- Built in JS from NAV below, not written out here: the icons, the group labels and
            the per-role hiding all come from one list, so a pane added later needs one line. -->
@@ -6600,10 +6600,62 @@ function nsWhere(r){
     +(age?'<div class="mut">'+esc(age)+'</div>':'')
     +'</div>';
 }
+/* NEW SALES -- the week and the month, and who is carrying them.
+   =========================================================================================
+     "Add NEW SALES widgets at top of weekly and monthly progress showing 3: 1-no of agents,
+      2-no of customers, 3-price. And another card showing top and bottom agent at once as
+      weekly progress 3x2: 1-agent name, 2-no of sales, 3-price."
+
+   THESE COUNT THE SALES OF HANDSETS WE LOCKED, which is what this whole pane is about -- the
+   same stamped rows as the table underneath, so the widget and the table can never disagree.
+   A card reading the deck directly would count phones this audit has never heard of.
+
+   THE THREE NUMBERS ARE THE THREE ASKED FOR, in that order, and the period is printed under
+   them: a progress figure with no dates on it is a number nobody can check. */
+function nsThree(title, sub, p){
+  var cell=function(lab,val){ return '<div><div class="mut" style="font-size:10px">'+lab+'</div>'
+    +'<div style="font-size:19px;font-weight:600;line-height:1.15">'+val+'</div></div>'; };
+  return '<div class="card" style="padding:12px">'
+    +'<div style="font-weight:600;font-size:12.5px">'+esc(title)+'</div>'
+    +'<div class="mut" style="font-size:10px;margin-bottom:8px">'+esc(sub)+'</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">'
+    +cell('Maajenti / agents', money(p.agents||0))
+    +cell('Wateja / customers', money(p.customers||0))
+    +cell('Thamani / price', money(p.amount||0))
+    +'</div>'
+    +'<div class="mut" style="font-size:10px;margin-top:6px">'+money(p.sales||0)+' simu / handsets</div>'
+    +'</div>';
+}
+/* TOP AND BOTTOM AT ONCE, 3x2: a name, a count and a value on each of two rows.
+   THE BOTTOM IS THE LOWEST WHO SOLD, never the highest who did not -- somebody who sold
+   nothing this week is not on these rows at all, so the card says how many agents it is
+   ranking rather than implying it ranked the whole company. With a single seller the two rows
+   would be one person printed twice as if that were two facts, so it says that instead. */
+function nsTopBottom(ns){
+  var row=function(tag, cls, a){
+    if(!a) return '';
+    return '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px;align-items:baseline;padding:4px 0">'
+      +'<div><span class="chip '+cls+'">'+tag+'</span> <b style="font-size:12.5px">'+esc(a.name)+'</b></div>'
+      +'<div style="font-size:14px">'+money(a.sales)+' <span class="mut" style="font-size:10px">mauzo</span></div>'
+      +'<div style="font-size:14px">'+money(a.amount)+'</div></div>';
+  };
+  return '<div class="card" style="padding:12px">'
+    +'<div style="font-weight:600;font-size:12.5px">Juu na chini / Top and bottom</div>'
+    +'<div class="mut" style="font-size:10px;margin-bottom:6px">wiki hii · '+esc(ns.week.from)+' → '+esc(ns.week.to)+'</div>'
+    +(ns.top
+      ? row('JUU','ok',ns.top)+row('CHINI','bad',ns.bottom)
+        +(ns.bottom?'':'<div class="mut" style="font-size:10.5px;padding:4px 0">Ajenti mmoja tu ameuza wiki hii. '
+          +'/ Only one agent has sold this week, so there is no bottom to name.</div>')
+      : '<div class="mut" style="font-size:11.5px;padding:6px 0">Hakuna mauzo wiki hii. / No sales this week.</div>')
+    +'<div class="mut" style="font-size:10px;margin-top:4px">kati ya maajenti '+money(ns.ranked||0)
+    +' walioamiliana wiki hii / of the '+money(ns.ranked||0)+' agents who sold this week</div>'
+    +'</div>';
+}
 function drawNewStock(m){
   m.innerHTML='<div class="card"><h2>NEW STOCK</h2><div class="sk"></div></div>';
   srv('newStock',NSQ).then(function(d){
     var c=d.counts||{}, rows=d.rows||[];
+    var ns=d.newSales||{week:{},month:{},top:null,bottom:null,ranked:0};
     var pick=function(k){ return {on:NSQ.status===k,cta:'chuja ›',
       go:function(){ NSQ.status=(NSQ.status===k?'':k); drawNewStock(m); }}; };
     var tiles='<div class="tiles">'
@@ -6640,7 +6692,7 @@ function drawNewStock(m){
       +'</div>';
     var table=rows.length
       ? '<div class="scroll"><table><thead><tr>'
-        +'<th>IMEI</th><th>RSM</th><th>RSM no</th><th>Ajenti / agent</th><th>Agent no</th>'
+        +'<th>IMEI</th><th>Tarehe / disb date</th><th>RSM</th><th>RSM no</th><th>Ajenti / agent</th><th>Agent no</th>'
         +'<th>Mteja / customer</th><th>Customer no</th><th>Bei / price</th>'
         +'<th>Mdhamini / guarantor</th><th>Guarantor no</th>'
         +'<th>Hali / status<div class="mut" style="font-size:9px;font-weight:400">+ eneo / location</div></th>'
@@ -6657,6 +6709,12 @@ function drawNewStock(m){
               +'<div class="mut" style="font-size:9.5px">'+esc(clock(r.seenAt))+'</div>';
           return '<tr><td>'+esc(r.imei)
             +(r.model?'<div class="mut" style="font-size:9.5px">'+esc(r.model)+'</div>':'')+'</td>'
+            /* SORTABLE BY DATE is the whole ask, so the cell prints the day AS STORED. An ISO
+               day sorts as text exactly the way it sorts as a date; prettifying it to
+               "13 Jul" would put August above July and the column would lie on every click. */
+            +'<td style="font-size:11.5px">'+(r.saleDate?esc(r.saleDate)
+              +(s.sale_date?'<div class="mut" style="font-size:9.5px">'+esc(s.sale_date)+'</div>':'')
+              :'<span class="mut">—</span>')+'</td>'
             +'<td>'+nsCell(r.rsm,s.rsm)+'</td><td>'+nsCell(r.rsmPhone,s.rsm_phone,true)+'</td>'
             +'<td>'+nsCell(r.agent,s.agent)+'</td><td>'+nsCell(r.agentPhone,s.agent_phone,true)+'</td>'
             +'<td>'+nsCell(r.customer,s.customer)+'</td><td>'+nsCell(r.customerPhone,s.customer_phone,true)+'</td>'
@@ -6679,7 +6737,18 @@ function drawNewStock(m){
       +'hivyo hubadilika. / Every handset we have locked, with the sale behind it. The sale details '
       +'are <b>stamped the first time any feed can answer and never overwritten</b>; status and the '
       +'last beat are read live, because those change.</div>'
-      +note+tiles+head+bar+table+'</div>';
+      /* NEW SALES SITS AT THE TOP, above the register it is counted from -- somebody opens this
+         pane to answer "how are we doing" before they answer "where is that handset", and the
+         three cards are the first question. They wrap to one column on a phone. */
+      +note
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin:10px 0">'
+      +nsThree('NEW SALES · wiki hii / this week',
+        (ns.week.from||'')+' → '+(ns.week.to||''), ns.week)
+      +nsThree('NEW SALES · mwezi huu / this month',
+        (ns.month.from||'')+' → '+(ns.month.to||''), ns.month)
+      +nsTopBottom(ns)
+      +'</div>'
+      +tiles+head+bar+table+'</div>';
     wireTiles(m);
     var go=function(){ NSQ.q=$('#nsQ').value; drawNewStock(m); };
     $('#nsGo').onclick=go;
@@ -7276,11 +7345,23 @@ function salesRender(m){
     var totC=rows.reduce(function(s,r){ return s+r.count; },0);
     var totA=rows.reduce(function(s,r){ return s+r.amount; },0);
 
+    /* THE AMOUNT WAS ONLY EVER IN A TOOLTIP, and a tooltip is not a number on a phone.
+       -------------------------------------------------------------------------------------
+         "Daily sales performance progress is showing QTY without amounts."
+
+       The cell has always carried both -- the value sat in `title`, which needs a mouse and a
+       hover. Every other money column in this system prints its figure, and the one place the
+       daily board is actually read is a handset. So the count leads (it is what the column is
+       counted and sorted by) and the value sits under it, in the same shape the register uses
+       everywhere else for a second fact about one cell.
+
+       The title stays: it costs nothing and still says TZS out loud on a desktop. */
     var cell=function(c){
       if(!c||!c.count) return '<td class="r"><span style="color:var(--soft)">—</span></td>';
       var hit=target&&c.amount>=target;
       return '<td class="r"'+(hit?' style="color:var(--ok);font-weight:700"':'')
-        +' title="'+money(c.amount)+' TZS">'+money(c.count)+'</td>';
+        +' title="'+money(c.amount)+' TZS">'+money(c.count)
+        +'<div class="mut" style="font-size:9.5px;font-weight:400">'+money(c.amount)+'</div></td>';
     };
     body='<div class="scroll"><table><thead><tr><th>'+esc(who)+'</th>'
       +d.days.map(function(dd){
@@ -7299,11 +7380,16 @@ function salesRender(m){
       }).join('')
       +'</tbody><tfoot><tr class="totrow"><td><b>Jumla / total</b></td>'
       +d.days.map(function(dd){
-        return '<td class="r" title="'+money(colA[dd])+' TZS">'+(colC[dd]?money(colC[dd]):'—')+'</td>'; }).join('')
+        // The totals row answers "what did the whole company do on Tuesday" -- in both numbers,
+        // for the same reason the cells above it do.
+        return '<td class="r" title="'+money(colA[dd])+' TZS">'+(colC[dd]?money(colC[dd]):'—')
+          +(colC[dd]?'<div class="mut" style="font-size:9.5px;font-weight:400">'+money(colA[dd])+'</div>':'')
+          +'</td>'; }).join('')
       +'<td class="r"><b>'+money(totC)+'</b></td><td class="r"><b>'+money(totA)+'</b></td>'
       +(target?'<td></td>':'')+'</tr></tfoot></table></div>'
-      +'<div class="mut" style="font-size:10.5px;margin-top:8px">Kila nambari = idadi ya simu siku hiyo; '
-      +'gusa/weka kishale juu yake kuona thamani (TZS). <b style="color:var(--ok)">Kijani</b> = siku imefika lengo. '
+      +'<div class="mut" style="font-size:10.5px;margin-top:8px">Kila kisanduku: idadi ya simu juu, '
+      +'thamani (TZS) chini. <b style="color:var(--ok)">Kijani</b> = siku imefika lengo. '
+      +'/ Each cell: handsets on top, value in TZS underneath. '
       +(target?'':'Weka <b>SALES_DAILY_TARGET</b> kwenye Settings ili uone lengo.')
       +'</div>';
   }

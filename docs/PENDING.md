@@ -1141,3 +1141,43 @@ days ago). Achia does not erase it, which is the case it was asked for.
 FIXED IN PASSING: a missing location column read as a missing devices register on both this pane and
 the Devices pane, because `tableMissing()` matches an absent column as well as an absent table. Both
 now ask the narrower question first, so one un-run migration cannot take the whole register dark.
+
+## 36. SHIPPED 2026-09-11: NEW SALES widgets, the disbursement date, and the daily board's amounts
+
+**Do:** nothing. No migration, no nav, no setting.
+
+NEW STOCK gained a **Tarehe / disb date** column, second after the IMEI, so the register sorts by
+date. It prints the day AS STORED: an ISO day sorts as text exactly the way it sorts as a date, and
+prettifying it would put August above July on every click.
+
+THREE CARDS ABOVE THE REGISTER. NEW SALES this week and this month, each showing the three numbers
+asked for -- agents, customers, price -- with the period printed under them, because a progress
+figure with no dates on it is a number nobody can check. Plus a 3x2 card with the week's top and
+bottom agent: name, sales, price on each row.
+
+They are counted from this pane's OWN stamped rows, so the cards and the table under them can never
+disagree -- a card reading the deck directly would count phones this audit has never heard of. A
+customer is a phone number where there is one. The bottom agent is the lowest who SOLD, never the
+highest who did not, so the card says how many agents it ranked rather than implying it ranked the
+whole company.
+
+THE DAILY SALES BOARD NOW PRINTS THE AMOUNT. It always carried both numbers -- the value sat in a
+`title` tooltip, which needs a mouse, and that pane is read on a handset. The count leads each cell
+and the value sits under it, in the totals row too. The tooltip stays; the legend no longer tells
+anybody to hover for a number that is now on screen.
+
+## 37. SHIPPED 2026-09-11: one brand in the nav header, and it is ours
+
+"Remove the WATU SIMU brand name on top left of our system nav header: fit the logo with only our
+own brand name, not two."
+
+**Do:** nothing.
+
+The sidebar read HOOPLOAN with WATU SIMU under it -- a second company's name in the one place a
+system says whose it is. The mark and the word are now one lockup, sized to sit with the logo rather
+than as a label stuck beside a picture. The sign-in screen carried the same second name in a
+sentence under our own logo; it now reads "Mfumo wa ufuatiliaji wa simu".
+
+STILL CARRYING IT, named rather than quietly changed: `APP.MOTTO` in `api/_lib/call-core.js`, which
+is the CALLS app's own header (call.html), not the portal's. Say the word and it goes too -- it is
+one line, but it is a different surface and was not what the ask named.

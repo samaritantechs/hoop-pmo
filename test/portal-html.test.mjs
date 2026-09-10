@@ -2454,3 +2454,21 @@ test('portal.html: the desk opens on my desk, with the whole log one click away'
   assert.match(tbl, /r\.directed\?'<div class="mut"[^>]*>\\u2192 '\+esc\(r\.toName\)/,
     'and names the person where one was named');
 });
+
+test('portal.html: the nav header carries one brand, and it is ours', () => {
+  /* "Remove the WATU SIMU brand name on top left of our system nav header: fit the logo with
+     only our own brand name, not two."
+
+     The sidebar read HOOPLOAN with WATU SIMU under it -- a second company's name in the one
+     place a system says whose it is. The mark and the word are now one lockup. */
+  const html = read('portal.html');
+  const brand = html.slice(html.indexOf('<div class="brand">'), html.indexOf('<nav class="tabs"'));
+  assert.match(brand, /<div>HOOPLOAN<\/div>/);
+  assert.ok(!/WATU SIMU/i.test(brand), 'one brand in the header, not two');
+  // The sign-in screen carried the same second name in a sentence, under our own logo.
+  const signin = html.slice(html.indexOf('<div id="scrIn">'), html.indexOf('id="inCode"'));
+  assert.match(signin, /<h1>HOOPLOAN<\/h1>/);
+  assert.ok(!/watu simu/i.test(signin));
+  // And nowhere else in the page picked it up.
+  assert.ok(!/WATU SIMU/i.test(html), 'the other brand is gone from the portal entirely');
+});
