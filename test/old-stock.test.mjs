@@ -298,6 +298,101 @@ const fnSrc = name => {
   return HTML.slice(at, HTML.indexOf('\n}', at) + 2);
 };
 
+/* =========================================================================================
+   THE THREE NUMBERS ON THE ROUND OPEN WHAT THEY COUNT.
+
+     "pieces, oldest and 90+ numbers in Ziara / The round at old stock -- the nos should be
+      clickable to open a list of that qty displayed in the specified cell in a row/column"
+
+   ONE FUNCTION, ONE FLOOR, THREE CELLS. They are the same question with a different minimum
+   age under it, and `oldest` needs no special case: it is the MAXIMUM age in the group, so
+   asking for "at least that" returns exactly the piece the cell is naming.
+   ========================================================================================= */
+test('a number on the round opens the handsets behind it', async () => {
+  const db = osDb({ stock: [
+    old({ imei: 'P1', agent: 'ABEL MGANGA', age: 200 }),
+    old({ imei: 'P2', agent: 'ABEL MGANGA', age: 95 }),
+    old({ imei: 'P3', agent: 'ABEL MGANGA', age: 12 }),
+    old({ imei: 'Q1', agent: 'ANOLD RUBBEN', age: 300 }),
+  ] });
+  const board = (await _FNS.oldStock(db, STORE, {})).byAgent;
+  const abel = board.find(g => g.agent === 'ABEL MGANGA');
+  assert.equal(abel.pieces, 3); assert.equal(abel.oldest, 200); assert.equal(abel.over90, 2);
+
+  // PIECES: no floor, so all of them -- and nobody else's.
+  const all = await _FNS.oldStockHolder(db, STORE, { key: abel.key, min: null });
+  assert.deepEqual(all.rows.map(r => r.imei), ['P1', 'P2', 'P3'], 'oldest first, like the pane');
+  assert.equal(all.shown, 3, 'the list is exactly the number that opened it');
+  assert.equal(all.agent, 'ABEL MGANGA');
+
+  // OLDEST: the floor is the figure shown, and the maximum is the only thing that clears it.
+  const top = await _FNS.oldStockHolder(db, STORE, { key: abel.key, min: abel.oldest });
+  assert.deepEqual(top.rows.map(r => r.imei), ['P1']);
+
+  // 90+: the floor is ninety.
+  const over = await _FNS.oldStockHolder(db, STORE, { key: abel.key, min: 90 });
+  assert.deepEqual(over.rows.map(r => r.imei), ['P1', 'P2']);
+  assert.equal(over.shown, abel.over90, 'the drawer and the cell cannot disagree');
+});
+
+test('the drawer ignores the pane’s filter, because the board does too', async () => {
+  /* THE BOARD IS NOT FILTERED, so this must not be either. A count of three that opened a
+     list of one because the pane happened to be narrowed to another RSM would be worse than
+     no link at all. */
+  const db = osDb({ stock: [
+    old({ imei: 'R1', agent: 'ABEL MGANGA', rsm: 'ANORD SAWE', age: 200 }),
+    old({ imei: 'R2', agent: 'ABEL MGANGA', rsm: 'ANORD SAWE', age: 150 }),
+  ] });
+  const board = (await _FNS.oldStock(db, STORE, { rsm: 'AYUBU BWANGA' })).byAgent;
+  assert.equal(board[0].pieces, 2, 'the board still counts the whole round');
+  const d = await _FNS.oldStockHolder(db, STORE, { key: board[0].key });
+  assert.equal(d.shown, 2, 'and so does the list it opens');
+});
+
+test('a holder with no name still opens, and a sold piece is not in the list', async () => {
+  /* "(hakuna jina)" is a LABEL, not a holder -- looking it up by the name on screen would
+     find nobody while the count beside it says two. The group's key is what travels. */
+  const db = osDb({
+    stock: [
+      old({ imei: 'N1', agent: null, agentPhone: null, age: 40 }),
+      old({ imei: 'N2', agent: null, agentPhone: null, age: 20 }),
+      old({ imei: 'N3', agent: null, agentPhone: null, age: 10 }),
+    ],
+    loans: [{ imei: 'N3', agent: 'X', disbursed_date: D(-2), price: 400000 }],
+  });
+  const board = (await _FNS.oldStock(db, STORE, {})).byAgent;
+  assert.equal(board[0].key, '?', 'the unnamed group is keyed, not named');
+  assert.equal(board[0].pieces, 2, 'the sold one already left the round');
+  const d = await _FNS.oldStockHolder(db, STORE, { key: '?' });
+  assert.deepEqual(d.rows.map(r => r.imei), ['N1', 'N2'],
+    'and it is not in the list either: one index answers both');
+});
+
+test('the cells lead with the figure, and a zero opens nothing', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const num = html.slice(html.indexOf('function osNum_('), html.indexOf('function osHolderDrawer('));
+  /* EVERY TABLE HERE SORTS ON THE CELL'S TEXT, so a number wrapped in a control has to stay a
+     number FIRST. An icon or a word in front of it and the Kongwe column starts sorting
+     alphabetically -- on the one board read to decide which visit goes first. */
+  assert.match(num, /">'\+money\(n\)\+'<\/button>'/,
+    'the button closes its tag and the figure is the whole of what is inside it');
+  assert.match(num, /if\(!n\) return money\(n\|\|0\);/,
+    'a zero is not a link: there is nothing behind it to open');
+  assert.match(num, /text-decoration:underline/, 'and it looks like it does something');
+
+  const draw = html.slice(html.indexOf('function drawOldStock('), html.indexOf('function osNum_('));
+  for (const cell of ["osNum_(g.pieces,g.key,''", 'osNum_(g.oldest,g.key,g.oldest', 'osNum_(g.over90,g.key,90']) {
+    assert.ok(draw.includes(cell), 'the round is missing: ' + cell);
+  }
+  assert.match(draw, /data-osh/, 'and the board wires them');
+
+  const dr = html.slice(html.indexOf('function osHolderDrawer('), html.indexOf('function drawNewStock('));
+  assert.match(dr, /srv\('oldStockHolder'/);
+  assert.ok(!/drawOldStock/.test(dr), 'opening a number never redraws the pane under it');
+  assert.match(dr, /Showing '\+money\(rows\.length\)\+' of '\+money\(d\.shown\)/,
+    'a capped list says so rather than sitting under a heading that names the full count');
+});
+
 test('the pane opens as a worklist: the round first, then the handsets', () => {
   const src = fnSrc('drawOldStock');
   assert.match(src, /Ziara \/ The round/, 'the per-holder board, because a visit is made to a person');

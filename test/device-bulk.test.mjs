@@ -236,7 +236,13 @@ test('one form, two orders, and the warning is not written once for both', () =>
   /* Everything that makes a bulk order safe is the same work for either desk, so there is one
      form. What is NOT the same is what the order costs, and a warning copied across would be
      false on one of the two screens. */
-  const t = new Function(HTML.slice(HTML.indexOf('var DEVBULK={'),
+  /* DEPT comes along, read out of the page rather than copied here: the warning names the
+     desk that can undo a lock, and that desk was renamed by the CEO. A test carrying its own
+     copy of the name would keep passing through the next rename while the screen said
+     something else. */
+  const dept = HTML.slice(HTML.indexOf('var DEPT={'), HTML.indexOf(';', HTML.indexOf('var DEPT={')) + 1);
+  assert.ok(dept.length > 10 && dept.length < 200, 'DEPT is one line at the top of the script');
+  const t = new Function(dept + '\n' + HTML.slice(HTML.indexOf('var DEVBULK={'),
     HTML.indexOf('\n};', HTML.indexOf('var DEVBULK={')) + 3) + '\nreturn DEVBULK;')();
   assert.deepEqual(Object.keys(t).sort(), ['locked', 'released']);
 
@@ -244,14 +250,15 @@ test('one form, two orders, and the warning is not written once for both', () =>
   assert.match(t.released.warn, /mlango wa njia moja[\s\S]*one-way/);
   assert.match(t.released.warn, /kebo|cable/);
 
-  /* Funga CAN be undone -- by general duty, in a second -- so calling it irreversible would be
-     a lie that makes the real warning next door mean less. What is true is that every phone on
-     the list goes dark to whoever is holding it, which on a pasted list is a number nobody
-     counted. */
+  /* Funga CAN be undone -- by the sales coordinator, in a second -- so calling it irreversible
+     would be a lie that makes the real warning next door mean less. What is true is that every
+     phone on the list goes dark to whoever is holding it, which on a pasted list is a number
+     nobody counted. */
   assert.ok(!/njia moja|one-way|irreversible/i.test(t.locked.warn),
     'locking is not a one-way door and must not borrow the sentence of the one that is');
   assert.match(t.locked.warn, /gizani|dark/, 'it says what a lock actually costs the holder');
-  assert.match(t.locked.warn, /General duty/, 'and who can undo it, since this desk cannot');
+  assert.match(t.locked.warn, /Sales Coordinator/i, 'and who can undo it, since this desk cannot');
+  assert.ok(!/general duty/i.test(t.locked.warn), 'under the name that desk now has');
   // The reason devAct_ will demand is announced, not sprung after the paste is typed.
   assert.match(t.locked.warn, /sababu|reason/);
 });

@@ -34,7 +34,16 @@ export default async function handler(req, res) {
         .select(probeSel.error ? 'imei, agent' : 'imei, agent, branch, guarantor_name'));
       const ags = await fetchAll(() => supabase.from('hoop_agents').select('name, phone'));
       const cus = await fetchAll(() => supabase.from('call_users').select('user_id, role, active'));
-      const CR = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CREDIT TEAM']);
+      /* WHO COUNTS AS CREDIT, asked of call-core rather than spelled out again here.
+         This probe used to carry its own copy of that set, and the morning the department
+         was renamed to Portfolio and Compliance the copy would have started disagreeing
+         with the fence it is reporting on: a health page counting a roster of four while
+         the deal dealt to seven, which is worse than printing no number at all.
+         The literal survives as a FALLBACK, never as a second opinion -- this endpoint's
+         whole promise is that it still answers when a module will not load. */
+      let CR;
+      try { CR = (await import('./_lib/call-core.js')).CREDIT_ROLES; }
+      catch (ignored) { CR = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CREDIT TEAM']); }
       const K = s => String(s == null ? '' : s).trim().toUpperCase();
       const dv = await supabase.from('settings').select('value').eq('key', 'DATA_VERSION').maybeSingle();
       // Stock rides along: row count + how many report dates -- so "did Sipho's upload

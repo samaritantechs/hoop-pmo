@@ -726,6 +726,14 @@ function paneFailed(m, e){
 function isoToday(off){ var d=new Date(); d.setDate(d.getDate()+(off||0)); var p=function(n){return('0'+n).slice(-2);}; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 
 var CODE='', BOOT=null, TAB='dash';
+/* THE TWO DEPARTMENTS THE CEO RENAMED, WRITTEN DOWN ONCE.
+     "Agreed to change hoop dept names GENERAL DUTY into SALES COORDINATOR since they analyze
+      and push sales, CREDIT into PORTFOLIO AND COMPLIANCE OFFICER since they make followups"
+   Every sentence on this page that names either desk reads it from here. They used to be
+   typed as literals in a dozen places, which is how the NEXT rename would have got half done
+   and stayed that way. The stored keys -- GENERAL_DUTY, CREDIT -- are untouched: a rename is
+   a change of name, and the name is what a person reads, never what a row holds. */
+var DEPT={SC:'Sales Coordinator',PC:'Portfolio and Compliance Officer'};
 /* EVERY TABLE EXPORTS TO EXCEL: a button injected above each table automatically, so
    every report in every tab -- including tabs added later -- is born exportable.
    CSV with a BOM: Excel opens it clean, Swahili characters intact. Hidden rows
@@ -3254,8 +3262,8 @@ function devPaint_(m, d, at){
        show every phone, which is exactly why the missing button needs a sentence. */
     +'<div class="note" style="font-size:11.5px;margin-bottom:8px">'
     +(canLock
-      ? 'Dawati la stoo: kufunga na kufunga upya. Kufungua kunafanywa na <b>General duty</b> kwenye dawati la kufungua. '
-        +'/ The store bench locks and re-locks; unlocking is general duty\'s, on their own pane.'
+      ? 'Dawati la stoo: kufunga na kufunga upya. Kufungua kunafanywa na <b>'+DEPT.SC+'</b> kwenye dawati la kufungua. '
+        +'/ The store bench locks and re-locks; unlocking is the '+DEPT.SC+'\'s, on their own pane.'
       : 'Dawati la kufungua (POS): kufungua na kuachia. Kufunga kunafanywa na <b>stoo</b>. '
         +'/ The POS desk unlocks and releases; locking is the store keeper\'s.')
     +'</div>'
@@ -3697,9 +3705,9 @@ var DEVBULK={
     /* Not "irreversible" -- it is not -- but not "harmless" either. Every one of these goes
        dark to whoever is holding it, and on a pasted list that is a number nobody counted. */
     warn:'Kila simu kwenye orodha itaenda gizani kwa aliye nayo hadi ifunguliwe. Kufungua ni '
-      +'kazi ya <b>General duty</b> kwenye dawati lao. Utaulizwa sababu — moja kwa orodha nzima. '
+      +'kazi ya <b>'+DEPT.SC+'</b> kwenye dawati lao. Utaulizwa sababu — moja kwa orodha nzima. '
       +'/ Every handset on this list goes dark to whoever holds it until it is opened again, '
-      +'which is <b>general duty\'s</b> to do on their own pane. You will be asked for one '
+      +'which is the <b>'+DEPT.SC+'\'s</b> to do on their own pane. You will be asked for one '
       +'reason, and it is recorded against all of them.',
     go:'Funga / Lock',
   },
@@ -5065,7 +5073,7 @@ function drawImpAppr(m){
           +'<button class="btn sm ghost danger" data-rld="'+esc(r.role)+'">Futa</button></td></tr>'; }).join('')
         +'</tbody></table></div>':'<div class="mut">Hakuna wadhifa bado. / No roles yet.</div>')
       +'<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">'
-      +'<input id="rlRole" class="inp" style="flex:2;min-width:140px" placeholder="Wadhifa (mfano CREDIT, RSM, CEO)">'
+      +'<input id="rlRole" class="inp" style="flex:2;min-width:140px" placeholder="Wadhifa (mfano SALES COORDINATOR, RSM, CEO)">'
       +'<input id="rlRate" class="inp" style="flex:1;min-width:110px" type="number" min="0" step="1" placeholder="TZS kwa siku">'
       +'<button class="btn sm" id="rlAdd">Hifadhi / Save</button></div>'
       +'</div>'
@@ -6765,7 +6773,29 @@ function nsThree(title, sub, p){
    nothing this week is not on these rows at all, so the card says how many agents it is
    ranking rather than implying it ranked the whole company. With a single seller the two rows
    would be one person printed twice as if that were two facts, so it says that instead. */
+/* THE ONE CARD THAT SLIDES, AND THE ONE CARD THAT EXPORTS.
+   =========================================================================================
+     "this widget should have excel button within, so that we can export the current weeks
+      sales data just from there, with back and forward buttons for previous and forward week
+      preview/excel download on the single widget, not changing the other widgets nor the
+      page's data"
+
+   NSWK IS THE CARD'S OWN STATE, and it is deliberately not part of NSQ. The pane's filter and
+   search decide what the TABLE shows; this decides which week one card is describing. Putting
+   them together is how a week arrow ends up reloading a table nobody asked it to touch.
+
+   THE ARROWS REDRAW THIS CARD ALONE. nsBoardGo_ asks the server for the same pane with a week
+   offset on it and paints the answer into #nsBoard -- the table, the tiles and the two
+   progress cards keep the bytes they already have. That is the ask, said plainly: the other
+   widgets do not move.
+
+   FORWARD IS DISABLED AT THIS WEEK rather than absent, so the pair of arrows stays a pair and
+   the one that has stopped working says why in its tooltip. */
+var NSWK=0;
 function nsTopBottom(ns){
+  var b=ns.board||{off:0,from:(ns.week||{}).from,to:(ns.week||{}).to,atWeek:true,totals:ns.week,sales:[]};
+  var when=b.atWeek?'wiki hii / this week'
+    :(b.off===-1?'wiki iliyopita / last week':money(-b.off)+' wiki nyuma / weeks back');
   var row=function(tag, cls, a){
     if(!a) return '';
     return '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px;align-items:baseline;padding:4px 0">'
@@ -6773,9 +6803,30 @@ function nsTopBottom(ns){
       +'<div style="font-size:14px">'+money(a.sales)+' <span class="mut" style="font-size:10px">mauzo</span></div>'
       +'<div style="font-size:14px">'+money(a.amount)+'</div></div>';
   };
-  return '<div class="card" style="padding:12px">'
+  var t=b.totals||{};
+  return '<div class="card" style="padding:12px" id="nsBoard">'
+    +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
     +'<div style="font-weight:600;font-size:12.5px">Juu na chini / Top and bottom</div>'
-    +'<div class="mut" style="font-size:10px;margin-bottom:6px">wiki hii · '+esc(ns.week.from)+' → '+esc(ns.week.to)+'</div>'
+    +'<span style="flex:1"></span>'
+    +'<button class="btn sm ghost" id="nsPrev" title="Wiki iliyopita / previous week" '
+      +'style="padding:2px 8px;font-size:12px">‹</button>'
+    +'<button class="btn sm ghost" id="nsNext" title="'
+      +(b.atWeek?'Hii ndiyo wiki hii / this is the current week':'Wiki inayofuata / next week')+'" '
+      +(b.atWeek?'disabled ':'')+'style="padding:2px 8px;font-size:12px'+(b.atWeek?';opacity:.45':'')+'">›</button>'
+    /* THE EXPORT TAKES THE WEEK, NOT THE SCREEN. Every other table in the system exports what
+       you can see, which is right for a table; this card has no table, and what it is about is
+       a week. So the file is the week's sales as the server counted them -- the same rows
+       behind the two names above it. */
+    +'<button class="btn sm ghost" id="nsXl" title="Pakua mauzo ya wiki hii / download this week\'s sales" '
+      +'style="padding:2px 8px;font-size:11.5px">⤓ Excel</button>'
+    +'</div>'
+    +'<div class="mut" style="font-size:10px;margin-bottom:6px">'+esc(when)+' · '
+      +esc(b.from||'')+' → '+esc(b.to||'')+'</div>'
+    /* THE WEEK'S OWN THREE FIGURES, so an arrow moves an answer and not just two names. They
+       are the same three the card above shows for this week -- read for whichever week is on
+       the board. */
+    +'<div class="mut" style="font-size:10.5px;margin-bottom:4px">'
+      +money(t.sales||0)+' simu · '+money(t.customers||0)+' wateja · <b>'+money(t.amount||0)+'</b></div>'
     +(ns.top
       ? row('JUU','ok',ns.top)+row('CHINI','bad',ns.bottom)
         +(ns.bottom?'':'<div class="mut" style="font-size:10.5px;padding:4px 0">Ajenti mmoja tu ameuza wiki hii. '
@@ -6792,6 +6843,63 @@ function nsTopBottom(ns){
         +(ns.idle>ns.idleNames.length?' … +'+money(ns.idle-ns.idleNames.length):''):'')
       +' / <b>'+money(ns.idle)+'</b> sold nothing at all this week.</div>':'')
     +'</div>';
+}
+/* THE CARD'S OWN WIRING, re-applied every time it redraws itself. */
+function nsBoardWire_(){
+  var p=$('#nsPrev'); if(p) p.onclick=function(){ nsBoardGo_(NSWK-1); };
+  var n=$('#nsNext'); if(n) n.onclick=function(){ nsBoardGo_(NSWK+1); };
+  var x=$('#nsXl'); if(x) x.onclick=function(){ nsBoardXl_(); };
+}
+/* ONE CARD, ONE REQUEST, ONE REPAINT.
+   The pane is asked again with a week offset on it -- the server is the only thing that knows
+   the whole week, because the page holds at most 2000 rows and only the ones that passed its
+   filter -- and ONLY #nsBoard is replaced with the answer. Nothing else on screen is touched,
+   which is the difference between this and pressing a tile.
+
+   THE ANSWER IS KEPT for the export, so pressing Excel does not ask a third time and cannot
+   hand back a different week from the one being read. */
+var NSBOARD=null;
+function nsBoardGo_(off){
+  var card=$('#nsBoard'); if(!card) return;
+  var was=NSWK;
+  NSWK=Math.max(-104, Math.min(0, off));
+  if(NSWK===was && NSBOARD) return;
+  card.style.opacity='.5';
+  srv('newStock',{status:NSQ.status,q:NSQ.q,wk:NSWK}).then(function(d){
+    var ns=d.newSales||{};
+    NSBOARD=ns;
+    var host=$('#nsBoard'); if(!host) return;
+    /* outerHTML rather than innerHTML: nsTopBottom returns the whole card, id and all, so
+       writing it inside itself would nest a second card in the first. */
+    host.outerHTML=nsTopBottom(ns);
+    nsBoardWire_();
+  }).catch(function(e){
+    NSWK=was;
+    var host=$('#nsBoard'); if(host) host.style.opacity='';
+    toast(safeErr(e), true);
+  });
+}
+/* THE WEEK'S SALES AS A FILE. Built from the rows the server counted rather than from the
+   screen, and given the week in its name so two downloads cannot be told apart only by the
+   time they were taken. */
+function nsBoardXl_(){
+  var ns=NSBOARD, b=ns&&ns.board;
+  if(!b||!(b.sales||[]).length){ toast('Hakuna mauzo wiki hiyo / no sales that week', true); return; }
+  var head=['TAREHE','IMEI','RSM','SIMU YA RSM','AJENTI','SIMU YA AJENTI','MTEJA','SIMU YA MTEJA',
+    'MDHAMINI','SIMU YA MDHAMINI','BEI','TAWI','MODEL','HALI'];
+  var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
+  var lines=[head.map(q).join(',')];
+  (b.sales||[]).forEach(function(r){
+    lines.push([r.saleDate, r.imei, r.rsm, r.rsmPhone, r.agent, r.agentPhone,
+      r.customer, r.customerPhone, r.guarantor, r.guarantorPhone,
+      (r.price==null?'':r.price), r.branch, r.model,
+      /* The four words the register uses, and the fifth for a handset we never locked -- the
+         one thing a sales sheet must not quietly present as ours. */
+      (r.neverLocked?'HAIJAFUNGWA':String(r.status||''))].map(q).join(','));
+  });
+  // The BOM is what makes Excel open Swahili text clean, the same as every other export here.
+  saveFile_('HOOPLOAN-mauzo-'+String(b.from||'')+'-'+String(b.to||'')+'.csv',
+    'text/csv;charset=utf-8', '﻿'+lines.join('\r\n'));
 }
 /* ============================== OLD STOCK ==================================================
      "For an OLD STOCK new nav pane for all those stock that imei no does not exist in our new
@@ -6849,9 +6957,13 @@ function drawOldStock(m){
             +(g.phone?'<div class="mut" style="font-size:10px"><a href="tel:'+esc(g.phone)+'">'+esc(g.phone)+'</a></div>':'')+'</td>'
             +'<td style="font-size:11.5px">'+esc(g.rsm||'—')
             +(g.rsmPhone?'<div class="mut" style="font-size:10px">'+esc(g.rsmPhone)+'</div>':'')+'</td>'
-            +'<td class="r">'+money(g.pieces)+'</td>'
-            +'<td class="r"'+(g.oldest>=180?' style="color:var(--bad);font-weight:700"':'')+'>'+money(g.oldest)+'</td>'
-            +'<td class="r">'+(g.over90?money(g.over90):'<span class="mut">—</span>')+'</td></tr>';
+            /* THE THREE NUMBERS OPEN WHAT THEY COUNT. The cell still leads with the figure, so
+               the column sorts exactly as it did -- osNum_ wraps it, it does not replace it. */
+            +'<td class="r">'+osNum_(g.pieces,g.key,'','simu zote / all pieces')+'</td>'
+            +'<td class="r"'+(g.oldest>=180?' style="color:var(--bad);font-weight:700"':'')+'>'
+              +osNum_(g.oldest,g.key,g.oldest,'kongwe kuliko zote / the oldest piece')+'</td>'
+            +'<td class="r">'+(g.over90?osNum_(g.over90,g.key,90,'siku 90+ / 90 days and over')
+              :'<span class="mut">—</span>')+'</td></tr>';
         }).join('')+'</tbody></table></div>'
       : '';
     var table=rows.length
@@ -6883,12 +6995,70 @@ function drawOldStock(m){
     $('#osGo').onclick=go;
     $('#osQ').onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); go(); } };
     $('#osRsm').onchange=go; $('#osAgent').onchange=go;
+    $all('[data-osh]').forEach(function(b){ b.onclick=function(){
+      osHolderDrawer(b.getAttribute('data-osh'), b.getAttribute('data-osmin'),
+        b.getAttribute('data-oslab'));
+    }; });
   }).catch(function(e){ paneFailed(m,e); });
+}
+
+/* A NUMBER THAT OPENS WHAT IT COUNTS.
+   =========================================================================================
+     "pieces, oldest and 90+ numbers in Ziara / The round at old stock -- the nos should be
+      clickable to open a list of that qty displayed in the specified cell in a row/column"
+
+   THE CELL STILL LEADS WITH THE FIGURE. Every table on this page sorts itself on a <th>
+   click by reading the cell's text, so a number wrapped in a control has to remain a number
+   FIRST -- put an icon or a word in front of it and the Kongwe column starts sorting
+   alphabetically on whatever that is, on the one board read to decide which visit goes first.
+   So this is the plain figure with a button around it, underlined to say it does something.
+
+   A ZERO IS NOT A LINK. There is nothing behind it to open, and a control that answers with an
+   empty list teaches people that the numbers on this board do not really do anything. */
+function osNum_(n, key, min, label){
+  if(!n) return money(n||0);
+  return '<button class="btn sm ghost" data-osh="'+esc(key)+'" data-osmin="'+esc(min===''?'':min)+'" '
+    +'data-oslab="'+esc(label)+'" title="Fungua orodha / open the list" '
+    +'style="padding:0;border:0;background:none;font:inherit;color:inherit;'
+    +'text-decoration:underline;text-underline-offset:3px;cursor:pointer">'+money(n)+'</button>';
+}
+/* THE LIST BEHIND THE NUMBER, in a drawer rather than in the pane.
+   The board is not filtered, so this is not either -- a count of five that opened a list of
+   two because the pane happened to be narrowed to one RSM would be worse than no link at all.
+   And it leaves the pane exactly as it was: the filter, the search and the scroll position are
+   all still there when the drawer closes. */
+function osHolderDrawer(key, min, label){
+  drawer('<h3>Ziara / The round</h3><div class="sk"></div>');
+  srv('oldStockHolder',{key:key,min:(min===''||min==null)?null:min}).then(function(d){
+    var rows=d.rows||[];
+    drawer('<h3 style="margin-bottom:2px">'+esc(d.agent||'(hakuna jina / unnamed)')+'</h3>'
+      +'<div class="mut" style="font-size:11px;margin-bottom:8px">'+esc(label||'')
+      +(d.rsm?' · RSM '+esc(d.rsm):'')
+      +(d.phone?' · <a href="tel:'+esc(d.phone)+'">'+esc(d.phone)+'</a>':'')+'</div>'
+      +(rows.length
+        ? '<div class="scroll"><table><thead><tr><th>IMEI</th><th>Bidhaa / item</th>'
+          +'<th class="r">Umri leo / age today</th></tr></thead><tbody>'
+          +rows.map(function(r){
+            return '<tr><td style="font-family:ui-monospace,monospace;font-size:11.5px">'+esc(r.imei)+'</td>'
+              +'<td style="font-size:11.5px">'+esc(r.item||'—')+'</td>'
+              +'<td class="r">'+osAge(r)+'</td></tr>';
+          }).join('')+'</tbody></table></div>'
+          /* SAID OUT LOUD RATHER THAN SILENTLY TRIMMED. A depot's worth of stock belongs in
+             the pane's own table, not in a panel, and a heading naming 500 above a list of
+             300 is the kind of arithmetic that stops a board being believed. */
+          +(d.shown>rows.length?'<div class="note" style="margin-top:8px">Inaonyesha '+money(rows.length)
+            +' kati ya '+money(d.shown)+'. Tumia kichujio kwenye ukurasa kwa orodha nzima. '
+            +'/ Showing '+money(rows.length)+' of '+money(d.shown)+' — filter the pane itself for all of them.</div>':'')
+        : '<div class="mut">Hakuna simu. / Nothing here.</div>'));
+  }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
 }
 
 function drawNewStock(m){
   m.innerHTML='<div class="card"><h2>NEW STOCK</h2><div class="sk"></div></div>';
-  srv('newStock',NSQ).then(function(d){
+  /* THE BOARD'S WEEK RIDES ALONG, so a tile press or a search redraws the table without
+     yanking that one card back to this week -- it keeps its own state the way the filter
+     keeps the table's. */
+  srv('newStock',{status:NSQ.status,q:NSQ.q,wk:NSWK}).then(function(d){
     var c=d.counts||{}, rows=d.rows||[];
     var ns=d.newSales||{week:{},month:{},top:null,bottom:null,ranked:0};
     var pick=function(k){ return {on:NSQ.status===k,cta:'chuja ›',
@@ -6986,6 +7156,10 @@ function drawNewStock(m){
       +'</div>'
       +tiles+head+bar+table+'</div>';
     wireTiles(m);
+    /* The server clamps the offset, so the card follows ITS answer rather than what was asked
+       for: press forward at this week and the number does not drift past a week that exists. */
+    NSBOARD=ns; NSWK=(ns.board&&ns.board.off)||0;
+    nsBoardWire_();
     var go=function(){ NSQ.q=$('#nsQ').value; drawNewStock(m); };
     $('#nsGo').onclick=go;
     $('#nsQ').onkeydown=function(e){ if(e.key==='Enter') go(); };
@@ -7058,8 +7232,24 @@ function issueNotReady(){
     +'<b>db/migrations/RUN-ME-2026-09-08-issues.sql</b> kwenye Supabase, kisha rudi hapa. '
     +'/ The issues tables have not been created yet — run that migration, then come back.</div>';
 }
-var ISSUE_DEPT_LABEL={STORE:'Stoo / Store',FINANCE:'Fedha / Finance',IT:'IT',HR:'HR',CREDIT:'Mikopo / Credit',
-  SALES:'Mauzo / Sales',GENERAL_DUTY:'General duty',ADMIN:'Admin'};
+/* THE TWO DEPARTMENTS THE CEO RENAMED, IN ONE PLACE.
+   =========================================================================================
+     "Agreed to change hoop dept names GENERAL DUTY into SALES COORDINATOR since they
+      analyze and push sales, CREDIT into PORTFOLIO AND COMPLIANCE OFFICER since they make
+      followups"
+
+   THE KEYS DO NOT MOVE, ONLY THE LABELS. `GENERAL_DUTY` and `CREDIT` are written into
+   `issues.department`, into `issues.to_role`, and into the ISSUES_EMAIL setting the owner
+   maintains by hand. Renaming the key would orphan every issue already filed and silently
+   stop routing mail for both departments -- a rename is a change of NAME, and the name is
+   what a person reads, never what a row stores.
+
+   AND THEY ARE NAMED ONCE, in DEPT at the top of this script. The old name was typed as a
+   literal in a dozen sentences across this page, which is exactly why a rename at the next
+   meeting would have missed half of them. */
+var ISSUE_DEPT_LABEL={STORE:'Stoo / Store',FINANCE:'Fedha / Finance',IT:'IT',HR:'HR',
+  CREDIT:'Mikopo / '+DEPT.PC,
+  SALES:'Mauzo / Sales',GENERAL_DUTY:DEPT.SC,ADMIN:'Admin'};
 var ISSUE_KIND_LABEL={issue:'Suala / Issue',complaint:'Malalamiko ya mteja / Customer complaint',document:'Nyaraka inayodaiwa / Missing document',
   performance:'Utendaji wa ajenti / Agent performance',system:'Mfumo · ukarabati / System · repair'};
 var ISSUE_SUBJECT_LABEL={'':'Hakuna / None',imei:'IMEI ya mteja / Customer IMEI',agent:'Ajenti / Agent',receipt:'Risiti / Receipt no.',
@@ -7541,7 +7731,7 @@ function drawSalesPerf(m){
 function salesRender(m){
   var d=SALESPERF.data; if(!d) return;
   var target=d.dailyTarget||0;
-  var pivots=[['general','General duty'],['rsm','RSM'],['agent','Commission agent'],['company','Company']];
+  var pivots=[['general',DEPT.SC],['rsm','RSM'],['agent','Commission agent'],['company','Company']];
   var bar='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'
     +'<button class="btn sm ghost" id="spPrev" title="previous week">◀</button>'
     +'<span style="font-size:12px;font-weight:600">'+esc(d.from||'')+' → '+esc(d.to||'')+'</span>'
@@ -7630,8 +7820,8 @@ function salesRender(m){
       +'</div>';
   }
   m.innerHTML='<div class="card"><h2>Sales performance</h2>'
-    +'<div class="mut" style="margin-bottom:8px">Mauzo ya kila siku, yaliyofuatiliwa kwa: mhudumu (general duty), RSM, wakala wa komisheni, na jumla ya kampuni. '
-    +'/ Daily sales pivoted by general duty, RSM, commission agent, and company.</div>'
+    +'<div class="mut" style="margin-bottom:8px">Mauzo ya kila siku, yaliyofuatiliwa kwa: mhudumu ('+DEPT.SC+'), RSM, wakala wa komisheni, na jumla ya kampuni. '
+    +'/ Daily sales pivoted by '+DEPT.SC+', RSM, commission agent, and company.</div>'
     +bar+tabs+body+'</div>';
   var step=function(n){
     var base=new Date((d.from||new Date().toISOString().slice(0,10))+'T09:00:00Z');
@@ -7945,7 +8135,7 @@ function drawAudit(m){
         Object.assign({color:'bad'},mzBy('HAKUNA_WATU')))
       +tile('Bulk/Pending',money((c.bulk||0)+(c.pending||0)),'',mzBy('BULK|PENDING'))
       +'</div>'
-      +'<div class="mut" style="margin-bottom:8px">General duty\'s sales checked against the Watu register by IMEI. Each seller is identified by payout number from the agents register (next of kin on file).</div>'
+      +'<div class="mut" style="margin-bottom:8px">The '+DEPT.SC+'\'s sales checked against the Watu register by IMEI. Each seller is identified by payout number from the agents register (next of kin on file).</div>'
       +'<div class="scroll"><table><thead><tr><th>Date</th><th>Customer</th><th>IMEI</th><th class="r">Price</th><th>Seller</th><th>Watu agent</th><th>Status</th></tr></thead><tbody>'
       +mzRows(d.rows||[]).map(function(r){
         var seller='<b>'+esc(r.seller||'—')+'</b>'
@@ -8878,7 +9068,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',oldstock:'OLD STOCK (held, never locked)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking (general duty at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',oldstock:'OLD STOCK (held, never locked)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking (the sales coordinator at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',

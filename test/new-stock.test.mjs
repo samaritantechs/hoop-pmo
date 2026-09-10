@@ -703,3 +703,135 @@ test('the card says who sold nothing, and does not rank them', () => {
   // It is a note, not a third ranked row: they are all equally bottom.
   assert.ok(!/CHINI[\s\S]{0,80}idle/.test(tb));
 });
+
+/* =========================================================================================
+   THE BOARD SLIDES BY THE WEEK, AND EXPORTS THE WEEK IT IS SHOWING.
+
+     "this widget should have excel button within, so that we can export the current weeks
+      sales data just from there, with back and forward buttons for previous and forward week
+      preview/excel download on the single widget, not changing the other widgets nor the
+      page's data"
+
+   THE OFFSET REACHES EXACTLY ONE CARD. `week` and `month` are "this week" and "this month" by
+   definition; a progress figure that has quietly moved to a window nobody chose is worse than
+   no figure at all.
+   ========================================================================================= */
+const LASTWK = addDaysKey(WEEK, -7);
+
+test('an arrow moves the board and leaves the other two cards where they were', async () => {
+  const db = salesDb([
+    sold('W1', 'JUMA G', TODAY, 450000),
+    sold('W2', 'ASHA M', addDaysKey(WEEK, -3), 300000),      // last week
+    sold('W3', 'ASHA M', addDaysKey(WEEK, -2), 200000),      // last week
+  ]);
+  const now = (await _FNS.newStock(db, STORE, {})).newSales;
+  assert.equal(now.board.off, 0);
+  assert.equal(now.board.from, WEEK);
+  assert.equal(now.board.to, TODAY, 'this week runs to today: it is progress, not a promise');
+  assert.equal(now.top.name, 'JUMA G');
+
+  const back = (await _FNS.newStock(db, STORE, { wk: -1 })).newSales;
+  assert.equal(back.board.off, -1);
+  assert.equal(back.board.from, LASTWK);
+  assert.equal(back.board.to, addDaysKey(LASTWK, 6), 'a week behind is a whole week');
+  assert.equal(back.top.name, 'ASHA M', 'the board is reading last week now');
+  assert.equal(back.board.totals.sales, 2);
+  assert.equal(back.board.totals.amount, 500000);
+
+  /* THE OTHER TWO CARDS DID NOT MOVE. This is the whole of "not changing the other widgets
+     nor the page's data" -- and it is asserted against the SAME response, so the two cannot
+     drift apart in a later edit. */
+  assert.deepEqual(back.week, now.week);
+  assert.deepEqual(back.month, now.month);
+  assert.equal(back.week.from, WEEK, 'still this week, with the board a week behind it');
+});
+
+test('forward stops at this week, and back cannot run off the calendar', async () => {
+  const db = salesDb([sold('X1', 'JUMA G', TODAY, 450000)]);
+  /* Nothing has been sold next week. A card that could be scrolled into an empty future would
+     read as a collapse in sales rather than as a date nobody has reached yet. */
+  for (const wk of [1, 5, '3']) {
+    assert.equal((await _FNS.newStock(db, STORE, { wk })).newSales.board.off, 0, 'forward: ' + wk);
+  }
+  assert.equal((await _FNS.newStock(db, STORE, { wk: -5000 })).newSales.board.off, -104);
+  // Junk is not an offset, and must not become NaN dates on a card somebody reads.
+  for (const wk of [null, undefined, '', 'abc', {}]) {
+    const b = (await _FNS.newStock(db, STORE, { wk })).newSales.board;
+    assert.equal(b.off, 0, 'junk offset: ' + JSON.stringify(wk));
+    assert.equal(b.from, WEEK);
+  }
+});
+
+test('the export carries the whole week, not the page', async () => {
+  /* THE PAGE HOLDS AT MOST 2000 ROWS AND ONLY WHAT PASSED ITS FILTER. Exporting from the
+     screen would hand somebody a file that silently omits whatever the pane was narrowed to,
+     under a heading naming the whole week. So the rows come from the server. */
+  const db = salesDb([
+    sold('Y1', 'JUMA G', addDaysKey(WEEK, -3), 450000),
+    sold('Y2', 'ASHA M', addDaysKey(WEEK, -5), 300000),
+    sold('Y3', 'JUMA G', TODAY, 999000),                     // this week: not in that file
+  ]);
+  // Narrowed to a status that matches nothing, so the table is empty and the export is not.
+  const ns = (await _FNS.newStock(db, STORE, { wk: -1, status: 'lost' })).newSales;
+  assert.equal(ns.board.sales.length, 2, 'the week, whatever the table was filtered to');
+  assert.deepEqual(ns.board.sales.map(r => r.imei), ['Y2', 'Y1'], 'oldest sale first');
+  const one = ns.board.sales[1];
+  for (const k of ['saleDate', 'imei', 'rsm', 'agent', 'customer', 'customerPhone',
+    'guarantor', 'price', 'branch', 'model', 'status']) {
+    assert.ok(k in one, 'the export row is missing ' + k);
+  }
+  assert.equal(one.price, 450000);
+  assert.equal(one.saleDate, addDaysKey(WEEK, -3));
+});
+
+test('a handset we never locked is marked as such on the sheet', async () => {
+  /* A week's sales sheet that does not say which handsets we never controlled is the sheet
+     that makes the ground visits look unnecessary. */
+  const db = fakeDb({
+    stock_audit: [], devices: [], hoop_sales: [], hoop_aged_stock: [], hoop_agents: [],
+    old_stock: [{ imei: 'Z9', item: 'A07', agent: 'JUMA G', agent_phone: '0700000001',
+      rsm: null, rsm_phone: null, age_days: 100, as_of: TODAY }],
+    watu_loans: [{ imei: 'Z9', client_name: 'Mteja Z', client_mobile: '0716548153',
+      agent: 'JUMA G', disbursed_date: TODAY, price: 400000, model_details: 'A07' }],
+  });
+  const ns = (await _FNS.newStock(db, STORE, {})).newSales;
+  const row = ns.board.sales.find(r => r.imei === 'Z9');
+  assert.ok(row, 'a sold old-stock handset is in the week it sold');
+  assert.equal(row.neverLocked, true);
+});
+
+test('the card carries its own arrows and its own Excel button', () => {
+  const tb = fnSrc('nsTopBottom');
+  assert.match(tb, /id="nsPrev"/); assert.match(tb, /id="nsNext"/);
+  assert.match(tb, /id="nsXl"/, 'the export is inside this card, not the page-wide one');
+  assert.match(tb, /id="nsBoard"/, 'and the card names itself, so it can be replaced alone');
+  /* FORWARD IS DISABLED AT THIS WEEK rather than absent, so the pair stays a pair and the one
+     that has stopped working says why. */
+  assert.match(tb, /b\.atWeek\?'disabled '/);
+  // The window on the heading is the BOARD's, never the untouched "this week" card's.
+  assert.match(tb, /esc\(b\.from\|\|''\)/);
+  assert.ok(!/ns\.week\.from/.test(tb), 'the heading must not read the card that does not move');
+
+  /* ONE CARD, ONE REPAINT. An arrow asks for the same pane with an offset and replaces only
+     #nsBoard -- the table, the tiles and the two progress cards keep the bytes they have. */
+  const go = fnSrc('nsBoardGo_');
+  assert.match(go, /srv\('newStock',\{status:NSQ\.status,q:NSQ\.q,wk:NSWK\}\)/);
+  assert.match(go, /host\.outerHTML=nsTopBottom\(ns\)/,
+    'outerHTML: the function returns the whole card, so innerHTML would nest a second one');
+  assert.ok(!/drawNewStock/.test(go), 'an arrow never redraws the pane');
+  assert.match(go, /NSWK=Math\.max\(-104, Math\.min\(0, off\)\)/);
+
+  const xl = fnSrc('nsBoardXl_');
+  assert.match(xl, /b\.sales/, 'the file is the week the server counted');
+  assert.match(xl, /saveFile_\(/, 'through the one export path, so it saves on a phone too');
+  assert.match(xl, /HOOPLOAN-mauzo-'\+String\(b\.from\|\|''\)/,
+    'the week is in the name: two downloads must be tellable apart');
+  assert.match(xl, /HAIJAFUNGWA/);
+  assert.ok(!/csvOfTable_|querySelector/.test(xl), 'it never reads the screen');
+
+  // The pane hands the card its state on first draw, and follows the server's clamped answer.
+  const draw = fnSrc('drawNewStock');
+  assert.match(draw, /wk:NSWK/, 'so a tile press does not yank the board back to this week');
+  assert.match(draw, /NSWK=\(ns\.board&&ns\.board\.off\)\|\|0/);
+  assert.match(draw, /nsBoardWire_\(\)/);
+});
