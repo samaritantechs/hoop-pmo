@@ -1590,6 +1590,12 @@ var NAV=[
   { g:'stock', t:'newstock', nav:'newstock',   sw:'NEW STOCK',        en:'NEW STOCK',
     ic:'<path d="M20 7l-8-4-8 4 8 4 8-4z"/><path d="M4 7v10l8 4 8-4V7"/><path d="M12 11v10"/>' },
 
+  /* OLD STOCK -- what we hold and have never locked. The worklist the ground visits are made
+     from: a row leaves it by turning up in the register (we locked it) or in the deck (it
+     sold), both asked at read time so nothing has to be marked as moved. */
+  { g:'stock', t:'oldstock', nav:'oldstock',   sw:'OLD STOCK',        en:'OLD STOCK',
+    ic:'<path d="M20 7l-8-4-8 4 8 4 8-4z"/><path d="M4 7v10l8 4 8-4V7"/><path d="M9 13.5l3 1.5 3-1.5"/>' },
+
   /* TOP-UPS: SOP B.5 is the only step in any of these SOPs with the words "must never be
      delayed", so the desk pane counts minutes and orders by who has waited longest. */
   { g:'mauzo', t:'tureq',    nav:'topupreq',   sw:'Omba top-up',      en:'Request a top-up',
@@ -1805,6 +1811,7 @@ function draw(){
   if(TAB==='stappr') return drawStockAppr(m);
   if(TAB==='strep') return drawStockRep(m);
   if(TAB==='newstock') return drawNewStock(m);
+  if(TAB==='oldstock') return drawOldStock(m);
   /* ONE PANE, TWO DOORS -- the same drawDevices either way, so the two halves cannot drift
      into disagreeing about the fleet. Which orders it offers is read off TAB inside. */
   if(TAB==='devlock') return drawDevices(m);
@@ -6594,10 +6601,10 @@ var NS_CLS={locked:'bad',unlocked:'',achia:'ok',lost:'bad'};
 /** A stamped cell, with what filled it underneath. Provenance is small and grey because it is
     the second question -- but it is on the row rather than in a drawer, because "where did
     this come from" is asked of exactly the cells somebody is already looking at. */
-function nsCell(v, from, phone){
-  if(!v) return '<span class="mut">—</span>';
-  return (phone?'<a href="tel:'+esc(v)+'">'+esc(v)+'</a>':esc(v))
-    +(from?'<div class="mut" style="font-size:9.5px">'+esc(from)+'</div>':'');
+function nsCell(name, phone, from){
+  if(!name && !phone) return '<span class="mut">—</span>';
+  return '<span'+(from?' title="'+esc(from)+'"':'')+'>'+esc(name||'—')+'</span>'
+    +(phone?'<div class="mut" style="font-size:9.5px"><a href="tel:'+esc(phone)+'">'+esc(phone)+'</a></div>':'');
 }
 /* WHERE THE PHONE WAS, UNDER WHAT IT IS DOING.
    =========================================================================================
@@ -6690,6 +6697,99 @@ function nsTopBottom(ns){
       +' / <b>'+money(ns.idle)+'</b> sold nothing at all this week.</div>':'')
     +'</div>';
 }
+/* ============================== OLD STOCK ==================================================
+     "For an OLD STOCK new nav pane for all those stock that imei no does not exist in our new
+      enrolled phones. So we have NEW STOCK and OLD STOCK (never enrolled)."
+
+     "We'll conduct ground visits to all our previous agents and lock all stock we find, and
+      once a stock in OLD STOCK is enrolled into our lock then it moves to list of NEW STOCK."
+
+   THIS IS A WORKLIST, so it opens like one: oldest first, and a per-holder board above the
+   handsets, because a ground visit is made to a PERSON. One row per journey, with the oldest
+   piece on it, so the worst trip is obvious before anybody sets off.
+
+   THE AGE KEEPS CLIMBING ON ITS OWN. The list arrived with an age that was true on one morning
+   and the server adds the days since on every read, so a handset nobody has been to see gets
+   visibly worse without anything having to be re-uploaded. */
+var OSQ={q:'',agent:'',rsm:''};
+function osAge(r){
+  if(r.age==null) return '<span class="mut">—</span>';
+  var cls=r.age>=180?'style="color:var(--bad);font-weight:700"':r.age>=90?'style="color:var(--bad)"':'';
+  return '<span '+cls+'>'+money(r.age)+'</span>'
+    +'<div class="mut" style="font-size:9.5px">tangu '+esc(r.asOf||'')+': '+money(r.ageStart||0)+'</div>';
+}
+function drawOldStock(m){
+  m.innerHTML='<div class="card"><h2>OLD STOCK</h2><div class="sk"></div></div>';
+  srv('oldStock',OSQ).then(function(d){
+    var c=d.counts||{}, rows=d.rows||[];
+    var tiles='<div class="tiles">'
+      +tile('Hazijafungwa',money(c.open||0),'kati ya '+money(c.listed||0)+' kwenye orodha',
+        {on:false,cta:'',go:function(){}})
+      +tile('Zimefungwa',money(c.locked||0),'ziliporwa kwenye ziara',Object.assign({color:'ok'},{on:false,cta:'',go:function(){}}))
+      +tile('Ziliuzwa',money(c.sold||0),'kabla hatujazifunga',{on:false,cta:'',go:function(){}})
+      +tile('Siku 180+',money(c.over180||0),money(c.d90||0)+' siku 90-179',
+        Object.assign({color:(c.over180?'bad':'')},{on:false,cta:'',go:function(){}}))
+      +tile('Wenye nazo',money(c.holders||0),'ziara za kufanya',{on:false,cta:'',go:function(){}})
+      +'</div>';
+    var opts=function(list,sel){ return '<option value="">— zote / all —</option>'
+      +(list||[]).map(function(x){ return '<option value="'+esc(x)+'"'+(x===sel?' selected':'')+'>'+esc(x)+'</option>'; }).join(''); };
+    var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<select id="osRsm" style="min-width:150px">'+opts(d.rsms,d.rsm)+'</select>'
+      +'<select id="osAgent" style="min-width:170px">'+opts(d.agents,d.agent)+'</select>'
+      +'<input id="osQ" inputmode="numeric" placeholder="Tafuta IMEI / find" value="'+esc(d.q||'')+'" '
+      +'style="width:160px;font-family:ui-monospace,monospace;font-size:12px">'
+      +'<button class="btn sm" id="osGo">Chuja / Filter</button>'
+      +'<span style="flex:1"></span>'
+      +'<span class="mut" style="font-size:11px">Ilisomwa '+esc(clock(d.asOf))+'</span></div>';
+    /* THE HOLDER BOARD IS THE ROUND. Sorted by the oldest piece, because that is the visit
+       that has been waiting longest -- not by how many, which is a bigger van, not a worse
+       problem. */
+    var board=(d.byAgent||[]).length
+      ? '<h3 style="margin:14px 0 6px">Ziara / The round</h3><div class="scroll"><table><thead><tr>'
+        +'<th>Mwenye nazo / holder</th><th>RSM</th><th class="r">Simu / pieces</th>'
+        +'<th class="r">Kongwe / oldest</th><th class="r">90+</th></tr></thead><tbody>'
+        +d.byAgent.map(function(g){
+          return '<tr><td><b>'+esc(g.agent)+'</b>'
+            +(g.phone?'<div class="mut" style="font-size:10px"><a href="tel:'+esc(g.phone)+'">'+esc(g.phone)+'</a></div>':'')+'</td>'
+            +'<td style="font-size:11.5px">'+esc(g.rsm||'—')
+            +(g.rsmPhone?'<div class="mut" style="font-size:10px">'+esc(g.rsmPhone)+'</div>':'')+'</td>'
+            +'<td class="r">'+money(g.pieces)+'</td>'
+            +'<td class="r"'+(g.oldest>=180?' style="color:var(--bad);font-weight:700"':'')+'>'+money(g.oldest)+'</td>'
+            +'<td class="r">'+(g.over90?money(g.over90):'<span class="mut">—</span>')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+      : '';
+    var table=rows.length
+      ? '<h3 style="margin:14px 0 6px">Simu / The handsets</h3><div class="scroll"><table><thead><tr>'
+        +'<th>IMEI</th><th>Bidhaa / item</th><th>Mwenye nazo / holder</th><th>RSM</th>'
+        +'<th class="r">Umri leo / age today</th></tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr><td style="font-family:ui-monospace,monospace">'+esc(r.imei)+'</td>'
+            +'<td style="font-size:11.5px">'+esc(r.item||'—')+'</td>'
+            +'<td style="font-size:11.5px">'+esc(r.agent||'—')
+            +(r.agentPhone?'<div class="mut" style="font-size:10px">'+esc(r.agentPhone)+'</div>':'')+'</td>'
+            +'<td style="font-size:11.5px">'+esc(r.rsm||'—')+'</td>'
+            +'<td class="r">'+osAge(r)+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        +(d.shown>rows.length?'<div class="note" style="margin-top:8px">Jedwali linaonyesha '
+          +money(rows.length)+' kati ya '+money(d.shown)+'. / Showing '+money(rows.length)+' of '+money(d.shown)+'.</div>':'')
+      : '<div class="mut" style="margin-top:12px">Hakuna simu kwenye kundi hili. / Nothing here.</div>';
+    m.innerHTML='<div class="card"><h2>OLD STOCK — hazijawahi kufungwa</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Simu tulizonazo ambazo hazijawahi kuingizwa kwenye '
+      +'kufuli letu. <b>Ikifungwa au ikiuzwa, inatoka hapa yenyewe</b> na kuonekana NEW STOCK — '
+      +'hakuna cha kufuta. Umri unaendelea kupanda kila siku ambayo bado haijafungwa. '
+      +'/ Stock we hold that has never been enrolled into our lock. <b>Locking or selling one '
+      +'takes it off this list by itself</b> and it appears in NEW STOCK; nothing has to be '
+      +'ticked off. The age keeps climbing for every day it stays un-enrolled.</div>'
+      +(d.notReady?'<div class="note bad">'+esc(d.notReadyNote)+'</div>':'')
+      +tiles+bar+board+table+'</div>';
+    wireTiles(m);
+    var go=function(){ OSQ={q:$('#osQ').value,agent:$('#osAgent').value,rsm:$('#osRsm').value}; drawOldStock(m); };
+    $('#osGo').onclick=go;
+    $('#osQ').onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); go(); } };
+    $('#osRsm').onchange=go; $('#osAgent').onchange=go;
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 function drawNewStock(m){
   m.innerHTML='<div class="card"><h2>NEW STOCK</h2><div class="sk"></div></div>';
   srv('newStock',NSQ).then(function(d){
@@ -6731,9 +6831,8 @@ function drawNewStock(m){
       +'</div>';
     var table=rows.length
       ? '<div class="scroll"><table><thead><tr>'
-        +'<th>IMEI</th><th>Tarehe / disb date</th><th>RSM</th><th>RSM no</th><th>Ajenti / agent</th><th>Agent no</th>'
-        +'<th>Mteja / customer</th><th>Customer no</th><th>Bei / price</th>'
-        +'<th>Mdhamini / guarantor</th><th>Guarantor no</th>'
+        +'<th>IMEI</th><th>Tarehe / disb date</th><th>RSM</th><th>Ajenti / agent</th>'
+        +'<th>Mteja / customer</th><th>Bei / price</th><th>Mdhamini / guarantor</th>'
         +'<th>Hali / status<div class="mut" style="font-size:9px;font-weight:400">+ eneo / location</div></th>'
         +'<th>Nani / by</th><th>Iliongea lini / last read</th></tr></thead><tbody>'
         +rows.map(function(r){
@@ -6754,12 +6853,14 @@ function drawNewStock(m){
             +'<td style="font-size:11.5px">'+(r.saleDate?esc(r.saleDate)
               +(s.sale_date?'<div class="mut" style="font-size:9.5px">'+esc(s.sale_date)+'</div>':'')
               :'<span class="mut">—</span>')+'</td>'
-            +'<td>'+nsCell(r.rsm,s.rsm)+'</td><td>'+nsCell(r.rsmPhone,s.rsm_phone,true)+'</td>'
-            +'<td>'+nsCell(r.agent,s.agent)+'</td><td>'+nsCell(r.agentPhone,s.agent_phone,true)+'</td>'
-            +'<td>'+nsCell(r.customer,s.customer)+'</td><td>'+nsCell(r.customerPhone,s.customer_phone,true)+'</td>'
+            +'<td>'+nsCell(r.rsm,r.rsmPhone,s.rsm)+'</td>'
+            +'<td>'+nsCell(r.agent,r.agentPhone,s.agent)+'</td>'
+            +'<td>'+nsCell(r.customer,r.customerPhone,s.customer)+'</td>'
             +'<td>'+(r.price==null?'<span class="mut">—</span>':money(r.price))+'</td>'
-            +'<td>'+nsCell(r.guarantor,s.guarantor)+'</td><td>'+nsCell(r.guarantorPhone,s.guarantor_phone,true)+'</td>'
-            +'<td><span class="chip '+(NS_CLS[r.status]||'')+'">'+esc(NS_LABEL[r.status]||r.status||'—')+'</span>'
+            +'<td>'+nsCell(r.guarantor,r.guarantorPhone,s.guarantor)+'</td>'
+            +'<td>'+(r.neverLocked
+              ? '<span class="chip warn" title="Iliuzwa kabla hatujaifunga / sold before we ever locked it">Haijafungwa</span>'
+              : '<span class="chip '+(NS_CLS[r.status]||'')+'">'+esc(NS_LABEL[r.status]||r.status||'—')+'</span>')
               +nsWhere(r)+'</td>'
             +'<td>'+(r.by?esc(r.by):'<span class="mut">—</span>')
             +(r.atMs?'<div class="mut" style="font-size:9.5px">'+esc(clock(r.atMs))+'</div>':'')+'</td>'
@@ -8677,7 +8778,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking (general duty at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',oldstock:'OLD STOCK (held, never locked)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking (general duty at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',

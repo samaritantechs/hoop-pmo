@@ -346,9 +346,13 @@ test('the pane is the owner’s column list, in the owner’s order', () => {
   const src = fnSrc('drawNewStock');
   /* THE COLUMNS WERE DICTATED, so they are asserted as dictated -- in order, because the order
      is how somebody reads a row aloud to the person they are chasing. */
-  const want = ['IMEI', 'RSM', 'RSM no', 'Ajenti / agent', 'Agent no', 'Mteja / customer',
-    'Customer no', 'Bei / price', 'Mdhamini / guarantor', 'Guarantor no',
-    'Hali / status', 'Nani / by', 'Iliongea lini / last read'];
+  /* THE NUMBERS MOVED UNDER THE NAMES, so four pairs of columns became four columns:
+       "We could put agent and customer numbers under their names in the single double rowed row
+        in name columns to reduce lengths."
+     Every field the owner named is still on the row -- the table is narrower, not smaller. */
+  const want = ['IMEI', 'Tarehe / disb date', 'RSM', 'Ajenti / agent', 'Mteja / customer',
+    'Bei / price', 'Mdhamini / guarantor', 'Hali / status', 'Nani / by',
+    'Iliongea lini / last read'];
   let at = 0;
   for (const h of want) {
     // Matched on the header's opening rather than the whole cell: Hali carries a second line
@@ -387,11 +391,25 @@ test('the stamp is invisible, so the pane says it happened', () => {
   assert.match(src, /husomwa moja kwa moja[\s\S]*read live/);
 });
 
-test('provenance rides the cell, because that is where it is asked', () => {
+test('the number sits under the name, and the feed moves to the tooltip', () => {
+  /* "Replace the brand/Co.-reader under the names there, e.g. watu_loans into 0756749261."
+     The space under a name was being spent on which feed filled it. The phone answers "who do
+     I ring", which is what this pane is open for; the feed answers "where did this come from",
+     which is asked of one cell occasionally -- so it moves to the title, not off the page. */
   const cell = fnSrc('nsCell');
-  assert.match(cell, /from\?/, 'which feed answered is drawn under the value');
-  assert.match(cell, /phone\?'<a href="tel:/, 'and a number is a call, on the pane that chases people');
+  assert.match(cell, /phone\?'<div class="mut"[^']*<a href="tel:/,
+    'the number is drawn under the name, and it is a call');
+  assert.match(cell, /from\?' title="'\+esc\(from\)/, 'the feed is still recoverable, in the tooltip');
+  assert.ok(!/<div class="mut" style="font-size:9\.5px">'\+esc\(from\)/.test(cell),
+    'but it no longer occupies the line the number needs');
   assert.match(cell, /—/, 'an unanswered column reads as unanswered, never as an empty cell');
+
+  // And the row passes name and phone together, so one cell carries both.
+  const src = fnSrc('drawNewStock');
+  for (const pair of ['r.rsm,r.rsmPhone', 'r.agent,r.agentPhone', 'r.customer,r.customerPhone',
+    'r.guarantor,r.guarantorPhone']) {
+    assert.ok(src.includes('nsCell(' + pair), 'missing paired cell: ' + pair);
+  }
 });
 
 /* ---------------------------------------------------------------------------------------- */
