@@ -236,3 +236,63 @@ test('the POS desk carries the Gmail steps, and the store bench does not', () =>
   assert.match(card, /Si hitilafu ya kufuli letu wala si simu ya kazi/);
   assert.match(card, /This is not a fault in the lock and it is not a work phone/);
 });
+
+/* ============================================================================================
+   NOTHING MINTS A SECOND TOKEN FOR A HANDSET THAT ALREADY HAS ONE.
+   ============================================================================================
+     "so the tokens should be autoupdated"
+     "i fear to disturb tokens for unlocking and achia"
+     "we have stock at ground you know"
+
+   THE SECOND INSTINCT IS THE RIGHT ONE. A token lives in TWO places -- the devices row and the
+   handset's own storage -- and the phone's copy changes only with the phone in your hands. Give
+   the register a new one on its own and the pair stop matching, which on a handset out with a
+   customer is a fortnight, not an inconvenience: every beat 403s so the office can no longer
+   unlock OR release it; an unlocked one self-locks after its grace week with nobody able to open
+   it; and it comes back only after fourteen continuous days of refusal.
+
+   SO THE PROTECTION IS AN ABSENCE, and an absence is exactly what a future edit removes without
+   noticing. "Auto-update the tokens" is a reasonable-sounding sentence that would put field stock
+   on the floor, so the shape of the code that prevents it is pinned here.
+   ============================================================================================ */
+test('a known IMEI keeps its token: no server path mints a second one', async () => {
+  const db = fakeDb({ devices: [], device_events: [], hoop_aged_stock: [], settings: [] });
+  const IMEI = '351111111111111';
+  const first = await _FNS.deviceEnrol(db, STORE, { imeis: [IMEI] });
+  const token = first.provision[0].token;
+  assert.match(token, /^[0-9a-f]{32}$/, 'minted once, at enrolment');
+
+  /* Enrolling the same IMEI again hands back the SAME string -- "achia and relock/re-enroll
+     should repick same token used before if the imei exists". A second mint here is how a
+     register and a handset stop agreeing. */
+  const again = await _FNS.deviceEnrol(db, STORE, { imeis: [IMEI] });
+  assert.equal(again.provision[0].token, token, 're-enrolling never re-mints');
+
+  // Releasing does not touch it either: achia is a decision about a loan, not about identity.
+  await _FNS.deviceSetState(db, DUTY, { imeis: [IMEI], state: 'released' });
+  const after = await _FNS.deviceToken(db, STORE, { imei: IMEI });
+  assert.equal(after.token, token, 'achia leaves the credential alone on both sides');
+
+  /* And the reader is a reader. deviceToken discloses; it must never rotate -- there is no
+     screen anywhere that can change a field handset's token, and that is the whole point. */
+  const api = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  const fn = api.slice(api.indexOf('  async deviceToken(db, user, args) {'));
+  const body = fn.slice(0, fn.indexOf('\n  },')).replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/randomUUID/.test(body), 'deviceToken reads the token; it does not mint one');
+  assert.ok(!/\.update\(|\.upsert\(|\.insert\(/.test(body), 'and it writes nothing');
+});
+
+test('the Token drawer says why there is no new-token button', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const drawerSrc = html.slice(html.indexOf('function devToken(imei){'));
+  const card = drawerSrc.slice(0, 6000).replace(/'\s*\+\s*'/g, '');
+  // Said where somebody would look for the button, not only in a doc nobody opens at a bench.
+  assert.match(card, /never changed for a handset that is in the field/i);
+  assert.match(card, /self-locks after its grace week/i);
+  assert.match(card, /Token haibadilishwi kwa simu iliyoko shambani/);
+  /* AND THE APK IS FETCHED FRESH. A field handset has self-updated, so an older file on the
+     laptop is refused as a downgrade -- and the station's one-liner joins with &&, so the
+     enrol broadcast then never runs. That reads at the bench as "re-enrolling is broken". */
+  assert.match(card, /Download it fresh every time/i);
+  assert.match(card, /refused as a downgrade/i);
+});
