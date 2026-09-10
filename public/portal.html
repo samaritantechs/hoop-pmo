@@ -3319,6 +3319,55 @@ function devPaint_(m, d, at){
       : 'Dawati la kufungua (POS): kufungua na kuachia. Kufunga kunafanywa na <b>stoo</b>. '
         +'/ The POS desk unlocks and releases; locking is the store keeper\'s.')
     +'</div>'
+    /* GMAIL AT THE COUNTER, WHICH IS NOT A FAULT IN THE LOCK.
+       =====================================================================================
+         "RSMs in abroad regions are complaining phones at Point of sale cant login GMAIL
+          account"
+         "they say they cant create account, they have to create in their own phones and then
+          login in our customer phone"
+         "signing in is okay but creating is not"
+
+       THAT LAST LINE IS THE WHOLE DIAGNOSIS, and it clears this app entirely. Every account
+       control a Device Owner has -- DISALLOW_MODIFY_ACCOUNTS, setAccountManagementDisabled --
+       blocks ADDING an account, an existing one exactly as much as a new one. If we were
+       holding one of them, signing in would fail too. It does not, and we set neither.
+
+       What is left is Google's own rule: on a fully-managed phone the sign-in flow drops the
+       "Create account" path and keeps sign-in. That is why it comes back at achia -- achia
+       steps us down as Device Owner and the phone stops being managed. There is no policy
+       switch that hands account CREATION back while the lock stands, so this is a counter
+       procedure and not a code change.
+
+       IT IS WRITTEN DOWN HERE BECAUSE THE DANGEROUS FIX IS THE OBVIOUS ONE. Somebody reading
+       "the lock stops Gmail" will reach for dropping Device Owner, and that does not weaken
+       the lock, it ends it -- every handset in the field becomes an ordinary phone. The desk
+       needs the steps, and the file needs the reason nobody should go looking for a switch.
+
+       ON THE POS PANE ONLY: this is the desk with the customer standing at it. */
+    +(canLock ? '' :
+      '<div class="note" style="font-size:11.5px;margin-bottom:8px">'
+      +'<b>Gmail mpya kwenye simu ya mteja / A new Gmail on the customer\'s phone.</b><br>'
+      +'Simu ikiwa bado chini ya mkopo, Google huficha njia ya <b>kufungua akaunti mpya</b> '
+      +'kwenye Mipangilio; <b>kuingia kwa akaunti iliyopo kunafanya kazi</b>. Si hitilafu ya '
+      +'kufuli letu, na hurudi yenyewe simu ikishaachiwa. '
+      +'/ While the phone is still under finance, Google hides <b>create account</b> in '
+      +'Settings; <b>signing in with an account that already exists works</b>. This is not a '
+      +'fault in the lock, and it returns by itself once the phone is released.'
+      +'<div style="margin-top:6px">1. Fungua <b>Chrome</b> kwenye simu ya mteja → '
+      +'<b>accounts.google.com/signup</b> → tengeneza akaunti hapo. '
+      +'/ Open <b>Chrome</b> on the customer\'s own phone and create the account there.</div>'
+      +'<div>2. Kisha <b>Mipangilio → Akaunti → Ongeza akaunti → Google</b> → ingia nayo. '
+      +'/ Then add it under Settings → Accounts → Add account → Google.</div>'
+      /* THE KNOWN-GOOD ROUTE STAYS ON THE CARD. The browser step is the one that saves the
+         second handset, and it is the one nobody at this desk has confirmed yet -- so what
+         the RSMs are already doing successfully is written underneath it rather than
+         replaced by it. A card that offers only the untested route is a card that strands
+         whoever it fails for. */
+      +'<div class="mut" style="margin-top:6px">Ikikataa: tengeneza akaunti kwenye simu '
+      +'nyingine yoyote, kisha ingia nayo hapa — ndiyo njia inayotumika sasa. '
+      +'/ If that is refused: create the account on any other phone and sign in with it here — '
+      +'the route already in use.</div>'
+      +'</div>')
     +tiles+bar+alarm+actions+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
   wireTiles(m);
   $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
