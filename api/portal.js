@@ -881,12 +881,27 @@ async function oldStockIndex(db) {
   const todayK = todayKey();
   let rows = [];
   let notReady = false;
+  /* THE LOCATION COLUMN IS ASKED FOR SEPARATELY, and its absence is not the table's absence.
+     tableMissing() matches a missing COLUMN as well as a missing table, so a database that has
+     old_stock but has not run the location migration would otherwise read as "OLD STOCK does
+     not exist" -- a false alarm about the wrong thing, on the pane somebody opens to plan a
+     visit. The narrower question is asked first, exactly as the devices pane asks it. */
+  const OS_CORE = 'imei, item, agent, agent_phone, rsm, rsm_phone, age_days, as_of';
+  const OS_LOC = ', location, location_from';
+  let hasLoc = true;
   try {
-    rows = await fetchAll(() => db.from('old_stock')
-      .select('imei, item, agent, agent_phone, rsm, rsm_phone, age_days, as_of'));
+    rows = await fetchAll(() => db.from('old_stock').select(OS_CORE + OS_LOC));
   } catch (e) {
-    if (!tableMissing(e)) throw e;
-    notReady = true;
+    if (/location/.test(String(e && e.message || ''))) {
+      hasLoc = false;
+      try {
+        rows = await fetchAll(() => db.from('old_stock').select(OS_CORE));
+      } catch (e2) {
+        if (!tableMissing(e2)) throw e2;
+        notReady = true;
+      }
+    } else if (tableMissing(e)) notReady = true;
+    else throw e;
   }
   /* WHAT HAS SINCE BEEN FOUND. Every read is best-effort: a missing devices table means we have
      locked nothing, which is the honest reading, not a reason to refuse the list. */
@@ -914,7 +929,76 @@ async function oldStockIndex(db) {
   const feedImeis = async (table, cols) => {
     try { return await fetchAll(() => db.from(table).select(cols)); } catch (ignored) { return []; }
   };
-  for (const l of await feedImeis('watu_loans', 'imei')) sold.add(String(l.imei));
+  /* WHERE A HOLDER WORKS, built from the same read that answers "has it sold".
+     -------------------------------------------------------------------------------------
+       "the location we used as in PCOs calling not the kinondoni default"
+
+     `branch` and never `team`. teamFromShop turns "Hoop Limited, Kinondoni" into KINONDONI for
+     every row this dealer has -- it is the shop's own address, so pivoting by it gives exactly
+     one bar. `branch` rides in on the offline queue, which is the PCOs' own portfolio sheet
+     and the place the office already talks in.
+
+     THE COMMONEST ONE WINS, not the first seen. An agent who moved branches, or one row typed
+     into the wrong one, must not decide where a van is sent -- and a single stray row is
+     exactly what a first-wins rule would promote. */
+  const branchTally = new Map();
+  const noteBranch = (name, branch) => {
+    const k = nameKey(name || '');
+    const b = String(branch == null ? '' : branch).trim();
+    if (!k || !b) return;
+    let t = branchTally.get(k);
+    if (!t) { t = new Map(); branchTally.set(k, t); }
+    t.set(b, (t.get(b) || 0) + 1);
+  };
+  /* Widened to carry the agent and the branch, and narrowed again on a database that predates
+     the offline-queue migration -- the sold-or-not answer must not depend on a column that
+     arrived later. */
+  let loans = await feedImeis('watu_loans', 'imei, agent, branch');
+  if (!loans.length) loans = await feedImeis('watu_loans', 'imei');
+  for (const l of loans) { sold.add(String(l.imei)); noteBranch(l.agent, l.branch); }
+  /* The staff register answers first where it has been filled in: somebody typed that on
+     purpose, and a deck is a pile of receipts. */
+  const staffBranch = new Map();
+  for (const a of await feedImeis('hoop_agents', 'name, branch')) {
+    const k = nameKey(a.name || '');
+    const b = String(a.branch == null ? '' : a.branch).trim();
+    if (k && b && !staffBranch.has(k)) staffBranch.set(k, b);
+  }
+  const commonest = t => {
+    let best = null, n = 0;
+    for (const [b, c] of t) if (c > n || (c === n && best !== null && b < best)) { best = b; n = c; }
+    return best;
+  };
+  /** Where this handset is, and how confidently we know. `stated` means somebody wrote it on
+      the row; the rest is worked out and says so, because a derived place and a declared one
+      are different kinds of answer and a van is sent on both. */
+  const whereOf = (r) => {
+    /* ALREADY WRITTEN DOWN? Then that is the answer, and it is not worked out again.
+       -----------------------------------------------------------------------------------
+         "if such data is permanent stamp it permanent rather always fetching yet watu
+          deletes the data per time"
+
+       This is the whole point of the column. The loan book underneath is re-uploaded over
+       itself with rows GONE, so re-deriving on every read means an agent whose sales have
+       since been trimmed out of the deck loses their location -- the pane goes from naming a
+       town to a dash, with nothing on screen to say why, on the list a van is dispatched
+       from. Worked out once, stamped, and never overwritten.
+
+       `location_from` rides with it so a stamped guess does not start reading as a declared
+       fact the moment it lands. */
+    const stated = String((r && r.location) || '').trim();
+    if (stated) return { location: stated, locFrom: String((r && r.location_from) || 'stated'), locNew: false };
+    const k = nameKey((r && r.agent) || '');
+    if (!k) return { location: '', locFrom: '', locNew: false };
+    /* `locNew` is what stops the stamp firing twice. Without it a row read back from the
+       column looks exactly like one derived this second, so every open would re-write every
+       row -- two thousand pointless writes a morning, and a `placed` count that never falls
+       to zero and therefore never means anything. */
+    if (staffBranch.has(k)) return { location: staffBranch.get(k), locFrom: 'staff', locNew: true };
+    const t = branchTally.get(k);
+    const b = t ? commonest(t) : null;
+    return b ? { location: b, locFrom: 'sales', locNew: true } : { location: '', locFrom: '', locNew: false };
+  };
   for (const s of await feedImeis('hoop_sales', 'imei')) sold.add(String(s.imei));
   for (const r of await feedImeis('stock_audit', 'imei, sale_date, customer, price')) {
     if (stampedSale(r)) sold.add(String(r.imei));
@@ -924,13 +1008,14 @@ async function oldStockIndex(db) {
     imei: String(r.imei), item: r.item || '',
     agent: r.agent || '', agentPhone: r.agent_phone || '',
     rsm: r.rsm || '', rsmPhone: r.rsm_phone || '',
+    ...whereOf(r),
     asOf: String(r.as_of || '').slice(0, 10),
     ageStart: r.age_days == null ? null : num(r.age_days),
     age: ageToday(r, todayK),
     lockedNow: locked.has(String(r.imei)),
     soldNow: sold.has(String(r.imei)),
   }));
-  return { notReady, todayK, rows: out,
+  return { notReady, todayK, hasLoc, rows: out,
     /* STILL OUTSTANDING is the list this pane is for; the other two are counted so the pane can
        say how the ground visits are going rather than just shrinking silently. */
     open: out.filter(r => !r.lockedNow && !r.soldNow),
@@ -6008,14 +6093,50 @@ const FNS = {
     requireNav(user, 'oldstock');
     const a = args || {};
     const idx = await oldStockIndex(db);
+    /* THE PLACE IS WRITTEN DOWN THE FIRST TIME IT IS WORKED OUT.
+       -----------------------------------------------------------------------------------
+         "we always fall to another alternative if that data is not somewhere, and if such
+          data is permanent stamp it permanent rather always fetching yet watu deletes the
+          data per time"
+
+       Same axis as the NEW STOCK sale audit, and for the same reason: the feed underneath
+       DELETES. A location derived from the loan book is true today and gone the morning Watu
+       trims that agent's rows out of its export -- so it is captured here, once, and read off
+       the row for ever after. Only rows that gained something are written; on a settled
+       morning that is none of them.
+
+       A VIEW-ONLY CODE STAMPS NOTHING, and neither does a database that has not run the
+       migration. Both simply read what is there, which is the same rule the sale audit
+       follows. */
+    let placed = 0;
+    if (idx.hasLoc && !idx.notReady && !isReadOnly(user)) {
+      const fresh = idx.rows.filter(r => r.locNew && r.location);
+      for (let i = 0; i < fresh.length; i += 200) {
+        const slice = fresh.slice(i, i + 200).map(r => ({
+          imei: r.imei, location: r.location, location_from: r.locFrom,
+          updated_at: new Date().toISOString(),
+        }));
+        const { error } = await db.from('old_stock').upsert(slice, { onConflict: 'imei' });
+        /* POSTGREST REFUSES BY RESOLVING, NOT BY THROWING -- and a stamp that reported
+           success on a write the database rejected is the exact failure this column exists
+           to prevent. It is still not worth failing the pane over: the list reads either
+           way, so the count simply stops climbing. */
+        if (error) { placed = 0; break; }
+        placed += slice.length;
+      }
+    }
     const open = idx.open.slice();
     const q = String(a.q == null ? '' : a.q).replace(/\D/g, '');
     const who = K(a.agent || '');
     const boss = K(a.rsm || '');
+    /* PIVOT BY WHERE IT IS, not only by whose it is. An RSM's round can cross three towns and
+       a town's round can cross three RSMs -- which is the whole reason this was asked for. */
+    const place = K(a.location || '');
     const shown = open.filter(r => {
       if (q && !String(r.imei).includes(q)) return false;
       if (who && K(r.agent) !== who) return false;
       if (boss && K(r.rsm) !== boss) return false;
+      if (place && K(r.location) !== place) return false;
       return true;
     }).sort((x, y) => (y.age == null ? -1 : y.age) - (x.age == null ? -1 : x.age)
       || String(x.agent).localeCompare(String(y.agent))
@@ -6033,7 +6154,11 @@ const FNS = {
            row that has no name -- "(hakuna jina)" is a label, not a holder, and looking it up
            would find nobody while the count beside it says three. */
         g = { key: k, agent: r.agent || '(hakuna jina / unnamed)', phone: r.agentPhone || '',
-          rsm: r.rsm || '', rsmPhone: r.rsmPhone || '', pieces: 0, oldest: 0, over90: 0 };
+          rsm: r.rsm || '', rsmPhone: r.rsmPhone || '',
+          /* A holder is in one place, so the group takes the first one that answers. Where
+             nothing does it stays blank and the pane says so -- a van is sent on this. */
+          location: r.location || '', locFrom: r.locFrom || '',
+          pieces: 0, oldest: 0, over90: 0 };
         byAgent.set(k, g);
       }
       g.pieces++;
@@ -6044,9 +6169,11 @@ const FNS = {
     return { ok: true, notReady: idx.notReady,
       notReadyNote: idx.notReady ? OLDSTOCK_NOT_READY : '',
       asOf: Date.now(), q, agent: String(a.agent || ''), rsm: String(a.rsm || ''),
+      location: String(a.location || ''), hasLoc: idx.hasLoc, placed,
       rows: shown.slice(0, 2000), shown: shown.length,
       agents: [...new Set(open.map(r => r.agent).filter(Boolean))].sort(),
       rsms: [...new Set(open.map(r => r.rsm).filter(Boolean))].sort(),
+      locations: [...new Set(open.map(r => r.location).filter(Boolean))].sort(),
       byAgent: [...byAgent.values()].sort((x, y) => y.oldest - x.oldest || y.pieces - x.pieces),
       counts: {
         open: open.length,
@@ -6059,6 +6186,11 @@ const FNS = {
         over180: band(180, null), d90: band(90, 180), d30: band(30, 90), fresh: band(0, 30),
         noAge: open.filter(r => r.age == null).length,
         holders: byAgent.size,
+        /* HOW MUCH OF THE MAP IS BLANK. A pivot by place is only as good as how many rows have
+           one, and that number should be visible rather than discovered by adding the bars up
+           and finding they fall short. */
+        noPlace: open.filter(r => !r.location).length,
+        places: new Set(open.map(r => r.location).filter(Boolean)).size,
       } };
   },
 
@@ -6104,6 +6236,7 @@ const FNS = {
       agent: first ? (first.agent || '') : '',
       phone: first ? (first.agentPhone || '') : '',
       rsm: first ? (first.rsm || '') : '',
+      location: first ? (first.location || '') : '',
       /* A holder with five hundred pieces is a depot, not a visit, and a drawer is not the
          place to read five hundred rows -- the pane's own table is. The cap is said out loud
          rather than silently trimming the list under a heading that names the full count. */
@@ -6155,6 +6288,7 @@ const FNS = {
       const g = by.get(nameKey(r.agent) || '?');
       return { agent: r.agent || '', agentPhone: r.agentPhone || '',
         rsm: r.rsm || '', rsmPhone: r.rsmPhone || '',
+        location: r.location || '', locFrom: r.locFrom || '',
         pieces: g.pieces, oldest: g.oldest, over90: g.over90,
         imei: r.imei, item: r.item || '', age: r.age, asOf: r.asOf };
     });

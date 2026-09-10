@@ -406,6 +406,177 @@ test('the round export ignores the pane’s filter, because the card does', asyn
   assert.deepEqual((await _FNS.oldStockRound(gone, STORE, {})).rows.map(r => r.imei), ['H1']);
 });
 
+/* =========================================================================================
+   WHERE IT IS, SO A VISIT CAN BE PLANNED BY PLACE AND NOT ONLY BY WHOSE IT IS.
+
+     "add location column in old stock since this operation to visit it is better when we can
+      pivot by not just RSM but location too - the location we used as in PCOs calling not the
+      kinondoni default"
+
+   `branch`, NEVER `team`. teamFromShop turns "Hoop Limited, Kinondoni" into KINONDONI for
+   every row this dealer has -- it is the shop's own address, so pivoting by it gives one bar.
+   `branch` rides in on the offline queue, which is the PCOs' own portfolio sheet.
+
+     "if such data is permanent stamp it permanent rather always fetching yet watu deletes the
+      data per time"
+
+   And it is WRITTEN DOWN the first time it is worked out, because the book underneath is
+   re-uploaded with rows gone.
+   ========================================================================================= */
+const locDb = (o = {}) => fakeDb({
+  old_stock: o.stock || [], devices: [], watu_loans: o.loans || [],
+  hoop_aged_stock: [], settings: [], stock_audit: [], hoop_sales: [],
+  hoop_agents: o.agents || [],
+});
+const WRITER = STORE;
+const READER = VIEWER;
+
+test('the location comes from the branch, never from the Kinondoni default', async () => {
+  const db = locDb({
+    stock: [{ ...old({ imei: 'L1', agent: 'ABEL MGANGA' }), location: null, location_from: null }],
+    /* THE TRAP, WRITTEN INTO THE FIXTURE: `team` says KINONDONI on every row this dealer has,
+       because it is derived from the shop string. Reading it would put every handset in the
+       country in one town. */
+    loans: [{ imei: 'SOLD-A', agent: 'ABEL MGANGA', team: 'KINONDONI', branch: 'MWANZA' },
+            { imei: 'SOLD-B', agent: 'ABEL MGANGA', team: 'KINONDONI', branch: 'MWANZA' }],
+  });
+  const d = await _FNS.oldStock(db, WRITER, {});
+  assert.equal(d.rows[0].location, 'MWANZA');
+  assert.notEqual(d.rows[0].location, 'KINONDONI');
+  assert.equal(d.rows[0].locFrom, 'sales', 'and it says the answer was worked out, not declared');
+});
+
+test('the staff register answers before the deck, and the commonest branch wins', async () => {
+  /* Somebody typed the staff row on purpose; a deck is a pile of receipts. And an agent who
+     moved branches, or one row typed into the wrong one, must not decide where a van is
+     sent -- which is exactly what a first-seen rule would let a single stray row do. */
+  const db = locDb({
+    stock: [old({ imei: 'M1', agent: 'ABEL MGANGA' }), old({ imei: 'M2', agent: 'ZAWADI K' })],
+    agents: [{ name: 'ABEL MGANGA', phone: '0789473000', role: 'Field_Officer', branch: 'DODOMA', active: true }],
+    loans: [
+      { imei: 's1', agent: 'ABEL MGANGA', branch: 'MWANZA' },      // the register outranks this
+      { imei: 's2', agent: 'ZAWADI K', branch: 'ARUSHA' },
+      { imei: 's3', agent: 'ZAWADI K', branch: 'ARUSHA' },
+      { imei: 's4', agent: 'ZAWADI K', branch: 'TANGA' },          // the stray row
+    ],
+  });
+  const d = await _FNS.oldStock(db, WRITER, {});
+  const by = Object.fromEntries(d.rows.map(r => [r.imei, r]));
+  assert.equal(by.M1.location, 'DODOMA', 'the staff register first');
+  assert.equal(by.M2.location, 'ARUSHA', 'and otherwise the commonest, not the first seen');
+});
+
+test('a place nobody knows is a dash, never a guess', async () => {
+  /* Guessing would send a van to the wrong town, which costs a day. */
+  const db = locDb({ stock: [old({ imei: 'N1', agent: 'NOBODY KNOWS' })] });
+  const d = await _FNS.oldStock(db, WRITER, {});
+  assert.equal(d.rows[0].location, '');
+  assert.equal(d.rows[0].locFrom, '');
+  assert.equal(d.counts.noPlace, 1, 'and the pane counts how much of the map is blank');
+  assert.equal(d.counts.places, 0);
+});
+
+test('the place is stamped once, and survives the deck forgetting the agent', async () => {
+  /* THE WHOLE REASON IT IS A COLUMN. Watu re-uploads its export with rows deleted; a location
+     re-derived on every read would go from naming a town to a dash the morning that agent's
+     sales were trimmed -- with nothing on screen to say why, on the list a van is sent from. */
+  const stock = [{ ...old({ imei: 'P1', agent: 'ABEL MGANGA' }), location: null, location_from: null }];
+  const db = locDb({ stock, loans: [{ imei: 's1', agent: 'ABEL MGANGA', branch: 'MBEYA' }] });
+  const first = await _FNS.oldStock(db, WRITER, {});
+  assert.equal(first.rows[0].location, 'MBEYA');
+  assert.equal(first.placed, 1, 'the read wrote it down and says how many');
+  const saved = db._dump('old_stock').find(r => r.imei === 'P1');
+  assert.equal(saved.location, 'MBEYA');
+  assert.equal(saved.location_from, 'sales', 'and remembers it was worked out, not declared');
+
+  // Watu trims that agent out of the deck entirely.
+  const later = locDb({ stock: db._dump('old_stock'), loans: [] });
+  const d = await _FNS.oldStock(later, WRITER, {});
+  assert.equal(d.rows[0].location, 'MBEYA', 'still there, read off the row');
+  assert.equal(d.rows[0].locFrom, 'sales');
+  assert.equal(d.placed, 0, 'and nothing was written a second time');
+});
+
+test('a stated location wins, and a stamp never overwrites one', async () => {
+  const db = locDb({
+    stock: [{ ...old({ imei: 'Q1', agent: 'ABEL MGANGA' }), location: 'SINGIDA', location_from: 'stated' }],
+    loans: [{ imei: 's1', agent: 'ABEL MGANGA', branch: 'MWANZA' }],
+  });
+  const d = await _FNS.oldStock(db, WRITER, {});
+  assert.equal(d.rows[0].location, 'SINGIDA', 'what somebody wrote on the handset');
+  assert.equal(d.rows[0].locFrom, 'stated');
+  assert.equal(d.placed, 0);
+  assert.equal(db._dump('old_stock')[0].location, 'SINGIDA', 'untouched on disk');
+});
+
+test('a view-only code reads the map and never writes to it', async () => {
+  const db = locDb({
+    stock: [old({ imei: 'R1', agent: 'ABEL MGANGA' })],
+    loans: [{ imei: 's1', agent: 'ABEL MGANGA', branch: 'IRINGA' }],
+  });
+  const d = await _FNS.oldStock(db, READER, {});
+  assert.equal(d.rows[0].location, 'IRINGA', 'they still see where it is');
+  assert.equal(d.placed, 0);
+  assert.equal(db._dump('old_stock')[0].location, undefined, 'and nothing was stamped');
+});
+
+test('it pivots by place, and the pane offers the places it actually has', async () => {
+  const db = locDb({
+    stock: [old({ imei: 'S1', agent: 'A ONE' }), old({ imei: 'S2', agent: 'B TWO' }),
+            old({ imei: 'S3', agent: 'C THREE' })],
+    agents: [
+      { name: 'A ONE', phone: '01', role: 'Field_Officer', branch: 'MWANZA', active: true },
+      { name: 'B TWO', phone: '02', role: 'Field_Officer', branch: 'MWANZA', active: true },
+      { name: 'C THREE', phone: '03', role: 'Field_Officer', branch: 'TABORA', active: true },
+    ],
+  });
+  const all = await _FNS.oldStock(db, WRITER, {});
+  assert.deepEqual(all.locations, ['MWANZA', 'TABORA']);
+  assert.equal(all.counts.places, 2);
+  const one = await _FNS.oldStock(db, WRITER, { location: 'mwanza' });
+  assert.deepEqual(one.rows.map(r => r.imei).sort(), ['S1', 'S2'],
+    'case-insensitively, because nobody types a register’s capitals');
+  /* AN RSM'S ROUND CAN CROSS THREE TOWNS AND A TOWN'S ROUND CAN CROSS THREE RSMs, which is
+     the whole reason this was asked for -- so the two filters compose. */
+  assert.equal((await _FNS.oldStock(db, WRITER, { location: 'MWANZA', agent: 'A ONE' })).rows.length, 1);
+  // The tiles keep describing the whole outstanding list, never the filtered slice.
+  assert.equal(one.counts.open, 3);
+});
+
+test('before the location migration the pane still opens', async () => {
+  /* tableMissing() matches a missing COLUMN as well as a missing table, so asking the broad
+     question first would answer a missing `location` with "OLD STOCK does not exist" -- a
+     false alarm about the wrong thing, on the pane somebody opens to plan a visit. */
+  const bare = fakeDb({
+    old_stock: [old({ imei: 'T1' })], devices: [], watu_loans: [], hoop_aged_stock: [],
+    settings: [], stock_audit: [], hoop_sales: [], hoop_agents: [],
+  }, { missingColumns: { old_stock: ['location', 'location_from'] } });
+  const d = await _FNS.oldStock(bare, WRITER, {});
+  assert.equal(d.notReady, false, 'the whole pane must not go dark over one absent column');
+  assert.equal(d.rows.length, 1);
+  assert.equal(d.hasLoc, false);
+  assert.equal(d.placed, 0, 'and nothing is stamped into a column that is not there');
+});
+
+test('the pane shows the place, offers it as a filter, and says which kind of answer it is', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const paint = fnSrc('osPaint_');
+  assert.match(paint, /<th>Mahali \/ location<\/th>/);
+  assert.match(paint, /id="osLoc"/, 'a dropdown, beside RSM and holder');
+  assert.match(paint, /opts\(d\.locations,d\.location\)/);
+  assert.match(paint, /location:\$\('#osLoc'\)\.value/, 'and the filter reads it');
+  // The round carries it too: a visit is planned to a person IN a place.
+  assert.match(paint, /osPlace_\(g\)/);
+  assert.match(paint, /osPlace_\(r\)/);
+
+  const place = html.slice(html.indexOf('function osPlace_('), html.indexOf('function osAge('));
+  /* A DERIVED PLACE AND A DECLARED ONE ARE DIFFERENT ANSWERS and a van is sent on both, so the
+     row says which it is rather than presenting a guess as a fact. */
+  assert.match(place, /if\(!r\.location\) return[\s\S]{0,120}—/, 'unknown is a dash, never a guess');
+  assert.match(place, /r\.locFrom==='stated'/);
+  assert.match(place, /title="'\+esc\(why\)/, 'and where it came from is on the cell');
+});
+
 test('the cells lead with the figure, and a zero opens nothing', () => {
   const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
   const num = html.slice(html.indexOf('function osNum_('), html.indexOf('function osHolderDrawer('));
