@@ -7991,16 +7991,20 @@ function drawMove(m){
 /* THE SALARIES BLOCK on the Staff pane (Finance SOP G.5). Its own read and its own box, so a
    pane that already draws a thousand agents does not carry a salary column nobody asked for --
    and so a code that holds `staff` sees exactly the figures the 40% cap needs and nothing else.
-   Keyed by ACCESS CODE, because that is what an advance stamps on itself. */
+   Keyed by ACCESS CODE, because that is what an advance stamps on itself.
+
+   THE RULE IS NOT RESTATED HERE. It used to carry a paragraph explaining the 40% cap; the only
+   people who can open this pane are the ones who request and approve advances, and they know
+   what 40% is. Text that tells a reader what they already know is not neutral -- it is read
+   once, learned to be skippable, and then the notice that does matter (the migration warning
+   below it) gets skipped with it. The cap still speaks for itself in the KIKOMO column, on
+   every row, in figures. */
 function drawSalaries(){
   var box=$('#salaryBox'); if(!box) return;
   box.innerHTML='<div class="card"><h2>Mishahara / Salaries</h2><div class="sk"></div></div>';
   srv('salaryList',{}).then(function(d){
     var rows=d.rows||[], canW=!BOOT.readOnly;
     box.innerHTML='<div class="card"><h2>Mishahara / Salaries</h2>'
-      +'<div class="mut" style="margin-bottom:8px">Kwa kanuni moja tu: kikomo cha advance ni asilimia '+money(d.maxPct||40)
-      +' ya mshahara wa mwezi (Finance SOP G.5). Bila mshahara, advance inaidhinishwa bila kikomo na ripoti inasema hivyo. '
-      +'/ Read by exactly one rule: the '+money(d.maxPct||40)+'% salary-advance cap. No salary means no cap, and the report says so.</div>'
       +(d.notReady?'<div class="note bad">Jedwali la mishahara halijatengenezwa bado. Endesha '
         +'<b>db/migrations/RUN-ME-2026-09-09-advance-rules.sql</b> kwenye Supabase. '
         +'/ Run that migration first.</div>':'')

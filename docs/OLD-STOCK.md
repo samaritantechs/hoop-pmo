@@ -13,13 +13,40 @@
 
 | | what is in it | how a handset gets in |
 |---|---|---|
-| **NEW STOCK** | every IMEI in `devices` — we locked it — **plus** any old-stock IMEI that has since **sold** | we enrolled it, or the deck shows it sold |
+| **NEW STOCK** | every IMEI in `devices` — we locked it — **plus** any old-stock IMEI that has since **sold** | we enrolled it, or a sale book shows it sold |
 | **OLD STOCK** | everything on Sipho's list that is in **neither** | it was on the list and we have not caught up with it |
 
 **Nothing marks a row as moved.** A handset is in OLD STOCK exactly while it is absent from the
-register *and* absent from the deck — both asked at read time. A `moved` column would be a second
-opinion about a question the data already answers, and the day the two disagreed a phone would be
-on both lists or on neither. There is no Done button because there is nothing to tick.
+register *and* has no sale against it. A `moved` column would be a second opinion about a question
+the data already answers, and the day the two disagreed a phone would be on both lists or on
+neither. There is no Done button because there is nothing to tick.
+
+### What counts as sold — three books, and the third is the receipt
+
+| asked | what it is |
+|---|---|
+| `watu_loans` | the Watu deck |
+| `hoop_sales` | our own shop's export — a **different upload of the same event** |
+| `stock_audit` | what we **stamped** when it moved, where a sale was actually captured |
+
+The first two are two ways of writing down one sale. A handset written in one and not the other
+used to sit in OLD STOCK with a receipt against it — listed as never enrolled and gathering dust
+while the till had already rung it up.
+
+The third is what makes the move **permanent**. The decks are re-uploaded over themselves with rows
+deleted, which is the whole reason a sale is stamped rather than joined; without this test a phone
+that moved in September would walk back into the un-enrolled list in October because Watu trimmed
+its export, and the ground team would be sent to fetch a phone that sold two months ago.
+
+Membership in `stock_audit` is **not** itself evidence. That table also holds handsets merged off
+the stock report alone, which says who was *holding* a phone and nothing whatever about it being
+sold — and a price of zero is a missing price, not a free handset. A date, a buyer, or a price above
+zero is the test. Counting membership would empty OLD STOCK of exactly the handsets it exists to
+chase.
+
+`newStock` and `oldStockIndex` ask this identical question, deliberately: the two lists are defined
+against each other, so one answer is the only thing that keeps a phone off both lists or off
+neither.
 
 ## The age is arithmetic, never a stored number
 
@@ -108,4 +135,4 @@ door that looks shut and is not.
 | `api/portal.js` | `oldStockIndex`, `daysApart`, `ageToday`, the `oldStock` fn, the `oldstock` nav, NEW STOCK's sold-but-never-locked join, `stockAgingIndex` repointed |
 | `public/portal.html` | the catalog entry, `OSQ`/`osAge`/`drawOldStock`, `nsCell` collapsed to name+number |
 | `public/upload.html` | the aged-stock chip disabled, and the sniffer no longer routes to it |
-| `test/old-stock.test.mjs` | ten tests |
+| `test/old-stock.test.mjs` | thirteen tests |

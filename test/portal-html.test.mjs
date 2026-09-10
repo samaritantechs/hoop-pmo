@@ -2028,15 +2028,29 @@ test('portal.html: HR gets Pay then Deduct, in that order, and only where each i
   }
 });
 
-test('portal.html: salaries sit behind the staff nav and say what they are for', () => {
+test('portal.html: salaries sit behind the staff nav and show the cap without lecturing', () => {
   const html = read('portal.html');
   const fn = IMP_SRC('drawSalaries', html);
   assert.match(fn, /srv\('salaryList',\{\}\)/);
-  assert.match(fn, /Finance SOP G\.5/, 'the block says the one rule that reads it');
-  assert.match(fn, /d\.maxPct\|\|40/, 'and takes the percentage from the server');
-  assert.match(fn, /RUN-ME-2026-09-09-advance-rules\.sql/);
   assert.match(fn, /canW=!BOOT\.readOnly/);
   assert.match(IMP_SRC('drawStaff', html), /drawSalaries\(\);/, 'drawn as part of the staff pane');
+
+  /* THE RULE IS SHOWN, NOT EXPLAINED.
+       "remove this at staff, all requester and approver know what 40% is"
+
+     Only requesters and approvers can open this pane, and the cap is their daily arithmetic.
+     A paragraph restating it trained them to skip the top of the card -- which is where the
+     migration warning lives, and that one they cannot afford to skip. So the prose is gone and
+     the cap stays where it is actually read: as a figure, on every row. */
+  assert.match(fn, /KIKOMO CHA ADVANCE/, 'the cap is a column of figures, per person');
+  assert.ok(!/asilimia|salary-advance cap|maxPct/.test(fn),
+    'and the rule is not restated in prose above them');
+
+  /* The one notice that is NOT boilerplate survives: without the table there are no salaries,
+     so every advance is uncapped and nobody would know why. */
+  assert.match(fn, /RUN-ME-2026-09-09-advance-rules\.sql/);
+  assert.match(fn, /Hakuna mshahara uliowekwa/,
+    'an empty list still says it is empty -- that is a state, not an explanation');
 });
 
 /* =========================================================================================
