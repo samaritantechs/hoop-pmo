@@ -432,7 +432,7 @@ test('the cells lead with the figure, and a zero opens nothing', () => {
 });
 
 test('the pane opens as a worklist: the round first, then the handsets', () => {
-  const src = fnSrc('drawOldStock');
+  const src = fnSrc('osPaint_');
   assert.match(src, /Ziara \/ The round/, 'the per-holder board, because a visit is made to a person');
   assert.match(src, /Kongwe \/ oldest/);
   assert.match(src, /href="tel:/, 'with the number to ring before setting off');
@@ -441,6 +441,33 @@ test('the pane opens as a worklist: the round first, then the handsets', () => {
   assert.match(src, /Ikifungwa au ikiuzwa, inatoka hapa yenyewe[\s\S]*takes it off this list by itself/);
   const age = fnSrc('osAge');
   assert.match(age, /tangu '\+esc\(r\.asOf/, 'and each age says what it started at, and when');
+});
+
+test('the two lists are chips, and only the chosen one is drawn', () => {
+  /* "Ziara / The round and Simu / The handsets should be chipped that the list opens once
+      clicked like the chipping feature i've been using in hopepmo"
+
+     Two thousand handsets above a board of two hundred holders meant scrolling past the whole
+     of the first to reach the second -- the complaint that put chips on Stock movement. */
+  const src = fnSrc('osPaint_');
+  assert.match(src, /var SECS=\[\['round','Ziara \/ The round'/);
+  assert.match(src, /\['handsets','Simu \/ The handsets'/);
+  assert.match(src, /data-ossec="/, 'each list is a chip');
+  assert.match(src, /OSSEC===x\[0\]\?'':' ghost'/, 'and the open one reads as the live one');
+  /* ONE AT A TIME, which is the whole point: the other list is not drawn at all rather than
+     drawn and hidden, so a pane holding 2,000 rows does not build both of them. */
+  assert.match(src, /\+chips\+\(OSSEC==='round'\?board:table\)/);
+
+  /* A CHIP REPAINTS, IT DOES NOT RE-READ. Both lists came in the same answer, so switching
+     must not cost a round trip or blank the pane -- the same split the devices pane runs on. */
+  assert.match(src, /OSSEC=b\.getAttribute\('data-ossec'\); osPaint_\(m, d\);/);
+  const fetchHalf = fnSrc('drawOldStock');
+  assert.match(fetchHalf, /srv\('oldStock',OSQ\)[\s\S]{0,80}osPaint_\(m, d\)/);
+  assert.ok(!/<table/.test(fetchHalf), 'the fetch half draws nothing but the skeleton');
+
+  // The count rides ON the chip, so the choice is made without opening either list.
+  assert.match(src, /\(d\.counts\|\|\{\}\)\.holders\|\|0/);
+  assert.match(src, /\(d\.counts\|\|\{\}\)\.open\|\|0/);
 });
 
 test('the aged-stock upload is off but not gone, and auto-detect will not route to it', () => {

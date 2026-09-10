@@ -318,7 +318,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    the safe direction. A missing case that defaulted to "allowed" is how a nav split quietly
    stops splitting anything. */
 const DEVICE_STATE_NAV = { locked: 'devlock', lost: 'devlock', enrolled: 'devunlock', released: 'devunlock' };
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'oldstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'oldstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'audit', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -8241,7 +8241,7 @@ const FNS = {
     /* 'sales' and 'devices' are stored ALIASES, not panes: each expands in navsFor. They stay
        allowed so a role saved under one keeps every door it had -- dropping an alias on save
        would quietly take a pane away from everybody holding that role. */
-    const ALLOWED = new Set([...NAV_TABS, 'upload', 'audit', 'sales', 'devices']);
+    const ALLOWED = new Set([...NAV_TABS, 'upload', 'sales', 'devices']);
     const tabs = (Array.isArray(args && args.tabs) ? args.tabs : [])
       .map(t => String(t).toLowerCase()).filter(t => ALLOWED.has(t));
     const { error } = await db.from('roles').upsert({ role, tabs }, { onConflict: 'role' });
@@ -9104,9 +9104,32 @@ const FNS = {
     return { ok: true, sent: true, to: mail.to, watch: watch.length };
   },
 
+  /* =====================================================================================
+     THE AUDIT LOG -- who did what, when, from where, and what the value was before and after.
+     =====================================================================================
+       "Implement audit log tab too at admin - who did what what, when, where, value b4 and
+        after {auto-delete history of 15 days+}"
+
+     IT IS A NAV NOW, NOT A SETTINGS SIDE-DOOR. It used to be gated on requireSettings, which
+     meant the only way to let a supervisor read the log was to hand them the pane that edits
+     every setting in the system -- exactly backwards for a screen whose whole job is
+     oversight. `audit` joins NAV_TABS, so it is ticked like everything else and ADMIN has it
+     already.
+
+     A READ, AND ONLY A READ. There is deliberately no way to delete a row from here: a log
+     whose readers can edit it is not a log. The fifteen-day window is the only thing that
+     removes anything, and it removes by age alone.
+     ===================================================================================== */
   async audit(db, user, args) {
-    requireSettings(user);
-    return { ok: true, ...(await auditList(db, { limit: 200 })) };
+    requireNav(user, 'audit');
+    const a = args || {};
+    return { ok: true, ...(await auditList(db, {
+      limit: a.limit || 300,
+      actor: a.actor || null,
+      action: a.action || null,
+      from: a.from || null,
+      to: a.to || null,
+    })) };
   },
 };
 
@@ -9139,5 +9162,9 @@ export default withApi(async (req) => {
      hold a circular reference and JSON.stringify threw. A 500 by luck is not a boundary. */
   const h = Object.prototype.hasOwnProperty.call(FNS, fn) ? FNS[fn] : null;
   if (typeof h !== 'function') { const e = new Error('Unknown portal fn: ' + fn); e.status = 400; throw e; }
-  return audited(supabase, user, fn, args, () => h(supabase, user, args));
+  /* WHERE THE CALL CAME FROM travels with it. The dispatcher is the only place that still
+     holds the request, and the audit row is written three frames down -- so it is passed
+     rather than reached for, which is also what keeps audited() testable without a req. */
+  return audited(supabase, user, fn, args, () => h(supabase, user, args),
+    { ip: ipOf(req), ua: uaOf(req) });
 });
