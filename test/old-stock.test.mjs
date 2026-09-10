@@ -691,12 +691,14 @@ test('the three lists are chips, and only the chosen one is drawn', () => {
   const src = fnSrc('osPaint_');
   assert.match(src, /var SECS=\[\['round','Ziara \/ The round'/);
   assert.match(src, /\['handsets','Simu \/ The handsets'/);
+  assert.match(src, /\['place','Mahali \/ By location'/);
   assert.match(src, /\['noplace','Hazijulikani zilipo \/ No location'/);
   assert.match(src, /data-ossec="/, 'each list is a chip');
   assert.match(src, /OSSEC===x\[0\]\?'':' ghost'/, 'and the open one reads as the live one');
-  /* ONE AT A TIME, which is the whole point: the other list is not drawn at all rather than
-     drawn and hidden, so a pane holding 2,000 rows does not build both of them. */
-  assert.match(src, /\+chips\+\(OSSEC==='round'\?board:OSSEC==='noplace'\?noplace:table\)/);
+  /* ONE AT A TIME, which is the whole point: the other lists are not drawn at all rather than
+     drawn and hidden, so a pane holding 2,000 rows does not build all four of them. */
+  assert.match(src,
+    /\+chips\+\(OSSEC==='round'\?board:OSSEC==='place'\?pivot[\s\S]{0,20}:OSSEC==='noplace'\?noplace:table\)/);
 
   /* A CHIP REPAINTS, IT DOES NOT RE-READ. Both lists came in the same answer, so switching
      must not cost a round trip or blank the pane -- the same split the devices pane runs on. */
@@ -776,4 +778,137 @@ test('the third chip empties itself as the map is filled in', async () => {
   assert.match(paint, /Set their branch on the <b>?Staff pane|Staff pane<\/b>/);
   // And its numbers open the handsets behind them, exactly as the round's do.
   assert.match(paint, /osNum_\(g\.pieces,g\.key,''/);
+});
+
+/* ============================================================================================
+   THE PIVOT BY PLACE.
+   ============================================================================================
+     "add location column in old stock since this operation to visit it is better when we can
+      pivot by not just RSM but location too"
+     "you added about locations nice but the pivot data not yet"
+
+   A COLUMN AND A FILTER ARE NOT A PIVOT, which is what the second message is saying. Both of
+   those answer "where is THIS one", a row at a time; a round is planned the other way round --
+   how much is in this town, how many people, and whose. Getting that out of the filter meant
+   picking each place in turn and writing the totals down on paper.
+   ============================================================================================ */
+test('the pivot counts handsets per place, biggest trip first, unplaced last', async () => {
+  const db = locDb({
+    stock: [
+      old({ imei: 'A1', agent: 'ADAM OMARY', rsm: 'AYUBU BWANGA', age: 200 }),
+      old({ imei: 'A2', agent: 'ADAM OMARY', rsm: 'AYUBU BWANGA', age: 30 }),
+      old({ imei: 'B1', agent: 'BEATRICE M', rsm: 'ANORD SAWE', age: 95 }),
+      // MWANZA holds three across two holders under two RSMs -- the crossing this exists to show.
+      old({ imei: 'C1', agent: 'CHRIS N', rsm: 'AYUBU BWANGA', age: 10 }),
+      // And one nobody can place at all.
+      old({ imei: 'D1', agent: 'DAUDI X', rsm: 'ANORD SAWE', age: 400 }),
+    ],
+    agents: [
+      { name: 'ADAM OMARY', phone: '01', role: 'Field_Officer', branch: 'MWANZA', active: true },
+      { name: 'BEATRICE M', phone: '02', role: 'Field_Officer', branch: 'MWANZA', active: true },
+      { name: 'CHRIS N', phone: '03', role: 'Field_Officer', branch: 'ARUSHA', active: true },
+    ],
+  });
+  const d = await _FNS.oldStock(db, WRITER, {});
+  assert.deepEqual(d.byPlace.map(g => g.location), ['MWANZA', 'ARUSHA', '']);
+
+  const mwanza = d.byPlace[0];
+  assert.equal(mwanza.pieces, 3, 'counted from the handsets');
+  // HOW MANY VISITS, not how many phones: three handsets across two people is two journeys.
+  assert.equal(mwanza.holders, 2);
+  assert.equal(mwanza.oldest, 200);
+  assert.equal(mwanza.over90, 2, '200 and 95, not the 30-day one');
+  /* THE RSMs RIDE ALONG, because a town's round crossing two of them is who has to be rung
+     before a van goes anywhere. */
+  assert.deepEqual(mwanza.rsms, ['ANORD SAWE', 'AYUBU BWANGA']);
+
+  /* THE UNPLACED PILE IS A ROW AND IT IS LAST. Leaving it out would make a pivot whose bars
+     do not add up to the tile above them, which is how a board stops being believed -- and it
+     sorts last wherever its size would have put it, because it is not a destination. */
+  const unplaced = d.byPlace[2];
+  assert.equal(unplaced.key, '');
+  assert.equal(unplaced.pieces, 1);
+  assert.equal(d.byPlace.reduce((n, g) => n + g.pieces, 0), d.counts.open,
+    'the bars add up to the total on the tile');
+});
+
+test('the pivot is counted from the handsets, not from the holder board', async () => {
+  /* THE HOLDER BOARD TAKES ONE LOCATION PER PERSON. A holder whose rows disagree -- one
+     handset with a place written on it, the rest worked out -- would otherwise be counted
+     WHOLE into whichever place that board happened to see first, and a van would be sent for
+     four phones to a town holding one. */
+  const db = locDb({
+    stock: [
+      { ...old({ imei: 'S1', agent: 'SPLIT ONE' }), location: 'IRINGA', location_from: 'stated' },
+      old({ imei: 'S2', agent: 'SPLIT ONE' }),
+      old({ imei: 'S3', agent: 'SPLIT ONE' }),
+    ],
+    agents: [{ name: 'SPLIT ONE', phone: '01', role: 'Field_Officer', branch: 'MBEYA', active: true }],
+  });
+  const d = await _FNS.oldStock(db, WRITER, {});
+  const by = Object.fromEntries(d.byPlace.map(g => [g.location, g.pieces]));
+  assert.deepEqual(by, { MBEYA: 2, IRINGA: 1 });
+  // The same person is in both, counted once in each -- which is the truth about the handsets.
+  assert.equal(d.byPlace.find(g => g.location === 'IRINGA').holders, 1);
+});
+
+test('a number on the pivot opens that place, and the empty key is still a group', async () => {
+  const db = locDb({
+    stock: [
+      old({ imei: 'P1', agent: 'PLACED', age: 120 }),
+      old({ imei: 'P2', agent: 'PLACED', age: 5 }),
+      old({ imei: 'U1', agent: 'UNPLACED', age: 60 }),
+    ],
+    agents: [{ name: 'PLACED', phone: '01', role: 'Field_Officer', branch: 'TANGA', active: true }],
+  });
+  const byPlace = await _FNS.oldStockHolder(db, WRITER, { scope: 'place', place: 'TANGA' });
+  assert.deepEqual(byPlace.rows.map(r => r.imei), ['P1', 'P2']);
+  assert.equal(byPlace.holders, 1);
+  assert.equal(byPlace.place, 'TANGA');
+
+  // The floor works the same as it does on the round: 90+ opens exactly the ones past ninety.
+  const over90 = await _FNS.oldStockHolder(db, WRITER, { scope: 'place', place: 'TANGA', min: 90 });
+  assert.deepEqual(over90.rows.map(r => r.imei), ['P1']);
+
+  /* THE UNPLACED PILE IS A GROUP AND ITS KEY IS THE EMPTY STRING, which is why the scope is
+     carried rather than guessed from the value: "no place given, so they must mean a holder"
+     would open the wrong list on the one row that matters most. */
+  const nowhere = await _FNS.oldStockHolder(db, WRITER, { scope: 'place', place: '' });
+  assert.deepEqual(nowhere.rows.map(r => r.imei), ['U1']);
+
+  /* And with no scope at all it is still the holder drawer it has always been -- asked with
+     the key the board itself hands out, never one spelled by hand. */
+  const key = (await _FNS.oldStock(db, WRITER, {})).byAgent.find(g => g.agent === 'PLACED').key;
+  const holder = await _FNS.oldStockHolder(db, WRITER, { key });
+  assert.equal(holder.scope, 'holder');
+  assert.deepEqual(holder.rows.map(r => r.imei), ['P1', 'P2']);
+});
+
+test('the pivot pane drills through, and holders is not a link', () => {
+  const src = fnSrc('osPaint_');
+  // The three numbers open what they count -- same control, same drawer, one floor under it.
+  assert.match(src, /osNum_\(g\.pieces,g\.key,'','simu zote \/ all pieces','place'\)/);
+  assert.match(src, /osNum_\(g\.oldest,g\.key,g\.oldest,[^)]*,'place'\)/);
+  assert.match(src, /osNum_\(g\.over90,g\.key,90,[^)]*,'place'\)/);
+  /* HOLDERS IS DELIBERATELY NOT ONE OF THEM: it counts people and the drawer lists handsets,
+     and a number that opens a list of something else is worse than a number that opens
+     nothing at all. */
+  assert.match(src, /<td class="r">'\+money\(g\.holders\|\|0\)\+'<\/td>/);
+
+  /* READING A TOTAL IS THE FIRST HALF OF THE QUESTION. Pressing the place drops the pane's
+     own filter onto it and opens the handsets -- the two steps somebody does by hand next,
+     every single time. */
+  assert.match(src, /data-osloc="/);
+  assert.match(src, /OSQ\.location=b\.getAttribute\('data-osloc'\); OSSEC='handsets'; drawOldStock\(m\)/);
+  // The unplaced row is in the table but is not dressed as a destination.
+  assert.match(src, /hapajulikani \/ no location/);
+
+  /* THE SCOPE TRAVELS WITH THE NUMBER rather than being inferred from the key. */
+  const num = fnSrc('osNum_');
+  assert.match(num, /data-ossc="'\+esc\(scope\|\|'holder'\)\+'"/);
+  const drawerSrc = fnSrc('osHolderDrawer');
+  assert.match(drawerSrc, /var isPlace=scope==='place'/);
+  assert.match(drawerSrc, /\{scope:'place',place:key/);
+  // A place holds several people, so its list says whose each handset is.
+  assert.match(drawerSrc, /Mwenye nazo \/ holder/);
 });

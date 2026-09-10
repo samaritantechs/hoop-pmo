@@ -1724,8 +1724,17 @@ var NAV=[
 
   /* WHO DID WHAT. A nav rather than a corner of Settings: the only way to let a supervisor
      read the log used to be handing them the pane that edits every setting in the system,
-     which is exactly backwards for a screen whose whole job is oversight. */
-  { g:'admin', t:'audit',    nav:'audit',      sw:'Nani alifanya nini', en:'Audit log',
+     which is exactly backwards for a screen whose whole job is oversight.
+
+     "SYSTEM" IS IN THE NAME ON PURPOSE.
+       "Audit log (system actions) is not fraud audit (matching sales)"
+
+     This rail already carries a pane called Fraud audit, and the two share the only word
+     anybody reads at a glance. They are opposite screens: that one matches SALES against the
+     decks, this one records what USERS of this system did. A supervisor sent to "the audit"
+     lands on whichever they saw first, and a role gets the wrong box ticked -- which is the
+     one that hands somebody the log of every decision in the company. */
+  { g:'admin', t:'audit',    nav:'audit',      sw:'Nani alifanya nini', en:'System audit log',
     ic:'<path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/>' },
 
   { g:'admin', t:'staff',    nav:'staff',      sw:'Wafanyakazi',      en:'Staff',
@@ -1845,7 +1854,7 @@ function draw(){
   TILEGO=[];
   if(TAB==='dash') return drawDash(m);
   if(TAB==='cust') return drawCust(m);
-  if(TAB==='fraud') return drawAudit(m);
+  if(TAB==='fraud') return drawFraudAudit(m);
   if(TAB==='score') return drawAgents(m);
   if(TAB==='stock') return drawStock(m);
   if(TAB==='move') return drawMove(m);
@@ -1862,7 +1871,7 @@ function draw(){
   if(TAB==='strep') return drawStockRep(m);
   if(TAB==='newstock') return drawNewStock(m);
   if(TAB==='oldstock') return drawOldStock(m);
-  if(TAB==='audit') return drawAudit(m);
+  if(TAB==='audit') return drawSysAudit(m);
   /* ONE PANE, TWO DOORS -- the same drawDevices either way, so the two halves cannot drift
      into disagreeing about the fleet. Which orders it offers is read off TAB inside. */
   if(TAB==='devlock') return drawDevices(m);
@@ -7103,6 +7112,52 @@ function osPaint_(m, d){
         +(d.shown>rows.length?'<div class="note" style="margin-top:8px">Jedwali linaonyesha '
           +money(rows.length)+' kati ya '+money(d.shown)+'. / Showing '+money(rows.length)+' of '+money(d.shown)+'.</div>':'')
       : '<div class="mut" style="margin-top:12px">Hakuna simu kwenye kundi hili. / Nothing here.</div>';
+    /* THE PIVOT BY PLACE -- one row per town, which is what the location column was asked for.
+       -------------------------------------------------------------------------------------
+         "add location column in old stock since this operation to visit it is better when we
+          can pivot by not just RSM but location too"
+
+       A COLUMN AND A FILTER ARE NOT A PIVOT. Both of them answer "where is THIS one", asked a
+       row at a time; a round is planned the other way round -- how much is in this town, how
+       many people, and whose. Getting that out of the filter meant picking each place in turn
+       and writing the totals on paper, which is the job this pane exists to save.
+
+       THE PLACE ITSELF DRILLS THROUGH to the handsets, because reading a total is the first
+       half of the question and "show me which ones" is always the second.
+
+       THE THREE NUMBERS OPEN WHAT THEY COUNT, exactly as they do on the round -- same control,
+       same drawer, one floor under it. Holders is deliberately NOT one of them: it counts
+       people and the drawer lists handsets, and a number that opens a list of something else
+       is worse than a number that opens nothing. */
+    var pivot=(d.byPlace||[]).length
+      ? '<div class="scroll"><table><thead><tr>'
+        +'<th>Mahali / location</th><th>RSM</th><th class="r">Wenye nazo / holders</th>'
+        +'<th class="r">Simu / pieces</th><th class="r">DAYS OFF</th><th class="r">90+</th>'
+        +'</tr></thead><tbody>'
+        +d.byPlace.map(function(g){
+          var rs=g.rsms||[];
+          return '<tr><td>'+(g.location
+              ? '<button class="btn sm ghost" data-osloc="'+esc(g.location)+'" '
+                +'title="Chuja simu za hapa / filter the handsets to this place" '
+                +'style="padding:0;border:0;background:none;font:inherit;color:inherit;'
+                +'text-decoration:underline;text-underline-offset:3px;cursor:pointer"><b>'
+                +esc(g.location)+'</b></button>'
+              /* THE UNPLACED PILE IS A ROW so the bars add up to the tile above them -- but it
+                 is not a destination and does not pretend to be one. */
+              : '<span class="mut">— hapajulikani / no location</span>')+'</td>'
+            +'<td style="font-size:11px">'+(rs.length
+              ? esc(rs.slice(0,3).join(', '))
+                +(rs.length>3?' <span class="mut">+'+money(rs.length-3)+'</span>':'')
+              : '<span class="mut">—</span>')+'</td>'
+            +'<td class="r">'+money(g.holders||0)+'</td>'
+            +'<td class="r">'+osNum_(g.pieces,g.key,'','simu zote / all pieces','place')+'</td>'
+            +'<td class="r"'+(g.oldest>=180?' style="color:var(--bad);font-weight:700"':'')+'>'
+              +osNum_(g.oldest,g.key,g.oldest,'kongwe kuliko zote / the oldest piece','place')+'</td>'
+            +'<td class="r">'+(g.over90
+              ?osNum_(g.over90,g.key,90,'siku 90+ / 90 days and over','place')
+              :'<span class="mut">—</span>')+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+      : '<div class="mut" style="margin-top:12px">Hakuna simu. / Nothing here.</div>';
     /* WHO NOBODY CAN PLACE, and therefore who to ring. Sorted by RSM and then by size,
        because it is worked down by asking each RSM where their people are -- so their names
        have to sit together, which is the one thing the round's own ordering does not do.
@@ -7137,7 +7192,10 @@ function osPaint_(m, d){
        that is what the chip is naming. */
     var SECS=[['round','Ziara / The round',(d.counts||{}).holders||0],
               ['handsets','Simu / The handsets',(d.counts||{}).open||0],
-              /* THE THIRD LIST IS A WORKLIST OF PEOPLE, not of handsets: the branch is set on
+              /* THE PIVOT AND THE GAP IN IT SIT SIDE BY SIDE, because they are one question
+                 asked twice: where the stock is, and how much of it nobody can place yet. */
+              ['place','Mahali / By location',(d.counts||{}).places||0],
+              /* THE LAST LIST IS A WORKLIST OF PEOPLE, not of handsets: the branch is set on
                  a person and one edit answers every phone they carry, so the count is holders
                  and the chip disappears when the map is finished. */
               ['noplace','Hazijulikani zilipo / No location',(d.counts||{}).noPlaceHolders||0]];
@@ -7158,7 +7216,8 @@ function osPaint_(m, d){
          write the database was rejecting every single time -- which reads exactly like nothing
          NEEDED stamping, and that is why it went unnoticed. */
       +(d.placeNote?'<div class="note bad">'+esc(d.placeNote)+'</div>':'')
-      +tiles+bar+chips+(OSSEC==='round'?board:OSSEC==='noplace'?noplace:table)+'</div>';
+      +tiles+bar+chips+(OSSEC==='round'?board:OSSEC==='place'?pivot
+        :OSSEC==='noplace'?noplace:table)+'</div>';
     wireTiles(m);
     var go=function(){ OSQ={q:$('#osQ').value,agent:$('#osAgent').value,rsm:$('#osRsm').value,
       location:$('#osLoc').value}; drawOldStock(m); };
@@ -7167,7 +7226,13 @@ function osPaint_(m, d){
     $('#osRsm').onchange=go; $('#osAgent').onchange=go; $('#osLoc').onchange=go;
     $all('[data-osh]').forEach(function(b){ b.onclick=function(){
       osHolderDrawer(b.getAttribute('data-osh'), b.getAttribute('data-osmin'),
-        b.getAttribute('data-oslab'));
+        b.getAttribute('data-oslab'), b.getAttribute('data-ossc'));
+    }; });
+    /* READING A TOTAL IS THE FIRST HALF OF THE QUESTION. Pressing the place drops the pane's
+       own location filter onto it and opens the handsets -- the same two steps by hand, which
+       is what somebody does next every single time. */
+    $all('[data-osloc]').forEach(function(b){ b.onclick=function(){
+      OSQ.location=b.getAttribute('data-osloc'); OSSEC='handsets'; drawOldStock(m);
     }; });
     var rx=$('#osRoundXl'); if(rx) rx.onclick=function(){ osRoundXl_(this); };
     /* A CHIP CHANGES WHAT IS DRAWN, never what was asked for: both lists arrived in the same
@@ -7191,10 +7256,14 @@ function osPaint_(m, d){
 
    A ZERO IS NOT A LINK. There is nothing behind it to open, and a control that answers with an
    empty list teaches people that the numbers on this board do not really do anything. */
-function osNum_(n, key, min, label){
+function osNum_(n, key, min, label, scope){
   if(!n) return money(n||0);
+  /* A GROUP IS A HOLDER OR A PLACE, and the scope is carried rather than guessed from the key:
+     the unplaced pile IS a group and its key is the empty string, so "no place, so they must
+     mean a holder" would open the wrong list on the one row that matters most. */
   return '<button class="btn sm ghost" data-osh="'+esc(key)+'" data-osmin="'+esc(min===''?'':min)+'" '
-    +'data-oslab="'+esc(label)+'" title="Fungua orodha / open the list" '
+    +'data-oslab="'+esc(label)+'" data-ossc="'+esc(scope||'holder')+'" '
+    +'title="Fungua orodha / open the list" '
     +'style="padding:0;border:0;background:none;font:inherit;color:inherit;'
     +'text-decoration:underline;text-underline-offset:3px;cursor:pointer">'+money(n)+'</button>';
 }
@@ -7235,20 +7304,40 @@ function osRoundXl_(btn){
    two because the pane happened to be narrowed to one RSM would be worse than no link at all.
    And it leaves the pane exactly as it was: the filter, the search and the scroll position are
    all still there when the drawer closes. */
-function osHolderDrawer(key, min, label){
-  drawer('<h3>Ziara / The round</h3><div class="sk"></div>');
-  srv('oldStockHolder',{key:key,min:(min===''||min==null)?null:min}).then(function(d){
+function osHolderDrawer(key, min, label, scope){
+  /* ONE DRAWER FOR BOTH BOARDS. The round and the pivot ask the same question -- the
+     outstanding handsets in this group, at least this old -- so they share the endpoint and
+     the panel. What differs is the heading and one column: a place holds several people, and
+     the first thing asked of a town's list is whose each handset is. */
+  var isPlace=scope==='place';
+  drawer('<h3>'+(isPlace?'Mahali / By location':'Ziara / The round')+'</h3><div class="sk"></div>');
+  var ask=isPlace
+    ? {scope:'place',place:key,min:(min===''||min==null)?null:min}
+    : {key:key,min:(min===''||min==null)?null:min};
+  srv('oldStockHolder',ask).then(function(d){
     var rows=d.rows||[];
-    drawer('<h3 style="margin-bottom:2px">'+esc(d.agent||'(hakuna jina / unnamed)')+'</h3>'
+    var head=isPlace
+      ? (d.place||'— hapajulikani / no location')
+      : (d.agent||'(hakuna jina / unnamed)');
+    drawer('<h3 style="margin-bottom:2px">'+esc(head)+'</h3>'
       +'<div class="mut" style="font-size:11px;margin-bottom:8px">'+esc(label||'')
-      +(d.location?' · '+esc(d.location):'')
-      +(d.rsm?' · RSM '+esc(d.rsm):'')
-      +(d.phone?' · <a href="tel:'+esc(d.phone)+'">'+esc(d.phone)+'</a>':'')+'</div>'
+      +(isPlace
+        /* HOW MANY VISITS, not just how many phones: a hundred handsets across four holders
+           is four journeys, and that is the number a round is planned on. */
+        ? ' · '+money(d.holders||0)+' wenye nazo / holders'
+        : (d.location?' · '+esc(d.location):'')
+          +(d.rsm?' · RSM '+esc(d.rsm):'')
+          +(d.phone?' · <a href="tel:'+esc(d.phone)+'">'+esc(d.phone)+'</a>':''))+'</div>'
       +(rows.length
-        ? '<div class="scroll"><table><thead><tr><th>IMEI</th><th>Bidhaa / item</th>'
+        ? '<div class="scroll"><table><thead><tr><th>IMEI</th>'
+          +(isPlace?'<th>Mwenye nazo / holder</th>':'')
+          +'<th>Bidhaa / item</th>'
           +'<th class="r">Umri leo / age today</th></tr></thead><tbody>'
           +rows.map(function(r){
             return '<tr><td style="font-family:ui-monospace,monospace;font-size:11.5px">'+esc(r.imei)+'</td>'
+              +(isPlace?'<td style="font-size:11.5px">'+esc(r.agent||'—')
+                +(r.agentPhone?'<div class="mut" style="font-size:10px"><a href="tel:'+esc(r.agentPhone)+'">'
+                  +esc(r.agentPhone)+'</a></div>':'')+'</td>':'')
               +'<td style="font-size:11.5px">'+esc(r.item||'—')+'</td>'
               +'<td class="r">'+osAge(r)+'</td></tr>';
           }).join('')+'</tbody></table></div>'
@@ -7296,8 +7385,26 @@ function audDiff_(r){
   }
   return out.length?out.join(''):'<span class="mut">—</span>';
 }
-function drawAudit(m){
-  m.innerHTML='<div class="card"><h2>Nani alifanya nini / Audit log</h2><div class="sk"></div></div>';
+/* NAMED drawSysAudit AND NOT drawAudit, AND THAT IS NOT A TIDYING-UP.
+   -----------------------------------------------------------------------------------------
+     "Audit log (system actions) is not fraud audit (matching sales)"
+
+   IT WAS drawAudit -- AND SO WAS THE FRAUD PANE. Two `function drawAudit(m)` declarations in
+   one file are not an error in JavaScript: the later one silently replaces the earlier. The
+   fraud pane is defined further down, so `if(TAB==='audit') return drawAudit(m)` dispatched
+   to FRAUD, and this pane was unreachable from the day it shipped while its nav looked like
+   it worked -- it opened a table of things that happened, which is what you came to read.
+
+   NOTHING FAILED, WHICH IS WHY IT LASTED. Every test reads this file as text and found the
+   function defined exactly where it expected it; only the browser knows which definition won.
+   The regression test now asserts no two top-level draw functions share a name, because this
+   is invisible in either one of them and only exists in the pair.
+
+   THE ROOM ALREADY HAD AN "AUDIT" IN IT, so the collision was going to happen twice -- once
+   in the code and once in the nav rail. Both ends now name their subject: SYSTEM actions
+   here, SALES matched against the decks over there. */
+function drawSysAudit(m){
+  m.innerHTML='<div class="card"><h2>Nani alifanya nini / System audit log</h2><div class="sk"></div></div>';
   srv('audit',AUDQ).then(function(d){
     var rows=d.rows||[];
     /* THE SAME HEADINGS THIS PANE'S FILTERS WERE MISSING. Two bare date boxes side by side are
@@ -7345,21 +7452,31 @@ function drawAudit(m){
             +'<td>'+audDiff_(r)+'</td></tr>';
         }).join('')+'</tbody></table></div>'
       : '<div class="mut">Hakuna kumbukumbu kwenye kipindi hiki. / Nothing recorded in this window.</div>';
-    m.innerHTML='<div class="card"><h2>Nani alifanya nini / Audit log</h2>'
+    m.innerHTML='<div class="card"><h2>Nani alifanya nini / System audit log</h2>'
       +'<div class="mut" style="margin-bottom:8px">Kila kitendo kinachobadilisha kitu, na thamani '
       +'kabla na baada yake. Kumbukumbu <b>zinafutwa zenyewe baada ya siku '+money(d.keepDays||15)+'</b>. '
       +'/ Every call that CHANGES something, with the value before and after it. Entries older '
       +'than '+money(d.keepDays||15)+' days are deleted automatically.</div>'
+      /* IT SAYS WHAT IT IS NOT, and where that lives instead.
+           "Audit log (system actions) is not fraud audit (matching sales)"
+         Two panes in this rail share the word "audit" and answer opposite questions. Somebody
+         sent to "the audit" opens whichever they saw first, and reading the wrong one is not
+         obvious for several minutes -- both are tables of things that happened. */
+      +'<div class="mut" style="font-size:11px;margin-bottom:8px">Hapa ni matendo ya '
+      +'<b>watumiaji wa mfumo</b>. Ukaguzi wa <b>mauzo</b> — kulinganisha mauzo na deki — uko '
+      +'<b>Mauzo › Ukaguzi wa udanganyifu</b>. / These are <b>system actions</b>: who used this '
+      +'system and what they changed. The <b>sales</b> fraud audit, which matches sales against '
+      +'the decks, is a different pane — <b>Sales › Fraud audit</b>.</div>'
       +(d.note?'<div class="note bad">'+esc(d.note)+'</div>':'')
       +bar+table+'</div>';
     var go=function(){
       AUDQ.action=$('#auAct').value; AUDQ.from=$('#auFrom').value; AUDQ.to=$('#auTo').value;
-      drawAudit(m);
+      drawSysAudit(m);
     };
     $('#auGo').onclick=go;
     $('#auAct').onchange=go;
-    $('#auClr').onclick=function(){ AUDQ={actor:'',action:'',from:'',to:''}; drawAudit(m); };
-    $('#auRef').onclick=function(){ drawAudit(m); };
+    $('#auClr').onclick=function(){ AUDQ={actor:'',action:'',from:'',to:''}; drawSysAudit(m); };
+    $('#auRef').onclick=function(){ drawSysAudit(m); };
   }).catch(function(e){ paneFailed(m,e); });
 }
 
@@ -8420,18 +8537,26 @@ function mzStatusChip(s){
     two statuses, because on this screen they are the same answer: not yet judgeable. */
 function mzBy(status,cta){
   return { on:(MZ.status||'')===status, cta:cta||'chuja ›',
-    go:function(){ MZ.status=((MZ.status||'')===status?'':status); drawAudit($('#main')); } };
+    go:function(){ MZ.status=((MZ.status||'')===status?'':status); drawFraudAudit($('#main')); } };
 }
 function mzRows(rows){
   if(!MZ.status) return rows;
   var want=MZ.status.split('|');
   return rows.filter(function(r){ return want.indexOf(String(r.status))>=0; });
 }
-function drawAudit(m){
+/* THE SALES FRAUD AUDIT. Renamed from drawAudit, which it shared with the system audit log
+   further up -- see the note there: the duplicate name silently swallowed that pane. */
+function drawFraudAudit(m){
   m.innerHTML='<div class="card"><h2>Fraud audit</h2><div class="sk"></div></div>';
   srv('salesAudit',{from:MZ.from,to:MZ.to}).then(function(d){
     var c=d.counts||{};
     m.innerHTML='<div class="card"><h2>Fraud audit — '+esc(d.from)+' → '+esc(d.to)+'</h2>'
+      /* WHICH AUDIT THIS IS. The rail carries two and they answer opposite questions; a
+         reader who wanted "who changed that figure" is one nav away, not lost. */
+      +'<div class="mut" style="font-size:11px;margin-bottom:6px">Ukaguzi wa <b>mauzo</b> '
+      +'dhidi ya deki. Matendo ya <b>watumiaji wa mfumo</b> yako <b>Utawala › Nani alifanya '
+      +'nini</b>. / <b>Sales</b> matched against the decks. What <b>users of this system</b> '
+      +'did is a different pane — <b>Admin › System audit log</b>.</div>'
       +mzDates()
       /* Each tile is one value of the Status column, so it filters the table under it --
          which is the whole point of an audit screen: the count is the alarm, the rows are
@@ -8465,7 +8590,7 @@ function drawAudit(m){
           +'</td></tr>')
       +'</tbody></table></div></div>';
     wireTiles(m);
-    mzWire(m,drawAudit);
+    mzWire(m,drawFraudAudit);
   }).catch(function(e){ paneFailed(m,e); });
 }
 function drawAgents(m){
@@ -9435,14 +9560,17 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report ('+DEPT.PCO+' → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',oldstock:'OLD STOCK (held, never locked)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking ('+DEPT.SC+' at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            /* THE TWO "AUDITS" NAME THEIR SUBJECT, because this list is where the wrong one
+               gets ticked -- and the wrong tick here hands somebody the log of every decision
+               in the company, or hides the sales check from the people whose job it is. */
+            fraud:'Fraud audit — sales matched against the decks',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',oldstock:'OLD STOCK (held, never locked)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking ('+DEPT.SC+' at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',
             enrol:'Enrolment (IT: the details, the check, the RSM being told)',
             security:'Sign-in security (IT: who was turned away at the door)',
             itrep:'Weekly IT report (IT \u2192 GM)',
-            audit:'Audit log (who did what, and what the value was before)',
+            audit:'System audit log — what users of this system did, and the value before',
             upload:'Upload (action)'}[k]||k;
           return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0">'
             +'<input type="checkbox" class="rlT" value="'+esc(k)+'"> '+esc(lbl)+'</label>';
