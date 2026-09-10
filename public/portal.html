@@ -1580,6 +1580,13 @@ var NAV=[
   { g:'stock', t:'strep',    nav:'stockrep',   sw:'Ripoti ya stoo',   en:'Stock reports',
     ic:'<path d="M3 3v18h18"/><path d="M8 17v-5M12 17V7M16 17v-9"/>' },
 
+  /* NEW STOCK -- one row per handset we have locked, and the sale behind it. Every other
+     stock pane answers "where is it"; this one answers "whose is it, and is it still
+     talking to us". The sale half is STAMPED because Watu deletes; the state half is read
+     live because it changes. */
+  { g:'stock', t:'newstock', nav:'newstock',   sw:'NEW STOCK',        en:'NEW STOCK',
+    ic:'<path d="M20 7l-8-4-8 4 8 4 8-4z"/><path d="M4 7v10l8 4 8-4V7"/><path d="M12 11v10"/>' },
+
   /* TOP-UPS: SOP B.5 is the only step in any of these SOPs with the words "must never be
      delayed", so the desk pane counts minutes and orders by who has waited longest. */
   { g:'adv',   t:'tureq',    nav:'topupreq',   sw:'Omba top-up',      en:'Request a top-up',
@@ -1794,6 +1801,7 @@ function draw(){
   if(TAB==='streq') return drawStockReq(m);
   if(TAB==='stappr') return drawStockAppr(m);
   if(TAB==='strep') return drawStockRep(m);
+  if(TAB==='newstock') return drawNewStock(m);
   /* ONE PANE, TWO DOORS -- the same drawDevices either way, so the two halves cannot drift
      into disagreeing about the fleet. Which orders it offers is read off TAB inside. */
   if(TAB==='devlock') return drawDevices(m);
@@ -6487,6 +6495,119 @@ function syncWire(m, redraw){
   if(go) go.onclick=function(){ SYNCQ={state:$('#syState').value,holder:$('#syHolder').value}; redraw(); };
 }
 
+/* ============================== NEW STOCK ==================================================
+     "An audit of our existing imeis since we started locking on our own -- Imei, Rsm, rsm no,
+      agent, agent no, customer, customer no, price, guarantor, guaranto no, status (locked,
+      unlocked, achia), by (who promted that status), last read (last sync date & time). So
+      that we could always sort locked and sort by sync to know our lost or stock that needs
+      verification."
+
+   ONE ROW PER HANDSET WE HAVE LOCKED, and every column the owner named, in the order they
+   named them. The table sorts itself on any header -- that is what the whole pane is for --
+   so each cell leads with something that sorts meaningfully rather than with a chip.
+
+   THE STAMP IS INVISIBLE AND HAS TO BE SAID. Opening this pane captures whatever the feeds can
+   answer today, for good. Nobody would guess that from a table, so the line under the tiles
+   says how many columns were filled this time -- and on the morning after a Watu upload that
+   number is the point of the pane. */
+var NSQ={status:'',q:''};
+var NS_LABEL={locked:'Imefungwa / Locked',unlocked:'Imefunguliwa / Unlocked',
+  achia:'Imeachiwa / Achia',lost:'Imepotea / Lost'};
+var NS_CLS={locked:'bad',unlocked:'',achia:'ok',lost:'bad'};
+/** A stamped cell, with what filled it underneath. Provenance is small and grey because it is
+    the second question -- but it is on the row rather than in a drawer, because "where did
+    this come from" is asked of exactly the cells somebody is already looking at. */
+function nsCell(v, from, phone){
+  if(!v) return '<span class="mut">—</span>';
+  return (phone?'<a href="tel:'+esc(v)+'">'+esc(v)+'</a>':esc(v))
+    +(from?'<div class="mut" style="font-size:9.5px">'+esc(from)+'</div>':'');
+}
+function drawNewStock(m){
+  m.innerHTML='<div class="card"><h2>NEW STOCK</h2><div class="sk"></div></div>';
+  srv('newStock',NSQ).then(function(d){
+    var c=d.counts||{}, rows=d.rows||[];
+    var pick=function(k){ return {on:NSQ.status===k,cta:'chuja ›',
+      go:function(){ NSQ.status=(NSQ.status===k?'':k); drawNewStock(m); }}; };
+    var tiles='<div class="tiles">'
+      +tile('Simu zote',money(c.total||0),'zilizowahi kufungwa na sisi',
+        {on:!NSQ.status,cta:NSQ.status?'onyesha zote ›':'zote',
+         go:function(){ NSQ.status=''; drawNewStock(m); }})
+      +tile('Zimefungwa',money(c.locked||0),'sasa hivi',Object.assign({color:(c.locked?'bad':'')},pick('locked')))
+      +tile('Zimefunguliwa',money(c.unlocked||0),'hazijafungwa',pick('unlocked'))
+      +tile('Zimeachiwa',money(c.achia||0),'mkopo umeisha',Object.assign({color:'ok'},pick('achia')))
+      +tile('Hazipigi ripoti',money(c.never||0),money(c.quiet7||0)+' kimya siku 7+',
+        {on:false,cta:'',go:function(){}})
+      +'</div>';
+    /* THE GAP COUNT IS THE HEALTH OF THE STAMP. It should fall after every upload, and a number
+       that never falls means a feed is not arriving -- which is invisible on a table of blanks
+       and obvious as one number. */
+    var head='<div class="mut" style="font-size:11.5px;margin:8px 0">'
+      +'Ilisomwa '+esc(clock(d.asOf))
+      +(d.stamped?' · <b>'+money(d.stamped)+'</b> safu zimeongezwa taarifa mpya sasa hivi '
+        +'/ rows gained new detail on this read':'')
+      +(c.gappy?' · '+money(c.gappy)+' bado zina nafasi wazi / still have blanks':'')
+      +'</div>';
+    var note=d.notReady
+      ? '<div class="note bad">'+esc(d.notReadyNote)+'</div>'
+      : (d.noDevices
+        ? '<div class="note bad">Register ya vifaa haipo bado. Endesha '
+          +'<b>db/migrations/RUN-ME-2026-08-24-devices.sql</b>. '
+          +'/ The devices register does not exist yet — run that migration.</div>'
+        : '');
+    var bar='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<input id="nsQ" placeholder="Tafuta IMEI, mteja, ajenti… / search" value="'+esc(d.q||'')+'" '
+      +'style="min-width:220px;flex:1">'
+      +'<button class="btn sm" id="nsGo">Tafuta / Search</button>'
+      +'<button class="btn sm ghost" id="nsRef" title="Soma upya na piga muhuri / re-read and stamp">↻</button>'
+      +'</div>';
+    var table=rows.length
+      ? '<div class="scroll"><table><thead><tr>'
+        +'<th>IMEI</th><th>RSM</th><th>RSM no</th><th>Ajenti / agent</th><th>Agent no</th>'
+        +'<th>Mteja / customer</th><th>Customer no</th><th>Bei / price</th>'
+        +'<th>Mdhamini / guarantor</th><th>Guarantor no</th>'
+        +'<th>Hali / status</th><th>Nani / by</th><th>Iliongea lini / last read</th></tr></thead><tbody>'
+        +rows.map(function(r){
+          var s=r.src||{};
+          /* THE SILENCE LEADS THE CELL so the column sorts by it: a phone that has never spoken
+             sorts above every silence that has an end, which is the order somebody chasing
+             stock actually wants. */
+          var last=r.neverSeen
+            ? '<span class="mut">hajawahi / never</span>'
+            : (r.silentDays>=7?'<span style="color:var(--bad)">':'<span>')
+              +esc(String(r.silentDays))+'d</span>'
+              +'<div class="mut" style="font-size:9.5px">'+esc(clock(r.seenAt))+'</div>';
+          return '<tr><td>'+esc(r.imei)
+            +(r.model?'<div class="mut" style="font-size:9.5px">'+esc(r.model)+'</div>':'')+'</td>'
+            +'<td>'+nsCell(r.rsm,s.rsm)+'</td><td>'+nsCell(r.rsmPhone,s.rsm_phone,true)+'</td>'
+            +'<td>'+nsCell(r.agent,s.agent)+'</td><td>'+nsCell(r.agentPhone,s.agent_phone,true)+'</td>'
+            +'<td>'+nsCell(r.customer,s.customer)+'</td><td>'+nsCell(r.customerPhone,s.customer_phone,true)+'</td>'
+            +'<td>'+(r.price==null?'<span class="mut">—</span>':money(r.price))+'</td>'
+            +'<td>'+nsCell(r.guarantor,s.guarantor)+'</td><td>'+nsCell(r.guarantorPhone,s.guarantor_phone,true)+'</td>'
+            +'<td><span class="chip '+(NS_CLS[r.status]||'')+'">'+esc(NS_LABEL[r.status]||r.status||'—')+'</span></td>'
+            +'<td>'+(r.by?esc(r.by):'<span class="mut">—</span>')
+            +(r.atMs?'<div class="mut" style="font-size:9.5px">'+esc(clock(r.atMs))+'</div>':'')+'</td>'
+            +'<td>'+last+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        +(d.shown>rows.length?'<div class="note" style="margin-top:8px">Jedwali linaonyesha '
+          +money(rows.length)+' kati ya '+money(d.shown)+'. / Showing '+money(rows.length)
+          +' of '+money(d.shown)+'.</div>':'')
+      : '<div class="mut">Hakuna simu kwenye kundi hili. / No handsets in this group.</div>';
+    m.innerHTML='<div class="card"><h2>NEW STOCK</h2>'
+      +'<div class="mut" style="margin-bottom:8px">Kila simu tuliyowahi kuifunga, na mauzo yake. '
+      +'<b>Taarifa za mauzo hupigwa muhuri mara ya kwanza zinapopatikana na hazibadilishwi tena</b> — '
+      +'Watu wakifuta, zetu zishahifadhiwa. Hali na muda wa kuongea husomwa moja kwa moja kwa sababu '
+      +'hivyo hubadilika. / Every handset we have locked, with the sale behind it. The sale details '
+      +'are <b>stamped the first time any feed can answer and never overwritten</b>; status and the '
+      +'last beat are read live, because those change.</div>'
+      +note+tiles+head+bar+table+'</div>';
+    wireTiles(m);
+    var go=function(){ NSQ.q=$('#nsQ').value; drawNewStock(m); };
+    $('#nsGo').onclick=go;
+    $('#nsQ').onkeydown=function(e){ if(e.key==='Enter') go(); };
+    $('#nsRef').onclick=function(){ drawNewStock(m); };
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
 function drawStockRep(m){
   if(!STOCKR.from&&!STOCKR.to&&!STOCKR.explicit){ var mr=monthRange_(); STOCKR.from=mr.from; STOCKR.to=mr.to; }
   m.innerHTML='<div class="sk"></div>';
@@ -8241,7 +8362,7 @@ function drawCodes(m){
       +'<div class="row" id="rlTabs" style="flex-wrap:wrap;gap:8px 14px">'
       +((d.navTabs||[]).concat(['upload'])).map(function(k){
           var lbl={dashboard:'Dashboard',customers:'Customers',reports:'Call reports',furep:'Follow-up report (credit → GM)',recovery:'Recovery',
-            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking (general duty at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
+            fraud:'Fraud audit',scorecards:'Agent scorecards',targets:'Sales targets (CSM + RSMs)',commission:'Commission (Finance builds + pays)',lossreq:'Report a loss or damage',topupreq:'Request a top-up',topups:'Top-ups (Finance desk)',loss:'Loss and damage desk (Finance)',commappr:'Commission sign-off (Administration)',stock:'Stock',movement:'Stock movement',stockreq:'Stock request (RSM asks)',stockappr:'Stock approval + handover (store)',stockrep:'Stock reports + aging tracker',newstock:'NEW STOCK (the sale behind every locked IMEI)',devlock:'Locking (store: lock, re-lock, enrol)',devunlock:'Unlocking (general duty at the POS)',staff:'Staff',codes:'Access codes',settings:'Settings',
             impreq:'Imprest request',impappr:'Imprest approval (administrator + rates)',imprep:'Imprest reports (CEO copy)',
             leavereq:'Leave request',leaveappr:'Leave approval (HR)',leaverep:'Leave reports (CEO, HR, Finance)',
             issuereq:'Raise an issue',issues:'Issues desk (works every department)',issuerep:'Issues report (CEO, heads)',

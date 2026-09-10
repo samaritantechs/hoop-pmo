@@ -1,0 +1,137 @@
+# NEW STOCK — the sale behind every handset we have locked
+
+> *"I need an audit of our existing imeis since we started locking on our own — Imei, Rsm, rsm no,
+> agent, agent no, customer, customer no, price, guarantor, guaranto no, status (locked, unlocked,
+> achia), by (who promted that status), last read (last sync date&time). So that we could always
+> sort locked and sort by sync to know our lost or stock that needs verification."*
+>
+> *"It should always read and stamp the sales first imei sales info from watu deck upload, since
+> watu always omit data so when we stamp once we are done for the missing column info, the rest
+> until obtained — if watu removes sales data, we already stamped ours."*
+
+## Two kinds of fact on one row
+
+This is the whole design, and everything else follows from it.
+
+| | | |
+|---|---|---|
+| **The sale** | RSM, agent, customer, price, guarantor and their numbers | **stamped** — captured the first time any feed can answer, never overwritten |
+| **The state** | locked / unlocked / achia, who ordered it, when it last spoke | **read live** — never stamped, on every open |
+
+Everywhere else in this system, writing down something you could derive is the mistake: a stored
+total is a lie the moment its inputs move. Here the opposite is true, and the difference is **which
+way the input moves**.
+
+- A derived **total** goes *stale* when its inputs change → never store it.
+- A captured **sale** goes *missing* when its input is deleted → store it, or lose it.
+
+Watu re-uploads its deck over itself, with columns blank and rows gone. Who bought a handset on the
+13th of July does not stop being true because a spreadsheet stopped mentioning it. A status, by
+contrast, is a lie within the hour of being written down — and this is the pane read to decide
+whether a phone needs chasing.
+
+## First catch wins, and it says who caught it
+
+Each column is filled the first time any feed can answer it and is then **left alone for good**.
+That is what makes the stamp worth having: a second upload that has gone blank cannot un-say what
+the first one said.
+
+Because some of these are captured rather than witnessed — and the RSM is *derived* — the
+provenance travels with the value. `src` is one `jsonb` column mapping field → feed, and the pane
+prints it in small grey type **under the cell**, because "where did this come from" is asked of
+exactly the cells somebody is already looking at.
+
+### The order the feeds are asked
+
+The owner named it, and it is an order of *trustworthiness about a sale*:
+
+| # | feed | what it alone can answer |
+|---|---|---|
+| 1 | **`watu_loans`** — the Watu deck | agent, customer + number, price, model, sale date, team |
+| 2 | **the offline queue** (merged onto the same row) | **guarantor + number** — nowhere else has one |
+| 3 | **`hoop_sales`** — the shop book | customer, the payout number of whoever is owed |
+| 4 | **`hoop_agents`** — the staff register | the agent's own number, their branch |
+| 5 | **`hoop_aged_stock`** | who was *holding* it — the weakest claim to having sold it, hence last |
+
+1 and 2 are the same table today and are still listed apart, because they are different
+**uploads**: the daily deck carries the sale, the offline-queue sheet is the only place a guarantor
+was ever written down. Naming them separately is what lets a stamped guarantor say where it came
+from.
+
+**The earliest receipt wins** where the shop wrote more than one for an IMEI. A later receipt is a
+top-up or a correction; "first catch" has to mean the first *sale*, or the audit quietly
+re-attributes a handset to whoever touched it most recently.
+
+### A blank is not a value
+
+`''`, whitespace and a price of **0** are all *unanswered*, not answers. Stamping them would close
+the column for good against the upload that finally carries the number — the opposite of what the
+stamp is for. A zero price is a missing price, not a free handset.
+
+## Where the RSM comes from
+
+No sale feed knows our hierarchy — Watu has never heard of it. So the RSM is walked up the staff
+register from the agent: **Field_Officer → Team_Leader → Regional_Manager**, using the same
+`salesTree` the target cascade already builds. A manager who sold a phone themselves is their own
+RSM, which is the honest answer. A register that names a loop costs that row its RSM and nothing
+else.
+
+Where no Regional_Manager exists above somebody, the column stays **open** rather than being filled
+with the nearest available name.
+
+## The population is the register
+
+*"Our existing imeis since we started locking on our own."* One row per IMEI in `devices`. A phone
+that appears in the sales books but was never locked is somebody else's audit and does not appear
+here — and is not stamped either.
+
+## What is on screen
+
+**Tiles:** all · locked · unlocked · achia · not reporting (with *silent 7+* underneath). Clicking
+one filters the table; the tiles always count the **whole** fleet, never the filtered slice.
+
+**Columns**, in the order they were dictated: IMEI · RSM · RSM no · Agent · Agent no · Customer ·
+Customer no · Price · Guarantor · Guarantor no · Status · By · Last read.
+
+Every table on this page sorts itself on a header click — which is the entire ask, *"so that we
+could always sort locked and sort by sync"*. The **Last read** cell leads with the number of days
+and carries the timestamp underneath, so the sort means what the reader thinks it means; a handset
+that has never spoken sorts above every silence that has an end. Phone numbers are `tel:` links,
+on the pane where somebody is chasing people.
+
+**The stamp is invisible, so the pane says it happened.** Under the tiles: when it read, how many
+rows *gained new detail on this read*, and how many still have blanks. On the morning after a Watu
+upload, the first number is the point of opening the pane; the second should be falling, and a
+gap count that never falls means a feed is not arriving — invisible on a table of blanks, obvious
+as one number.
+
+## What it costs
+
+Opening the pane reads five feeds and writes back only the rows that actually **gained** something
+— on a steady morning, none. A second open in the same hour writes nothing at all. A view-only code
+computes the whole table and stamps nothing, as everywhere here.
+
+A feed that has never been uploaded costs its columns and nothing else: an audit that refuses to
+open because one upload has not happened is an audit nobody uses, and this one is opened precisely
+when things are incomplete.
+
+## Before the migration
+
+The pane still **computes** — the joins underneath work perfectly well — but nothing is being kept,
+and it says so in red. That is the one thing worth stating out loud rather than showing a table
+that looks complete.
+
+## What to do
+
+1. Run `db/migrations/RUN-ME-2026-09-11-new-stock.sql`.
+2. Tick **`newstock`** on the roles that should see it. It carries customer and guarantor phone
+   numbers, so it is its own nav rather than riding on the stock reports.
+
+## Files
+
+| file | what changed |
+|---|---|
+| `db/migrations/RUN-ME-2026-09-11-new-stock.sql` | `stock_audit` |
+| `api/portal.js` | `NEWSTOCK_*`, `unanswered`, `rsmAbove`, `newStockOffers`, `newStockFill`, `newStockRow`, the `newStock` fn, the `newstock` nav |
+| `public/portal.html` | the catalog entry, `NSQ`/`NS_LABEL`/`nsCell`/`drawNewStock` |
+| `test/new-stock.test.mjs` | eighteen tests |

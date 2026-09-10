@@ -1,0 +1,393 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { fakeDb } from './fake-db.mjs';
+import { _FNS } from '../api/portal.js';
+
+/* =========================================================================================
+   NEW STOCK -- the sale behind every handset we have locked.
+
+     "An audit of our existing imeis since we started locking on our own -- Imei, Rsm, rsm no,
+      agent, agent no, customer, customer no, price, guarantor, guaranto no, status (locked,
+      unlocked, achia), by (who promted that status), last read (last sync date & time), so
+      that we could always sort locked and sort by sync to know our lost or stock that needs
+      verification."
+
+     "It should always read and stamp the sales first imei sales info from watu deck upload,
+      since watu always omit data so when we stamp once we are done for the missing column
+      info, the rest until obtained -- if watu removes sales data, we already stamped ours."
+
+   TWO KINDS OF FACT, HANDLED IN OPPOSITE WAYS, and nearly every test here is about the line
+   between them.
+
+   THE SALE DISAPPEARS, SO IT IS STAMPED. Who bought this handset and for how much is a fact
+   about a day in the past. Watu re-uploads its deck over itself with columns blank and rows
+   gone; the fact does not stop being true because a spreadsheet stopped mentioning it.
+
+   THE STATE CHANGES, SO IT IS NEVER STAMPED. Locked or not, who ordered it, when it last
+   spoke -- read live, every time. A stamped status is a lie within the hour.
+
+   Everywhere else in this system, writing down what you could derive is the mistake. The
+   difference is which way the input moves: a derived TOTAL goes stale when its inputs change,
+   a captured SALE goes missing when its input is deleted.
+   ========================================================================================= */
+const ADMIN = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
+const STORE = { code: 'S1', name: 'SIPHO', role: 'STORE', teams: null, tabs: ['newstock'], readOnly: false };
+const VIEWER = { code: 'V1', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['newstock'], readOnly: true };
+const OUT = { code: 'Z1', name: 'Mtu', role: 'OFFICER', teams: null, tabs: ['stock'], readOnly: false };
+
+const IM = '351929937378664';
+const hoursAgo = h => new Date(Date.now() - h * 3600000).toISOString();
+
+const dev = (o = {}) => ({
+  imei: o.imei || IM, item: o.item || 'A07', holder: 'SIPHO STORE',
+  state: o.state || 'locked', state_by: o.by === undefined ? 'SIPHO' : o.by,
+  state_at: o.at || hoursAgo(30), last_seen: o.seen === undefined ? hoursAgo(2) : o.seen,
+  customer: o.customer || null,
+});
+/* The deck row as credits upload it, with the offline-queue columns merged onto it -- which is
+   how this database has held them since the queue landed. */
+const loan = (o = {}) => ({
+  imei: o.imei || IM, client_name: o.customer === undefined ? 'Alafati K Selemani' : o.customer,
+  client_mobile: o.phone === undefined ? '255716548153' : o.phone,
+  agent: o.agent === undefined ? 'Denis John' : o.agent,
+  team: 'KINONDONI', shop: 'Hoop Limited, Kinondoni',
+  model: 'A07', model_details: o.model === undefined ? 'A07 (SM-A075F/DS)' : o.model,
+  disbursed_date: o.day || '2026-07-13', price: o.price === undefined ? 450000 : o.price,
+  guarantor_name: o.guarantor === undefined ? 'Issack daniely samawa' : o.guarantor,
+  guarantor_phone: o.gphone === undefined ? '0788533370' : o.gphone,
+  branch: 'Dar es salaam',
+});
+const receipt = (o = {}) => ({
+  imei: o.imei || IM, sale_date: o.day || '2026-08-14', branch: 'HOOP LIMITED',
+  agent: 'CYPRIAN RENATUS', client_name: o.customer || 'Fredy J Damasi',
+  client_phone: o.phone || '0797053513', model: 'SAMSUNG A07-64GB',
+  commission_agent: o.agent === undefined ? 'Cyprian Dotto Renatus' : o.agent,
+  commission_phone: o.aphone === undefined ? '0780866571' : o.aphone,
+  price: o.price === undefined ? 503000 : o.price,
+});
+const staff = (name, role, branch, phone) => ({ phone, name, role, branch, manager: null, active: true });
+
+const nsDb = (o = {}) => fakeDb({
+  stock_audit: o.audit || [], devices: o.devices || [dev({})],
+  watu_loans: o.loans || [], hoop_sales: o.sales || [],
+  hoop_agents: o.agents || [], hoop_aged_stock: o.aged || [],
+}, o.opts || {});
+const only = d => d.rows[0];
+
+/* ---------------------------------------------------------------------------------------- */
+test('the deck answers first, and every column the owner named lands on one row', async () => {
+  const db = nsDb({
+    loans: [loan({})],
+    agents: [staff('SIMON MWANGASA', 'Regional_Manager', 'Dar es salaam', '0683875152'),
+      staff('ATHUMANI DIANGA', 'Team_Leader', 'Dar es salaam', '0670306780'),
+      staff('Denis John', 'Field_Officer', 'Dar es salaam', '0712657140')],
+  });
+  const r = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(r.imei, IM);
+  assert.equal(r.agent, 'Denis John');
+  assert.equal(r.customer, 'Alafati K Selemani');
+  assert.equal(r.customerPhone, '0716548153', 'a 255-prefixed number is stored the register’s way');
+  assert.equal(r.price, 450000);
+  assert.equal(r.guarantor, 'Issack daniely samawa', 'the offline queue is the only feed that has one');
+  assert.equal(r.guarantorPhone, '0788533370');
+  /* THE RSM IS ON NO SALE FEED. Watu does not know our hierarchy, so it is walked up the staff
+     register: agent -> team leader -> regional manager. */
+  assert.equal(r.rsm, 'SIMON MWANGASA');
+  assert.equal(r.rsmPhone, '0683875152');
+  assert.equal(r.agentPhone, '0712657140', 'the staff register answers the agent’s number');
+
+  // The state half, live off the register rather than stamped.
+  assert.equal(r.status, 'locked');
+  assert.equal(r.by, 'SIPHO');
+  assert.ok(r.seenAt > 0 && r.silentDays === 0);
+  assert.equal(r.gaps, 0, 'nothing left unanswered on this handset');
+});
+
+test('once stamped, a deck that goes blank cannot un-say it', async () => {
+  /* THE WHOLE REASON THIS IS A TABLE AND NOT A JOIN. "Watu always omit data so when we stamp
+     once we are done ... if watu removes sales data, we already stamped ours." */
+  const db = nsDb({ loans: [loan({})] });
+  await _FNS.newStock(db, STORE, {});
+  const stamped = db._dump('stock_audit');
+  assert.equal(stamped.length, 1);
+  assert.equal(stamped[0].customer, 'Alafati K Selemani');
+  assert.equal(stamped[0].src.customer, 'watu_loans', 'and it says which feed answered');
+
+  // Watu re-uploads with the customer, the price and the guarantor gone. Or drops the row.
+  db._dump('watu_loans').length = 0;
+  db._dump('watu_loans').push(loan({ customer: null, phone: null, price: null,
+    guarantor: null, gphone: null, agent: null }));
+  const after = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(after.customer, 'Alafati K Selemani', 'the stamp holds');
+  assert.equal(after.price, 450000);
+  assert.equal(after.guarantor, 'Issack daniely samawa');
+
+  db._dump('watu_loans').length = 0;                 // the row is gone from the deck entirely
+  const gone = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(gone.customer, 'Alafati K Selemani', 'a deleted sale is still our sale');
+  assert.equal(gone.status, 'locked', 'and the handset is still ours to watch');
+});
+
+test('a later feed fills only what the earlier one left blank', async () => {
+  /* THE PRIORITY IS THE OWNER'S OWN: the deck financed the handset, the offline queue is the
+     only place a guarantor was written down, then the shop book, then the staff register, then
+     the stock report. Each is asked in turn and none of them may overwrite the one before. */
+  const db = nsDb({
+    // A deck row that knows the agent and the price and nothing about the buyer.
+    loans: [loan({ customer: null, phone: null })],
+    sales: [receipt({})],
+  });
+  const r = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(r.agent, 'Denis John', 'the deck’s agent stands: the shop book does not outrank it');
+  assert.equal(r.price, 450000, 'nor its price');
+  assert.equal(r.customer, 'Fredy J Damasi', 'but the blank the deck left is filled by the shop');
+  assert.equal(r.customerPhone, '0797053513');
+  assert.equal(r.src.agent, 'watu_loans');
+  assert.equal(r.src.customer, 'hoop_sales');
+  /* The shop book's payout number is the agent's, and it is the only feed carrying one when
+     the staff register has never heard of them. */
+  assert.equal(r.agentPhone, '0780866571');
+  assert.equal(r.src.agent_phone, 'hoop_sales');
+});
+
+test('the earliest receipt is the sale, not whichever row came back first', async () => {
+  /* A second receipt against the same IMEI is a top-up or a correction. "First catch" has to
+     mean the first SALE, or the audit quietly re-attributes a handset to whoever touched it
+     most recently. */
+  const db = nsDb({ sales: [
+    receipt({ day: '2026-08-20', customer: 'Wa pili', agent: 'Mtu mwingine' }),
+    receipt({ day: '2026-08-14', customer: 'Wa kwanza', agent: 'Cyprian Dotto Renatus' }),
+  ] });
+  const r = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(r.customer, 'Wa kwanza');
+  assert.equal(r.agent, 'Cyprian Dotto Renatus');
+});
+
+test('an unanswered column stays open for the upload that can finally answer it', async () => {
+  /* A BLANK IS NOT A VALUE. Stamping '' or 0 would close the column for good against the feed
+     that finally carries the number -- which is the opposite of what the stamp is for. */
+  const db = nsDb({ loans: [loan({ customer: '  ', price: 0, guarantor: '', gphone: '' })] });
+  const first = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(first.customer, '', 'whitespace is not a customer');
+  assert.equal(first.price, null, 'a price of zero is a missing price, not a free handset');
+  assert.ok(first.gaps > 0);
+  const stamped = db._dump('stock_audit')[0];
+  assert.equal(stamped.customer, null);
+  assert.equal(stamped.price, null);
+  assert.ok(!('customer' in stamped.src), 'and nothing claims to have answered it');
+
+  // The next upload carries them, and now they stamp.
+  db._dump('watu_loans').length = 0;
+  db._dump('watu_loans').push(loan({}));
+  const then = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(then.customer, 'Alafati K Selemani');
+  assert.equal(then.price, 450000);
+  assert.ok(then.gaps < first.gaps,
+    'and the gap count falls -- which is how one number shows a feed finally arriving');
+});
+
+test('status, who ordered it and the last beat are read live and never stamped', async () => {
+  const db = nsDb({ loans: [loan({})] });
+  await _FNS.newStock(db, STORE, {});
+  const stamped = db._dump('stock_audit')[0];
+  /* THE LINE THIS PANE IS BUILT ON. Anything that CHANGES must not be captured: a stamped
+     status is a lie within the hour, and this is the pane read to decide whether a handset
+     needs chasing. */
+  for (const k of ['status', 'state', 'by', 'state_by', 'last_seen', 'seen_at']) {
+    assert.ok(!(k in stamped), k + ' must never be stamped -- it changes');
+  }
+
+  const reg = db._dump('devices');
+  reg[0].state = 'released'; reg[0].state_by = 'ASHA'; reg[0].last_seen = null;
+  const after = only(await _FNS.newStock(db, STORE, {}));
+  assert.equal(after.status, 'achia', 'the owner’s own word for a released handset');
+  assert.equal(after.by, 'ASHA', 'and who prompted it');
+  assert.equal(after.neverSeen, true);
+  assert.equal(after.customer, 'Alafati K Selemani', 'while the sale is exactly where it was');
+
+  reg[0].state = 'enrolled';
+  assert.equal(only(await _FNS.newStock(db, STORE, {})).status, 'unlocked');
+  /* `lost` is not one of the three words the owner used, because it is rare -- but calling it
+     "locked" because that is what the handset does would hide a written-off phone inside the
+     one number this audit is read for. */
+  reg[0].state = 'lost';
+  assert.equal(only(await _FNS.newStock(db, STORE, {})).status, 'lost');
+});
+
+test('the population is the register: a phone nobody locked is somebody else’s audit', async () => {
+  const db = nsDb({
+    devices: [dev({ imei: 'OURS' })],
+    loans: [loan({ imei: 'OURS' }), loan({ imei: 'NEVER-LOCKED' })],
+    sales: [receipt({ imei: 'SOLD-ELSEWHERE' })],
+  });
+  const d = await _FNS.newStock(db, STORE, {});
+  assert.deepEqual(d.rows.map(r => r.imei), ['OURS'],
+    '"our existing imeis since we started locking on our own"');
+  assert.equal(d.counts.total, 1);
+  assert.equal(db._dump('stock_audit').length, 1, 'and nothing else is stamped either');
+});
+
+test('the tiles are the three words, and the desk can narrow to one', async () => {
+  const db = nsDb({ devices: [
+    dev({ imei: 'A', state: 'locked', seen: hoursAgo(200) }),
+    dev({ imei: 'B', state: 'enrolled' }),
+    dev({ imei: 'C', state: 'released' }),
+    dev({ imei: 'D', state: 'locked', seen: null }),
+  ] });
+  const d = await _FNS.newStock(db, ADMIN, {});
+  assert.equal(d.counts.locked, 2);
+  assert.equal(d.counts.unlocked, 1);
+  assert.equal(d.counts.achia, 1);
+  assert.equal(d.counts.never, 1);
+  assert.equal(d.counts.quiet7, 1, 'A has been silent over a week');
+  /* WORST FIRST: never spoken, then the longest silence. Every column still sorts on its own
+     click -- that is the pane's whole purpose -- but the order it OPENS in is the order
+     somebody chasing stock wants. */
+  assert.deepEqual(d.rows.map(r => r.imei), ['D', 'A', 'B', 'C']);
+
+  assert.deepEqual((await _FNS.newStock(db, ADMIN, { status: 'locked' })).rows.map(r => r.imei),
+    ['D', 'A']);
+  assert.equal((await _FNS.newStock(db, ADMIN, { status: 'achia' })).counts.total, 4,
+    'the tiles always count the whole fleet, never the filtered slice');
+});
+
+test('the search reaches the stamped detail, not just the IMEI', async () => {
+  const db = nsDb({
+    devices: [dev({ imei: 'A' }), dev({ imei: 'B' })],
+    loans: [loan({ imei: 'A' }), loan({ imei: 'B', customer: 'Mtu Mwingine', guarantor: 'Mdhamini B' })],
+  });
+  assert.deepEqual((await _FNS.newStock(db, STORE, { q: 'alafati' })).rows.map(r => r.imei), ['A'],
+    'by customer, case-insensitively');
+  assert.deepEqual((await _FNS.newStock(db, STORE, { q: 'Mdhamini B' })).rows.map(r => r.imei), ['B'],
+    'and by guarantor -- the column a verification actually starts from');
+});
+
+test('before the migration it still computes, and says nothing is being kept', async () => {
+  const db = nsDb({ loans: [loan({})], opts: { missingColumns: { stock_audit: ['imei'] } } });
+  const d = await _FNS.newStock(db, STORE, {});
+  assert.equal(d.notReady, true);
+  assert.match(d.notReadyNote, /RUN-ME-2026-09-11-new-stock\.sql/);
+  /* NOT AN EMPTY AUDIT -- an audit that cannot be SAVED. The joins underneath work perfectly
+     well, so the rows are there; what is missing is the remembering, and that is the one thing
+     worth saying out loud rather than showing a table that looks complete. */
+  assert.equal(d.rows.length, 1);
+  assert.equal(d.rows[0].customer, 'Alafati K Selemani');
+  assert.equal(d.stamped, 0);
+});
+
+test('a feed that has never been uploaded costs its columns and nothing else', async () => {
+  /* An audit that refuses to open because one upload has not happened yet is an audit nobody
+     uses -- and this one is opened precisely when things are incomplete. */
+  const bare = fakeDb({ stock_audit: [], devices: [dev({ customer: 'Mteja wa dukani' })] });
+  const d = await _FNS.newStock(bare, STORE, {});
+  assert.equal(d.ok, true);
+  assert.equal(d.rows.length, 1);
+  assert.equal(d.rows[0].agent, '');
+  assert.equal(d.rows[0].customer, 'Mteja wa dukani',
+    'the till’s own note stands in where no sales feed has ever mentioned this handset');
+  assert.ok(d.counts.gappy > 0, 'and the pane says how much it still does not know');
+});
+
+test('a view-only code reads the audit and stamps nothing', async () => {
+  const db = nsDb({ loans: [loan({})] });
+  const d = await _FNS.newStock(db, VIEWER, {});
+  assert.equal(d.rows.length, 1);
+  assert.equal(d.rows[0].customer, 'Alafati K Selemani', 'it still computes the whole row');
+  assert.equal(d.stamped, 0);
+  assert.equal(db._dump('stock_audit').length, 0, 'but a view-only code writes nothing, as everywhere');
+
+  // ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the standing rule.
+  assert.equal((await _FNS.newStock(db, ADMIN, {})).ok, true);
+  await assert.rejects(() => _FNS.newStock(db, OUT, {}), /no access to the newstock pane/);
+});
+
+test('a second read with nothing new to learn writes nothing at all', async () => {
+  /* The stamp is idempotent by construction -- it fills blanks -- so a pane opened twice in a
+     morning must not rewrite four hundred rows to say the same thing. */
+  const db = nsDb({ loans: [loan({})] });
+  assert.equal((await _FNS.newStock(db, STORE, {})).stamped, 1);
+  assert.equal((await _FNS.newStock(db, STORE, {})).stamped, 0);
+  assert.equal((await _FNS.newStock(db, STORE, {})).stamped, 0);
+  const row = db._dump('stock_audit')[0];
+  assert.ok(row.first_at, 'and the row remembers when it first appeared');
+  assert.equal(row.first_at, row.stamped_at, 'nothing having changed since');
+});
+
+test('a manager who sold a phone is their own RSM, and a loop costs a row not the request', async () => {
+  const db = nsDb({
+    loans: [loan({ agent: 'SIMON MWANGASA' })],
+    agents: [staff('SIMON MWANGASA', 'Regional_Manager', 'SOUTHERN HIGHLAND', '0683875152')],
+  });
+  assert.equal(only(await _FNS.newStock(db, STORE, {})).rsm, 'SIMON MWANGASA',
+    'the honest answer, rather than climbing past them to somebody else');
+
+  /* Two people naming each other is a typo the register can contain, and the walk must not
+     take the server with it. salesTree already refuses a "manager" who is not ABOVE you, so
+     this is belt and braces on the walk itself. */
+  const loopy = nsDb({
+    loans: [loan({ agent: 'A MOJA' })],
+    agents: [{ ...staff('A MOJA', 'Field_Officer', 'X', '0700000001'), manager: 'B MBILI' },
+      { ...staff('B MBILI', 'Field_Officer', 'X', '0700000002'), manager: 'A MOJA' }],
+  });
+  const r = only(await _FNS.newStock(loopy, STORE, {}));
+  assert.equal(r.rsm, '', 'no regional manager exists above them, so the column stays open');
+});
+
+/* ---------------------------------------------------------------------------------------- */
+import fs from 'node:fs';
+const HTML = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+const fnSrc = name => {
+  const at = HTML.indexOf('function ' + name + '(');
+  assert.ok(at > 0, name + ' is not defined in portal.html');
+  return HTML.slice(at, HTML.indexOf('\n}', at) + 2);
+};
+
+test('the pane is the owner’s column list, in the owner’s order', () => {
+  const src = fnSrc('drawNewStock');
+  /* THE COLUMNS WERE DICTATED, so they are asserted as dictated -- in order, because the order
+     is how somebody reads a row aloud to the person they are chasing. */
+  const want = ['IMEI', 'RSM', 'RSM no', 'Ajenti / agent', 'Agent no', 'Mteja / customer',
+    'Customer no', 'Bei / price', 'Mdhamini / guarantor', 'Guarantor no',
+    'Hali / status', 'Nani / by', 'Iliongea lini / last read'];
+  let at = 0;
+  for (const h of want) {
+    const i = src.indexOf('<th>' + h + '</th>', at);
+    assert.ok(i > 0, 'the "' + h + '" column is missing from the table');
+    at = i;
+  }
+  /* EVERY TABLE ON THIS PAGE SORTS ITSELF on a header click, which is the entire ask -- "so
+     that we could always sort locked and sort by sync". That is a delegated handler on <th>,
+     so the only thing this pane owes it is a real <thead>. */
+  assert.match(src, /<thead><tr>/);
+});
+
+test('the silence leads its cell, so the column sorts by it', () => {
+  /* "Sort by sync to know our lost or stock that needs verification." A cell that leads with a
+     timestamp sorts alphabetically by clock face, which is not an answer to anything. The days
+     go first and the timestamp underneath, so the sort means what the reader thinks it means --
+     and a handset that has never spoken sorts above every silence that has an end. */
+  const src = fnSrc('drawNewStock');
+  const cell = src.slice(src.indexOf('var last=r.neverSeen'), src.indexOf('return \'<tr>'));
+  assert.match(cell, /hajawahi/, 'never-spoken is named rather than shown as a blank');
+  assert.ok(cell.indexOf('r.silentDays') < cell.indexOf('clock(r.seenAt)'),
+    'the days come before the clock, or the column sorts by the time of day');
+});
+
+test('the stamp is invisible, so the pane says it happened', () => {
+  /* Opening this pane captures whatever the feeds can answer, for good. Nobody would guess
+     that from a table, and on the morning after a Watu upload the number of columns just
+     captured IS the point of opening it. */
+  const src = fnSrc('drawNewStock');
+  assert.match(src, /d\.stamped\?/, 'the count of what was just stamped is on screen');
+  assert.match(src, /c\.gappy/, 'and how much is still unanswered, which should fall each upload');
+  // The two halves are explained where somebody will read them, not only in the docs.
+  assert.match(src, /hupigwa muhuri[\s\S]*stamped the first time/);
+  assert.match(src, /husomwa moja kwa moja[\s\S]*read live/);
+});
+
+test('provenance rides the cell, because that is where it is asked', () => {
+  const cell = fnSrc('nsCell');
+  assert.match(cell, /from\?/, 'which feed answered is drawn under the value');
+  assert.match(cell, /phone\?'<a href="tel:/, 'and a number is a call, on the pane that chases people');
+  assert.match(cell, /—/, 'an unanswered column reads as unanswered, never as an empty cell');
+});

@@ -313,7 +313,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    the safe direction. A missing case that defaulted to "allowed" is how a nav split quietly
    stops splitting anything. */
 const DEVICE_STATE_NAV = { locked: 'devlock', lost: 'devlock', enrolled: 'devunlock', released: 'devunlock' };
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -1317,6 +1317,132 @@ function salesTree(agents) {
       return out;
     },
   };
+}
+
+/* ---------- NEW STOCK: what gets stamped, and which feed is asked first ----------
+   The owner named the order, and it is an order of TRUSTWORTHINESS about a sale rather than
+   of convenience: the deck financed the handset, the offline queue is the only place a
+   guarantor was ever written down, the shop book knows who was paid, the staff register knows
+   who they are, and the stock report knows only who was holding it. */
+const NEWSTOCK_NOT_READY = 'Jedwali la NEW STOCK halijatengenezwa bado — unaona takwimu lakini '
+  + 'hazihifadhiwi. Endesha db/migrations/RUN-ME-2026-09-11-new-stock.sql kwenye Supabase. '
+  + '/ The stock_audit table has not been created yet: the rows below are computed live but '
+  + 'nothing is being STAMPED, so a feed that goes blank will take its columns with it.';
+const NEWSTOCK_COLS = 'imei, rsm, rsm_phone, agent, agent_phone, customer, customer_phone, '
+  + 'price, guarantor, guarantor_phone, branch, model, sale_date, src, first_at, stamped_at';
+const NEWSTOCK_FIELDS = ['rsm', 'rsm_phone', 'agent', 'agent_phone', 'customer', 'customer_phone',
+  'price', 'guarantor', 'guarantor_phone', 'branch', 'model', 'sale_date'];
+/* The owner's three words for what a handset is doing, plus the fourth this register also has.
+   Written as data so the pane, the tiles and the filter cannot each invent their own. */
+const NEWSTOCK_STATE = { locked: 'locked', enrolled: 'unlocked', released: 'achia', lost: 'lost' };
+const RSM_TIER = TARGET_TIERS.indexOf('REGIONAL_MANAGER');
+/** Nothing has been captured for this column yet. An empty string is not a value somebody
+    stamped -- it is the absence of one, and treating it as filled would close the column
+    against the upload that could finally answer it. */
+const unanswered = v => v == null || String(v).trim() === '';
+
+/** WHO THE RSM WAS. Not on any sale feed -- Watu does not know our hierarchy -- so it is read
+    off the staff register by walking up from the agent until a Regional_Manager is reached.
+    A manager who sold a phone themselves is their own RSM, which is the honest answer.
+
+    `seen` because a register that names a loop must cost a row, never the request. */
+function rsmAbove(name, tree) {
+  let k = nameKey(name || '');
+  const seen = new Set();
+  while (k && !seen.has(k)) {
+    seen.add(k);
+    const p = tree.of(k);
+    if (p && tierOf(p.role) === RSM_TIER) return p;
+    k = tree.parentOf(k);
+  }
+  return null;
+}
+
+/** EVERY FEED'S ANSWER FOR ONE IMEI, richest first. Each entry is [source, {field: value}] and
+    a field a feed cannot speak to is simply absent -- never null, which would read as "this
+    feed says there isn't one" and is a different claim entirely.
+
+    THE DECK AND THE OFFLINE QUEUE ARE THE SAME TABLE and are still listed separately, because
+    they are different UPLOADS that happen to have been merged into one row: the daily deck
+    carries the sale, the offline-queue sheet is the only place a guarantor has ever been
+    written down. Naming them apart is what lets a stamped guarantor say where it came from. */
+function newStockOffers(imei, ctx) {
+  const out = [];
+  const w = ctx.watu.get(imei);
+  if (w) {
+    out.push(['watu_loans', {
+      agent: w.agent, customer: w.client_name, customer_phone: phone0(w.client_mobile),
+      /* A PRICE OF ZERO IS A MISSING PRICE, not a free handset. Stamping it would close the
+         column for good against the upload that finally carries the number. */
+      price: num(w.price) > 0 ? num(w.price) : undefined,
+      model: w.model_details || w.model, sale_date: w.disbursed_date,
+      branch: w.team || w.shop,
+    }]);
+    out.push(['offline_queue', {
+      guarantor: w.guarantor_name, guarantor_phone: phone0(w.guarantor_phone),
+      branch: w.branch,
+    }]);
+  }
+  const s = ctx.sales.get(imei);
+  if (s) {
+    out.push(['hoop_sales', {
+      customer: s.client_name, customer_phone: phone0(s.client_phone),
+      /* commission_agent is who is OWED for the sale -- the seller. `agent` on this table is
+         the record holder, which is a different person on a team leader's receipt. */
+      agent: s.commission_agent || s.agent, agent_phone: phone0(s.commission_phone),
+      price: num(s.price) > 0 ? num(s.price) : undefined,
+      model: s.model, sale_date: s.sale_date, branch: s.branch,
+    }]);
+  }
+  const st = ctx.aged.get(imei);
+  // The stock report knows who was HOLDING it, which is the weakest claim to having sold it --
+  // hence last, and only where nothing better ever turned up.
+  if (st) out.push(['hoop_aged_stock', { agent: st.agent, model: st.item }]);
+  return out;
+}
+
+/** ONE IMEI'S ROW, merged. Starts from what is already stamped and fills only what is still
+    unanswered, so a column captured in July survives a deck that has since dropped it.
+    Returns the merged values, the provenance, and how many columns were newly filled --
+    which is what decides whether this row is written back at all. */
+function newStockFill(imei, was, ctx) {
+  const row = {};
+  const src = Object.assign({}, (was && was.src) || {});
+  let hits = 0;
+  for (const f of NEWSTOCK_FIELDS) row[f] = was ? was[f] : null;
+  const put = (field, value, from) => {
+    if (!unanswered(row[field])) return;             // FIRST CATCH WINS, for good
+    const v = typeof value === 'string' ? value.trim() : value;
+    if (unanswered(v)) return;
+    row[field] = v; src[field] = from; hits++;
+  };
+  for (const [from, offer] of newStockOffers(imei, ctx)) {
+    for (const f of NEWSTOCK_FIELDS) if (offer[f] !== undefined) put(f, offer[f], from);
+  }
+  /* THE STAFF REGISTER ANSWERS LAST, and only about the person -- because it can only be asked
+     once the earlier feeds have said whose name is on the sale. */
+  const who = ctx.byName.get(nameKey(row.agent || ''))
+    || (row.agent_phone ? ctx.byPhone.get(pnorm(row.agent_phone)) : null);
+  if (who) {
+    put('agent_phone', phone0(who.phone), 'hoop_agents');
+    put('branch', who.branch, 'hoop_agents');
+  }
+  const boss = rsmAbove(row.agent || (who && who.name) || '', ctx.tree);
+  if (boss) {
+    put('rsm', boss.name, 'hierarchy');
+    put('rsm_phone', phone0(boss.phone), 'hierarchy');
+  }
+  return { row, src, hits };
+}
+
+/** The row as the table takes it. first_at is carried from the existing stamp rather than
+    re-derived: it says when this handset first appeared in the audit, and a row that gains a
+    column today did not appear today. Both timestamps are written explicitly because a column
+    default cannot be relied on through an upsert that names the column. */
+function newStockRow(imei, f, was, at) {
+  const out = { imei, src: f.src, first_at: (was && was.first_at) || at, stamped_at: at };
+  for (const k of NEWSTOCK_FIELDS) out[k] = unanswered(f.row[k]) ? null : f.row[k];
+  return out;
 }
 
 /** ONE PERSON'S TARGET, and where it came from. Three answers in order of authority:
@@ -5488,6 +5614,186 @@ const FNS = {
            ordered, the handset has never once contacted us, and enough time has passed that
            "it has not got round to it" has stopped being an explanation. */
         neverAndRipe: rows.filter(r => r.neverSeen && r.suspect).length,
+      } };
+  },
+
+  /* =====================================================================================
+     NEW STOCK -- the sale behind every handset we have locked.
+     =====================================================================================
+       "An audit of our existing imeis since we started locking on our own -- Imei, Rsm, rsm
+        no, agent, agent no, customer, customer no, price, guarantor, guaranto no, status
+        (locked, unlocked, achia), by (who promted that status), last read (last sync date &
+        time), so that we could always sort locked and sort by sync to know our lost or stock
+        that needs verification."
+
+       "It should always read and stamp the sales first imei sales info from watu deck upload,
+        since watu always omit data so when we stamp once we are done for the missing column
+        info, the rest until obtained -- if watu removes sales data, we already stamped ours."
+
+     TWO KINDS OF FACT SIT ON ONE ROW, AND THEY ARE HANDLED IN OPPOSITE WAYS.
+
+     THE SALE DISAPPEARS, SO IT IS STAMPED. Who bought this handset, for how much, through
+     which agent, against whose guarantee -- these are facts about a day in the past. They do
+     not stop being true when a spreadsheet stops mentioning them, and the Watu deck is
+     re-uploaded over itself with columns blank and rows gone. Every one of them is written
+     into stock_audit the FIRST time any feed can answer it and then left alone for good.
+
+     THE STATE CHANGES, SO IT IS NEVER STAMPED. Locked or not, who ordered it, when the phone
+     last spoke -- these are read live from `devices` on every open. A stamped status would be
+     a lie within the hour, and this pane exists to be trusted about exactly that.
+
+     Everywhere else in this system, writing down something you could derive is the mistake.
+     Here it is the whole point, and the difference is which way the input moves: a derived
+     TOTAL goes stale when its inputs change, and a captured SALE goes missing when its input
+     is deleted. So the provenance travels with it -- `src` says which feed answered each
+     column -- and nothing is ever overwritten, which is what makes the capture worth having.
+     ===================================================================================== */
+  async newStock(db, user, args) {
+    requireNav(user, 'newstock');
+    const a = args || {};
+    const at = new Date().toISOString();
+    const now = Date.now();
+
+    let cur = [];
+    let notReady = false;
+    try {
+      cur = await fetchAll(() => db.from('stock_audit').select(NEWSTOCK_COLS));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      /* NOT AN EMPTY AUDIT -- an audit that cannot be saved yet. The pane still computes and
+         still shows every row, because the joins underneath work perfectly well; what it
+         cannot do is REMEMBER, which is the one thing worth saying out loud. */
+      notReady = true;
+    }
+    const stampedBy = new Map(cur.map(r => [String(r.imei), r]));
+
+    /* THE POPULATION IS THE REGISTER, not the sales books: "our existing imeis since we
+       started locking on our own". A phone nobody locked is somebody else's audit. */
+    let devs = [];
+    let noDevices = false;
+    try {
+      devs = await fetchAll(() => db.from('devices')
+        .select('imei, item, holder, state, state_by, state_at, last_seen, customer'));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      noDevices = true;
+    }
+
+    /* THE FEEDS, ALL BEST-EFFORT. A missing one costs its columns and nothing else -- an audit
+       that refuses to open because one upload has never happened is an audit nobody uses. */
+    const feed = async (table, cols) => {
+      try { return await fetchAll(() => db.from(table).select(cols)); } catch (ignored) { return []; }
+    };
+    const [watu, sales, agents, aged] = await Promise.all([
+      feed('watu_loans', 'imei, client_name, client_mobile, agent, team, shop, model, '
+        + 'model_details, disbursed_date, price, guarantor_name, guarantor_phone, branch'),
+      feed('hoop_sales', 'imei, sale_date, branch, agent, client_name, client_phone, model, '
+        + 'commission_agent, commission_phone, price'),
+      feed('hoop_agents', 'phone, name, role, branch, manager, active'),
+      feed('hoop_aged_stock', 'serial, agent, item'),
+    ]);
+
+    /* THE EARLIEST RECEIPT WINS where the shop wrote more than one for an IMEI. A later
+       receipt against the same handset is a top-up or a correction; the ORIGINAL sale is the
+       one this audit is about, and "first catch" has to mean the first sale, not the first row
+       the database happened to return. */
+    const salesBy = new Map();
+    for (const s of sales) {
+      const k = String(s.imei || '');
+      if (!k) continue;
+      const had = salesBy.get(k);
+      if (!had || String(s.sale_date || '9999') < String(had.sale_date || '9999')) salesBy.set(k, s);
+    }
+    const ctx = {
+      watu: new Map(watu.filter(r => r.imei).map(r => [String(r.imei), r])),
+      sales: salesBy,
+      aged: new Map(aged.filter(r => r.serial).map(r => [String(r.serial), r])),
+      byName: new Map(agents.filter(r => r.name).map(r => [nameKey(r.name), r])),
+      byPhone: new Map(agents.filter(r => r.phone).map(r => [pnorm(r.phone), r])),
+      tree: salesTree(agents),
+    };
+
+    const rows = [];
+    const changed = [];
+    for (const d of devs) {
+      const imei = String(d.imei);
+      const was = stampedBy.get(imei) || null;
+      const f = newStockFill(imei, was, ctx);
+      if (f.hits) changed.push(newStockRow(imei, f, was, at));
+      const seen = d.last_seen ? Date.parse(d.last_seen) : null;
+      rows.push({
+        imei,
+        rsm: f.row.rsm || '', rsmPhone: f.row.rsm_phone || '',
+        agent: f.row.agent || '', agentPhone: f.row.agent_phone || '',
+        /* devices.customer is stamped at the till by whoever sold it, so it stands in where
+           no sales feed has ever mentioned this handset. */
+        customer: f.row.customer || d.customer || '', customerPhone: f.row.customer_phone || '',
+        price: f.row.price == null ? null : num(f.row.price),
+        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
+        branch: f.row.branch || '', model: f.row.model || d.item || '',
+        saleDate: f.row.sale_date || null,
+        /* THE THREE WORDS THE OWNER USES, and the fourth this register also has. `lost` is not
+           in their list because it is rare -- but calling it "locked" because that is what the
+           handset does would hide a written-off phone inside the locked count, which is the
+           one number this audit is read for. */
+        status: NEWSTOCK_STATE[String(d.state || '')] || String(d.state || ''),
+        by: d.state_by || '', atMs: d.state_at ? Date.parse(d.state_at) : null,
+        seenAt: seen, neverSeen: !seen,
+        silentDays: seen ? Math.max(0, Math.floor((now - seen) / 86400000)) : null,
+        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
+        src: f.src,
+      });
+    }
+
+    /* THE STAMP. Only rows that actually GAINED something are written -- on a steady morning
+       that is none of them -- and each one carries the whole merged row, so a column filled
+       last month survives a feed that has since gone blank. */
+    let stamped = 0;
+    if (!notReady && !isReadOnly(user) && changed.length) {
+      for (let i = 0; i < changed.length; i += 200) {
+        const slice = changed.slice(i, i + 200);
+        const { error } = await db.from('stock_audit').upsert(slice, { onConflict: 'imei' });
+        /* POSTGREST REFUSES BY RESOLVING, NOT BY THROWING. A stamp that reported success on a
+           write the database rejected is the exact failure this table exists to prevent: the
+           deck moves on, and the office believes the sale was captured. */
+        if (error) {
+          if (!tableMissing(error)) throw new Error(error.message);
+          notReady = true; stamped = 0; break;
+        }
+        stamped += slice.length;
+      }
+    }
+
+    /* WORST FIRST: a handset that has never once spoken, then the longest silence. That is the
+       order somebody chasing stock wants, and every column still sorts on its own click. */
+    rows.sort((x, y) => (y.neverSeen ? 1 : 0) - (x.neverSeen ? 1 : 0)
+      || (y.silentDays || 0) - (x.silentDays || 0)
+      || String(x.imei).localeCompare(String(y.imei)));
+
+    const want = String(a.status || '').trim();
+    const q = K(a.q || '');
+    const shown = rows.filter(r => {
+      if (want && r.status !== want) return false;
+      if (!q) return true;
+      return [r.imei, r.customer, r.customerPhone, r.agent, r.rsm, r.guarantor, r.branch]
+        .some(v => K(v).includes(q));
+    });
+
+    const count = st => rows.filter(r => r.status === st).length;
+    return { ok: true, notReady, noDevices,
+      notReadyNote: notReady ? NEWSTOCK_NOT_READY : '',
+      asOf: now, stamped,
+      rows: shown.slice(0, 2000), shown: shown.length,
+      status: want, q: String(a.q || ''),
+      counts: {
+        total: rows.length,
+        locked: count('locked'), unlocked: count('unlocked'),
+        achia: count('achia'), lost: count('lost'),
+        never: rows.filter(r => r.neverSeen).length,
+        quiet7: rows.filter(r => r.silentDays != null && r.silentDays >= 7).length,
+        /* HOW MUCH OF THE SALE WE STILL DO NOT KNOW. The number that says whether the feeds
+           are answering -- and the one that should be falling, upload after upload. */
+        gappy: rows.filter(r => r.gaps > 0).length,
       } };
   },
 
