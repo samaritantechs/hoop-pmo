@@ -1037,3 +1037,39 @@ office, and Funga can -- by general duty, in a second. Calling a lock irreversib
 that makes the real warning next door mean less. So the locking sheet says what is true instead:
 every phone on the list goes dark to whoever holds it until general duty opens it, and one reason
 is recorded against all of them.
+
+## 33. SHIPPED 2026-09-11: NEW STOCK — the sale behind every handset we have locked
+
+"An audit of our existing imeis since we started locking on our own." The full story is
+[`docs/NEW-STOCK.md`](NEW-STOCK.md); the short version:
+
+**Do:**
+1. Run `db/migrations/RUN-ME-2026-09-11-new-stock.sql`.
+2. Tick `newstock` on the roles that should see it. It carries customer and guarantor phone
+   numbers, so it is its own nav rather than riding on the stock reports.
+
+TWO KINDS OF FACT ON ONE ROW. The SALE (rsm, agent, customer, price, guarantor and their numbers)
+is STAMPED -- captured the first time any feed can answer and never overwritten -- because Watu
+re-uploads its deck over itself with columns blank and rows gone, and who bought a handset in July
+does not stop being true because a spreadsheet stopped saying so. The STATE (locked / unlocked /
+achia, who ordered it, when it last spoke) is READ LIVE and never stamped, because a stamped status
+is a lie within the hour.
+
+Everywhere else here, storing something derived is the mistake. The difference is which way the
+input moves: a derived TOTAL goes stale when its inputs change; a captured SALE goes missing when
+its input is deleted.
+
+The feeds are asked in the owner's own order -- deck, offline queue (the only place a guarantor was
+ever written down), shop book, staff register, aged stock -- and each fills only what the one
+before left blank. Provenance rides the cell, so a stamped value can be argued with. The RSM is on
+no sale feed, so it is walked up the staff register from the agent.
+
+A BLANK IS NOT A VALUE: '', whitespace and a price of zero are unanswered, not answers. Stamping
+them would close the column against the upload that finally carries the number.
+
+The population is the devices register -- "our existing imeis since we started locking on our own"
+-- so a phone that appears in the sales books but was never locked is somebody else's audit.
+
+STILL TO COME, named rather than quietly skipped: the staff pane (each person by role, click in to
+fill their channel data, activate/deactivate that also blocks login). NEW STOCK reads the roles
+already in `hoop_agents` today, so it works now; the pane to MAINTAIN them is the next piece.
