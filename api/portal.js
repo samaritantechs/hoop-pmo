@@ -622,6 +622,9 @@ const pendingFirst = (x, y) => (x.status === 'pending' ? 0 : 1) - (y.status === 
   || (y.at || 0) - (x.at || 0);
 
 /* ---------- ISSUES: the shapes the three panes agree on ---------- */
+const ISSUE_ROUTE_NOT_READY = 'Uelekezaji bado haujawashwa. Endesha '
+  + 'db/migrations/RUN-ME-2026-09-10-issue-routing.sql kwenye Supabase ili masuala '
+  + 'yaelekezwe kwa wadhifa na mtu. / Routing is not switched on yet — run that migration.';
 const ISSUE_NOT_READY = 'Jedwali la masuala halijatengenezwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-09-08-issues.sql kwenye Supabase. '
   + '/ The issues table has not been created yet — run that migration first.';
@@ -632,9 +635,14 @@ const ISSUE_DEPTS = ['STORE', 'FINANCE', 'IT', 'HR', 'CREDIT', 'SALES', 'GENERAL
 const ISSUE_KINDS = ['issue', 'complaint', 'document', 'performance', 'system'];
 const ISSUE_SUBJECTS = ['imei', 'agent', 'receipt', 'system', 'other'];
 const ISSUE_STATES = ['open', 'waiting', 'escalated', 'resolved'];
-const ISSUE_COLS = 'id, raised_at, staff_code, staff_name, staff_role, department, kind, subject_type, '
+const ISSUE_COLS_BASE = 'id, raised_at, staff_code, staff_name, staff_role, department, kind, subject_type, '
   + 'subject, title, details, contact, verified, referred_to, external_ref, status, assigned_to, '
   + 'resolution, escalated_by, escalated_at, resolved_by, resolved_at, updated_by, updated_at';
+/* WHOSE DESK IT IS ON. These arrive with a hand-run migration, so every read asks for them
+   and settles for the row without them -- between a deploy and somebody pasting the SQL the
+   log must keep working, unrouted, rather than going dark. */
+const ISSUE_COLS = ISSUE_COLS_BASE + ', to_role, to_name';
+const ISSUE_ROUTE_COLS = /to_role|to_name/i;
 const issueRow = (r, me, nowMs) => {
   const at = r.raised_at ? Date.parse(r.raised_at) : null;
   const closed = r.resolved_at ? Date.parse(r.resolved_at) : null;
@@ -648,6 +656,10 @@ const issueRow = (r, me, nowMs) => {
     title: r.title || '', details: r.details || '', contact: r.contact || '',
     verified: !!r.verified, referredTo: r.referred_to || '', externalRef: r.external_ref || '',
     status: r.status || 'open', assignedTo: r.assigned_to || '', resolution: r.resolution || '',
+    /* WHOSE DESK. A blank toName is not a missing value: it is the raiser saying "anybody in
+       this role". The desk reads both, and so does the person looking for their own work. */
+    toRole: r.to_role || '', toName: r.to_name || '',
+    directed: !!String(r.to_name || '').trim(),
     escalatedBy: r.escalated_by || '', escalatedAt: r.escalated_at ? Date.parse(r.escalated_at) : null,
     resolvedBy: r.resolved_by || '', resolvedAt: closed,
     updatedBy: r.updated_by || '', updatedAt: r.updated_at ? Date.parse(r.updated_at) : null,
@@ -655,6 +667,32 @@ const issueRow = (r, me, nowMs) => {
     ageDays: at ? Math.max(0, Math.round(((closed || nowMs || Date.now()) - at) / 86400000)) : 0,
   };
 };
+/** Every issue, asking for the routing columns and settling for the row without them.
+    Returns the rows and whether the routing was actually there, so a pane can say so. */
+async function issueSelect(db, build) {
+  try {
+    return { rows: await fetchAll(() => build(ISSUE_COLS)), routed: true };
+  } catch (e) {
+    if (!ISSUE_ROUTE_COLS.test(String((e && (e.message || e.details)) || ''))) throw e;
+    return { rows: await fetchAll(() => build(ISSUE_COLS_BASE)), routed: false };
+  }
+}
+/** IS THIS ON MY DESK? Two ways, and the blank one is the point.
+
+      to_name set     one person's, and only theirs
+      to_name blank   everybody holding to_role -- whoever gets to it first
+
+    AN ISSUE WITH NO ROLE ON IT IS ON EVERYBODY'S DESK. It was filed when the desk WAS one
+    queue, and that is what it was addressed to -- so it stays addressed to it. Matching the
+    department against somebody's role instead would have been a guess, and a wrong guess here
+    means an old issue quietly falling off every desk in the company on deploy day. Routing
+    applies to the rows that carry it; the rest are unchanged. */
+function issueOnMyDesk(r, user) {
+  if (!r.toRole) return true;
+  if (K(r.toRole) !== K(user && user.role)) return false;
+  return !r.toName || K(r.toName) === K(user && user.name);
+}
+
 /* ISSUES_EMAIL is lines (or semicolons) of DEPARTMENT=address,address. Anything that does not
    parse is ignored rather than refused: this is a courtesy setting, and a typo in it must
    never stop an issue being filed. */
@@ -4784,8 +4822,24 @@ const FNS = {
     requireWrite(user);
     const a = args || {};
     const S = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+    /* WHOSE DESK THIS LANDS ON.
+       -----------------------------------------------------------------------------------
+         "when someone reports an issue they choose who to report to by choosing role and
+          next (option) user in the role"
+
+       The ROLE is what the owner already maintains in Access codes -- the same list they tick
+       navs on -- so routing needs no second vocabulary that would drift out of step with the
+       first. The PERSON is optional, and the blank is the feature: blank means anybody
+       holding that role, filled means one desk and only that one. */
+    const toRole = K(a.toRole).replace(/[\s-]+/g, '_');
+    /* The old department list is still accepted, so a screen that has not been reloaded yet
+       keeps filing. One of the two is required -- an issue addressed to nobody is a note. */
     const department = K(a.department).replace(/ /g, '_');
-    if (!ISSUE_DEPTS.includes(department)) bad('Chagua idara. / Choose a department.');
+    const deptOk = ISSUE_DEPTS.includes(department);
+    if (!toRole && !deptOk) {
+      bad('Chagua wadhifa wa kupeleka suala. / Choose the role (or department) to send it to.');
+    }
+    const toName = S(a.toName, 120);
     const kind = String(a.kind || 'issue').trim().toLowerCase();
     if (!ISSUE_KINDS.includes(kind)) bad('Aina ya suala si sahihi. / Unknown kind of issue.');
     const subjectType = String(a.subjectType || '').trim().toLowerCase();
@@ -4800,39 +4854,95 @@ const FNS = {
     const row = {
       raised_at: at, updated_at: at,
       staff_code: user.code || null, staff_name: user.name || '', staff_role: user.role || '',
-      department, kind, subject_type: subjectType || null, subject: subject || null,
+      /* The department stays where the role happens to be one of the eight it was born with,
+         so the issues report keeps grouping the way it always did. Otherwise it is simply not
+         set: refusing an issue because the owner's role vocabulary has moved on would stop the
+         log rather than route it. */
+      department: deptOk ? department : (ISSUE_DEPTS.includes(toRole) ? toRole : null),
+      kind, subject_type: subjectType || null, subject: subject || null,
       title, details: S(a.details, 4000) || null, contact: S(a.contact, 60) || null,
       status: 'open', updated_by: user.name || '',
     };
-    const { data, error } = await db.from('issues').insert([row]).select('id');
+    if (toRole) { row.to_role = toRole; row.to_name = toName || null; }
+    let data;
+    let error;
+    ({ data, error } = await db.from('issues').insert([row]).select('id'));
+    /* THE ROUTING COLUMNS ARRIVE BY HAND. Between a deploy and somebody pasting the SQL an
+       issue must still be filable -- unrouted, and said so -- rather than refused. */
+    if (error && ISSUE_ROUTE_COLS.test(String(error.message || ''))) {
+      const bare = { ...row };
+      delete bare.to_role; delete bare.to_name;
+      if (!bare.department) bare.department = 'GENERAL_DUTY';
+      ({ data, error } = await db.from('issues').insert([bare]).select('id'));
+    }
     if (error) {
       if (tableMissing(error)) bad(ISSUE_NOT_READY);
       throw new Error(error.message);
     }
     const id = data && data[0] ? String(data[0].id) : null;
     /* THE NUDGE to the department, best effort, after the row exists. */
+    /* WHO IS TOLD. ISSUES_EMAIL is still keyed by name, so it is asked for the ROLE first --
+       that is the address now -- and for the old department name as a fallback, so a settings
+       block written before routing keeps working without being retyped. */
     let to = '';
     try {
       const { data: s } = await db.from('settings').select('value').eq('key', 'ISSUES_EMAIL').maybeSingle();
-      to = issueDeptEmails(s && s.value, department);
+      to = issueDeptEmails(s && s.value, toRole) || issueDeptEmails(s && s.value, row.department || '');
     } catch (e) { to = ''; }
     const mail = to ? await sendMail(db, { to,
-      subject: 'HOOPLOAN — suala jipya / new issue (' + department + '): ' + title,
-      html: noticeHtml('Suala jipya / New issue — ' + department, [
+      subject: 'HOOPLOAN — suala jipya / new issue (' + (toName || toRole || row.department || '') + '): ' + title,
+      html: noticeHtml('Suala jipya / New issue — ' + (toRole || row.department || ''), [
+        ['Kwa / To', toName ? (toName + ' (' + toRole + ')') : (toRole || row.department || '—')],
         ['Kichwa / Title', title], ['Aina / Kind', kind],
         ['Kuhusu / About', (subjectType ? subjectType + ' ' : '') + (subject || '—')],
         ['Ameleta / Raised by', user.name || ''], ['Maelezo / Details', String(row.details || '').slice(0, 400)],
       ], 'Fungua Dawati la masuala kulifanyia kazi. / Open the issues desk to work it.') })
-      : { sent: false, reason: 'ISSUES_EMAIL haina ' + department + ' / no address set for ' + department };
-    return { ok: true, id, department, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
+      : { sent: false, reason: 'ISSUES_EMAIL haina ' + (toRole || row.department || '?')
+          + ' / no address set for ' + (toRole || row.department || '?') };
+    return { ok: true, id, department: row.department || '',
+      /* Answered back so the toast can name WHO it went to rather than which of the eight old
+         labels it happened to land under. */
+      toRole, toName, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
   },
 
   /** The raiser's own issues, and only their own. */
+  /** WHO AN ISSUE CAN BE SENT TO: every role the owner maintains, and the people holding it.
+
+      THE ACCESS CODES NEVER TRAVEL. This is the only place outside Access codes that reads
+      that table, and it reads a name and a role -- nothing that could sign anybody in. The
+      raise form needs a person's NAME to address an issue to them, and that is all it gets.
+
+      Behind either issue nav rather than behind Settings: the person filing an issue is the
+      one who has to choose where it goes, and they will not hold the codes pane. */
+  async issueTargets(db, user) {
+    requireAnyNav(user, ['issuereq', 'issues']);
+    let codes = [];
+    try {
+      codes = await fetchAll(() => db.from('access_codes').select('name, role'));
+    } catch (e) { codes = []; }
+    const by = new Map();
+    for (const c of codes) {
+      const role = K(c.role).replace(/[\s-]+/g, '_');
+      const name = String(c.name || '').trim();
+      if (!role) continue;
+      if (!by.has(role)) by.set(role, new Set());
+      if (name) by.get(role).add(name);
+    }
+    /* A role somebody holds but that no code names is still offerable -- and so are the
+       departments this log was born with, so an office mid-way through moving from one
+       vocabulary to the other can address an issue either way. */
+    for (const d of ISSUE_DEPTS) if (!by.has(d)) by.set(d, new Set());
+    return { ok: true,
+      roles: [...by.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1))
+        .map(([role, people]) => ({ role, people: [...people].sort() })) };
+  },
+
   async issueMine(db, user) {
     requireNav(user, 'issuereq');
     let rows;
     try {
-      rows = await fetchAll(() => db.from('issues').select(ISSUE_COLS).eq('staff_code', user.code || '~none~'));
+      rows = (await issueSelect(db, cols => db.from('issues').select(cols)
+        .eq('staff_code', user.code || '~none~'))).rows;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, departments: ISSUE_DEPTS, kinds: ISSUE_KINDS, subjects: ISSUE_SUBJECTS };
@@ -4846,30 +4956,64 @@ const FNS = {
   async issueQueue(db, user, args) {
     requireNav(user, 'issues');
     const a = args || {};
-    let rows;
+    let got;
     try {
-      rows = await fetchAll(() => db.from('issues').select(ISSUE_COLS));
+      got = await issueSelect(db, cols => db.from('issues').select(cols));
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, departments: ISSUE_DEPTS, kinds: ISSUE_KINDS, subjects: ISSUE_SUBJECTS,
-        counts: { open: 0, waiting: 0, escalated: 0, resolved: 0, byDept: {} } };
+        routed: false, myRole: K(user.role), roles: [], mine: 0,
+        counts: { open: 0, waiting: 0, escalated: 0, resolved: 0, mine: 0, directed: 0, byDept: {}, byRole: {} } };
     }
-    const all = rows.map(r => issueRow(r, user.code));
+    const all = got.rows.map(r => issueRow(r, user.code));
     const dept = K(a.department).replace(/ /g, '_');
+    const role = K(a.toRole).replace(/[\s-]+/g, '_');
     const want = String(a.state || '').trim();
-    const shown = all
+    /* MY DESK IS THE DEFAULT, because that is what the owner asked the desk to be: "on the
+       desks every user sees what they have on desk". Both other defaults have a reason:
+
+         ADMIN and AUDITOR see everything    the standing rule, and supervision that can only
+                                             see its own desk is not supervision
+         nothing routed yet, everybody       before the migration no row has a role on it, so
+                                             "my desk" would read as the log having emptied
+
+       Either way `view` is answered back, so the pane shows which one it is looking at rather
+       than leaving somebody to wonder where the rest went. */
+    const mineRows = all.filter(r => issueOnMyDesk(r, user));
+    const wide = advSeesEveryRole(user) || !got.routed;
+    const view = String(a.view || (wide ? 'all' : 'mine')).trim();
+    const pool = view === 'all' ? all : mineRows;
+    const shown = pool
       .filter(r => !dept || r.department === dept)
+      .filter(r => !role || K(r.toRole) === role)
       .filter(r => want === 'all' ? true : want ? r.status === want : r.status !== 'resolved')
       .sort(issueOpenFirst);
     const byDept = {};
     for (const d of ISSUE_DEPTS) byDept[d] = all.filter(r => r.department === d && r.status !== 'resolved').length;
+    const byRole = {};
+    for (const r of all) {
+      if (!r.toRole || r.status === 'resolved') continue;
+      byRole[r.toRole] = (byRole[r.toRole] || 0) + 1;
+    }
     return { ok: true, departments: ISSUE_DEPTS, kinds: ISSUE_KINDS, subjects: ISSUE_SUBJECTS,
+      /* Said plainly rather than shown as an empty desk: before the migration nothing is
+         routed, so every issue is on the old department footing and "my desk" would read as
+         nobody having anything. */
+      routed: got.routed,
+      routeNote: got.routed ? '' : ISSUE_ROUTE_NOT_READY,
+      view, myRole: K(user.role), myName: user.name || '',
+      roles: Object.keys(byRole).sort(),
       counts: {
         open: all.filter(r => r.status === 'open').length,
         waiting: all.filter(r => r.status === 'waiting').length,
         escalated: all.filter(r => r.status === 'escalated').length,
         resolved: all.filter(r => r.status === 'resolved').length,
-        byDept,
+        // What is on THIS person's desk, unresolved -- the number the desk exists to drive down.
+        mine: mineRows.filter(r => r.status !== 'resolved').length,
+        // ...and how many of those were addressed to them by name rather than to the role.
+        directed: mineRows.filter(r => r.status !== 'resolved' && r.directed
+          && K(r.toName) === K(user.name)).length,
+        byDept, byRole,
       },
       rows: shown };
   },
@@ -4914,7 +5058,7 @@ const FNS = {
     if (!isUuid(id)) bad('Suala halijachaguliwa. / No issue chosen.');
     let rows;
     try {
-      rows = await fetchAll(() => db.from('issues').select(ISSUE_COLS).eq('id', id));
+      rows = (await issueSelect(db, cols => db.from('issues').select(cols).eq('id', id))).rows;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       bad(ISSUE_NOT_READY);
@@ -4983,7 +5127,7 @@ const FNS = {
     const a = args || {};
     let rows;
     try {
-      rows = await fetchAll(() => db.from('issues').select(ISSUE_COLS));
+      rows = (await issueSelect(db, cols => db.from('issues').select(cols))).rows;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, totals: {}, departments: ISSUE_DEPTS };
