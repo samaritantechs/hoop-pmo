@@ -7235,7 +7235,13 @@ function drawAudit(m){
                  server logs, which is the thing this pane exists to save them. */
               +(r.ok===false?'<div style="font-size:10px;color:var(--bad)">✖ '
                 +esc(r.error||'imekataliwa / refused')+'</div>':'')+'</td>'
-            +'<td style="font-size:10.5px">'+esc(r.ip||'—')
+            /* WHICH DOOR. The app and the portal are both "the system" and a name that only
+               ever appears through one of them is worth noticing -- an office code used from a
+               handset, or the reverse. Read off the action rather than stored twice: every app
+               entry is written under a name this list already owns. */
+            +'<td style="font-size:10.5px">'
+              +'<span class="chip'+(/^call/.test(r.action||'')?'':' ok')+'" style="font-size:9.5px">'
+              +(/^call/.test(r.action||'')?'App':'Portal')+'</span> '+esc(r.ip||'—')
               +(r.ua?'<div class="mut" style="font-size:9.5px;max-width:210px;overflow:hidden;'
                 +'text-overflow:ellipsis;white-space:nowrap" title="'+esc(r.ua)+'">'+esc(r.ua)+'</div>':'')
             +'</td>'

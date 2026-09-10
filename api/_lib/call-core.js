@@ -1,4 +1,5 @@
 import { fetchAll } from './supabase.js';
+import { auditedApp } from './audit.js';
 import { teamAllowed, suspendedOn, isAdminRole } from './auth.js';
 import { TZ_OFFSET_MS, todayKey, addDaysKey, weekMondayKey } from './time.js';
 import { isSystemOpen } from './system-gate.js';
@@ -1328,11 +1329,66 @@ const HANDLERS = {
    masking from the front would hide nothing at all. */
 const REG_ARG = { device: 0, code: 3, phone: 4, passcode: 5 };
 
+/* WHAT THE APP DOES THAT THE AUDIT LOG SHOULD HOLD.
+   =========================================================================================
+     "i didnt mean sales fraud audit but system audit of system users ... or through app"
+
+   The audit log watched /api/portal only, so half the system's users -- the ones who work
+   from a handset all day -- did not appear in it at all. These two put them there, under the
+   same five headings, in the same pane.
+
+   AND ONLY THESE TWO, which is rule 1 kept rather than widened. `api_callSync` runs on a five
+   minute timer on every handset: seven officers over fifteen days is ten thousand rows of a
+   background heartbeat, burying the entries somebody opened this pane to find. A timer is not
+   a person doing something. `api_callNotifSeen` is the same in miniature, and `api_callBoot`,
+   `api_callList` and `api_callReport` are reads.
+
+   REGISTRATION IS ALSO A DOOR and already reaches signin_attempts, which is a different
+   question: that pane is about who was TURNED AWAY. A successful registration creates a
+   system user, and creating one belongs here. */
+const CALL_AUDIT = {
+  api_callRegister: 'callRegister',
+  api_callAddComment: 'callAddComment',
+};
+/* The follow-up STATE each side of the call -- "hakupatikana → ahadi" -- which is the one
+   thing about a comment that is a value rather than a payload. The comment's TEXT, the amount
+   promised and any new phone number are deliberately absent: they live in followup_comments
+   behind team scoping, and this table must not become a second copy of them. */
+const CALL_DIFF = {
+  api_callAddComment: {
+    table: 'followup_status',
+    key: a => ({ imei: String((a[1] || {}).ref || '') }),
+    fields: ['fu_status', 'promise_date'],
+  },
+};
+
 export async function callApi(db, fn, args, nowMs = Date.now(), meta = null) {
   const h = HANDLERS[fn];
   if (!h) { const e = new Error('Unknown call API: ' + fn); e.status = 400; throw e; }
   const a = args || [];
-  if (fn !== 'api_callRegister') return h(db, a, nowMs);
+  if (fn !== 'api_callRegister') {
+    const action = CALL_AUDIT[fn];
+    if (!action) return h(db, a, nowMs);
+    /* WHO, read once here rather than trusted from the request: the handler looks the device
+       up too, and a name the CLIENT supplied would make the log worth nothing. A device that
+       is not registered leaves the name blank and the entry still lands -- somebody using an
+       unknown device id is exactly the row an audit is opened for. */
+    let who = null;
+    try { who = await userByDeviceSoft(db, a[0]); } catch (e) { who = null; }
+    const p = a[1] || {};
+    return auditedApp(db, {
+      action,
+      /* THE DEVICE ID IS THE CREDENTIAL out here -- there is no access code -- so it goes
+         where a code would. Anonymising it would put a hundred officers under one name. */
+      actorCode: String(a[0] == null ? '' : a[0]),
+      actorName: who && who.name, actorRole: who && who.role,
+      ref: p.ref, team: p.team,
+      subject: [p.ref ? 'ref=' + p.ref : '', p.fu ? 'stage=' + p.fu : '']
+        .filter(Boolean).join(' ') || null,
+      ip: meta && meta.ip, ua: meta && meta.ua,
+      diff: CALL_DIFF[fn] || null, args: a,
+    }, () => h(db, a, nowMs));
+  }
   /* The secret tried is whichever one was offered: a leader gives an access code, an officer
      or an agent gives the shared team code. */
   const secret = String(a[REG_ARG.code] || '').trim() || String(a[REG_ARG.passcode] || '').trim();
@@ -1347,5 +1403,18 @@ export async function callApi(db, fn, args, nowMs = Date.now(), meta = null) {
   }
   await noteSignin(db, { ...base, ok: true,
     who: { name: out && out.name, role: (out && out.leader) ? 'LEADER' : 'OFFICER' } });
+  /* AND INTO THE AUDIT LOG, because a new system user was just created. The door watch answers
+     "who was turned away"; this answers "who is now able to work", which is a different
+     question and the one an admin asks when a name they do not recognise appears on a deck.
+     Only the successful case: a refused attempt never made a user, and signin_attempts is
+     already the place that keeps those. */
+  await auditedApp(db, {
+    action: 'callRegister',
+    actorCode: String(a[REG_ARG.device] == null ? '' : a[REG_ARG.device]),
+    actorName: out && out.name,
+    actorRole: (out && out.leader) ? 'LEADER' : 'OFFICER',
+    subject: 'name=' + String((out && out.name) || '?'),
+    ip: meta && meta.ip, ua: meta && meta.ua,
+  }, () => Promise.resolve(out));
   return out;
 }
