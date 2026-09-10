@@ -418,21 +418,57 @@ async function advSelect(db, build, wide, narrow) {
     return { rows: await fetchAll(() => build(narrow)), rules: false };
   }
 }
-/* THE TWO NUMBERS SOP G FIXES, as settings with the SOP's own values as the fallback, so an
-   unset key is never a disabled rule. */
+/* THE NUMBERS SOP G FIXES, as settings with the SOP's own values as the fallback, so an unset
+   key is never a disabled rule. */
 async function advPolicy(db) {
-  const out = { deadlineDay: 15, maxPct: 40 };
+  const out = { deadlineDay: 15, maxPct: 40, maxPerMonth: ADV_PER_MONTH_DEFAULT };
   try {
     const rows = await fetchAll(() => db.from('settings').select('key, value')
-      .in('key', ['ADVANCE_DEADLINE_DAY', 'ADVANCE_MAX_PCT']));
+      .in('key', ['ADVANCE_DEADLINE_DAY', 'ADVANCE_MAX_PCT', 'ADVANCE_MAX_PER_MONTH']));
     for (const r of rows) {
       const v = parseInt(String(r.value == null ? '' : r.value).replace(/[^0-9]/g, ''), 10);
       if (!Number.isFinite(v)) continue;
       if (r.key === 'ADVANCE_DEADLINE_DAY' && v >= 1 && v <= 31) out.deadlineDay = v;
       if (r.key === 'ADVANCE_MAX_PCT' && v >= 1 && v <= 100) out.maxPct = v;
+      if (r.key === 'ADVANCE_MAX_PER_MONTH' && v >= 1 && v <= 31) out.maxPerMonth = v;
     }
   } catch (e) { /* the SOP's own numbers stand */ }
   return out;
+}
+/* ONE ADVANCE A MONTH.
+   =========================================================================================
+     "One shouldn't be able to request advance more than once in a single month from now on.
+      One had been there and second real one already, so I rejected the 1st one with comment
+      trial -- that's why we don't need to treat the old one but treat the future, from now on."
+
+   A DECLINED REQUEST DOES NOT COUNT, and that is the whole shape of this rule rather than a
+   detail. The owner's own fix for the duplicate was to DECLINE the trial so the real one could
+   stand; if a decline still blocked, that fix would not have worked and the person would be
+   locked out of a month by a mistake somebody else made. So a decline is the eraser, and
+   pending or approved is what occupies the month.
+
+   MEASURED ON THE MONTH THE ADVANCE IS *FOR*, not the day the button was pressed. The whole
+   point is one advance against one payroll month -- SOP G.5's ceiling is a percentage of that
+   month's salary -- and requested_at would let two requests for September be filed either side
+   of the 1st of October and both stand.
+
+   "FROM NOW ON" means the rule governs new requests; it does not go back and change, flag or
+   delete anything already filed. A month that already holds two live requests keeps them and
+   simply cannot take a third. */
+const ADV_PER_MONTH_DEFAULT = 1;
+const monthOf = d => String(d || '').slice(0, 7);
+/** The live requests this person already has for the month `applyDate` falls in. Declined rows
+    are not live. Returns [] where the question cannot be asked -- no code, or no table yet --
+    because a rule that cannot be checked must not become a refusal. */
+async function advSameMonth(db, code, applyDate) {
+  const month = monthOf(applyDate);
+  if (!code || month.length !== 7) return [];
+  try {
+    const rows = await fetchAll(() => db.from('staff_advances')
+      .select('id, apply_date, amount, status, requested_at')
+      .eq('staff_code', code).neq('status', 'declined'));
+    return rows.filter(r => monthOf(r.apply_date) === month);
+  } catch (e) { return []; }
 }
 /** The monthly salary on file for one access code, or null when HR has not entered one. */
 async function salaryOf(db, code) {
@@ -3964,6 +4000,23 @@ const FNS = {
        an office that cannot ask for an advance because a rule column is missing is worse off
        than one whose lateness is not yet being recorded. */
     const policy = await advPolicy(db);
+    /* ONE A MONTH, AND THIS ONE *IS* A REFUSAL -- unlike G.4's deadline, which only flags.
+       The difference is who the rule is for: a late request is a judgement the approver is
+       entitled to make, and a second advance against one month's salary is a thing the office
+       has decided does not happen. A decline erases the month, so the way out of a mistake is
+       the one the owner already used. */
+    const live = await advSameMonth(db, user.code, applyDate);
+    if (live.length >= policy.maxPerMonth) {
+      const other = live.sort((x, y) => String(x.apply_date || '').localeCompare(String(y.apply_date || '')))[0];
+      const what = other
+        ? ' (' + String(other.apply_date || '').slice(0, 10) + ', '
+          + (other.status === 'approved' ? 'imekubaliwa / approved' : 'inasubiri / pending') + ')'
+        : '';
+      bad('Tayari una ombi la advance kwa mwezi huu' + what
+        + '. Ombi moja kwa mwezi. Likikataliwa, unaweza kuomba tena. '
+        + '/ You already have an advance request for this month' + what
+        + '. One per month; if it is declined you may ask again.');
+    }
     const salary = await salaryOf(db, user.code);
     row.late = Number(applyDate.slice(8, 10)) > policy.deadlineDay;
     row.salary_at_request = salary;
@@ -4003,10 +4056,18 @@ const FNS = {
        say what will happen before somebody presses the button rather than after. The salary
        itself never goes out: the person is told their ceiling, not what anybody earns. */
     const salary = await salaryOf(db, user.code);
+    const out = rows.map(r => advRow(r, user.code)).sort((x, y) => (y.at || 0) - (x.at || 0));
+    /* WHICH MONTHS ARE ALREADY SPOKEN FOR, so the form can say it before the button rather
+       than after -- the same courtesy the G.4 deadline line already gets. Computed from the
+       rows this pane is holding anyway, so it costs no extra read. A declined row is not on
+       this list, because a decline frees the month. */
+    const usedMonths = [...new Set(out.filter(r => r.status !== 'declined')
+      .map(r => monthOf(r.applyDate)).filter(mm => mm.length === 7))];
     return { ok: true, amounts: ADV_AMOUNTS,
       deadlineDay: policy.deadlineDay, maxPct: policy.maxPct,
+      maxPerMonth: policy.maxPerMonth, usedMonths,
       cap: salary == null ? null : Math.floor(salary * policy.maxPct / 100),
-      rows: rows.map(r => advRow(r, user.code)).sort((x, y) => (y.at || 0) - (x.at || 0)) };
+      rows: out };
   },
 
   /** THE APPROVER'S QUEUE. Pending first because that is the whole job; recently decided

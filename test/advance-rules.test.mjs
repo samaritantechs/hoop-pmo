@@ -75,16 +75,21 @@ test('advance rules: the migration, the settings and the audited writes', () => 
 test('G.4: a late request is FLAGGED, never refused', async () => {
   const d = advDb();
   // On the deadline day itself is in time; the day after is not.
+  /* TWO DIFFERENT MONTHS, because one person now gets one advance a month and this test is
+     about the DEADLINE rather than about that. The two rules are deliberately opposite in
+     kind: lateness is a judgement the approver is entitled to make, so it FLAGS; a second
+     advance against one month's salary is something the office has decided does not happen,
+     so it REFUSES. Filing both in September would be exercising the wrong rule. */
   const onTime = await _FNS.advRequest(d, ASKER, { ...GOOD, applyDate: '2026-09-15' });
   assert.equal(onTime.late, false);
-  const late = await _FNS.advRequest(d, ASKER, { ...GOOD, applyDate: '2026-09-16' });
+  const late = await _FNS.advRequest(d, ASKER, { ...GOOD, applyDate: '2026-10-16' });
   assert.equal(late.late, true, 'the 16th is after the 15th');
   assert.equal(late.deadlineDay, 15);
   const rows = d._dump('staff_advances');
   assert.equal(rows.length, 2, 'BOTH were filed: the deadline is a flag, not a lock');
   assert.equal(rows[0].late, false); assert.equal(rows[1].late, true);
   // Measured against the applicant's own date, not the day they pressed the button.
-  assert.equal(rows[1].apply_date, '2026-09-16');
+  assert.equal(rows[1].apply_date, '2026-10-16');
   // The day is a setting, with the SOP's 15 as the fallback.
   const d2 = advDb({ settings: [{ key: 'ADVANCE_DEADLINE_DAY', value: '20' }] });
   assert.equal((await _FNS.advRequest(d2, ASKER, { ...GOOD, applyDate: '2026-09-16' })).late, false);

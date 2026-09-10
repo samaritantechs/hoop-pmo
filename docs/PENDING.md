@@ -1073,3 +1073,36 @@ The population is the devices register -- "our existing imeis since we started l
 STILL TO COME, named rather than quietly skipped: the staff pane (each person by role, click in to
 fill their channel data, activate/deactivate that also blocks login). NEW STOCK reads the roles
 already in `hoop_agents` today, so it works now; the pane to MAINTAIN them is the next piece.
+
+## 34. SHIPPED 2026-09-11: one advance a month, the reference on the list, and the nav move
+
+Three small things asked for together.
+
+**Do:** run `db/migrations/RUN-ME-2026-09-11-advance-once-a-month.sql`. Nothing else — no new nav,
+and no existing request is touched.
+
+ONE ADVANCE A MONTH, FROM NOW ON. A second request for the same payroll month is refused, and the
+refusal names the one in the way and its status. A DECLINED request does NOT count -- that is the
+shape of the whole rule, not a detail: declining the trial so the real one could stand is the fix
+the owner already used, and if a decline still held the month that fix would not have worked.
+
+Measured on the month the advance is FOR (apply_date), never on the day the button was pressed --
+otherwise two September advances could be filed either side of the 1st of October and both stand.
+
+"From now on" means nothing already filed is rewritten, flagged or deleted. A month that already
+holds two live requests keeps both and simply cannot take a third. The migration touches no row;
+its unique index sits in a block that cannot abort the paste and tells you how to find duplicates
+if it could not be created.
+
+`ADVANCE_MAX_PER_MONTH` relaxes it without a deploy. Unset falls back to 1, so the rule is in force
+from the deploy rather than from the paste.
+
+THE REFERENCE IS ON THE LIST NOW. HR's report has carried the bank and account since the start;
+the asker's own list and the approver's queue did not, so nobody could read back the account they
+typed. Both now show it -- and it is a control as well as a convenience, because the approver is
+the person best placed to notice money going somewhere that is not the requester's own number.
+
+NAV: top-up, loss and commission moved from **Advance** to **Sales**. Loss and damage came with
+them because it sits inside the range named ("request topup to commission sigoff"); say the word
+and it moves to Stock instead. The grouping is a label, not a grant -- every nav key is unchanged,
+so nobody's access moved.

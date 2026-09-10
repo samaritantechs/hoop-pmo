@@ -1589,25 +1589,25 @@ var NAV=[
 
   /* TOP-UPS: SOP B.5 is the only step in any of these SOPs with the words "must never be
      delayed", so the desk pane counts minutes and orders by who has waited longest. */
-  { g:'adv',   t:'tureq',    nav:'topupreq',   sw:'Omba top-up',      en:'Request a top-up',
+  { g:'mauzo', t:'tureq',    nav:'topupreq',   sw:'Omba top-up',      en:'Request a top-up',
     ic:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>' },
-  { g:'adv',   t:'topups',   nav:'topups',     sw:'Top-up (Finance)', en:'Top-ups',
+  { g:'mauzo', t:'topups',   nav:'topups',     sw:'Top-up (Finance)', en:'Top-ups',
     ic:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>' },
 
   /* LOSS AND DAMAGE: four SOPs point at one process (Finance H, Store C.7, RSM F, CSM G) and
      none of them could open a case. `lossreq` opens one and reads its own; `loss` is Finance's
      desk, where the price list lives and the money is chased. */
-  { g:'adv',   t:'lossreq',  nav:'lossreq',    sw:'Toa taarifa ya upotevu', en:'Report a loss',
+  { g:'mauzo', t:'lossreq',  nav:'lossreq',    sw:'Toa taarifa ya upotevu', en:'Report a loss',
     ic:'<path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>' },
-  { g:'adv',   t:'loss',     nav:'loss',       sw:'Upotevu na uharibifu', en:'Loss and damage',
+  { g:'mauzo', t:'loss',     nav:'loss',       sw:'Upotevu na uharibifu', en:'Loss and damage',
     ic:'<path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/><path d="M19 3v4M21 5h-4"/>' },
 
   /* COMMISSION: Finance builds and pays, the Administration approval group signs off.
      Two navs because Finance SOP A.4 puts the sign-off in somebody else's hands, and nobody
      should be able to build a sheet AND approve it unless the owner ticks both boxes. */
-  { g:'adv',   t:'comm',     nav:'commission', sw:'Kamisheni',        en:'Commission',
+  { g:'mauzo', t:'comm',     nav:'commission', sw:'Kamisheni',        en:'Commission',
     ic:'<path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>' },
-  { g:'adv',   t:'commappr', nav:'commappr',   sw:'Idhini ya kamisheni', en:'Commission sign-off',
+  { g:'mauzo', t:'commappr', nav:'commappr',   sw:'Idhini ya kamisheni', en:'Commission sign-off',
     ic:'<path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/><path d="M19 15l2 2 4-4"/>' },
 
   /* SALARY ADVANCE: three panes, because they are three different jobs done by three
@@ -4065,14 +4065,33 @@ function drawAdvReq(m){
     /* FINANCE SOP G.4 SAID OUT LOUD, BEFORE THE BUTTON. The server flags a late request rather
        than refusing it, so the only fair thing the form can do is tell the person what the
        flag will say. The deadline day comes from the server, never a 15 written in here. */
+    /* ONE A MONTH, SAID BEFORE THE BUTTON AND NOT AFTER IT.
+       Unlike the deadline this rule is a real refusal, so a form that only reveals it once the
+       request has been typed and sent is a form that wastes the trip. The months already
+       spoken for come from the server with this pane's own rows -- and a DECLINED request is
+       not among them, because a decline frees the month. */
+    var used=d.usedMonths||[], perMonth=d.maxPerMonth||1;
+    var monthTaken=function(){
+      var mm=String($('#avDate').value||'').slice(0,7);
+      return mm.length===7 && used.indexOf(mm)>=0;
+    };
     var ruleLine=function(){
       var el=$('#avRule'); if(!el) return;
       var day=Number(String($('#avDate').value||'').slice(8,10));
       var dd=d.deadlineDay||15;
-      el.innerHTML=(day&&day>dd)
+      var late=(day&&day>dd)
         ? '<span style="color:var(--bad)">Tarehe hii ni baada ya tarehe '+money(dd)+' — ombi litawekwa alama ya kuchelewa (SOP G.4). '
           +'Bado unaweza kutuma. / After the '+money(dd)+'th, so this will be flagged late. You can still send it.</span>'
         : 'Maombi yanatakiwa kufika kabla ya tarehe '+money(dd)+' ya mwezi (SOP G.4). / Requests are due by the '+money(dd)+'th.';
+      var month=monthTaken()
+        ? '<div style="color:var(--bad);margin-top:4px"><b>Tayari una ombi la mwezi huu.</b> '
+          +'Ombi '+money(perMonth)+' kwa mwezi. Likikataliwa, unaweza kuomba tena. '
+          +'/ <b>You already have a request for this month.</b> '+money(perMonth)+' per month; '
+          +'if it is declined you may ask again.</div>'
+        : '<div class="mut" style="margin-top:4px">Ombi '+money(perMonth)+' kwa mwezi. '
+          +'/ '+money(perMonth)+' request per month.</div>';
+      el.innerHTML=late+month;
+      var b=$('#avSend'); if(b) b.disabled=monthTaken();
     };
     $('#avDate').onchange=ruleLine; $('#avDate').oninput=ruleLine; ruleLine();
     $('#avSend').onclick=function(){
@@ -4085,7 +4104,13 @@ function drawAdvReq(m){
       }).then(function(){
         toast('Ombi limetumwa / Request sent');
         drawAdvReq(m);
-      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+      }).catch(function(e){
+        b.disabled=false;
+        // ruleLine owns whether this button is pressable; re-asking it keeps a refused month
+        // disabled instead of handing back a button whose only answer is the same refusal.
+        ruleLine();
+        toast(safeErr(e), true);
+      });
     };
   }).catch(function(e){ paneFailed(m,e); });
 }
@@ -4113,6 +4138,21 @@ function advTable(rows, act){
     +'<th>Tarehe / Applied for</th><th class="r">Kiasi / Requested</th>'
     +'<th>Hali / Status</th><th class="r">Kimekubaliwa / Approved</th><th>Kanuni / Rules</th>'
     +(pay?'<th>Malipo / Paid</th><th>Makato / Deducted</th>':'')
+    /* WHAT THE REQUESTER FILLED IN, on the list they read afterwards.
+       ===================================================================================
+         "They need the below report of my request to have data columns of what they filled
+          so as to know the reference."
+
+       HR's report has carried these since the beginning, because HR pays from them. The two
+       panes where the request is actually LOOKED AT -- the asker's own list and the queue the
+       approver decides from -- showed everything except the one thing a person wants to check
+       afterwards: which account they typed. A form you cannot read back is a form you fill in
+       twice.
+
+       IT IS ALSO A CONTROL, not only a convenience: the approver is the person best placed to
+       notice that the money is being sent somewhere that is not the requester's own number,
+       and they cannot notice what the screen does not show. */
+    +'<th>Benki / Bank or carrier</th><th>Namba ya akaunti / Account</th>'
     +'<th>Maoni / Comment</th>'
     +(act?'<th class="noxl"></th>':'')+'</tr></thead><tbody>'
     +rows.map(function(r){
@@ -4129,6 +4169,9 @@ function advTable(rows, act){
         +'<td style="font-size:11px">'+advRules(r)+'</td>'
         +(pay?'<td style="font-size:11px">'+(r.paidAt?esc(advWhen(r.paidAt))+'<div class="mut" style="font-size:10px">'+esc(r.paymentRef||'')+'</div>':'—')+'</td>'
             +'<td style="font-size:11px">'+(r.deductedAt?esc(r.deductPeriod||'')+'<div class="mut" style="font-size:10px">'+esc(r.deductedBy||'')+'</div>':'—')+'</td>':'')
+        +'<td style="font-size:11px">'+(r.bank?esc(r.bank):'<span class="mut">—</span>')+'</td>'
+        +'<td style="font-size:11px;font-family:ui-monospace,monospace">'
+          +(r.account?esc(r.account):'<span class="mut">—</span>')+'</td>'
         +'<td style="font-size:11px">'+esc(r.comment||'')
           +(r.decidedBy?'<div class="mut" style="font-size:10px">'+esc(r.decidedBy)+'</div>':'')+'</td>'
         +(act?'<td class="r noxl">'+acts+'</td>':'')
