@@ -1,6 +1,6 @@
 {
-  "versionCode": 22,
-  "versionName": "1.11.9",
-  "notes": "Simu inaweza kuhamishwa kati ya rejista mbili bila kufuta wala kebo. / A handset can be shifted between the two registers with no wipe and no cable.",
+  "versionCode": 23,
+  "versionName": "1.11.10",
+  "notes": "Skrini ya simu iliyofungwa haionyeshi tena sababu -- ujumbe unatosha. / The locked screen no longer shows a reason line -- the message is enough.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

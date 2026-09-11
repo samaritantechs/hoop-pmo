@@ -557,15 +557,26 @@ including unlocking it straight back.
              NASI KWA NAMBA 0700123456
 
            IMEI: 351388334583295
-           REASON: STOCK, UNSOLD
 
             [ Simu ya dharura / Emergency call ]
 ```
 
-**Not one of those words is in the APK.** The company name, the message, the number and the
-reason all arrive on the heartbeat and are stored on the handset, so a phone that has been in
-somebody's pocket for eighteen months still shows the number the office answers *today*. The
-app owns the layout; the server owns every word in it.
+**Not one of those words is in the APK.** The company name, the message and the number all
+arrive on the heartbeat and are stored on the handset, so a phone that has been in somebody's
+pocket for eighteen months still shows the number the office answers *today*. The app owns the
+layout; the server owns every word in it.
+
+**There used to be a fourth line, `REASON: ...`, and it is gone.**
+
+> "DROP THE REASON FILLING AND ITS DATA SINCE THE MESSAGE IS ENOUGH"
+> "The text under imei 'REASON: NEW'"
+
+Whoever is holding a locked phone needs to know whose it is and how to reach them — the message
+already says both. A reason line at best restated that, and at worst named an accused employee
+to anyone who picked the phone up and read it. **That story still exists** — it is still typed
+at Funga where the operator wants to give one, still on the row's own history in the portal
+(`deviceHistory`) — it is simply not painted onto glass a stranger can read any more. There is
+no `DEVICE_LOCK_REASON` setting either: nothing feeds that line now, so nothing needed to.
 
 **And now the wordmark above them, too.** It used to be the one thing on that screen the APK
 decided: `R.drawable.hoop_logo_white`, compiled in. That was fine while this build served one
@@ -612,20 +623,17 @@ new phone number is one row in Settings and not a build.
 | `DEVICE_LOCK_BRAND` | `HOOP LIMITED` | the company name across the top, and `{brand}` |
 | `DEVICE_LOCK_MESSAGE` | see below | the sentence under it; `{brand}` and `{namba}` are substituted |
 | `DEVICE_HELP_PHONE` | — | the number to call, and `{namba}` |
-| `DEVICE_LOCK_REASON` | — | the REASON line for every lock — see below |
 | `DEVICE_OFFLINE_GRACE_HOURS` | `168` | silence before a customer's phone self-locks |
 
 The default message is `Simu hii imefungwa na {brand}. Wasiliana nasi kwa namba {namba}.` —
 and, with no `DEVICE_HELP_PHONE` set, `…Wasiliana nasi kumaliza malipo.` instead. A sentence
 that promises a number and then does not give one is worse than no sentence at all.
 
-`DEVICE_LOCK_REASON` is a **fallback, not an override.** Funga no longer asks the operator to
-type one — the lock screen's message already names the company and a number to call, which is
-enough for the customer standing there — so this setting is now what almost every locked
-handset shows on its REASON line. (`api/portal.js`'s `deviceSetState` still accepts a `reason`
-argument, so a specific one CAN still be sent through the API and always wins when it is —
-nothing about that changed.) Without this setting a bare lock shows `REASON:` and nothing
-after it, which is the one case worth setting it for.
+**Funga does not ask the operator for a reason any more**, and has not needed to for a while —
+the lock screen's message already names the company and a number to call, which is enough for
+the customer standing there. `api/portal.js`'s `deviceSetState` still accepts a `reason`
+argument, so one can still be sent through the API when it is worth writing down; it lands in
+`state_reason` and the portal's own history, never on the phone's own screen — see above.
 
 These live in settings rather than in the APK because the number a stranded customer is told
 to call is exactly the kind of thing that changes on a Tuesday. Edit them in **Portal →
