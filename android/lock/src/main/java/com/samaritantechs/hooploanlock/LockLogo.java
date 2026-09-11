@@ -158,6 +158,23 @@ final class LockLogo {
     }
 
     /**
+     * Back to never-having-been-told, for a handset leaving one office for another.
+     *
+     * NOT the same as forget(), and the difference is a bug waiting to happen. A released
+     * phone is sent `logo: null`, which parks it at NONE -- correct while it belongs to
+     * nobody, and wrong the moment it is enrolled somewhere that sends no logo at all: NONE
+     * would suppress that company's own compiled-in mark for ever, on a phone whose screen
+     * would then name a company and show nothing above it. Clearing the key restores the
+     * fallback, which is what a phone with no history should have.
+     */
+    static void reset(Context c) {
+        try {
+            file(c).delete();
+            Prefs.of(c).edit().remove(Prefs.LOGO_VERSION).apply();
+        } catch (Throwable ignored) { }
+    }
+
+    /**
      * Has the office said to draw NO mark at all?
      *
      * Asked separately from bitmap() because "no mark" and "no mark yet" are different
