@@ -3549,10 +3549,10 @@ function devSetState(m, state){
 }
 /* EVERY ORDER GOES THROUGH THIS DOOR, whether it came from the bulk bar or from one row.
    -------------------------------------------------------------------------------------------
-   The reason a lock demands, the sentence Achia has to be answered with, the override for a
-   released handset that stopped listening -- all of that is safety, and safety that exists in
-   two copies is safety that will one day disagree with itself. So the per-row panel does not
-   reimplement any of it; it calls this with a list of one.
+   The sentence Achia has to be answered with, the override for a released handset that
+   stopped listening -- all of that is safety, and safety that exists in two copies is safety
+   that will one day disagree with itself. So the per-row panel does not reimplement any of
+   it; it calls this with a list of one.
 
    Returns whether an order was actually sent, so the caller can close its panel on a yes and
    leave it open on a cancel. */
@@ -3573,11 +3573,13 @@ function devAct_(m, imeis, state){
      The one-way warning rides ON the release choice rather than in a second dialog after it --
      otherwise "reduce the double work" would just move the double click. */
   if(state==='enrolled'){ devUnlockChoose_(m, imeis); return false; }
+  /* NO REASON PROMPT. Funga used to stop and demand one, typed per phone -- friction that
+     bought nothing a locked screen does not already say: DEVICE_LOCK_MESSAGE already names
+     the company and a number to call, and that is enough for the customer standing there to
+     act on. A blank reason simply falls back to DEVICE_LOCK_REASON in Settings on the lock
+     screen -- see lockWords() in device-core.js -- so REASON: still reads as a real sentence,
+     just one set once in Settings instead of typed at every lock. */
   var reason='';
-  if(state==='locked'||state==='lost'){
-    reason=prompt((state==='locked'?'Sababu ya kufunga':'Sababu')+' / Reason (required):')||'';
-    if(!reason.trim()){ toast('Sababu inahitajika. / A reason is required.', true); return false; }
-  }
   /* ACHIA IS THE ONE-WAY DOOR AND IT ASKED NOTHING.
      ---------------------------------------------------------------------------------------
      Funga and Imepotea both stop to demand a reason, so both take a deliberate second step.
@@ -3879,12 +3881,13 @@ var DEVBULK={
     sub:'Bandika IMEI za simu za kufunga — moja kwa mstari, au kwa comma. '
       +'/ Paste the IMEIs to lock, one per line or comma-separated.',
     /* Not "irreversible" -- it is not -- but not "harmless" either. Every one of these goes
-       dark to whoever is holding it, and on a pasted list that is a number nobody counted. */
+       dark to whoever is holding it, and on a pasted list that is a number nobody counted.
+       NO REASON IS ASKED HERE ANY MORE -- see the note on devAct_ -- so the warning no longer
+       promises one. */
     warn:'Kila simu kwenye orodha itaenda gizani kwa aliye nayo hadi ifunguliwe. Kufungua ni '
-      +'kazi ya <b>'+DEPT.SC+'</b> kwenye dawati lao. Utaulizwa sababu — moja kwa orodha nzima. '
+      +'kazi ya <b>'+DEPT.SC+'</b> kwenye dawati lao. '
       +'/ Every handset on this list goes dark to whoever holds it until it is opened again, '
-      +'which is the <b>'+DEPT.SC+'\'s</b> to do on their own pane. You will be asked for one '
-      +'reason, and it is recorded against all of them.',
+      +'which is the <b>'+DEPT.SC+'\'s</b> to do on their own pane.',
     go:'Funga / Lock',
   },
 };

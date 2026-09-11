@@ -131,7 +131,7 @@ copy the current one.
 > whatever single handset is plugged in: the first line enrols it, the rest are refused, and
 > that phone ends up holding the *first* row's identity. The multi-phone screen no longer
 > offers a button that does this, but a block assembled by hand would still do it.
-5. **Funga → reason → wait for CONFIRMED**, not pending. Only then power off and box it.
+5. **Funga → wait for CONFIRMED**, not pending. Only then power off and box it.
 
 Steps 1, 3, 4 and 5 are near-instant. **Step 2 is the day**: two to three minutes of tapping
 per phone that no script can reach, which at 200 phones is about ten hours of one person's
@@ -500,7 +500,7 @@ security this system exists to avoid.
 
 So while the handset is still on the bench and still online:
 
-1. Tick it → **Funga** → reason (`stock, unsold` does fine).
+1. Tick it → **Funga**. No reason is asked for.
 2. **Wait for the register to say confirmed, not pending.** Pending means the office has
    decided and the phone has not yet agreed. Only confirmed means the lock screen is actually
    up on that handset.
@@ -521,8 +521,8 @@ forever.
 
 ## Day to day
 
-- **Lock**: tick the phones, **Funga**, give a reason. A reason is required — six months
-  later "why is this locked" has to have an answer.
+- **Lock**: tick the phones, **Funga**. No reason is asked for — the lock screen already
+  names the company and a number to call, which is enough for the customer standing there.
 - **Unlock**: **Fungua**. Reaches the handset within about fifteen minutes.
 - **Release**: **Achia** when the loan clears. This gives the phone back *completely* — the
   restrictions come off, Device Owner steps down, and the app stops calling home. A customer
@@ -612,18 +612,20 @@ new phone number is one row in Settings and not a build.
 | `DEVICE_LOCK_BRAND` | `HOOP LIMITED` | the company name across the top, and `{brand}` |
 | `DEVICE_LOCK_MESSAGE` | see below | the sentence under it; `{brand}` and `{namba}` are substituted |
 | `DEVICE_HELP_PHONE` | — | the number to call, and `{namba}` |
-| `DEVICE_LOCK_REASON` | — | the REASON line **only when nobody ordered the lock** — see below |
+| `DEVICE_LOCK_REASON` | — | the REASON line for every lock — see below |
 | `DEVICE_OFFLINE_GRACE_HOURS` | `168` | silence before a customer's phone self-locks |
 
 The default message is `Simu hii imefungwa na {brand}. Wasiliana nasi kwa namba {namba}.` —
 and, with no `DEVICE_HELP_PHONE` set, `…Wasiliana nasi kumaliza malipo.` instead. A sentence
 that promises a number and then does not give one is worse than no sentence at all.
 
-`DEVICE_LOCK_REASON` is a **fallback, not an override.** A lock ordered from the portal always
-carries its own reason — Funga refuses to send one without — and that reason always wins. The
-setting covers the one case with nobody to write a reason: a phone that locked *itself* on the
-offline grace, in a dead spot, with the office unaware. Without it that handset shows
-`REASON:` and nothing after it.
+`DEVICE_LOCK_REASON` is a **fallback, not an override.** Funga no longer asks the operator to
+type one — the lock screen's message already names the company and a number to call, which is
+enough for the customer standing there — so this setting is now what almost every locked
+handset shows on its REASON line. (`api/portal.js`'s `deviceSetState` still accepts a `reason`
+argument, so a specific one CAN still be sent through the API and always wins when it is —
+nothing about that changed.) Without this setting a bare lock shows `REASON:` and nothing
+after it, which is the one case worth setting it for.
 
 These live in settings rather than in the APK because the number a stranded customer is told
 to call is exactly the kind of thing that changes on a Tuesday. Edit them in **Portal →
@@ -1041,8 +1043,8 @@ ours.
 
 **After a PARTIAL**, ownership was never given up, so relocking needs no factory reset:
 
-1. Devices → that IMEI → **Funga** first, reason `stock, unsold`. See the trap below — this
-   step is not optional if the row currently reads *imeachiwa*.
+1. Devices → that IMEI → **Funga** first. See the trap below — this step is not optional if
+   the row currently reads *imeachiwa*.
 2. Devices → that IMEI → **Token**. Do **not** use *+ Sajili simu*: see the second trap.
 3. `adb shell dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin` — it will
    answer *"already set"*, which is the expected reply here, not a failure

@@ -4048,9 +4048,12 @@ const FNS = {
   /* SET STATE -- lock, unlock, release or write off. One door for every state change, so
      the event trail cannot be bypassed by whichever screen happens to call it.
 
-     A REASON IS REQUIRED to lock or to write a phone off. Locking somebody's phone is an
-     act with a person on the other end of it; six months later "why is this locked" has to
-     have an answer, and the only reliable moment to capture one is now. */
+     NO REASON IS REQUIRED to lock or write a phone off, on purpose. A typed-per-phone reason
+     bought no more than the lock screen already says on its own: DEVICE_LOCK_MESSAGE names
+     the company and a number to call, which is enough for the customer standing there. An
+     empty reason simply falls back to the standing DEVICE_LOCK_REASON in Settings -- see
+     lockWords() and beat() in device-core.js -- so the screen still shows a real sentence,
+     set once rather than typed at every lock. */
   async deviceSetState(db, user, args) {
     requireWrite(user);
     const a = args || {};
@@ -4068,9 +4071,6 @@ const FNS = {
        to lock, and that is theirs to ask. */
     requireNav(user, DEVICE_STATE_NAV[to]);
     const reason = String(a.reason || '').trim();
-    if ((to === 'locked' || to === 'lost') && !reason) {
-      bad('Sababu inahitajika. / A reason is required to lock or write off a phone.');
-    }
     const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : [a.imei || a.imeis])
       .map(x => String(x || '').trim()).filter(Boolean))];
     if (!list.length) bad('Weka IMEI. / An IMEI is required.');

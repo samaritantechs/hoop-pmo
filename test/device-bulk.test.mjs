@@ -90,7 +90,7 @@ test('a pasted list releases many at once, and the strangers come back by name',
   assert.equal(await stateOf(db, 'D2'), 'released');
 });
 
-test('a pasted list locks a whole consignment, and still costs one reason', async () => {
+test('a pasted list locks a whole consignment, no reason needed', async () => {
   /* "as achia has bulk and enroll has bulk lock need bulk too at locking" -- the bench already
      pastes to enrol a batch, and locking that same batch was the one step still asking for
      four hundred clicks. */
@@ -98,17 +98,12 @@ test('a pasted list locks a whole consignment, and still costs one reason', asyn
     dev({ imei: 'D1' }), dev({ imei: 'D2' }), dev({ imei: 'D3', state: 'locked' }),
   ]);
   const r = await _FNS.deviceSetState(db, STORE, {
-    imeis: ['D1', 'D2', 'D3', 'GHOST'], state: 'locked', reason: 'mzigo mpya',
+    imeis: ['D1', 'D2', 'D3', 'GHOST'], state: 'locked',
   });
   assert.equal(r.changed, 2);
   assert.equal(r.alreadyThere, 1, 'one was already shut');
   assert.deepEqual(r.notEnrolledList, ['GHOST']);
   assert.equal(await stateOf(db, 'D1'), 'locked');
-  /* THE REASON IS NOT WAIVED BY THE LIST BEING LONG. It is the same door, so a paste that
-     forgot it is refused exactly as one ticked row would be -- and the form says so up front
-     rather than springing it after eighty IMEIs have been typed. */
-  await assert.rejects(() => _FNS.deviceSetState(db, STORE, { imeis: ['D1'], state: 'locked' }),
-    /Sababu inahitajika|reason is required/);
 });
 
 test('the paste is still each desk’s own order, however long the list is', async () => {
@@ -118,7 +113,7 @@ test('the paste is still each desk’s own order, however long the list is', asy
      could paste its way to a release would be the whole nav split undone by one form. */
   await assert.rejects(() => _FNS.deviceSetState(db, STORE, { imeis: ['D1'], state: 'released' }),
     /no access to the devunlock pane/);
-  await assert.rejects(() => _FNS.deviceSetState(db, DUTY, { imeis: ['D1'], state: 'locked', reason: 'x' }),
+  await assert.rejects(() => _FNS.deviceSetState(db, DUTY, { imeis: ['D1'], state: 'locked' }),
     /no access to the devlock pane/);
   assert.equal(await stateOf(db, 'D1'), 'locked');
 });
@@ -223,8 +218,8 @@ test('the last button takes the list, and never the ticks', () => {
   assert.ok(!/devPicked|dvck|dvCount/.test(form), 'the paste form does not read the tick boxes');
   assert.match(form, /devParseImeis_/);
   assert.match(form, /devAct_\(m, p\.list, state\)/,
-    'the order goes through the same door as every other, so the reason prompt, the one-way-door '
-    + 'confirmation and the not-listening refusal are the ones already proven');
+    'the order goes through the same door as every other, so the one-way-door confirmation '
+    + 'and the not-listening refusal are the ones already proven');
   /* THE COUNT UNDER THE BOX is the whole safety of the screen, and it must be live: a paste
      that arrived as one unbroken token reads 1, and a header row that came along reads "IMEI"
      as the first one -- both before the order rather than after the phones have gone dark. */
@@ -259,8 +254,8 @@ test('one form, two orders, and the warning is not written once for both', () =>
   assert.match(t.locked.warn, /gizani|dark/, 'it says what a lock actually costs the holder');
   assert.match(t.locked.warn, /Sales Co\./, 'and who can undo it, since this desk cannot');
   assert.ok(!/general duty/i.test(t.locked.warn), 'under the name that desk now has');
-  // The reason devAct_ will demand is announced, not sprung after the paste is typed.
-  assert.match(t.locked.warn, /sababu|reason/);
+  // No reason is demanded any more -- the warning must not promise one it will not ask for.
+  assert.ok(!/sababu|reason/i.test(t.locked.warn));
 });
 
 test('the IMEIs the register never heard of are named on screen, not counted', () => {
