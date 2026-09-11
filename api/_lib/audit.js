@@ -165,8 +165,10 @@ const AUDIT_DIFF = {
   issueUpdate:     { table: 'issues', key: a => ({ id: a.id }),
                      fields: ['status', 'to_role', 'to_code'] },
 
-  /* ONE HANDSET, ONE ORDER. deviceSetState takes a LIST and is deliberately absent: a diff
-     that described one of four hundred phones would be a lie about the other 399. */
+  /* ONE HANDSET, ONE ORDER. deviceSetState and deviceShift/deviceShiftCancel take a LIST and
+     are deliberately absent: a diff that described one of four hundred phones would be a lie
+     about the other 399, and a shift's real record -- which office, whose token -- is not a
+     column this table has, so it lives in the event's own reason instead (see deviceShift). */
   deviceDelete:    { table: 'devices', key: a => ({ imei: a.imei }), fields: ['state', 'holder'] },
 };
 const K_ = s => String(s == null ? '' : s).trim().toUpperCase();

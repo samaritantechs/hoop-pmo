@@ -3229,6 +3229,12 @@ function devPaint_(m, d, at){
       : '<button class="btn sm ghost" id="dvBulk" data-dvbulk="'+(canLock?'locked':'released')+'" '
         +'title="Bandika orodha ya IMEI / paste a list of IMEIs">'
         +(canLock?'Funga kwa wingi / Lock bulk':'Achia kwa wingi / Release bulk')+'</button>')
+    /* HAMISHA KWA WINGI sits with the bench's own bulk button, not the desk's, for the same
+       reason the single-row Hamisha does: deciding who owns a phone next is bench work. */
+    +(BOOT.readOnly||!canLock ? ''
+      : ' <button class="btn sm ghost" id="dvShiftBulk" '
+        +'title="Bandika IMEI,token kwa kila mstari / paste IMEI,token one per line">'
+        +'Hamisha kwa wingi / Shift bulk</button>')
     +'</div>';
   var table=rows.length
     ? '<div class="scroll"><table><thead><tr>'
@@ -3240,6 +3246,17 @@ function devPaint_(m, d, at){
         var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
           :r.state==='released'?'<span class="chip ok">imeachiwa</span>'
           :r.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
+        /* A PENDING SHIFT RIDES UNDER THE STATE, never replacing it -- lock/unlock still means
+           exactly what it always did on this office, whichever one the phone answers to next.
+           Red rather than the ordinary "imeagizwa · bado" wording once shiftStuck: a phone
+           that has beaten AGAIN since the shift was issued is telling us the token or address
+           the other office handed over was wrong, and that is worth noticing, not waiting out. */
+        if(r.shiftTarget){
+          st+='<div class="mut" style="font-size:10px'+(r.shiftStuck?';color:var(--bad)':'')+'">'
+            +(r.shiftStuck?'✖ haikufanikiwa · ' :'→ ')+esc(r.shiftTarget)
+            +(r.shiftRequestedAt?' · '+esc(agoMins(Math.round((Date.now()-r.shiftRequestedAt)/60000))):'')
+            +'</div>';
+        }
         /* THE TIME IT SPOKE, with the age underneath. The clock is what lets you place the
            beat either side of the order you gave; the age is what makes a dead phone
            obvious without doing arithmetic. Both, because they answer different questions,
@@ -3276,6 +3293,16 @@ function devPaint_(m, d, at){
           +(BOOT.readOnly||!canLock?'':'<button class="btn sm" data-dvlock="'+esc(r.imei)+'">Kufunga</button> ')
           +(BOOT.readOnly||canLock?'':'<button class="btn sm" data-dvopen="'+esc(r.imei)+'">Fungua</button> ')
           +(BOOT.readOnly||!canLock?'':'<button class="btn sm ghost" data-dvt="'+esc(r.imei)+'">Token</button> ')
+          /* HAMISHA -- one row, one destination, one pasted token. Bench work, like Token and
+             Futa, because deciding WHO owns this phone next sits with the office that already
+             decides everything else about it. Swaps to Ghairi once a shift is pending, so the
+             row never carries both at once. */
+          +(BOOT.readOnly||!canLock?''
+            :r.shiftTarget
+              ?'<button class="btn sm ghost" data-dvshiftx="'+esc(r.imei)+'" '
+                +'title="Ghairi kabla haijafika — haifanyi kazi ikiwa tayari imefika / cancel '
+                +'before it lands — does nothing once it already has">Ghairi kuhamisha</button> '
+              :'<button class="btn sm ghost" data-dvshift="'+esc(r.imei)+'">Hamisha</button> ')
           +'<button class="btn sm ghost" data-dvh="'+esc(r.imei)+'">Historia</button>'
           +(BOOT.readOnly||!canLock?'':' <button class="btn sm danger" data-dvd="'+esc(r.imei)+'" title="Ondoa kwenye register / Remove from the register">Futa</button>')
           +'</td></tr>';
@@ -3441,6 +3468,9 @@ function devPaint_(m, d, at){
   /* The order comes off the button rather than out of DEVMODE a second time: one place decides
      which desk this is, and everything else reads that decision instead of re-making it. */
   var rb=$('#dvBulk'); if(rb) rb.onclick=function(){ devBulkForm(m, rb.getAttribute('data-dvbulk')); };
+  var sb=$('#dvShiftBulk'); if(sb) sb.onclick=function(){ devShiftBulkForm(m); };
+  $all('[data-dvshift]').forEach(function(b){ b.onclick=function(){ devShiftDrawer(m, b.getAttribute('data-dvshift')); }; });
+  $all('[data-dvshiftx]').forEach(function(b){ b.onclick=function(){ devShiftCancel_(m, [b.getAttribute('data-dvshiftx')]); }; });
   $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
   /* The POS desk's one-row order. It ticks the row and reuses the same bulk path, so the
      confirmation, the count and the error handling are the ones already proven. */
@@ -3779,6 +3809,144 @@ function devDelete(m, imei){
     +'Deletes the register row and its history. The handset itself is unchanged.')) return;
   srv('deviceDelete',{imei:imei}).then(function(){
     toast('Imefutwa: '+imei);
+    drawDevices(m);
+  }).catch(function(e){ toast(safeErr(e), true); });
+}
+/* THE SHIFT -- one drawer for one phone, one form for a pasted list, sharing everything
+   between them the way Funga/Achia's single-row and bulk paths already do.
+   =========================================================================================
+     "and a phone 'achia' from hope or hope can be re-enrolled in the other company and works
+      with its same token and also we need shift action for one or bulk as lock and unlock
+      does so another button for shift so that hoop can shift a device to hope and viceversa
+      saving re-enlorrment energy"
+
+   THE TARGET IS ALWAYS PICKED, NEVER TYPED -- the server refuses anything not on
+   settings.DEVICE_SHIFT_TARGETS anyway, so offering a free-text box here would only be a
+   control that looks like it works and is refused on submit. If the list comes back empty,
+   the drawer says so and stops rather than showing a picker with nothing in it. */
+function devShiftTargetOptions_(sel){
+  return srv('deviceShiftTargets',{}).then(function(d){
+    var t=d.targets||[];
+    if(!t.length) return null;
+    return '<option value="">Chagua / choose</option>'
+      +t.map(function(x){ return '<option value="'+esc(x.key)+'"'+(x.key===sel?' selected':'')+'>'
+        +esc(x.label)+'</option>'; }).join('');
+  });
+}
+function devShiftDrawer(m, imei){
+  drawer('<h3>Hamisha · '+esc(imei)+'</h3><div class="sk"></div>');
+  devShiftTargetOptions_('').then(function(opts){
+    if(!opts){
+      drawer('<h3>Hamisha · '+esc(imei)+'</h3>'
+        +'<div class="note bad">Hakuna kampuni iliyowekwa. Muombe msimamizi aiongeze kwenye '
+        +'Mipangilio (DEVICE_SHIFT_TARGETS) kabla ya kuhamisha. '
+        +'/ No destination is configured yet. Ask an administrator to add one in Settings '
+        +'before anything can be shifted.</div>');
+      return;
+    }
+    drawer('<h3>Hamisha · '+esc(imei)+'</h3>'
+      +'<div class="sub">Simu inabaki chini ya udhibiti na hali yake ya sasa — kufunga au '
+      +'kufungua havibadiliki. Inahitaji tu token ambayo ofisi nyingine imeitoa kwa IMEI hii. '
+      +'/ The phone stays under control and keeps its current lock state — this only needs '
+      +'the token the other office minted for this one IMEI.</div>'
+      +'<div class="fld"><label>Kampuni / destination</label><select id="dvShiftTo" style="width:100%">'
+        +opts+'</select></div>'
+      +'<div class="fld"><label>Token</label><input id="dvShiftTok" style="width:100%;'
+        +'font-family:ui-monospace,monospace;font-size:12px"></div>'
+      +'<button class="btn w" id="dvShiftGo">Hamisha / Shift</button>');
+    $('#dvShiftGo').onclick=function(){
+      var to=$('#dvShiftTo').value, tok=$('#dvShiftTok').value.trim();
+      if(!to){ toast('Chagua kampuni. / Choose a destination.', true); return; }
+      if(!tok){ toast('Weka token. / Enter the token.', true); return; }
+      var b=$('#dvShiftGo'); b.disabled=true;
+      srv('deviceShift',{target:to,pairs:[{imei:imei,token:tok}]}).then(function(r){
+        toast('Imehamishwa: '+money(r.changed));
+        closeDrawer(); drawDevices(m);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+  }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
+}
+/* A LINE IS "IMEI,TOKEN" -- one pair, because the token differs per phone: it is minted by
+   the OTHER office for that one IMEI, so there is no such thing as one shared token the way
+   a lock/unlock/release order shares one decision across a whole pasted list. Split on the
+   first comma (or run of whitespace) so a token that happens to contain neither is still
+   read whole; a line with no second field names its IMEI back as unusable rather than being
+   silently dropped, the same honesty devParseImeis_'s dupe count already practises. */
+function devParseShiftPairs_(t){
+  var lines=String(t||'').split(/[\r\n]+/).map(function(x){ return x.trim(); }).filter(Boolean);
+  var seen={}, pairs=[], badLines=[], dupes=0;
+  for(var i=0;i<lines.length;i++){
+    var parts=lines[i].split(/[,\s]+/).filter(Boolean);
+    var imei=(parts[0]||'').replace(/^['"]+/,'').replace(/['"]+$/,'');
+    var tok=(parts[1]||'').replace(/^['"]+/,'').replace(/['"]+$/,'');
+    if(!imei) continue;
+    var k='k'+imei;
+    if(seen[k]){ dupes++; continue; }
+    seen[k]=1;
+    if(!tok){ badLines.push(imei); continue; }
+    pairs.push({imei:imei,token:tok});
+  }
+  return { pairs:pairs, badLines:badLines, dupes:dupes };
+}
+function devShiftBulkForm(m){
+  drawer('<h3>Hamisha kwa wingi / Shift bulk</h3><div class="sk"></div>');
+  devShiftTargetOptions_('').then(function(opts){
+    if(!opts){
+      drawer('<h3>Hamisha kwa wingi / Shift bulk</h3>'
+        +'<div class="note bad">Hakuna kampuni iliyowekwa. Muombe msimamizi aiongeze kwenye '
+        +'Mipangilio (DEVICE_SHIFT_TARGETS) kabla ya kuhamisha. '
+        +'/ No destination is configured yet. Ask an administrator to add one in Settings '
+        +'before anything can be shifted.</div>');
+      return;
+    }
+    drawer('<h3>Hamisha kwa wingi / Shift bulk</h3>'
+      +'<div class="sub">Mstari mmoja kwa kila simu: <b>IMEI,token</b> — token ni ile '
+      +'ambayo kampuni ya kuhamishia imeitoa kwa IMEI hiyo. Simu zinabaki katika hali yao '
+      +'ya sasa. / One line per phone: <b>IMEI,token</b> — the token the destination minted '
+      +'for that exact IMEI. Phones keep whatever lock state they are already in.</div>'
+      +'<div class="fld"><label>Kampuni / destination</label><select id="dvShiftTo" style="width:100%">'
+        +opts+'</select></div>'
+      +'<div class="fld"><label>IMEI,token</label>'
+      +'<textarea id="dvShiftPairs" rows="10" style="width:100%;font-family:ui-monospace,monospace;'
+        +'font-size:12px" placeholder="351234567890123,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"></textarea></div>'
+      +'<div id="dvShiftCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+      +'<button class="btn w" id="dvShiftBulkGo">Hamisha / Shift</button>');
+    var ta=$('#dvShiftPairs'), out=$('#dvShiftCount');
+    var recount=function(){
+      var p=devParseShiftPairs_(ta.value);
+      out.innerHTML=!p.pairs.length&&!p.badLines.length
+        ?'Bado hakuna kilichobandikwa. / Nothing pasted yet.'
+        :'<b>'+money(p.pairs.length)+'</b> tayari'
+          +(p.badLines.length?' · <span style="color:var(--bad)">'+money(p.badLines.length)
+            +' hazina token / missing a token</span>':'')
+          +(p.dupes?' · '+money(p.dupes)+' zimerudiwa / repeated':'')
+          +(p.pairs.length>500?' · <span style="color:var(--bad)">zaidi ya 500 — gawa kwa '
+            +'makundi / over the 500 limit, split it</span>':'');
+    };
+    ta.oninput=recount; recount();
+    $('#dvShiftBulkGo').onclick=function(){
+      var to=$('#dvShiftTo').value;
+      var p=devParseShiftPairs_(ta.value);
+      if(!to){ toast('Chagua kampuni. / Choose a destination.', true); return; }
+      if(!p.pairs.length){ toast('Bandika angalau simu moja na token yake. / Paste at least one phone with its token.', true); return; }
+      var b=$('#dvShiftBulkGo'); b.disabled=true;
+      srv('deviceShift',{target:to,pairs:p.pairs}).then(function(r){
+        toast('Zimehamishwa: '+money(r.changed)
+          +(r.notEnrolled?' · '+money(r.notEnrolled)+' hazipo kwenye register':'')
+          +(r.badLines?' · '+money(r.badLines)+' hazikuwa na token':''));
+        closeDrawer(); drawDevices(m);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+  }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
+}
+/** Cancel is the one order here that can genuinely do nothing -- see deviceShiftCancel's own
+    note. Said back to the operator honestly rather than as a blanket "done". */
+function devShiftCancel_(m, imeis){
+  if(!confirm('Ghairi kuhamisha '+imeis.length+'? Ikiwa simu tayari imefika ofisi nyingine, '
+    +'hii haitaifanya irudi. \n\nCancel the shift on '+imeis.length+'? If a phone has already '
+    +'landed at the other office, this will not bring it back.')) return;
+  srv('deviceShiftCancel',{imeis:imeis}).then(function(r){
+    toast('Imeghairiwa: '+money(r.changed));
     drawDevices(m);
   }).catch(function(e){ toast(safeErr(e), true); });
 }

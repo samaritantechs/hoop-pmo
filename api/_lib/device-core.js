@@ -38,7 +38,12 @@ const BEAT_COLS_LEGACY = 'imei, item, state, state_reason, reported, enrol_token
 // fcm_token is read only so the beat can tell whether the handset's address has CHANGED --
 // two hundred phones beating every minute would otherwise be two hundred needless writes a
 // minute. See byToken for what happens where the migration has not run yet.
-const BEAT_COLS = BEAT_COLS_LEGACY + ', fcm_token';
+const BEAT_COLS_PUSH = BEAT_COLS_LEGACY + ', fcm_token';
+// The shift columns -- see the note on the `shift` field below. Read alongside push rather
+// than folded into one tier: a deployment can have either migration run and not the other,
+// and byToken already falls back tier by tier when PostgREST refuses a whole select for one
+// unknown column.
+const BEAT_COLS = BEAT_COLS_PUSH + ', shift_target, shift_server, shift_token';
 
 const S = v => String(v == null ? '' : v).trim();
 
@@ -266,17 +271,22 @@ async function byToken(db, p) {
   const token = S(p && p.token);
   if (!token) { const e = new Error('Token required'); e.status = 400; throw e; }
   /* PRE-MIGRATION TOLERANCE, and this one is not a nicety. PostgREST refuses the WHOLE select
-     for one unknown column, so naming fcm_token here on a deployment that has not run
-     RUN-ME-2026-08-28-push.sql would fail every beat from every handset -- the entire fleet
-     dark, at the exact moment somebody is deploying. The beat matters more than the address,
-     so it falls back to the columns that have always existed and simply forgoes the "only
-     write when it changed" saving until the migration lands. */
+     for one unknown column, so naming a column here on a deployment that has not run the
+     matching migration would fail every beat from every handset -- the entire fleet dark, at
+     the exact moment somebody is deploying. The beat matters more than any one field it reads,
+     so this drops a tier at a time rather than failing on the newest thing it does not yet
+     know about, and simply forgoes that tier's saving until its migration lands. */
   let rows;
   try {
     rows = await fetchAll(() => db.from('devices').select(BEAT_COLS).eq('enrol_token', token));
   } catch (e) {
-    if (!/fcm_token/.test(String(e && e.message || ''))) throw e;
-    rows = await fetchAll(() => db.from('devices').select(BEAT_COLS_LEGACY).eq('enrol_token', token));
+    if (!/shift_target|shift_server|shift_token/.test(String(e && e.message || ''))) throw e;
+    try {
+      rows = await fetchAll(() => db.from('devices').select(BEAT_COLS_PUSH).eq('enrol_token', token));
+    } catch (e2) {
+      if (!/fcm_token/.test(String(e2 && e2.message || ''))) throw e2;
+      rows = await fetchAll(() => db.from('devices').select(BEAT_COLS_LEGACY).eq('enrol_token', token));
+    }
   }
   const dev = rows.find(r => S(r.enrol_token) === token) || null;
   if (!dev) { const e = new Error('Not enrolled'); e.status = 403; throw e; }
@@ -389,10 +399,36 @@ async function beat(db, [payload], nowMs) {
      way out, and hurrying it changes nothing. */
   const nowLocked = S(reported || dev.reported) === 'locked';
   const settled = retire || command === (nowLocked ? 'lock' : 'unlock');
+  /* THE SHIFT -- a second office's server and token, riding alongside the ordinary lock/unlock
+     command rather than replacing it.
+     =====================================================================================
+       "so another button for shift so that hoop can shift a device to hope and viceversa
+        saving re-enlorrment energy"
+       "when we shift it goes with current state"
+
+     ONLY THREE FIELDS ARE EVER READ HERE, and all three were written by a portal user who
+     holds the locking bench and picked the destination off an administrator's own allowlist
+     -- see deviceShift in portal.js and the note on EnrolReceiver's server guard, which this
+     does not reopen: it is not a second door into the same room, because it can only ever say
+     what THIS office, which the phone already trusts, tells it to say.
+
+     SUPPRESSED WHILE RETIRING, for the same reason the words and the boot window are: a
+     released phone is about to unharden and stop calling home, so a server to move to is an
+     instruction nobody is left to carry out.
+
+     "GOES WITH CURRENT STATE" IS NOT IMPLEMENTED HERE -- it falls out of not doing anything.
+     `command`, `reason` and every other field above are computed exactly as they always are,
+     from THIS phone's own `state` and `reported`; shift changes none of them. The handset
+     applies its lock/unlock order first, as it always has, and only then re-points itself --
+     so whatever the screen is doing when this lands is exactly what it goes on doing at the
+     new address. */
+  const shift = (!retire && S(dev.shift_target) && S(dev.shift_server) && S(dev.shift_token))
+    ? { server: S(dev.shift_server), token: S(dev.shift_token) } : null;
   return {
     ok: true,
     command,                                   // lock | unlock
     state: dev.state,
+    shift,                                      // { server, token } | null -- see above
     /* Ordered locks carry their own reason; a self-lock has none to carry, so it gets the
        one from settings. Either way the handset is never left with an empty REASON line. */
     reason: retire ? null : (S(dev.state_reason) || words.fallbackReason || null),

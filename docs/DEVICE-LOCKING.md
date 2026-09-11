@@ -832,6 +832,85 @@ bench that reads as "re-enrolling is broken" when the only stale thing is the fi
 
 ---
 
+## Hamisha — shifting a phone to another office's system, without a cable
+
+> *"and a phone 'achia' from hope or hope can be re-enrolled in the other company and works with
+> its same token and also we need shift action for one or bulk as lock and unlock does so another
+> button for shift so that hoop can shift a device to hope and viceversa saving re-enlorrment
+> energy"*
+> *"when we shift it goes with current state"*
+
+A handset can hold exactly **one** Device Owner, and moving that role to a different app needs a
+factory reset — the whole reason `achia` and re-enrolment exist as a two-office relay in the first
+place. **Shift is the way to skip that relay.** It re-points a phone at another office's server —
+HOOP to HOPE, or the other way once HOPE builds its own equivalent inbound path — over the air, on
+its next beat, with nothing plugged in and Device Owner never touched.
+
+**"Goes with current state" is not a feature that was built — it is what NOT building one gets
+you.** A shift never writes `locked`, `released`, or any other state. The phone's ordinary
+lock/unlock order is carried out first, exactly as it always is; only *after* that does the beat
+answer also carry a new server and a new token, so whatever the screen was doing when the shift
+landed is exactly what it goes on doing at the new address.
+
+### Where the destination comes from
+
+The server URL is **never typed on this form.** It is read from `settings.DEVICE_SHIFT_TARGETS` —
+a small JSON object only an administrator can edit, from Settings:
+
+```json
+{ "HOPE": { "label": "HOPE LOAN", "server": "https://hope-pmo.vercel.app" } }
+```
+
+The Hamisha drawer only ever offers a **name off that list**. What the operator pastes is the
+**token** — the credential the *destination* system minted for that one IMEI, exactly as sensitive
+as the token already pasted into every enrol command today, and no more. A typo or a compromised
+locking-bench session can misdirect a phone at most to somewhere an administrator already chose;
+it can never invent a new address.
+
+This is deliberate about not reopening `EnrolReceiver`'s own guard, which is unrelated and stays
+exactly as strict as it always has been: that receiver still accepts a server **exactly once**,
+over a cable, on a phone that is already Device Owner (see *The way back out, over the cable*,
+below). A shift travels a completely different road — the **beat response** — which only the
+office a phone is *currently* reporting to can shape. Handing that office the power to say where
+the phone reports next is not a bigger claim than the one it already holds: it can already lock
+the phone from anywhere in the world. Shift is the same trust, spent on a narrower thing.
+
+### One phone, or a pasted batch
+
+**Hamisha**, on a row, opens a small drawer: pick the destination, paste the one token it minted
+for that IMEI, done. **Hamisha kwa wingi** (bulk) takes a **list**, one line per phone:
+
+```
+351388334583295,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+351388334583296,yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+```
+
+This is a list of **pairs**, unlike bulk lock/unlock/release, which apply one shared decision to
+many rows. There is no such thing as one shared shift token: each phone's token is minted by the
+*other* office, individually, so the paste has to carry one per line. A line with an IMEI and no
+token is refused **by name** rather than silently dropped; an IMEI not on the register is reported
+the same way. Up to 500 pairs at once, the same ceiling every other bulk order here uses.
+
+### What the row shows while it is pending
+
+A phone with a shift queued carries a small line under its state chip: `→ HOPE`, with how long
+ago it was requested. That line turns red — `✖ haikufanikiwa · HOPE` — the moment the phone beats
+**again** on this office *after* the shift was issued, because that is the one signal worth
+noticing: the token or address the other office handed over did not work, and the phone is still
+here. **Ghairi kuhamisha** clears a shift that has not landed — honestly: if the phone has already
+re-pointed itself, cancelling this row does nothing to bring it back, and the confirm dialog says
+so before the click, not after.
+
+### The other direction
+
+HOOP shifting a phone **to** HOPE needs nothing from HOPE except a URL in the allowlist and a
+minted token per phone — both already exist in the flow above. HOPE shifting a phone **to** HOOP
+needs HOPE to build its own outbound half of this; the *inbound* leg on HOOP's side is already
+finished and already tested — it is the same `deviceEnrol` a phone reaches the very first time it
+is provisioned here, which is exactly the door a shifted-in phone should walk through.
+
+---
+
 ## The way back out, over the cable
 
 Everything above needs a handset the office can still reach. This is what to do when it

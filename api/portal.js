@@ -53,6 +53,10 @@ AUDITED.add('deviceSetState');
 AUDITED.add('deviceToken');
 /* An eraser. Once this runs the audit entry is the only record that phone was ever here. */
 AUDITED.add('deviceDelete');
+// deviceShift/deviceShiftCancel are list-shaped, like deviceSetState -- a diff belongs to
+// one row, and these can touch many, each with its own destination token.
+AUDITED.add('deviceShift');
+AUDITED.add('deviceShiftCancel');
 /* IMPREST AND LEAVE -- money and absence, so both ends of each are logged, the same way the
    advance is: who asked, who decided, who filed the retirement, who changed a rate. As with
    advances, KEEP in audit.js drops every amount and every free-text field on the way in, so the
@@ -3760,6 +3764,35 @@ const FNS = {
       if (fx === 0 && x.enrolledAt !== y.enrolledAt) return y.enrolledAt - x.enrolledAt;
       return rank(x) - rank(y) || String(x.imei).localeCompare(String(y.imei));
     });
+    /* A PENDING SHIFT, MERGED ON RATHER THAN SELECTED WITH THE REST.
+       -----------------------------------------------------------------------------------
+       Kept as its own best-effort query instead of a third tier on the fallback ladder
+       above: a shift is rare (most rows never have one), the partial index on shift_target
+       makes asking for just the pending ones cheap, and a database that has not run the
+       shift migration yet must not cost the whole Devices pane the way a wider select would
+       -- it simply shows no phones mid-shift, which is the truth on that deployment. */
+    let shifting = new Map();
+    try {
+      const pending = await fetchAll(() => db.from('devices')
+        .select('imei, shift_target, shift_requested_at, shift_requested_by')
+        .not('shift_target', 'is', null));
+      shifting = new Map(pending.map(r => [String(r.imei), r]));
+    } catch (ignored) { /* migration not run: no phone reads as mid-shift, which is true here */ }
+    if (shifting.size) {
+      for (const r of out) {
+        const s = shifting.get(String(r.imei));
+        if (!s) continue;
+        r.shiftTarget = s.shift_target;
+        r.shiftRequestedAt = s.shift_requested_at ? Date.parse(s.shift_requested_at) : null;
+        r.shiftRequestedBy = s.shift_requested_by || '';
+        /* WHETHER IT LOOKS LIKE IT LANDED, read off the same clock everything else here
+           uses. A phone that has NOT beaten us since the shift was issued has gone quiet
+           for the right reason -- it is presumably answering the new office now. One that
+           HAS beaten since is telling us the token or address it was handed was wrong, and
+           that is worth a red flag rather than a silent forever-pending row. */
+        r.shiftStuck = !!(r.seenAt && r.shiftRequestedAt && r.seenAt > r.shiftRequestedAt);
+      }
+    }
     const count = f => out.filter(f).length;
     return { ok: true, rows: out.slice(0, 500), total: out.length,
       /* WHAT WAS SEARCHED FOR, back on the wire. The box shows the digits the server actually
@@ -3777,6 +3810,8 @@ const FNS = {
         /* The alarm, counted separately from everything else because it is not a category of
            phone -- it is a category of MISTAKE, and one the office cannot see any other way. */
         lockedNeverSpoke: count(r => r.lockedNeverSpoke),
+        // Counted from `out`, like every other tile here, so it agrees with a filtered view.
+        shifting: count(r => !!r.shiftTarget),
       } };
   },
 
@@ -4395,6 +4430,166 @@ const FNS = {
     const { error } = await db.from('devices').delete().eq('imei', imei);
     if (error) throw new Error(error.message);
     return { ok: true, imei };
+  },
+
+  /* =====================================================================================
+     THE SHIFT -- handing a phone to another office's system, without a cable or a reset.
+     =====================================================================================
+       "and a phone 'achia' from hope or hope can be re-enrolled in the other company and
+        works with its same token and also we need shift action for one or bulk as lock and
+        unlock does so another button for shift so that hoop can shift a device to hope and
+        viceversa saving re-enlorrment energy"
+       "when we shift it goes with current state"
+
+     A HANDSET CAN HOLD EXACTLY ONE DEVICE OWNER, and re-pointing it at a different one needs
+     a factory reset -- the very cost this was asked to remove. So a shift never touches
+     Device Owner. It only changes which server the phone's NEXT BEAT is sent to and which
+     token it presents there; the lock screen, whether it is currently up, and every
+     restriction ride along untouched. "Goes with current state" is not implemented anywhere
+     in this pair of functions -- it falls out of the fact that neither one writes `state`.
+
+     THE SERVER URL IS NEVER TYPED HERE, on purpose. It comes from settings.DEVICE_SHIFT_TARGETS,
+     which only an administrator can set, so a typo or a compromised devlock session can redirect
+     a phone at most to a destination somebody with Settings access already chose -- never to an
+     address invented on this form. The one thing pasted here is the TOKEN the destination minted
+     for this one IMEI, which is exactly as sensitive as the token already pasted into every enrol
+     command, and no more.
+
+     BULK IS A LIST OF PAIRS, DELIBERATELY, not one shared secret applied to many rows the way
+     lock/unlock are. Each destination token is minted for ONE phone by the OTHER office, so
+     there is no such thing as one token that shifts twenty handsets -- the operator pastes
+     "imei,token" one line per phone, exactly as many lines as handsets being handed over. */
+
+  /** The allowlist, for the picker on the form. Read-only, so anyone holding the bench nav can
+      see what is configured even if only a writer can actually issue a shift. */
+  async deviceShiftTargets(db, user) {
+    requireNav(user, 'devlock');
+    let targets = {};
+    try {
+      const row = await db.from('settings').select('value').eq('key', 'DEVICE_SHIFT_TARGETS').maybeSingle();
+      targets = JSON.parse((row && row.data && row.data.value) || '{}') || {};
+    } catch (ignored) { /* not configured yet, or not valid JSON: nothing to offer */ }
+    return { ok: true, targets: Object.keys(targets).sort()
+      .filter(k => targets[k] && targets[k].server)      // a target with no server is not usable
+      .map(k => ({ key: k, label: (targets[k] && targets[k].label) || k })) };
+  },
+
+  /** Queue the shift: each line's IMEI gets the chosen target's server and its own pasted
+      token, and the phone picks it up on its next beat -- seconds away if push is configured,
+      a quarter of an hour at the outside otherwise. */
+  async deviceShift(db, user, args) {
+    requireWrite(user); requireNav(user, 'devlock');
+    const a = args || {};
+    const targetKey = K(a.target || '');
+    if (!targetKey) bad('Chagua kampuni ya kuhamishia. / Choose a destination first.');
+
+    let targets = {};
+    try {
+      const row = await db.from('settings').select('value').eq('key', 'DEVICE_SHIFT_TARGETS').maybeSingle();
+      targets = JSON.parse((row && row.data && row.data.value) || '{}') || {};
+    } catch (ignored) { /* falls through to the refusal below */ }
+    /* THE ALLOWLIST IS THE WHOLE GUARD, so a key that is not on it is refused outright --
+       never treated as "unlabelled but fine", which would turn this form back into a free-text
+       URL box the moment somebody passed a key nobody configured. */
+    const dest = targets[targetKey];
+    if (!dest || !dest.server) {
+      bad('Kampuni hiyo haijawekwa. Muombe msimamizi aiongeze kwenye Mipangilio kabla ya '
+        + 'kuhamisha. / That destination is not configured. Ask an administrator to add it in '
+        + 'Settings before shifting anything to it.');
+    }
+    const server = String(dest.server).trim();
+
+    /* PAIRS IN, ONE PER PHONE. Accepted as an array so the client owns the parsing (matching
+       every other paste box here), but re-validated rather than trusted: a line with an IMEI
+       and no token is refused by name rather than silently dropped, because a shift that never
+       happens should never look like one that did. */
+    const rawPairs = Array.isArray(a.pairs) ? a.pairs : [];
+    const seen = new Set();
+    const pairs = [];
+    const badLines = [];
+    for (const p of rawPairs) {
+      const imei = String((p && p.imei) || '').trim();
+      const token = String((p && p.token) || '').trim();
+      if (!imei) continue;
+      if (seen.has(imei)) continue;
+      seen.add(imei);
+      if (!token) { badLines.push(imei); continue; }
+      pairs.push({ imei, token });
+    }
+    if (!pairs.length && !badLines.length) {
+      bad('Bandika angalau IMEI moja na token yake. / Paste at least one IMEI with its token.');
+    }
+    if (pairs.length > 500) {
+      bad('Simu nyingi mno kwa mara moja (kikomo 500). Gawa kwa makundi. '
+        + '/ Too many at once — 500 max. Split the list into batches.');
+    }
+
+    const current = await fetchAll(() => db.from('devices').select('imei, state')
+      .in('imei', pairs.map(p => p.imei)));
+    const known = new Map(current.map(r => [String(r.imei), r.state]));
+    const notEnrolled = pairs.filter(p => !known.has(p.imei)).map(p => p.imei);
+    const changing = pairs.filter(p => known.has(p.imei));
+
+    const at = new Date().toISOString();
+    let pushed = { sent: 0, failed: 0, stale: [] };
+    if (changing.length) {
+      /* ONE ROW AT A TIME, because the token differs per row -- the bulk `.in(...).update()`
+         every other device fn uses only works when every matched row gets the SAME patch. */
+      for (const p of changing) {
+        const { error } = await db.from('devices').update({
+          shift_target: targetKey, shift_server: server, shift_token: p.token,
+          shift_requested_at: at, shift_requested_by: user.name, updated_at: at,
+        }).eq('imei', p.imei);
+        if (error) {
+          if (tableMissing(error)) bad('Jedwali la kuhamisha halijatengenezwa bado. Endesha '
+            + '<b>db/migrations/RUN-ME-2026-09-15-device-shift.sql</b>. '
+            + '/ The shift columns do not exist yet — run that migration first.');
+          throw new Error(error.message);
+        }
+      }
+      /* NO STATE CHANGES -- lock/unlock keep meaning exactly what they did a moment ago, on
+         this office and on whichever one the phone reports to next. What moved is recorded in
+         `reason`, the same way every other fact this table cannot name a column for is. */
+      const { error: eErr } = await db.from('device_events').insert(changing.map(p => ({
+        imei: p.imei, event: 'shift_requested',
+        from_state: known.get(p.imei), to_state: known.get(p.imei),
+        reason: 'kuhamishwa kwenda ' + targetKey + ' / shift to ' + targetKey,
+        actor: user.name, at })));
+      if (eErr) throw new Error(eErr.message);
+      // Ring the doorbell, exactly as a lock order does: seconds instead of a quarter-hour.
+      pushed = await nudge(db, changing.map(p => p.imei));
+    }
+
+    return { ok: true, changed: changing.length, target: targetKey,
+      notEnrolled, notEnrolledList: notEnrolled.slice(0, 20),
+      badLines, badLinesList: badLines.slice(0, 20),
+      woken: pushed.sent };
+  },
+
+  /** Cancel a shift THAT HAS NOT LANDED YET. Honest about the one thing it cannot do: once a
+      phone has actually re-pointed itself, clearing this row does nothing to bring it back --
+      that office is the only one who can send it home now. */
+  async deviceShiftCancel(db, user, args) {
+    requireWrite(user); requireNav(user, 'devlock');
+    const a = args || {};
+    const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : [a.imei || a.imeis])
+      .map(x => String(x || '').trim()).filter(Boolean))];
+    if (!list.length) bad('Weka IMEI. / An IMEI is required.');
+    let pending;
+    try {
+      pending = await fetchAll(() => db.from('devices').select('imei')
+        .in('imei', list).not('shift_target', 'is', null));
+    } catch (e) {
+      if (tableMissing(e)) return { ok: true, changed: 0 };
+      throw e;
+    }
+    if (!pending.length) return { ok: true, changed: 0 };
+    const { error } = await db.from('devices').update({
+      shift_target: null, shift_server: null, shift_token: null,
+      shift_requested_at: null, shift_requested_by: null, updated_at: new Date().toISOString(),
+    }).in('imei', pending.map(r => String(r.imei)));
+    if (error) throw new Error(error.message);
+    return { ok: true, changed: pending.length };
   },
 
   /* =====================================================================================

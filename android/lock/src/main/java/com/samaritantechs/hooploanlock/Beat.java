@@ -191,6 +191,8 @@ class Beat {
         if ("lock".equals(command)) Guard.lock(c);
         else Guard.unlock(c);
 
+        applyShift(c, r);
+
         /* SAY SO STRAIGHT AWAY WHEN THIS BEAT CHANGED SOMETHING.
            =====================================================================================
              "LOCKING worked, unlocking worked, relocking didnt"
@@ -318,6 +320,45 @@ class Beat {
         if (last == 0) return;                             // never once heard from us: not our call
         long silent = System.currentTimeMillis() - last;
         if (silent > graceHours * 3600000L) Guard.lock(c);
+    }
+
+    /* THE SHIFT -- re-pointing to a different office's server, without dropping Device Owner
+       and without touching the lock screen at all.
+       =====================================================================================
+         "and a phone 'achia' from hope or hope can be re-enrolled in the other company and
+          works with its same token and also we need shift action for one or bulk as lock and
+          unlock does so another button for shift so that hoop can shift a device to hope and
+          viceversa saving re-enlorrment energy"
+         "when we shift it goes with current state"
+
+       EnrolReceiver's server field is settable exactly once, over a cable, on a phone that
+       is already Device Owner -- and that guard stands untouched. This is not a second door
+       into the same room: it fires only from a BEAT RESPONSE, which only the office this
+       phone is CURRENTLY reporting to can shape. Handing that office the power to say where
+       this phone reports next is not a larger claim on it than the one it already has --
+       ordering a lock is the bigger power, and nothing here does anything a compromised
+       server could not already do by locking the fleet.
+
+       NOTHING ELSE MOVES. LOCKED and SCREEN_UP are never read or written here, so whatever
+       the screen is doing when this lands is exactly what it goes on doing at the new
+       address -- "goes with current state" is not implemented, it falls out of simply not
+       touching those keys. The command above (lock/unlock) has already been carried out on
+       THIS beat before this runs, so the screen is settled before the address changes under
+       it, never the other way round.
+
+       ONE BEAT IS ENOUGH. The very next scheduled beat -- or the confirming one just below,
+       if this same response also changed LOCKED -- reads Prefs.server(c) fresh and goes
+       straight to the new office; nothing here has to force a beat to make that true. */
+    private static void applyShift(Context c, JSONObject r) {
+        JSONObject shift = r.optJSONObject("shift");
+        if (shift == null) return;
+        String server = shift.optString("server", "");
+        String token = shift.optString("token", "");
+        // Half a shift is not a shift. Either the old office keeps beating, or the new one
+        // does -- never a phone pointed at a server with no credential, or the reverse.
+        if (server.isEmpty() || token.isEmpty()) return;
+        Prefs.put(c, Prefs.SERVER, server);
+        Prefs.put(c, Prefs.TOKEN, token);
     }
 
     private static int battery(Context c) {

@@ -2522,3 +2522,94 @@ test('call-core: the calls app carries our brand and no second one', () => {
   // The field still travels, so nothing that reads it starts seeing undefined.
   assert.match(src, /teams: \[\], brand, motto, logo, systemOpen/);
 });
+
+/* =========================================================================================
+   THE SHIFT -- handing a phone to another office's system, without a cable or a reset.
+     "so another button for shift so that hoop can shift a device to hope and viceversa
+      saving re-enlorrment energy"
+     "when we shift it goes with current state"
+   ========================================================================================= */
+
+test('the pasted shift list is one IMEI,token pair per line, and a bad line names itself', () => {
+  const src = read('portal.html');
+  const parse = lift(src, 'devParseShiftPairs_');
+
+  const p = parse('351388334583295,3fef0623abe94d368c1bb9cf88eb7888\n351388334583296  abcdef');
+  assert.deepEqual(p.pairs, [
+    { imei: '351388334583295', token: '3fef0623abe94d368c1bb9cf88eb7888' },
+    { imei: '351388334583296', token: 'abcdef' },
+  ], 'a comma or plain whitespace both separate the pair');
+
+  // A line with an IMEI and nothing else names its own IMEI back as unusable, rather than
+  // being silently dropped -- the same honesty devParseImeis_'s dupe count already practises.
+  const bad = parse('D1\nD2,tok2');
+  assert.deepEqual(bad.pairs, [{ imei: 'D2', token: 'tok2' }]);
+  assert.deepEqual(bad.badLines, ['D1']);
+
+  // Two lines pasted over the same phone collapse to one, and the count says so rather than
+  // silently keeping whichever token happened to land last.
+  const dup = parse('D3,first\nD3,second');
+  assert.deepEqual(dup.pairs, [{ imei: 'D3', token: 'first' }]);
+  assert.equal(dup.dupes, 1);
+
+  // Excel's quotes around a pasted cell are noise around the value, never part of it.
+  assert.deepEqual(parse('"D4","tok4"').pairs, [{ imei: 'D4', token: 'tok4' }]);
+
+  assert.deepEqual(parse('  \n\t ').pairs, [], 'whitespace is not a line');
+  assert.deepEqual(parse('').pairs, []);
+});
+
+test('Hamisha belongs to the locking bench, like Token and Futa, and swaps to Ghairi once pending', () => {
+  const src = read('portal.html');
+  const paint = src.slice(src.indexOf('function devPaint_('), src.indexOf('function devSearchFetch_('));
+
+  // THE BULK BUTTON. Offered only alongside the locking bench's own bulk button, and only
+  // when the pane is not read-only -- the same two gates every other write on this row uses.
+  assert.match(paint,
+    /BOOT\.readOnly\|\|!canLock \? ''\s*\n?\s*: ' <button class="btn sm ghost" id="dvShiftBulk"/,
+    'Shift bulk is gated on canLock and !readOnly, exactly like Lock bulk beside it');
+
+  // THE ROW BUTTON. Bench work, like Token and Futa -- it decides who owns the phone next.
+  const dvlockAt = paint.indexOf('data-dvlock=');
+  const rowBtns = paint.slice(dvlockAt, paint.indexOf('</tr>', dvlockAt));
+  assert.match(rowBtns, /BOOT\.readOnly\|\|!canLock\?''\s*\n?\s*:r\.shiftTarget/,
+    'the row Hamisha/Ghairi pair is gated the same way as the rest of the bench-only actions');
+  assert.match(rowBtns, /data-dvshiftx="'\+esc\(r\.imei\)\+'"/, 'a pending shift offers Ghairi...');
+  assert.match(rowBtns, /Ghairi kuhamisha/);
+  assert.match(rowBtns, /data-dvshift="'\+esc\(r\.imei\)\+'"/, '...otherwise it offers Hamisha');
+  assert.match(rowBtns, />Hamisha<\/button>/);
+  // Never both at once on the same row.
+  const shiftAt = rowBtns.indexOf('r.shiftTarget');
+  assert.ok(shiftAt > 0, 'the branch really is keyed off whether a shift is pending');
+
+  // THE BADGE under the state chip, red only once the phone has beaten again since the shift
+  // was issued -- the signal that the token or address the other office handed over was wrong.
+  const badge = paint.slice(paint.indexOf('if(r.shiftTarget){'), paint.indexOf('var age=agoMins'));
+  assert.match(badge, /shiftStuck\?'✖ haikufanikiwa/);
+  assert.match(badge, /color:var\(--bad\)/, 'the stuck badge reads in the same red as every other alarm');
+  assert.match(badge, /:'→ '/, 'a shift that has not landed yet reads as in-flight, not as a failure');
+
+  // THE WIRING -- every button drawn above actually reaches a handler.
+  assert.match(paint, /\$\('#dvShiftBulk'\); if\(sb\) sb\.onclick=function\(\)\{ devShiftBulkForm\(m\); \};/);
+  assert.match(paint, /\$all\('\[data-dvshift\]'\)\.forEach.*devShiftDrawer\(m, b\.getAttribute\('data-dvshift'\)\)/);
+  assert.match(paint, /\$all\('\[data-dvshiftx\]'\)\.forEach.*devShiftCancel_\(m, \[b\.getAttribute\('data-dvshiftx'\)\]\)/);
+});
+
+test('the Shift drawer and bulk form both refuse to work until a destination is configured', () => {
+  const src = read('portal.html');
+  const drawer = src.slice(src.indexOf('function devShiftDrawer('), src.indexOf('function devParseShiftPairs_('));
+  const bulk = src.slice(src.indexOf('function devShiftBulkForm('), src.indexOf('function devShiftCancel_('));
+  for (const fn of [drawer, bulk]) {
+    assert.match(fn, /devShiftTargetOptions_\(''\)/, 'the allowlist is read fresh, not assumed');
+    assert.match(fn, /if\(!opts\)\{/, 'no destinations configured is handled up front');
+    assert.match(fn, /DEVICE_SHIFT_TARGETS/, 'and says exactly which setting an administrator must fill in');
+  }
+  // The single form sends ONE pair; the bulk form sends every pair the paste box parsed --
+  // never a shared token applied to many rows, which is the one thing that cannot exist here.
+  assert.match(drawer, /srv\('deviceShift',\{target:to,pairs:\[\{imei:imei,token:tok\}\]\}\)/);
+  assert.match(bulk, /srv\('deviceShift',\{target:to,pairs:p\.pairs\}\)/);
+  // Cancel is honest that it can do nothing once a phone has actually landed elsewhere.
+  const cancel = src.slice(src.indexOf('function devShiftCancel_('));
+  assert.match(cancel, /srv\('deviceShiftCancel',\{imeis:imeis\}\)/);
+  assert.match(cancel, /haitaifanya irudi/, 'the confirm dialog says so before the click, not after');
+});

@@ -1772,3 +1772,277 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   assert.match(rounds[1], /findstr \/e \/c:"device"/,
     'the device check runs inside the loop body, not only before it');
 });
+
+/* =========================================================================================
+   THE SHIFT -- handing a phone to another office's system, without a cable or a reset.
+   =========================================================================================
+     "and a phone 'achia' from hope or hope can be re-enrolled in the other company and works
+      with its same token and also we need shift action for one or bulk as lock and unlock
+      does so another button for shift so that hoop can shift a device to hope and viceversa
+      saving re-enlorrment energy"
+     "when we shift it goes with current state"
+   ========================================================================================= */
+
+test('a beat carries a shift only when all three fields are set, and never while retiring', async () => {
+  const base = { imei: 'S1', state: 'enrolled', enrol_token: 'tokS1' };
+  // Nothing pending: no shift field at all.
+  let d = fleet([{ ...base }]);
+  let r = await deviceApi(d, 'dev_beat', [{ token: 'tokS1' }], NOW);
+  assert.equal(r.shift, null, 'no shift columns set -- nothing to carry');
+
+  // All three set: the handset gets exactly server and token, nothing more, and every other
+  // field on the answer is computed exactly as it always is.
+  d = fleet([{ ...base, shift_target: 'HOPE', shift_server: 'https://hope-pmo.vercel.app',
+    shift_token: 'dest-token-1' }]);
+  r = await deviceApi(d, 'dev_beat', [{ token: 'tokS1' }], NOW);
+  assert.deepEqual(r.shift, { server: 'https://hope-pmo.vercel.app', token: 'dest-token-1' });
+  assert.equal(r.command, 'unlock');
+  assert.equal(r.state, 'enrolled');
+
+  // Half a shift is not a shift -- the same rule Beat.java's applyShift enforces on the phone.
+  d = fleet([{ ...base, shift_target: 'HOPE', shift_server: '', shift_token: 'dest-token-1' }]);
+  r = await deviceApi(d, 'dev_beat', [{ token: 'tokS1' }], NOW);
+  assert.equal(r.shift, null, 'a target with no server does not carry -- there is nowhere to send it');
+
+  d = fleet([{ ...base, shift_target: 'HOPE', shift_server: 'https://hope-pmo.vercel.app',
+    shift_token: '' }]);
+  r = await deviceApi(d, 'dev_beat', [{ token: 'tokS1' }], NOW);
+  assert.equal(r.shift, null, 'a server with no token does not carry -- nothing to present there');
+
+  // A phone being handed back for good gets no shift either, the same reason it gets no
+  // words and no boot window: it is about to unharden and stop calling home.
+  d = fleet([{ imei: 'S2', state: 'released', enrol_token: 'tokS2', shift_target: 'HOPE',
+    shift_server: 'https://hope-pmo.vercel.app', shift_token: 'dest-token-2' }]);
+  r = await deviceApi(d, 'dev_beat', [{ token: 'tokS2' }], NOW);
+  assert.equal(r.retire, true);
+  assert.equal(r.shift, null, 'a retiring phone is not sent anywhere else either');
+});
+
+test('a beat still answers when the shift columns are not migrated yet', async () => {
+  const d = fakeDb({
+    devices: [{ imei: 'S3', state: 'locked', state_reason: 'r', enrol_token: 'tokS3' }],
+    device_events: [], settings: [],
+  }, { missingColumns: { devices: ['shift_target', 'shift_server', 'shift_token'] } });
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tokS3', locked: true }], NOW);
+  assert.equal(r.command, 'lock', 'the beat still answers on a deployment that has not run the migration');
+  assert.equal(r.shift, null, 'and simply offers no shift, the same tolerance push and legacy get');
+});
+
+test('applyShift runs after the lock/unlock command, and never touches the lock state', () => {
+  const beat = fs.readFileSync(new URL(
+    '../android/lock/src/main/java/com/samaritantechs/hooploanlock/Beat.java', import.meta.url), 'utf8');
+
+  // Called right after the ordinary command is carried out, before anything reports on it.
+  const callAt = beat.indexOf('applyShift(c, r);');
+  assert.ok(callAt > 0, 'applyShift must be called from the beat handler');
+  const lockAt = beat.lastIndexOf('Guard.lock(c);', callAt);
+  const unlockAt = beat.lastIndexOf('Guard.unlock(c);', callAt);
+  assert.ok(Math.max(lockAt, unlockAt) > 0 && Math.max(lockAt, unlockAt) < callAt,
+    'the ordinary command must be carried out BEFORE the address changes under it');
+
+  const body = beat.slice(beat.indexOf('private static void applyShift'),
+                          beat.indexOf('private static int battery'));
+  assert.match(body, /shift\.optString\("server", ""\)/);
+  assert.match(body, /shift\.optString\("token", ""\)/);
+  assert.match(body, /if \(server\.isEmpty\(\) \|\| token\.isEmpty\(\)\) return;/,
+    'half a shift is not a shift -- either the old office keeps beating or the new one does');
+  assert.match(body, /Prefs\.put\(c, Prefs\.SERVER, server\);/);
+  assert.match(body, /Prefs\.put\(c, Prefs\.TOKEN, token\);/);
+
+  // "GOES WITH CURRENT STATE" is achieved by never touching either lock-state key here.
+  assert.ok(!/Prefs\.LOCKED/.test(body) && !/Prefs\.SCREEN_UP/.test(body),
+    'applyShift must not read or write the lock state -- that is the whole of "goes with current state"');
+
+  assert.equal((beat.match(/applyShift\(/g) || []).length, 2,
+    'exactly one declaration and one call site');
+});
+
+test('deviceShiftTargets reads the allowlist and drops anything with no server', async () => {
+  const d = fleet([], [{ key: 'DEVICE_SHIFT_TARGETS', value: JSON.stringify({
+    HOPE: { label: 'HOPE LOAN', server: 'https://hope-pmo.vercel.app' },
+    BAD: { label: 'typo, no server' },
+  }) }]);
+  const r = await _FNS.deviceShiftTargets(d, ADMIN, {});
+  assert.deepEqual(r.targets, [{ key: 'HOPE', label: 'HOPE LOAN' }],
+    'a target with no server is not offered -- there is nowhere it could send a phone');
+});
+
+test('deviceShiftTargets reads as empty before an administrator has configured anything', async () => {
+  const d = fleet([]);
+  const r = await _FNS.deviceShiftTargets(d, ADMIN, {});
+  assert.deepEqual(r.targets, [], 'nothing configured yet, not a 500');
+});
+
+test('deviceShiftTargets needs the locking bench', async () => {
+  const d = fleet([]);
+  const OUTSIDER = { code: 'O', name: 'Outsider', role: 'GENERAL DUTY', teams: null,
+    tabs: ['devunlock'], readOnly: false };
+  await assert.rejects(() => _FNS.deviceShiftTargets(d, OUTSIDER, {}), /devlock/);
+});
+
+const SHIFT_SETTINGS = [{ key: 'DEVICE_SHIFT_TARGETS', value: JSON.stringify({
+  HOPE: { label: 'HOPE LOAN', server: 'https://hope-pmo.vercel.app' },
+}) }];
+
+test('deviceShift refuses a destination that is not on the allowlist', async () => {
+  const d = fleet([{ imei: 'H1', state: 'enrolled', enrol_token: 't1' }], SHIFT_SETTINGS);
+  await assert.rejects(() => _FNS.deviceShift(d, ADMIN, {
+    target: 'MADEUP', pairs: [{ imei: 'H1', token: 'dest-tok' }],
+  }), /haijawekwa|not configured/);
+  assert.equal(d._dump('devices')[0].shift_target ?? null, null, 'nothing was written');
+});
+
+test('deviceShift writes each row its OWN destination token, and touches nothing else', async () => {
+  const d = fleet([
+    { imei: 'H1', state: 'locked', state_reason: 'stock', enrol_token: 't1' },
+    { imei: 'H2', state: 'enrolled', enrol_token: 't2' },
+  ], SHIFT_SETTINGS);
+  const r = await _FNS.deviceShift(d, ADMIN, {
+    target: 'hope',   // lower-case on purpose -- the allowlist key is matched caseless
+    pairs: [{ imei: 'H1', token: 'dest-tok-1' }, { imei: 'H2', token: 'dest-tok-2' }],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.changed, 2);
+  assert.equal(r.target, 'HOPE');
+
+  const rows = d._dump('devices');
+  const h1 = rows.find(x => x.imei === 'H1'), h2 = rows.find(x => x.imei === 'H2');
+  assert.equal(h1.shift_target, 'HOPE');
+  assert.equal(h1.shift_server, 'https://hope-pmo.vercel.app');
+  assert.equal(h1.shift_token, 'dest-tok-1', 'each row keeps its OWN pasted token');
+  assert.equal(h2.shift_token, 'dest-tok-2');
+
+  // "GOES WITH CURRENT STATE" -- neither row's state changed. A shift is not a lock order.
+  assert.equal(h1.state, 'locked');
+  assert.equal(h2.state, 'enrolled');
+});
+
+test('deviceShift logs the move without recording it as a state change', async () => {
+  const d = fleet([{ imei: 'H3', state: 'locked', enrol_token: 't3' }], SHIFT_SETTINGS);
+  await _FNS.deviceShift(d, ADMIN, { target: 'HOPE', pairs: [{ imei: 'H3', token: 'dest-tok' }] });
+  const ev = d._dump('device_events').find(e => e.imei === 'H3' && e.event === 'shift_requested');
+  assert.ok(ev, 'the shift is recorded in the history');
+  assert.equal(ev.from_state, 'locked');
+  assert.equal(ev.to_state, 'locked', 'from and to are the SAME state -- this is not a transition');
+  assert.match(ev.reason, /HOPE/);
+});
+
+test('a paste of an IMEI with no token is refused by name, not silently dropped', async () => {
+  const d = fleet([
+    { imei: 'H4', state: 'enrolled', enrol_token: 't4' },
+    { imei: 'H5', state: 'enrolled', enrol_token: 't5' },
+  ], SHIFT_SETTINGS);
+  const r = await _FNS.deviceShift(d, ADMIN, {
+    target: 'HOPE', pairs: [{ imei: 'H4', token: 'dest-tok' }, { imei: 'H5', token: '' }],
+  });
+  assert.equal(r.changed, 1);
+  assert.deepEqual(r.badLines, ['H5']);
+  assert.deepEqual(r.badLinesList, ['H5']);
+  assert.equal(d._dump('devices').find(x => x.imei === 'H5').shift_target ?? null, null,
+    'the row with no token is untouched, not half-shifted');
+});
+
+test('an IMEI not on the register is reported, not silently skipped', async () => {
+  const d = fleet([{ imei: 'H6', state: 'enrolled', enrol_token: 't6' }], SHIFT_SETTINGS);
+  const r = await _FNS.deviceShift(d, ADMIN, {
+    target: 'HOPE', pairs: [{ imei: 'H6', token: 'dest-tok' }, { imei: 'GHOST', token: 'x' }],
+  });
+  assert.equal(r.changed, 1);
+  assert.deepEqual(r.notEnrolled, ['GHOST']);
+  assert.deepEqual(r.notEnrolledList, ['GHOST']);
+});
+
+test('a duplicate IMEI in the paste collapses to one row, keeping its first token', async () => {
+  const d = fleet([{ imei: 'H7', state: 'enrolled', enrol_token: 't7' }], SHIFT_SETTINGS);
+  const r = await _FNS.deviceShift(d, ADMIN, {
+    target: 'HOPE', pairs: [{ imei: 'H7', token: 'first' }, { imei: 'H7', token: 'second' }],
+  });
+  assert.equal(r.changed, 1);
+  assert.equal(d._dump('devices')[0].shift_token, 'first');
+});
+
+test('deviceShift is capped at the same 500 the other bulk orders use', async () => {
+  const many = n => Array.from({ length: n }, (_, i) => ({ imei: 'M' + i, token: 'tok' + i }));
+  const d = fleet([], SHIFT_SETTINGS);
+  await assert.rejects(() => _FNS.deviceShift(d, ADMIN, { target: 'HOPE', pairs: many(501) }),
+    /kikomo 500|500 max/);
+});
+
+test('deviceShift wakes the phones it changed, exactly as a lock order does', async () => {
+  const d = fleet([{ imei: 'H8', state: 'enrolled', enrol_token: 't8' }], SHIFT_SETTINGS);
+  const r = await _FNS.deviceShift(d, ADMIN, { target: 'HOPE', pairs: [{ imei: 'H8', token: 'dest-tok' }] });
+  // No Firebase credentials in the test environment, so nudge answers quietly with nothing
+  // sent -- the same "push is optional everywhere" contract every other order already relies on.
+  assert.equal(typeof r.woken, 'number');
+  assert.equal(r.woken, 0);
+});
+
+test('deviceShift needs write access and the locking bench, and is audited', async () => {
+  const d = fleet([{ imei: 'H9', state: 'enrolled', enrol_token: 't9' }], SHIFT_SETTINGS);
+  const VIEWER = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['devlock'] };
+  await assert.rejects(() => _FNS.deviceShift(d, VIEWER, {
+    target: 'HOPE', pairs: [{ imei: 'H9', token: 'x' }],
+  }));
+  const OUTSIDER = { code: 'O', name: 'Outsider', role: 'GENERAL DUTY', teams: null,
+    tabs: ['devunlock'], readOnly: false };
+  await assert.rejects(() => _FNS.deviceShift(d, OUTSIDER, {
+    target: 'HOPE', pairs: [{ imei: 'H9', token: 'x' }],
+  }), /devlock/);
+  assert.equal(d._dump('devices')[0].shift_target ?? null, null);
+
+  const { AUDITED } = await import('../api/_lib/audit.js');
+  assert.ok(AUDITED.has('deviceShift'));
+  assert.ok(AUDITED.has('deviceShiftCancel'));
+});
+
+test('deviceShift names the migration before the shift columns exist', async () => {
+  const d = fakeDb({
+    devices: [{ imei: 'H10', state: 'enrolled', enrol_token: 't10' }],
+    device_events: [], settings: SHIFT_SETTINGS,
+  }, { missingColumns: { devices: ['shift_target', 'shift_server', 'shift_token'] } });
+  await assert.rejects(() => _FNS.deviceShift(d, ADMIN, {
+    target: 'HOPE', pairs: [{ imei: 'H10', token: 'dest-tok' }],
+  }), /RUN-ME-2026-09-15-device-shift\.sql/);
+});
+
+test('deviceShiftCancel clears a pending shift, and is a no-op on one that is not pending', async () => {
+  const d = fleet([
+    { imei: 'C1', state: 'enrolled', enrol_token: 'c1', shift_target: 'HOPE',
+      shift_server: 'https://hope-pmo.vercel.app', shift_token: 'dest-tok',
+      shift_requested_at: '2026-09-11T08:00:00Z', shift_requested_by: 'Peter' },
+    { imei: 'C2', state: 'enrolled', enrol_token: 'c2' },
+  ]);
+  const r = await _FNS.deviceShiftCancel(d, ADMIN, { imeis: ['C1', 'C2'] });
+  assert.equal(r.changed, 1, 'only the one that actually had a shift pending counts');
+  const c1 = d._dump('devices').find(x => x.imei === 'C1');
+  assert.equal(c1.shift_target ?? null, null);
+  assert.equal(c1.shift_server ?? null, null);
+  assert.equal(c1.shift_token ?? null, null);
+  assert.equal(c1.shift_requested_at ?? null, null);
+  assert.equal(c1.shift_requested_by ?? null, null);
+  assert.equal(c1.state, 'enrolled', 'cancelling a shift never touches state either');
+
+  // Cancelling again is honest about doing nothing rather than claiming success on a lie.
+  const again = await _FNS.deviceShiftCancel(d, ADMIN, { imeis: ['C1'] });
+  assert.equal(again.changed, 0);
+});
+
+test('deviceShiftCancel before the migration reads as nothing pending, not a 500', async () => {
+  const d = fakeDb({
+    devices: [{ imei: 'C3', state: 'enrolled', enrol_token: 'c3' }],
+    device_events: [], settings: [],
+  }, { missingColumns: { devices: ['shift_target', 'shift_server', 'shift_token'] } });
+  const r = await _FNS.deviceShiftCancel(d, ADMIN, { imeis: ['C3'] });
+  assert.deepEqual(r, { ok: true, changed: 0 });
+});
+
+test('deviceShiftCancel needs write access and the locking bench', async () => {
+  const d = fleet([{ imei: 'C4', state: 'enrolled', enrol_token: 'c4', shift_target: 'HOPE',
+    shift_server: 'https://hope-pmo.vercel.app', shift_token: 'dest-tok' }]);
+  const VIEWER = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['devlock'] };
+  await assert.rejects(() => _FNS.deviceShiftCancel(d, VIEWER, { imeis: ['C4'] }));
+  const OUTSIDER = { code: 'O', name: 'Outsider', role: 'GENERAL DUTY', teams: null,
+    tabs: ['devunlock'], readOnly: false };
+  await assert.rejects(() => _FNS.deviceShiftCancel(d, OUTSIDER, { imeis: ['C4'] }), /devlock/);
+  assert.equal(d._dump('devices')[0].shift_target, 'HOPE', 'nothing was cleared');
+});

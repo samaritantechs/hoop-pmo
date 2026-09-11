@@ -1,6 +1,6 @@
 {
-  "versionCode": 19,
-  "versionName": "1.11.6",
-  "notes": "Alama ya HOOP sasa inaonekana juu ya jina kwenye skrini ya kufungwa. / The HOOP mark now shows above the title on the locked screen.",
+  "versionCode": 20,
+  "versionName": "1.12.0",
+  "notes": "Simu inaweza kuhamishwa kwenda mfumo mwingine (mf. HOPE) bila kufungua-upya wala kufuta data -- inabaki chini ya udhibiti na inaendelea kuwa katika hali yake ya sasa. / A handset can now be shifted to another office's system (e.g. HOPE) without a reset and without losing Device Owner -- it stays under control and keeps whatever lock state it was already in.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
