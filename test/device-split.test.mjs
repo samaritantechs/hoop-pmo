@@ -317,9 +317,9 @@ test('Fungua opens a choice, and it reaches both unlock and release through the 
      devSetState, the row panel directly -- so intercepting here catches all three, for the
      current phone or a selection, with nothing duplicated per entry point. */
   assert.match(act, /if\(state==='enrolled'\)\{ devUnlockChoose_\(m, imeis\); return false; \}/);
-  // And it must sit BEFORE the reason/confirm logic, or an unlock would demand a lock reason.
-  assert.ok(act.indexOf("state==='enrolled'") < act.indexOf("state==='locked'||state==='lost'"),
-    'the enrolled intercept precedes the lock-reason branch');
+  // And it must sit BEFORE the release confirmation, or an unlock would trip Achia's dialog.
+  assert.ok(act.indexOf("state==='enrolled'") < act.indexOf("state==='released' && !confirm("),
+    'the enrolled intercept precedes the release confirmation');
 
   const choose = html.slice(html.indexOf('function devUnlockChoose_('),
     html.indexOf('function devUnlockChoose_(') + 1600);
@@ -339,9 +339,9 @@ test('Fungua opens a choice, and it reaches both unlock and release through the 
 test('lock and the standalone achia are left exactly as they were', () => {
   const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
   const act = html.slice(html.indexOf('function devAct_('), html.indexOf('function devSend_('));
-  // Lock/write-off still demand a reason; the intercept did not touch them.
-  assert.match(act, /if\(state==='locked'\|\|state==='lost'\)\{/);
-  assert.match(act, /Sababu inahitajika/);
+  // Lock/write-off ask for no reason -- the intercept did not add one, and none is left over.
+  assert.ok(!/prompt\(/.test(act), 'no reason prompt anywhere in the order path');
+  assert.ok(!/Sababu inahitajika/.test(act));
   // The standalone Achia still carries its own one-way confirmation on the release path.
   assert.match(act, /state==='released' && !confirm\(/);
   // The desk still offers both buttons on their own, unchanged.

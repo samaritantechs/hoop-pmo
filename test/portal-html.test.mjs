@@ -1207,16 +1207,16 @@ test('portal.html: every row carries a Kufunga button, before Token', () => {
 });
 
 test('portal.html: the per-row panel reuses the bulk path, it does not reimplement it', () => {
-  /* The reason a lock demands, the sentence Achia must be answered with, and the override for
-     a released handset that stopped listening are all safety. Safety kept in two copies is
-     safety that will one day disagree with itself. */
+  /* The sentence Achia must be answered with, and the override for a released handset that
+     stopped listening, are both safety. Safety kept in two copies is safety that will one day
+     disagree with itself. */
   const src = read('portal.html');
   const one = src.slice(src.indexOf('function devLockOne(m, d, imei){'),
                         src.indexOf('function devSend_'));
   assert.ok(one.length > 500, 'the panel exists');
   assert.match(one, /devAct_\(m, \[imei\], b\.getAttribute\('data-dvs1'\)\)/,
     'it calls the shared door with a list of one');
-  assert.ok(!/prompt\(/.test(one), 'it must not ask for the reason itself');
+  assert.ok(!/prompt\(/.test(one), 'it must not ask anything itself');
   assert.ok(!/confirm\(/.test(one), 'nor put up its own Achia sentence');
   assert.ok(!/srv\('deviceSetState'/.test(one), 'nor talk to the server directly');
 

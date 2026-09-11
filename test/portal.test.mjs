@@ -446,27 +446,31 @@ test('a lock ORDERED is not a lock CONFIRMED until the phone says so', async () 
   assert.equal(r.rows[0].imei, 'L2');
 });
 
-test('locking requires a reason, and every state change lands in the event trail', async () => {
+test('locking needs no reason, and every state change lands in the event trail', async () => {
   const d = fakeDb({
     devices: [{ imei: 'D1', state: 'enrolled' }, { imei: 'D2', state: 'enrolled' }],
     device_events: [],
   });
-  await assert.rejects(() => _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'locked' }),
-    /reason is required/i, 'a lock with no reason is refused -- somebody is on the other end of it');
+  /* NO REASON IS REQUIRED any more -- see the note on deviceSetState. A bare lock still
+     works and lands its own event, carrying whatever the caller sent: nothing. */
+  const bare = await _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'locked' });
+  assert.equal(bare.changed, 1);
+  assert.equal(d._dump('device_events')[0].reason, null, 'no reason typed, none stored');
+
   await assert.rejects(() => _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'melted' }),
     /Unknown device state/);
 
   const r = await _FNS.deviceSetState(d, ADMIN, { imeis: ['D1', 'D2', 'NOPE'], state: 'locked', reason: 'Stock unaccounted' });
-  assert.equal(r.changed, 2);
+  assert.equal(r.changed, 1, 'D1 is already locked from the bare order above; only D2 moves');
   assert.equal(r.notEnrolled, 1, 'an IMEI nobody enrolled is reported, not silently locked');
   assert.deepEqual(r.notEnrolledList, ['NOPE']);
   const ev = d._dump('device_events');
   assert.equal(ev.length, 2);
-  assert.equal(ev[0].event, 'lock');
-  assert.equal(ev[0].from_state, 'enrolled');
-  assert.equal(ev[0].to_state, 'locked');
-  assert.equal(ev[0].reason, 'Stock unaccounted');
-  assert.equal(ev[0].actor, ADMIN.name);
+  assert.equal(ev[1].event, 'lock');
+  assert.equal(ev[1].from_state, 'enrolled');
+  assert.equal(ev[1].to_state, 'locked');
+  assert.equal(ev[1].reason, 'Stock unaccounted', 'a reason, when it IS given, still travels to the trail');
+  assert.equal(ev[1].actor, ADMIN.name);
 
   // Setting the same state again changes nothing and writes no event.
   const same = await _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'locked', reason: 'again' });
@@ -474,7 +478,7 @@ test('locking requires a reason, and every state change lands in the event trail
   assert.equal(same.alreadyThere, 1);
   assert.equal(d._dump('device_events').length, 2, 'no event for a state that did not move');
 
-  // Releasing needs no reason -- setting somebody free is not the act that needs justifying.
+  // Releasing needs no reason either -- setting somebody free is not the act that needs justifying.
   const rel = await _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'released' });
   assert.equal(rel.changed, 1);
   assert.ok(d._dump('devices').find(x => x.imei === 'D1').released_at);

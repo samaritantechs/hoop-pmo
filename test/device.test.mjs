@@ -243,8 +243,10 @@ test('a person typing something wrong is a 400, not a server failure', async () 
   const status = async fn => { try { await fn(); return 0; } catch (e) { return e.status || 500; } };
 
   assert.equal(await status(() => _FNS.deviceEnrol(d, ADMIN, { imeis: '' })), 400);
-  assert.equal(await status(() => _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'locked' })), 400,
-    'a lock with no reason is the caller\'s mistake');
+  // No reason is required to lock any more -- see the note on deviceSetState -- so this is
+  // simply a valid order and returns 0 (no error), not a 400.
+  assert.equal(await status(() => _FNS.deviceSetState(d, ADMIN, { imeis: ['D1'], state: 'locked' })), 0,
+    'a lock with no reason is a normal order now');
   assert.equal(await status(() => _FNS.deviceToken(d, ADMIN, { imei: '' })), 400);
   assert.equal(await status(() => _FNS.deviceToken(d, ADMIN, { imei: 'GHOST' })), 400);
 
