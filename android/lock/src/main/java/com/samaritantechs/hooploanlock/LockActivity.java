@@ -218,13 +218,26 @@ public class LockActivity extends Activity {
            Missing the resource (a build that skipped the generator) must not blank the
            screen the office phone number lives on, so a failed load is caught and the logo
            is simply absent rather than crashing what a locked customer is staring at. */
+        /* WHOSE MARK IT IS, IS THE SERVER'S TO SAY, because one APK serves two companies. The
+           drawable above is now the FALLBACK rather than the answer: a handset told which mark
+           to draw draws that one, a handset told to draw NONE draws none, and a handset nobody
+           has ever told anything goes on showing exactly what it always showed.
+
+           The three cases are kept apart deliberately. Collapsing "told none" into "not told"
+           is precisely how HOOP's wordmark ends up sitting above the words "HOPE MICROCREDIT"
+           on a HOPE officer's locked phone -- two companies on one screen, in front of
+           somebody deciding whether this is their employer or a scam. See LockLogo. */
         try {
-            ImageView logo = new ImageView(this);
-            logo.setImageResource(R.drawable.hoop_logo_white);
-            logo.setAdjustViewBounds(true);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, dp(48));
-            root.addView(logo, lp);
+            if (!LockLogo.suppressed(this)) {
+                ImageView logo = new ImageView(this);
+                android.graphics.Bitmap sent = LockLogo.bitmap(this);
+                if (sent != null) logo.setImageBitmap(sent);
+                else logo.setImageResource(R.drawable.hoop_logo_white);
+                logo.setAdjustViewBounds(true);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, dp(48));
+                root.addView(logo, lp);
+            }
         } catch (Exception ignored) { }
 
         brandView = row(root, 26, Color.WHITE, true, 0);

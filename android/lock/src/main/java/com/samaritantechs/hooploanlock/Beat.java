@@ -165,6 +165,14 @@ class Beat {
         if (brand != null && !brand.isEmpty()) Prefs.put(c, Prefs.BRAND, brand);
         String imei = r.optString("imei", "");
         if (imei != null && !imei.isEmpty()) Prefs.put(c, Prefs.IMEI, imei);
+        /* THE WORDMARK TRAVELS WITH THE WORDS, and is fetched HERE rather than when the screen
+           is drawn: the handset this matters most for is one that self-locks in a dead spot,
+           which draws its lock screen with no network at all. A beat has one by definition.
+           Only the address and a version ride on the answer; the bytes are downloaded once,
+           when that version moves. Costs nothing and breaks nothing on an older deployment
+           that sends neither field -- see LockLogo.apply. Deliberately ABOVE the retire block,
+           so a released handset's `logo: null` clears our mark off it on the way out. */
+        LockLogo.apply(c, r);
 
         if (r.optBoolean("retire", false)) {
             /* A RELEASED PHONE NEVER SELF-LOCKS AGAIN, and this line is load-bearing now that

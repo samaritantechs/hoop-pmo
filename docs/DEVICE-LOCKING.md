@@ -567,6 +567,36 @@ reason all arrive on the heartbeat and are stored on the handset, so a phone tha
 somebody's pocket for eighteen months still shows the number the office answers *today*. The
 app owns the layout; the server owns every word in it.
 
+**And now the wordmark above them, too.** It used to be the one thing on that screen the APK
+decided: `R.drawable.hoop_logo_white`, compiled in. That was fine while this build served one
+company and wrong the moment it served two — HOPE runs this same signed APK deliberately, so a
+locked HOPE handset drew HOOP's mark directly above the words "HOPE MICROCREDIT". Two
+companies on one screen, in front of somebody deciding whether this is their employer or a
+scam.
+
+So the beat may now carry `logo` and `logoVersion`, and `LockLogo` caches the file and draws
+it. **Nothing changes for HOOP's phones:** this server does not send those fields, an absent
+field means "change nothing", and every handset goes on drawing the mark compiled into it. If
+HOOP ever wants its own to be server-set too, it is the same two fields — the app half is
+already shipped.
+
+Three answers, kept apart on purpose:
+
+| the beat says | the phone draws |
+|---|---|
+| nothing about `logo` | the mark compiled into the build — today's behaviour, unchanged |
+| an address + version | that mark, fetched once when the version moves, then from disk |
+| `logo: null` | **no mark at all** — never the compiled one |
+
+That last row is the load-bearing one. Falling back on "none" is exactly how one company's
+logo reappears on the other's phone. It is also what a **released** handset is told, so our
+mark does not stay cached on a phone that has been handed back.
+
+The bytes are fetched **on a beat, never when the screen is drawn** — the handset this matters
+most for is one that self-locked in a dead spot and has no network at the moment it needs to
+say who is holding it. And only when the version moves: three hundred handsets re-fetching
+16 KB every fifteen minutes would be about 480 MB a month on data the company pays for.
+
 The IMEI shown is **the register's**, not the one the handset reads off its own modem. Those
 are different facts and the register's is the useful one: it is what Sipho's stock report
 says, what the office will search on, and — from Android 10 — the only one an app can display
