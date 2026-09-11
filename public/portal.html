@@ -7204,8 +7204,47 @@ function osPaint_(m, d){
        The bar every table gets copies WHAT IS ON SCREEN, which here is five summary columns
        per holder -- a team driving out to collect handsets needs the IMEIs, not the count of
        them, and would otherwise have to come back to this pane holder by holder. */
+    /* WHAT TO DO BEFORE THE HANDSET LEAVES THE HOLDER'S HANDS.
+       =====================================================================================
+         "on the recovery and submission of stocks from agents, of our stock some phones
+          comeback password protected ... samsung a07 354201389241692"
+         "we never locked before"
+
+       THAT SECOND LINE IS WHY THIS IS A NOTICE AND NOT A BUTTON. These handsets were never
+       enrolled -- no Device Owner, no token, nothing of ours on them -- so there is no remote
+       anything. The PIN is the holder's own Samsung screen lock and the only person who can
+       clear it is the person standing in front of the collector.
+
+       AND THE GOOGLE ACCOUNT IS THE WORSE HALF. A PIN is an inconvenience: reset the phone
+       from recovery and it is gone. But a reset on a handset still carrying somebody's Google
+       account arms Factory Reset Protection, and setup afterwards demands THAT ACCOUNT -- a
+       phone nobody in this company can open, recovered at the cost of a journey and worth
+       nothing. Two minutes with the holder present prevents it; no amount of work afterwards
+       reliably does.
+
+       SO IT SITS ON THE ROUND, which is the screen a collection team reads before driving
+       out, rather than in a manual nobody opens in a van. */
     var board=(d.byAgent||[]).length
-      ? '<div style="display:flex;gap:8px;align-items:center;margin:10px 0 6px">'
+      ? '<div class="note" style="margin:10px 0;font-size:11.5px">'
+        +'<b>Kabla ya kuchukua simu, mwenye nazo afute vitu viwili / Before you take a handset, '
+        +'have the holder clear two things:</b>'
+        +'<div style="margin-top:4px">1. <b>PIN / pattern</b> — Mipangilio → Skrini ya kufunga. '
+        +'Ikija ikiwa imefungwa, hakuna anayeweza kuifungua; sisi hatukuwahi kuiweka kwenye '
+        +'kufuli letu, kwa hiyo hatuna njia ya mbali. '
+        +'/ The screen lock. We never enrolled these handsets, so there is no remote way in — '
+        +'only the holder can clear it.</div>'
+        +'<div>2. <b>Akaunti yake ya Google</b> — Mipangilio → Akaunti → Ondoa. Hii ndiyo muhimu '
+        +'zaidi: ukiifuta simu (factory reset) na akaunti bado ipo ndani, Google itaidai tena '
+        +'(FRP) na simu haitafunguka na mtu yeyote hapa. '
+        +'/ Their Google account — this is the important one. Reset a handset that still has it '
+        +'signed in and Google demands that account afterwards (FRP); nobody here can open it.</div>'
+        +'<div class="mut" style="margin-top:4px">Imeshakuja ikiwa imefungwa? Mpigie mwenye nazo — '
+        +'namba yake ipo hapa chini: aseme PIN, au aondoe simu kwenye akaunti yake kwenye '
+        +'<b>myaccount.google.com</b>. '
+        +'/ Already back and locked? Ring the holder — their number is on this board: ask for the '
+        +'PIN, or have them remove the handset from their Google account.</div>'
+        +'</div>'
+        +'<div style="display:flex;gap:8px;align-items:center;margin:10px 0 6px">'
         +'<span style="flex:1"></span>'
         +'<button class="btn sm ghost" id="osRoundXl" style="padding:2px 8px;font-size:11.5px" '
         +'title="Pakua ziara na IMEI zote / download the round with its handsets">⤓ Excel</button>'

@@ -912,3 +912,40 @@ test('the pivot pane drills through, and holders is not a link', () => {
   // A place holds several people, so its list says whose each handset is.
   assert.match(drawerSrc, /Mwenye nazo \/ holder/);
 });
+
+/* ============================================================================================
+   THE ROUND TELLS THE COLLECTOR WHAT TO CLEAR BEFORE TAKING A HANDSET.
+   ============================================================================================
+     "on the recovery and submission of stocks from agents, of our stock some phones comeback
+      password protected ... samsung a07 354201389241692"
+     "we never locked before"
+
+   THE SECOND LINE IS WHY THIS IS A NOTICE AND NOT A BUTTON. OLD STOCK was never enrolled --
+   no Device Owner, no token, nothing of ours on the handset -- so there is no remote anything.
+   The PIN is the holder's own screen lock, and the only person who can clear it is the one
+   standing in front of the collector.
+
+   AND THE GOOGLE ACCOUNT IS THE WORSE HALF: a PIN dies in a factory reset, but a reset on a
+   handset still carrying somebody's Google account arms FRP, and setup then demands THAT
+   account. That is a phone recovered at the cost of a journey and worth nothing afterwards.
+   ============================================================================================ */
+test('the round says what to clear before a handset is taken, and why', () => {
+  const src = fnSrc('osPaint_');
+  const card = src.replace(/'\s*\+\s*'/g, '');   // read it the way the collector does
+  // Both halves, in order: the lock is the obvious one, the account is the expensive one.
+  assert.match(card, /PIN \/ pattern/);
+  assert.match(card, /Akaunti yake ya Google/);
+  assert.match(card, /FRP/, 'names the thing that makes a reset handset worthless');
+  /* IT SAYS WE HAVE NO REMOTE ROUTE, because the obvious question from anyone who knows the
+     locking desk exists is "why not just unlock it from the portal" -- and the answer is that
+     this stock was never enrolled at all. */
+  assert.match(card, /We never enrolled these handsets/);
+  // A handset already back is not a dead end: the holder's number is on this very board.
+  assert.match(card, /myaccount\.google\.com/);
+  assert.match(card, /Ring the holder/);
+
+  /* ON THE ROUND, not the handset table: this is read before driving out, by the team that
+     will be standing in front of the holder. */
+  const board = src.slice(src.indexOf('var board='), src.indexOf('var table='));
+  assert.match(board, /Kabla ya kuchukua simu/);
+});
