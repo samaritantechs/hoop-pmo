@@ -3549,6 +3549,22 @@ function devSetState(m, state){
    Returns whether an order was actually sent, so the caller can close its panel on a yes and
    leave it open on a cancel. */
 function devAct_(m, imeis, state){
+  /* FUNGUA CARRIES THE ACHIA DECISION NOW, IN ONE PRESS.
+     =======================================================================================
+       "sales coordinators fungua and achia at once at pos ... whenever pressed unlock prompt
+        a quin wether to achia too or just [unlock] ... reduce the double work ... decide the
+        two now"
+
+     Because a managed phone refuses Gmail account creation, the POS desk has been releasing
+     every handset right after unlocking it -- two presses, Fungua then Achia -- so the
+     customer can sign in. This turns that into ONE decision: pressing Unlock asks which of the
+     two it is. Nothing about lock, or the standalone Achia button, changes; this is the single
+     funnel every Fungua already passes through, so the bulk bar, the row button and the row
+     panel all get the choice for free, on the current phone or a selection.
+
+     The one-way warning rides ON the release choice rather than in a second dialog after it --
+     otherwise "reduce the double work" would just move the double click. */
+  if(state==='enrolled'){ devUnlockChoose_(m, imeis); return false; }
   var reason='';
   if(state==='locked'||state==='lost'){
     reason=prompt((state==='locked'?'Sababu ya kufunga':'Sababu')+' / Reason (required):')||'';
@@ -3568,6 +3584,33 @@ function devAct_(m, imeis, state){
     +'reporting. Bringing one back is a cable job, per phone.')) return false;
   devSend_(m, imeis, state, reason.trim(), false);
   return true;
+}
+/* THE ONE PRESS THAT DECIDES BOTH. Opened by every Fungua, for the current phone or a
+   selection. Two buttons, and the release one carries its own warning so the decision is made
+   once and informed -- there is no second dialog on the single-phone POS case, which is the
+   whole point. A bulk release still stops to confirm the count, because letting many phones go
+   for good at once is exactly where a slip is expensive; a single handset does not. */
+function devUnlockChoose_(m, imeis){
+  var n=imeis.length;
+  if(!n){ toast('Chagua simu kwanza. / Pick some phones first.', true); return; }
+  drawer('<h3>Fungua / Unlock · '+money(n)+'</h3>'
+    +'<div class="mut" style="font-size:12px;margin-bottom:10px">Chagua moja / choose one:</div>'
+    +'<button class="btn w" id="dvJustOpen">Fungua tu / Unlock only</button>'
+    +'<div class="mut" style="font-size:11px;margin:4px 0 14px">Simu inabaki chini ya udhibiti wetu; '
+    +'inaweza kufungwa tena. / Stays under our lock and can be re-locked.</div>'
+    +'<button class="btn w danger" id="dvOpenAchia">Fungua na Achia / Unlock + release</button>'
+    +'<div class="mut" style="font-size:11px;margin-top:4px">Simu itaachana na Device Owner na '
+    +'itaacha kupiga ripoti — kuirudisha ni kebo, kila simu. Ndiyo huruhusu kuingia Gmail. '
+    +'/ Drops Device Owner and stops reporting; bringing one back is a cable job, per phone. '
+    +'This is what lets Gmail sign-in work.</div>');
+  $('#dvJustOpen').onclick=function(){ closeDrawer(); devSend_(m, imeis, 'enrolled', '', false); };
+  $('#dvOpenAchia').onclick=function(){
+    closeDrawer();
+    /* One phone: the choice above was the deliberate yes -- go. Many phones: keep the count
+       confirmation, via the standalone achia path (which is not intercepted). */
+    if(n>1) devAct_(m, imeis, 'released');
+    else devSend_(m, imeis, 'released', '', false);
+  };
 }
 
 /* ONE PHONE, ON ITS OWN SCREEN.

@@ -296,3 +296,55 @@ test('the Token drawer says why there is no new-token button', () => {
   assert.match(card, /Download it fresh every time/i);
   assert.match(card, /refused as a downgrade/i);
 });
+
+/* ============================================================================================
+   ONE FUNGUA PRESS DECIDES UNLOCK-ONLY OR UNLOCK-AND-ACHIA.
+   ============================================================================================
+     "sales coordinators fungua and achia at once at pos ... whenever pressed unlock prompt a
+      quin wether to achia too or just [unlock] ... reduce the double work ... decide the two
+      now ... extend to achia for current or selected device"
+
+   A managed phone refuses Gmail account creation, so the POS desk was releasing every handset
+   right after unlocking it -- two presses. This makes it one decision. It is a UI change: the
+   server already gates both 'enrolled' and 'released' behind the unlock nav, and this test pins
+   that the single funnel every Fungua passes through now opens the chooser, and that lock and
+   the standalone achia are untouched.
+   ============================================================================================ */
+test('Fungua opens a choice, and it reaches both unlock and release through the one funnel', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const act = html.slice(html.indexOf('function devAct_('), html.indexOf('function devSend_('));
+  /* EVERY Fungua enters devAct_ with state 'enrolled' -- the bulk bar and row button via
+     devSetState, the row panel directly -- so intercepting here catches all three, for the
+     current phone or a selection, with nothing duplicated per entry point. */
+  assert.match(act, /if\(state==='enrolled'\)\{ devUnlockChoose_\(m, imeis\); return false; \}/);
+  // And it must sit BEFORE the reason/confirm logic, or an unlock would demand a lock reason.
+  assert.ok(act.indexOf("state==='enrolled'") < act.indexOf("state==='locked'||state==='lost'"),
+    'the enrolled intercept precedes the lock-reason branch');
+
+  const choose = html.slice(html.indexOf('function devUnlockChoose_('),
+    html.indexOf('function devUnlockChoose_(') + 1600);
+  // Two roads, both through devSend_/devAct_ -- the same proven write path, not a new one.
+  assert.match(choose, /Fungua tu \/ Unlock only/);
+  assert.match(choose, /Fungua na Achia \/ Unlock \+ release/);
+  assert.match(choose, /devSend_\(m, imeis, 'enrolled', '', false\)/);
+  assert.match(choose, /devSend_\(m, imeis, 'released', '', false\)/);
+  /* THE ONE-WAY WARNING RIDES ON THE RELEASE BUTTON, so the decision is made once and informed
+     rather than behind a second dialog -- which is the whole "reduce the double work". */
+  assert.match(choose, /Drops Device Owner and stops reporting/);
+  assert.match(choose, /lets Gmail sign-in work/i);
+  /* A BULK RELEASE STILL CONFIRMS THE COUNT; a single POS phone does not. */
+  assert.match(choose, /if\(n>1\) devAct_\(m, imeis, 'released'\);/);
+});
+
+test('lock and the standalone achia are left exactly as they were', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const act = html.slice(html.indexOf('function devAct_('), html.indexOf('function devSend_('));
+  // Lock/write-off still demand a reason; the intercept did not touch them.
+  assert.match(act, /if\(state==='locked'\|\|state==='lost'\)\{/);
+  assert.match(act, /Sababu inahitajika/);
+  // The standalone Achia still carries its own one-way confirmation on the release path.
+  assert.match(act, /state==='released' && !confirm\(/);
+  // The desk still offers both buttons on their own, unchanged.
+  assert.match(html, /data-dvs="enrolled">Fungua \/ Unlock/);
+  assert.match(html, /data-dvs="released">Achia \/ Release/);
+});
