@@ -35,6 +35,7 @@ import { fetchAll } from './supabase.js';
 // sold_ref and customer are here for one reason: together they answer "has this phone left
 // our hands", which is what decides whether silence may ever lock it. See graceFor().
 const BEAT_COLS_LEGACY = 'imei, item, state, state_reason, reported, enrol_token, customer, holder, sold_ref';
+const BEAT_COLS_SHIFT = ', shift_server, shift_batch';
 // fcm_token is read only so the beat can tell whether the handset's address has CHANGED --
 // two hundred phones beating every minute would otherwise be two hundred needless writes a
 // minute. See byToken for what happens where the migration has not run yet.
@@ -273,10 +274,22 @@ async function byToken(db, p) {
      write when it changed" saving until the migration lands. */
   let rows;
   try {
-    rows = await fetchAll(() => db.from('devices').select(BEAT_COLS).eq('enrol_token', token));
+    rows = await fetchAll(() => db.from('devices')
+      .select(BEAT_COLS + BEAT_COLS_SHIFT).eq('enrol_token', token));
   } catch (e) {
-    if (!/fcm_token/.test(String(e && e.message || ''))) throw e;
-    rows = await fetchAll(() => db.from('devices').select(BEAT_COLS_LEGACY).eq('enrol_token', token));
+    if (/shift_server|shift_batch/.test(String(e && e.message || ''))) {
+      try {
+        rows = await fetchAll(() => db.from('devices').select(BEAT_COLS).eq('enrol_token', token));
+      } catch (e2) {
+        if (!/fcm_token/.test(String(e2 && e2.message || ''))) throw e2;
+        rows = await fetchAll(() => db.from('devices')
+          .select(BEAT_COLS_LEGACY).eq('enrol_token', token));
+      }
+    } else if (/fcm_token/.test(String(e && e.message || ''))) {
+      rows = await fetchAll(() => db.from('devices').select(BEAT_COLS_LEGACY).eq('enrol_token', token));
+    } else {
+      throw e;
+    }
   }
   const dev = rows.find(r => S(r.enrol_token) === token) || null;
   if (!dev) { const e = new Error('Not enrolled'); e.status = 403; throw e; }
@@ -436,7 +449,35 @@ async function beat(db, [payload], nowMs) {
        everything from that moment on is now seconds. Beating that first wait needs a push
        channel (FCM), which is a genuinely different piece of work. */
     nextBeatSeconds: settled ? BEAT_SECONDS : PENDING_BEAT_SECONDS,
+    /* THE SHIFT ORDER, if deviceShift placed one on this row -- see the mirror of this note
+       in hope-pmo-v2's device-core.js, and Shift.java in android/lock, which is the SAME
+       class serving both companies. Read straight off the row; nothing the phone does or is
+       told from anywhere else can produce this field. */
+    shift: (dev.shift_server && dev.shift_batch)
+      ? { server: S(dev.shift_server), batch: S(dev.shift_batch) } : undefined,
   };
+}
+
+/* THE OLD OFFICE LEARNS A SHIFT LANDED -- see the HOPE mirror of this function for the full
+   note. Authenticated exactly like every other dev_* call (byToken), so only a phone that IS
+   this device can report it. The row becomes `released` here for the same reason it always
+   has: not ours to track any more, and correctly not beating here. */
+async function shifted(db, [payload], nowMs) {
+  const dev = await byToken(db, payload);
+  const at = new Date(nowMs).toISOString();
+  const reason = 'imehamishwa kwenda ofisi nyingine (shift) / shifted to another office';
+  const { error } = await db.from('devices').update({
+    state: 'released', state_reason: reason, state_by: 'shift', state_at: at,
+    released_at: at, updated_at: at,
+  }).eq('imei', dev.imei);
+  if (error) throw new Error(error.message);
+  await db.from('device_events').insert([{ imei: dev.imei, event: 'shifted',
+    from_state: dev.state, to_state: 'released', reason, actor: 'device', at }]);
+  try {
+    await db.from('devices').update({ shift_server: null, shift_batch: null })
+      .eq('imei', dev.imei);
+  } catch (ignored) { /* pre-migration: nothing to clear */ }
+  return { ok: true };
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -504,7 +545,7 @@ async function claim(db, [payload], nowMs) {
   let rows = [];
   try {
     rows = await fetchAll(() => db.from('devices')
-      .select('imei, enrol_token, enrol_batch_at').eq('enrol_batch', batch));
+      .select('imei, enrol_token, enrol_batch_at, state').eq('enrol_batch', batch));
   } catch (e) {
     // Before RUN-ME-2026-08-31-enrol-batch.sql there is no such column, so there is no batch
     // to be in. Same refusal: this endpoint never explains itself to a handset.
@@ -521,10 +562,44 @@ async function claim(db, [payload], nowMs) {
 
   const dev = rows.find(r => said.includes(S(r.imei).trim()));
   if (!dev || !S(dev.enrol_token)) refuse();
+  /* THE HANDSET ARRIVES WITH THE STATE IT LEFT WITH, WHEN THAT STATE MATTERS.
+     -------------------------------------------------------------------------------------
+       "when we shift it goes with current state" -- ported from hope-pmo-v2, where the
+     mirror of this function carries the same note in full.
+
+     A shift order is a beat response from the OTHER office, carrying its OWN devices.state
+     alongside the server + batch that sends the phone here. The phone only relays it -- it
+     never invents one -- but it is still self-reported, with none of the office-side
+     authority a real deviceSetState carries. So only the SAFE direction is trusted: LOCKED
+     or LOST only ever adds restriction, never removes it, so an unverified claim carrying
+     either can be used to smuggle a phone INTO more caution, never out of it.
+
+     APPLIED ONLY TO A ROW STILL AT ITS OWN DEFAULT. `state: 'enrolled'` is exactly what
+     deviceEnrol wrote when this row was minted moments ago for this batch. If this office
+     had already formed its own opinion about the phone before the claim landed, that
+     opinion is never overwritten: the shift is a hint about a device this office has not
+     looked at yet, not an order from one office to another. */
+  const carried = S((p && p.state) || '');
+  if ((carried === 'locked' || carried === 'lost') && S(dev.state) === 'enrolled') {
+    const at = new Date(nowMs).toISOString();
+    // The ORIGINAL reason travels too, when the phone had one to relay -- see the HOPE mirror.
+    const theirs = S((p && p.reason) || '').trim();
+    const reason = theirs
+      ? 'kutoka ofisi nyingine (shift): ' + theirs + ' / from the other office (shift): ' + theirs
+      : 'ilipokelewa ikiwa imefungwa (shift) / arrived already ' + carried + ' from a shift';
+    const { error } = await db.from('devices').update({
+      state: carried, state_reason: reason, state_by: 'shift', state_at: at, updated_at: at,
+    }).eq('imei', S(dev.imei));
+    if (!error) {
+      await db.from('device_events').insert([{ imei: S(dev.imei), event: carried,
+        from_state: 'enrolled', to_state: carried, reason, actor: 'shift', at }]);
+    }
+    // A failed write here must not fail the claim -- see the note in the HOPE mirror.
+  }
   return { ok: true, token: S(dev.enrol_token) };
 }
 
-const FNS = { dev_hello: hello, dev_beat: beat, dev_claim: claim };
+const FNS = { dev_hello: hello, dev_beat: beat, dev_claim: claim, dev_shifted: shifted };
 
 /** Same transport shape as callApi: one route, a named fn, positional args. */
 export async function deviceApi(db, fn, args, nowMs = Date.now()) {

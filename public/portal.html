@@ -3229,6 +3229,13 @@ function devPaint_(m, d, at){
       : '<button class="btn sm ghost" id="dvBulk" data-dvbulk="'+(canLock?'locked':'released')+'" '
         +'title="Bandika orodha ya IMEI / paste a list of IMEIs">'
         +(canLock?'Funga kwa wingi / Lock bulk':'Achia kwa wingi / Release bulk')+'</button>')
+    /* SHIFT IS THE LOCKING BENCH'S OWN, like Sajili simu -- moving a phone off this
+       register is the same job as putting it on. The server agrees: requireNav(user,
+       'devlock') on deviceShift refuses the release desk regardless of what this button
+       offers, so hiding it here is a courtesy, not the gate. */
+    +(BOOT.readOnly||!canLock ? '' : '<button class="btn sm ghost" id="dvShift" '
+      +'title="Hamisha kwenda kampuni nyingine / move to the other company">'
+      +'↔️ Hamisha / Shift</button>')
     +'</div>';
   var table=rows.length
     ? '<div class="scroll"><table><thead><tr>'
@@ -3441,6 +3448,7 @@ function devPaint_(m, d, at){
   /* The order comes off the button rather than out of DEVMODE a second time: one place decides
      which desk this is, and everything else reads that decision instead of re-making it. */
   var rb=$('#dvBulk'); if(rb) rb.onclick=function(){ devBulkForm(m, rb.getAttribute('data-dvbulk')); };
+  var sh=$('#dvShift'); if(sh) sh.onclick=function(){ devShiftForm(m); };
   $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
   /* The POS desk's one-row order. It ticks the row and reuses the same bulk path, so the
      confirmation, the count and the error handling are the ones already proven. */
@@ -3921,6 +3929,64 @@ function devBulkForm(m, state){
     var p=devParseImeis_(ta.value);
     if(!p.list.length){ toast('Bandika angalau IMEI moja. / Paste at least one IMEI.', true); return; }
     if(devAct_(m, p.list, state)) closeDrawer();
+  };
+}
+/* MOVING A HANDSET TO THE OTHER COMPANY, WITHOUT A FACTORY RESET.
+   =========================================================================================
+     "another button for shift so that hoop can shift a device to hope and viceversa saving
+      re-enlorrment energy"
+
+   Achia calls clearDeviceOwnerApp, and Device Owner is refused while any account is signed
+   in -- so a handset that has been in an agent's hand for months needs a FACTORY RESET just
+   to change which office it answers to. Shift writes an ORDER instead: the phone reads a
+   server+batch on its own next beat, exactly like a lock order, and moves itself with no
+   wipe and no cable.
+
+   THE OTHER OFFICE'S ADMIN HAS TO HAND OVER TWO THINGS FIRST, because there is no standing
+   trust between two separate companies' servers -- the only channel this uses is the
+   handset itself, proving its own IMEI against a batch, exactly like a bench enrolment:
+     1. their own address (where their portal lives)
+     2. a batch THEY minted, from THEIR OWN Sajili simu, for these same IMEIs
+   Nothing here reaches across to fetch either automatically. */
+function devShiftForm(m){
+  drawer('<h3>Hamisha kwenda kampuni nyingine / Shift to the other company</h3>'
+    +'<div class="sub">Simu HAIACHI kuwa Device Owner — inahama tu. Hakuna kufuta wala kebo. '
+    +'Hazihitaji kuwa kwenye jedwali; zinasomwa kutoka kwenye register nzima. '
+    +'/ The phone does NOT give up ownership — it just moves. No wipe, no cable. They do not '
+    +'have to be on the table behind this — the whole register is searched.</div>'
+    +'<div class="fld"><label>IMEI</label>'
+    +'<textarea id="dvShiftImeis" rows="8" style="width:100%;font-family:ui-monospace,monospace;font-size:12px"></textarea></div>'
+    +'<div id="dvShiftCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+    +'<div class="fld"><label>Anwani ya ofisi nyingine / The other office\'s address</label>'
+    +'<input id="dvShiftServer" placeholder="https://…"></div>'
+    +'<div class="fld"><label>Batch kutoka Sajili simu yao / Batch from THEIR Sajili simu</label>'
+    +'<input id="dvShiftBatch" style="font-family:ui-monospace,monospace" placeholder="32 hex characters"></div>'
+    +'<div class="note" style="font-size:11.5px">Batch hii ni ya OFISI NYINGINE — waombe wafungue '
+    +'Sajili simu kwa IMEI hizi hizi na wakupe batch iliyotolewa. Ni siri ya saa 24 tu. '
+    +'/ That batch belongs to THE OTHER office — ask them to open Sajili simu for these same '
+    +'IMEIs and hand you the batch it gives back. Good for 24 hours only.</div>'
+    +'<button class="btn w" id="dvShiftGo">Hamisha / Shift</button>');
+  var ta=$('#dvShiftImeis'), out=$('#dvShiftCount');
+  var recount=function(){
+    var p=devParseImeis_(ta.value);
+    out.innerHTML = !p.list.length
+      ? 'Bado hakuna IMEI. / Nothing pasted yet.'
+      : '<b>'+money(p.list.length)+'</b> IMEI · ya kwanza: <b>'+esc(p.list[0])+'</b>'
+        +(p.dupes?' · '+money(p.dupes)+' zimerudiwa / repeated':'');
+  };
+  ta.oninput=recount; recount();
+  $('#dvShiftGo').onclick=function(){
+    var p=devParseImeis_(ta.value);
+    if(!p.list.length){ toast('Bandika angalau IMEI moja. / Paste at least one IMEI.', true); return; }
+    var server=($('#dvShiftServer').value||'').trim(), batch=($('#dvShiftBatch').value||'').trim();
+    if(!server||!batch){ toast('Anwani na batch vinahitajika. / Address and batch are both required.', true); return; }
+    devBusy_(true);
+    srv('deviceShift',{imeis:p.list,server:server,batch:batch}).then(function(r){
+      toast('Zimeagizwa kuhama: '+money(r.ordered)
+        +(r.alreadyReleased?' · '+money(r.alreadyReleased)+' tayari zimeachiwa':'')
+        +(r.unknown?' · '+money(r.unknown)+' hazipo kwenye register':''));
+      closeDrawer(); drawDevices(m);
+    }).catch(function(e){ devBusy_(false); toast(safeErr(e), true); });
   };
 }
 /* THE STATION'S SCRIPT. A token on its own is a string nobody can act on -- what the bench

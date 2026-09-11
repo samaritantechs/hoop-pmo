@@ -49,6 +49,7 @@ AUDITED.add('deleteRole');
 /* Locking somebody's phone is the most consequential write this system has. */
 AUDITED.add('deviceEnrol');
 AUDITED.add('deviceSetState');
+AUDITED.add('deviceShift');
 /* A read, audited: it hands out a handset credential, so who asked for which one is kept. */
 AUDITED.add('deviceToken');
 /* An eraser. Once this runs the audit entry is the only record that phone was ever here. */
@@ -3978,6 +3979,70 @@ const FNS = {
         // problem that was not there.
         fresh: !have.has(imei) && !remembered.has(imei),
       })).filter(p => p.token) };
+  },
+
+  /* MOVING A HANDSET TO THE OTHER COMPANY, WITHOUT A FACTORY RESET.
+     =====================================================================================
+       "another button for shift so that hoop can shift a device to hope and viceversa
+        saving re-enlorrment energy"
+
+     One signed APK serves both companies. Achia calls clearDeviceOwnerApp, and Device Owner
+     is refused while any account is signed in -- so a handset that has been in an agent's
+     hand for months needs a FACTORY RESET just to change which office it answers to. Shift
+     never lets go of ownership: the phone reads a server+batch on its own next beat, the
+     same way a lock order already travels, and moves itself.
+
+     THIS FUNCTION WRITES ONLY THE ORDER, not the move. beat() in device-core.js reads it
+     back off the same row and hands it to the phone; Shift.java in the app does the rest,
+     proving the handset to the new office with a batch rather than being handed a token
+     directly -- see both files' own notes, and hope-pmo-v2's mirror of this function.
+
+     WHY THE OPERATOR TYPES THE OTHER OFFICE'S ADDRESS AND A BATCH IT ALREADY MINTED, rather
+     than this function reaching across automatically: these are two separate companies'
+     deployments with no standing trust between their backends. The only channel this uses
+     is the one that already exists and is already narrow -- the handset itself, proving its
+     own IMEI against a batch, exactly like a bench enrolment. */
+  async deviceShift(db, user, args) {
+    requireWrite(user); requireNav(user, 'devlock');
+    const a = args || {};
+    const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : String(a.imeis || '').split(/[\s,;]+/))
+      .map(x => String(x || '').trim()).filter(Boolean))];
+    if (!list.length) bad('Weka angalau IMEI moja. / At least one IMEI is required.');
+    if (list.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). / Too many at once — 500 max.');
+
+    let server = String(a.server || '').trim().replace(/\/+$/, '');
+    if (!/^https:\/\/[^\s]+$/i.test(server)) {
+      bad('Anwani ya ofisi nyingine lazima ianze na https:// . '
+        + '/ The other office\'s address must start with https:// .');
+    }
+    const batch = String(a.batch || '').trim();
+    if (!/^[0-9a-f]{32}$/i.test(batch)) {
+      bad('Batch si sahihi — nakili moja kwa moja kutoka \'Sajili simu\' ya ofisi nyingine. '
+        + '/ That batch does not look right — copy it straight from the other office\'s own '
+        + '\'Sajili simu\' / Enrol drawer.');
+    }
+
+    const known = await fetchAll(() => db.from('devices').select('imei, state').in('imei', list));
+    const have = new Map(known.map(r => [String(r.imei), r]));
+    if (!have.size) bad('Simu hizi hazipo kwenye rejista. / None of those IMEIs are on the register.');
+    /* A RELEASED PHONE HAS ALREADY LEFT -- BeatJob stops the moment achia takes, so nothing is
+       listening to receive this order. Writing it anyway would sit unread for ever. */
+    const released = [...have.values()].filter(r => String(r.state) === 'released').map(r => String(r.imei));
+    const eligible = [...have.values()].filter(r => String(r.state) !== 'released').map(r => String(r.imei));
+
+    const at = new Date().toISOString();
+    if (eligible.length) {
+      const { error } = await db.from('devices')
+        .update({ shift_server: server, shift_batch: batch, shift_at: at, updated_at: at })
+        .in('imei', eligible);
+      if (error) throw new Error(error.message);
+      await db.from('device_events').insert(eligible.map(imei => ({
+        imei, event: 'shift-ordered',
+        reason: 'kuhamishwa kwenda ' + server + ' / shift ordered to ' + server,
+        actor: user.name, at })));
+    }
+    return { ok: true, ordered: eligible.length, alreadyReleased: released.length,
+      unknown: list.filter(i => !have.has(i)).length, server };
   },
 
   /* SET STATE -- lock, unlock, release or write off. One door for every state change, so

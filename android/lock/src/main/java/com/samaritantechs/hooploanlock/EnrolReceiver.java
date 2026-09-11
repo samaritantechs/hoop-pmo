@@ -279,6 +279,15 @@ public class EnrolReceiver extends BroadcastReceiver {
         return false;
     }
 
+    /** Package-private door onto readImeis(), for Shift claiming this handset's identity at a
+        NEW office. One reader behind both doors, so a phone cannot name itself one way to its
+        first register and another way to its second. A separate method rather than widening
+        readImeis()'s own visibility, so the batch-claim tests that locate it by its exact
+        signature keep finding it. */
+    static JSONArray imeisForClaim(Context c) {
+        return readImeis(c);
+    }
+
     /**
      * Does this look like something the register minted?
      *

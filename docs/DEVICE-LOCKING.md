@@ -1481,3 +1481,54 @@ The ceiling is not arbitrary. A background broadcast is killed at 60 seconds, an
 receiver prints `result=0` with no data — which reads exactly like success and is strictly worse
 than the failure this fixes. 30s of waiting plus a last attempt spending its full 12s connect and
 12s read timeouts is 54s, and a test holds that sum under 60.
+
+---
+
+## Shift — moving a handset to HOPE, or taking one from them
+
+> "another button for shift so that hoop can shift a device to hope and viceversa saving
+> re-enlorrment energy"
+
+The same signed APK now serves two companies: this register, for customer-financed
+handsets, and HOPE's, for staff phones (`hope-pmo-v2`, `docs/DEVICE-LOCKING.md`). Moving a
+handset from one to the other used to mean **Achia** — which calls `clearDeviceOwnerApp`,
+and Device Owner is refused while any account is signed in, so a handset that has been in
+an agent's hand for months needed a **factory reset** just to change which office it
+answered to.
+
+**Shift never lets go of ownership.** The phone reads an order on its own next beat — a
+server and a batch, exactly like a lock order — and moves itself.
+
+### Sending a handset away
+
+**Locking** pane → **↔️ Hamisha / Shift**. Paste the IMEIs, the **receiving office's own
+address**, and a **batch that office already minted** for these same IMEIs from their own
+Sajili simu / Enrol drawer. There is no login shared between the two companies and none is
+created for this — the only thing that crosses is what a bench enrolment already sends: the
+handset proving its own IMEI against a batch.
+
+Nothing moves yet. The order sits on the row until the phone's own next beat, then the row
+here reads `Imeachiwa / released`, with a reason naming the shift.
+
+### Receiving one from HOPE
+
+Enrol it here first — **+ Sajili simu**, same as any new stock — and hand HOPE's admin the
+**batch** it gives back. That is the one thing they need from this side. Once they place the
+Shift order on their end, the phone claims its token here on its own next beat.
+
+**A locked phone arrives locked, not blank.** If HOPE's row for that IMEI was `locked` or
+`lost`, this register's fresh row is stamped the same way the moment the claim lands — an
+officer who left with company property does not become an ordinary phone in service just
+because it crossed a company boundary. Only that direction is trusted from an incoming
+claim: `locked` and `lost` only ever add restriction, and only onto a row this register has
+not yet formed its own opinion about.
+
+The whole mechanism — `Shift.java`, the beat's `shift` field, `dev_claim`'s state carry — is
+one class serving both companies; see its own comments in `android/lock` for the detail, and
+`hope-pmo-v2`'s `docs/DEVICE-LOCKING.md` for that office's side of the same procedure.
+
+**Handsets on lock app 1.11.8 or older never receive a shift order at all** — nothing
+breaks, the order simply sits on the row until the phone updates.
+
+Run `db/migrations/RUN-ME-2026-09-15-device-shift.sql` before any of this: until it runs,
+Shift does nothing — not fails, does nothing — the same as every device migration before it.

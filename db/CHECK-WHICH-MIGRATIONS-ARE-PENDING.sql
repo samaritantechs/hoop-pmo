@@ -35,7 +35,8 @@ with checks(ord, file, kind, obj) as (values
   (24, 'RUN-ME-2026-09-10-signin-watch.sql',      'table',  'signin_attempts'),
   (25, 'RUN-ME-2026-09-11-advance-once-a-month.sql', 'setting', 'ADVANCE_MAX_PER_MONTH'),
   (26, 'RUN-ME-2026-09-11-new-stock.sql',         'table',  'stock_audit'),
-  (27, 'RUN-ME-2026-09-12-old-stock.sql',         'table',  'old_stock')
+  (27, 'RUN-ME-2026-09-12-old-stock.sql',         'table',  'old_stock'),
+  (28, 'RUN-ME-2026-09-15-device-shift.sql',      'column', 'devices.shift_server')
 )
 select
   c.ord as "#",
