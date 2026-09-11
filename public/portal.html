@@ -5203,7 +5203,7 @@ var IMPQ='pending';
 function drawImpAppr(m){
   m.innerHTML='<div class="sk"></div>';
   Promise.all([srv('impQueue',{state:IMPQ}), srv('impRoles',{})]).then(function(a){
-    var d=a[0], roles=a[1].roles||[];
+    var d=a[0], roles=a[1].roles||[], allRoles=a[1].all||[];
     if(d.notReady){ m.innerHTML=impNotReady(); return; }
     var rows=d.rows||[], c=d.counts||{};
     var chip=function(k,label){ return '<button class="btn sm'+(IMPQ===k?'':' ghost')+'" data-impq="'+k+'">'+label+'</button>'; };
@@ -5223,10 +5223,38 @@ function drawImpAppr(m){
           +'<td class="r noxl" style="white-space:nowrap"><button class="btn sm ghost" data-rle="'+esc(r.role)+'" data-rate="'+esc(r.rate)+'">Badili</button> '
           +'<button class="btn sm ghost danger" data-rld="'+esc(r.role)+'">Futa</button></td></tr>'; }).join('')
         +'</tbody></table></div>':'<div class="mut">Hakuna wadhifa bado. / No roles yet.</div>')
-      +'<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">'
-      +'<input id="rlRole" class="inp" style="flex:2;min-width:140px" placeholder="Wadhifa (mfano SALES COORDINATOR, RSM, CEO)">'
-      +'<input id="rlRate" class="inp" style="flex:1;min-width:110px" type="number" min="0" step="1" placeholder="TZS kwa siku">'
-      +'<button class="btn sm" id="rlAdd">Hifadhi / Save</button></div>'
+      /* THE ROLE IS CHOSEN, NEVER TYPED.
+         -----------------------------------------------------------------------------------
+           "at Viwango vya malazi / Accommodation rates roles should be a drop down of all
+            existing to make choice"
+
+         A TYPED ROLE IS A ROLE THAT MATCHES NOBODY. The rate is found by NAME when a request
+         is priced, so "SALES CORDINATOR" with one letter missing is not a typo you notice --
+         it is a rate row nothing will ever look up, and a traveller paid nothing for their
+         nights with no error on any screen to say why.
+
+         THE OPTIONS ARE THE UNION of the roles that exist and the roles that already hold a
+         rate. That second half is load-bearing: Badili fills this control from a rate row,
+         and a value that is not among the options does not stick -- the box would silently
+         keep whatever was selected before and the save would land on the WRONG ROLE. A rate
+         row for a role since deleted must stay editable, if only to be corrected. */
+      +(function(){
+        var opts=allRoles.slice();
+        roles.forEach(function(r){ if(opts.indexOf(r.role)<0) opts.push(r.role); });
+        opts.sort();
+        return '<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">'
+          +'<select id="rlRole" class="inp" style="flex:2;min-width:160px">'
+          +'<option value="">Chagua wadhifa / choose a role</option>'
+          +opts.map(function(x){ return '<option value="'+esc(x)+'">'+esc(x)+'</option>'; }).join('')
+          +'</select>'
+          +'<input id="rlRate" class="inp" style="flex:1;min-width:110px" type="number" min="0" step="1" placeholder="TZS kwa siku">'
+          +'<button class="btn sm" id="rlAdd">Hifadhi / Save</button></div>'
+          /* NAMES THE WAY OUT when the wanted role is not on the list, because a dropdown
+             with no escape is where somebody gives up and pays by hand. */
+          +'<div class="mut" style="font-size:10.5px;margin-top:4px">Wadhifa haupo? Uunde kwanza '
+          +'kwenye <b>Misimbo ya kuingia</b>, kisha urudi hapa. '
+          +'/ Role not listed? Create it under <b>Access codes</b> first, then come back.</div>';
+      })()
       +'</div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
       +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')+chip('toRetire','Bila retirement / Not retired')
@@ -5242,6 +5270,10 @@ function drawImpAppr(m){
         .catch(function(e){ if(b) b.disabled=false; toast(safeErr(e), true); });
     };
     $('#rlAdd').onclick=function(){
+      /* THE ROLE FIRST, because it is now a choice and the unset one is a real state. The
+         server refuses a blank name anyway; saying so here costs no round trip and puts the
+         message next to the control that is empty. */
+      if(!$('#rlRole').value){ toast('Chagua wadhifa kwanza. / Choose a role first.', true); return; }
       if($('#rlRate').value===''){ toast('Andika kiwango cha malazi (0 inaruhusiwa). / Enter the nightly rate (0 is allowed).', true); return; }
       saveRole($('#rlRole').value, $('#rlRate').value, this);
     };
