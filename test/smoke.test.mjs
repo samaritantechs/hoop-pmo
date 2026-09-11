@@ -317,31 +317,39 @@ test('the lock app is syntactically valid Java', () => {
     + 'Android SDK cannot see it, so CI is otherwise the first thing to notice');
 });
 /* =========================================================================================
-   THE FOUR LINES ON A LOCKED PHONE, and why a test stands over them.
+   THE THREE LINES ON A LOCKED PHONE, and why a test stands over them.
 
        HOOP LIMITED
        SIMU HII IMEFUNGWA NA HOOP LIMITED. WASILIANA NASI KWA NAMBA 0700000000
        IMEI: 351388334583295
-       REASON: STOCK, UNSOLD
 
    That shape was specified by the person who answers the calls, and it is the only part of
    this system a customer ever reads. Nobody sees this screen during development -- it needs
    a provisioned handset and a lock order to appear at all -- so a line quietly lost in a
    refactor would ship, sit in a box, and surface as a phone call nobody can resolve because
    the caller cannot say which handset they are holding.
-   ========================================================================================= */
-test('the lock screen keeps its four lines, and hard-codes none of the words', () => {
+
+   A FOURTH LINE, "REASON: ...", used to sit under the IMEI. Dropped:
+   "DROP THE REASON FILLING AND ITS DATA SINCE THE MESSAGE IS ENOUGH". It could name an
+   accused employee, or just restate what the message above already said, either way it was
+   internal information painted onto a screen any stranger holding the phone could read. The
+   reason a phone is locked still exists -- still typed at Funga, still on the row's own
+   history in the portal -- it is simply not this screen's business any more. */
+test('the lock screen keeps its three lines, hard-codes none of the words, and shows no reason', () => {
   const lock = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockActivity.java');
 
   assert.match(lock, /"IMEI: "/, 'the IMEI line is what a caller reads out to identify the phone');
-  assert.match(lock, /"REASON: "/, 'a lock with no stated reason is the one nobody can resolve');
+  assert.doesNotMatch(lock, /"REASON: "/,
+    'the reason line was dropped -- a stranger holding this phone does not need it');
+  assert.doesNotMatch(lock, /Prefs\.REASON/,
+    'the screen must not read the reason back into anything it draws');
   assert.match(lock, /setAllCaps\(true\)/, 'read at arm\'s length, outdoors, by somebody upset');
 
   // Every word comes down the wire. A literal company name here is a rename that needs an
   // APK on every handset already in a customer's pocket -- see CALL_BRAND for how that ends.
   assert.doesNotMatch(lock, /"HOOP[^"]*"/,
     'the brand belongs in DEVICE_LOCK_BRAND, never compiled into the lock screen');
-  for (const key of ['Prefs.BRAND', 'Prefs.IMEI', 'Prefs.REASON', 'Prefs.HELP_PHONE']) {
+  for (const key of ['Prefs.BRAND', 'Prefs.IMEI', 'Prefs.HELP_PHONE']) {
     assert.ok(lock.includes(key), 'the lock screen stopped reading ' + key);
   }
 });

@@ -31,17 +31,23 @@ import android.widget.TextView;
  * use it, and they need to know why and what to do about it. A lock screen that just says
  * LOCKED turns a payment problem into an angry walk to a shop.
  *
- * THE FOUR LINES, specified by the person who has to answer the calls:
+ * THE THREE LINES, specified by the person who has to answer the calls:
  *
  *     HOOP LIMITED
  *     SIMU HII IMEFUNGWA NA HOOP LIMITED. WASILIANA NASI KWA NAMBA 0700000000
  *     IMEI: 351388334583295
- *     REASON: STOCK, UNSOLD
  *
- * Not one of those words is compiled into this APK. The company name, the number, the
- * message and the reason all arrive on the heartbeat and are stored, because a handset in
- * somebody's pocket for eighteen months cannot wait for an app release when the office
- * changes its phone number. This class owns the LAYOUT; device-core.js owns the WORDS.
+ * Not one of those words is compiled into this APK. The company name, the number and the
+ * message all arrive on the heartbeat and are stored, because a handset in somebody's pocket
+ * for eighteen months cannot wait for an app release when the office changes its phone
+ * number. This class owns the LAYOUT; device-core.js owns the WORDS.
+ *
+ * THERE USED TO BE A FOURTH LINE, "REASON: ...", and it is gone on purpose:
+ * "DROP THE REASON FILLING AND ITS DATA SINCE THE MESSAGE IS ENOUGH". It could name an
+ * accused employee, or simply restate what the message above already said -- either way it
+ * was internal information painted onto a screen any stranger holding the phone can read.
+ * The reason a phone is locked still exists: it is typed at Funga, still required, still on
+ * the row's own history in the portal. It is simply not this screen's business any more.
  *
  * IN CAPITALS, deliberately. This is read at arm's length, often outdoors, often by somebody
  * who is upset, and the IMEI has to be copied out loud down a phone line digit by digit.
@@ -56,7 +62,6 @@ public class LockActivity extends Activity {
     private TextView reasonView;
     private TextView helpView;
     private TextView imeiView;
-    private TextView whyView;
 
     /* THE SCREEN'S OWN DOORBELL. Registered while this activity is alive, so an unlock can
        reach it without anybody having to start an activity from the background -- which is
@@ -152,7 +157,6 @@ public class LockActivity extends Activity {
         String msg = str(Prefs.MESSAGE);
         if (msg.isEmpty()) msg = getString(R.string.lock_default);
         String help = str(Prefs.HELP_PHONE);
-        String reason = str(Prefs.REASON);
 
         /* THE IMEI, from the register first and the modem only as a fallback. Those are two
            different facts and the register's is the useful one: it is what Sipho's stock
@@ -174,7 +178,13 @@ public class LockActivity extends Activity {
            telling somebody to get in touch without saying how. */
         set(helpView, help.isEmpty() || msg.contains(help) ? "" : help);
         set(imeiView, imei.isEmpty() ? "" : "IMEI: " + imei);
-        set(whyView, reason.isEmpty() ? "" : "REASON: " + reason);
+        /* NO REASON LINE. There used to be one here -- "REASON: STOCK, UNSOLD", or worse,
+           naming an accused employee by name on a screen anybody who picks the phone up can
+           read. "DROP THE REASON FILLING AND ITS DATA SINCE THE MESSAGE IS ENOUGH": whoever
+           is holding a locked phone needs to know who it belongs to and how to reach them --
+           `msg` already says both -- not the internal story behind the lock. That story
+           still exists, still typed at Funga, still on the row's own history; it simply no
+           longer gets painted onto glass a stranger can read. */
     }
 
     private String str(String key) {
@@ -243,13 +253,12 @@ public class LockActivity extends Activity {
         brandView = row(root, 26, Color.WHITE, true, 0);
         reasonView = row(root, 16, 0xFFDCE6FA, false, 20);
         helpView = row(root, 22, Color.WHITE, true, 24);
-        /* IMEI and REASON are the reference lines -- smaller, dimmer, and last, because they
-           are what somebody reads OUT once they are already on the call. The message above
-           is what they read first. Monospace on the IMEI so fifteen digits can be tracked
-           with a finger without losing the place. */
+        /* THE IMEI is the last, reference line -- smaller, dimmer, because it is what
+           somebody reads OUT once they are already on the call. The message above is what
+           they read first. Monospace so fifteen digits can be tracked with a finger without
+           losing the place. No REASON line under it any more -- see refresh(). */
         imeiView = row(root, 14, 0xFFA9BEE6, false, 22);
         imeiView.setTypeface(Typeface.MONOSPACE);
-        whyView = row(root, 14, 0xFFA9BEE6, false, 6);
 
         /* THE ONE THING A LOCKED PHONE MUST STILL DO. Emergency calls are not ours to take
            away -- not for a debt, not for anything. The dialer opens outside lock task for
