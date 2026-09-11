@@ -164,8 +164,8 @@ const EDITABLE_SETTINGS = [
   'SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
   'CALL_SCRIPT', 'KPI_DEFAULT_RATE',
   'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET',
-  // The locked handset's four lines, plus how long silence is forgiven. See device-core.js.
-  'DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE', 'DEVICE_LOCK_REASON',
+  // The locked handset's three lines, plus how long silence is forgiven. See device-core.js.
+  'DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE',
   'DEVICE_OFFLINE_GRACE_HOURS',
   /* WHO IS TOLD, by email, when somebody asks or something is decided. Blank means nobody --
      the panes are the record and work without these; see api/_lib/mail.js. EMAIL_FROM is the

@@ -612,18 +612,19 @@ new phone number is one row in Settings and not a build.
 | `DEVICE_LOCK_BRAND` | `HOOP LIMITED` | the company name across the top, and `{brand}` |
 | `DEVICE_LOCK_MESSAGE` | see below | the sentence under it; `{brand}` and `{namba}` are substituted |
 | `DEVICE_HELP_PHONE` | — | the number to call, and `{namba}` |
-| `DEVICE_LOCK_REASON` | — | the REASON line **only when nobody ordered the lock** — see below |
 | `DEVICE_OFFLINE_GRACE_HOURS` | `168` | silence before a customer's phone self-locks |
 
 The default message is `Simu hii imefungwa na {brand}. Wasiliana nasi kwa namba {namba}.` —
 and, with no `DEVICE_HELP_PHONE` set, `…Wasiliana nasi kumaliza malipo.` instead. A sentence
 that promises a number and then does not give one is worse than no sentence at all.
 
-`DEVICE_LOCK_REASON` is a **fallback, not an override.** A lock ordered from the portal always
-carries its own reason — Funga refuses to send one without — and that reason always wins. The
-setting covers the one case with nobody to write a reason: a phone that locked *itself* on the
-offline grace, in a dead spot, with the office unaware. Without it that handset shows
-`REASON:` and nothing after it.
+> "DROP THE REASON FILLING AND ITS DATA SINCE THE MESSAGE IS ENOUGH"
+
+`DEVICE_LOCK_REASON` — a fallback REASON line shown only when a phone locked *itself* on the
+offline grace, never on one ordered from the portal — is gone. That handset's `REASON:` line is
+simply blank now: the message above it already says whose phone this is and what to do about
+it. **A lock ordered from the portal still always carries its own reason** — Funga refuses to
+send one without — and that is untouched.
 
 These live in settings rather than in the APK because the number a stranded customer is told
 to call is exactly the kind of thing that changes on a Tuesday. Edit them in **Portal →

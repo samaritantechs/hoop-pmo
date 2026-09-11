@@ -97,7 +97,7 @@ test('settingSet refuses keys outside the whitelist', async () => {
 test('every setting the lock screen reads can actually be set', async () => {
   const d = fakeDb({ settings: [] });
   const KEYS = ['DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE',
-    'DEVICE_LOCK_REASON', 'DEVICE_OFFLINE_GRACE_HOURS'];
+    'DEVICE_OFFLINE_GRACE_HOURS'];
   for (const key of KEYS) await _FNS.settingSet(d, ADMIN, { key, value: 'x' });
 
   // ...and every one of them is visible in the pane, or nobody would know it was there.
