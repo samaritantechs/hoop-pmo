@@ -193,6 +193,36 @@ class Beat {
             if (LockAdmin.unharden(c)) {
                 Prefs.put(c, Prefs.RETIRED, true);
                 BeatJob.cancel(c);
+                /* AND THE HANDSET FORGETS WHOSE IT WAS, so achia genuinely frees it.
+                   ---------------------------------------------------------------------
+                     "a phone achia from hope or hope can be re-enrolled in the other
+                      company and works with its same token"
+
+                   It could not, and that is the point of these four lines. One APK serves
+                   two companies, and a released phone used to keep BOTH its old token and
+                   its old server -- and EnrolReceiver writes the server only when there is
+                   no token (`fresh`). So a handset released by HOPE and enrolled by Hoop
+                   ignored `-e server` in silence, took Hoop's token, and went on beating at
+                   HOPE. HOPE does not know that token; Hoop never hears from it. The phone
+                   is then owned, hardened and unreachable from either desk, and
+                   DISALLOW_FACTORY_RESET means it cannot be wiped -- the exact state the
+                   cable RELEASE exists to recover from. Achia should not be able to create
+                   it.
+
+                   Cleared, the next enrolment is `fresh`: it writes the new server and the
+                   new token, and a phone moves between the two registers on the ordinary
+                   two-command bench with nothing special to remember.
+
+                   ONLY WHERE THE STEP-DOWN ACTUALLY TOOK. Inside this branch, not beside
+                   it: a phone the system refused to release keeps beating so the office can
+                   still reach it, and a handset that has forgotten its token is a handset
+                   nobody can reach at all.
+
+                   The LOGO reset is not a tidy-up either -- see LockLogo.reset. A released
+                   phone was parked at NONE by the `logo: null` above, and carrying that into
+                   the next company would suppress ITS mark for ever. */
+                LockLogo.reset(c);
+                Prefs.of(c).edit().remove(Prefs.TOKEN).remove(Prefs.SERVER).apply();
             }
             return;
         }

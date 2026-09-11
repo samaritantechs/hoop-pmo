@@ -74,6 +74,10 @@ public class ReleaseReceiver extends BroadcastReceiver {
         // whether or not the system let us give up Device Owner. If ownership was refused, the
         // phone stays owner with no token, which is exactly the state EnrolReceiver will take a
         // fresh token in: relock is possible without a factory reset.
+        // The mark goes with the identity, and goes back to NEVER-TOLD rather than to "none":
+        // a handset released here is one about to be enrolled somewhere else, and NONE would
+        // suppress that company's own compiled-in mark for ever. See LockLogo.reset.
+        LockLogo.reset(c);
         Prefs.of(c).edit()
                 .remove(Prefs.TOKEN)
                 .remove(Prefs.RETIRED)

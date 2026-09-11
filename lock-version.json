@@ -1,6 +1,6 @@
 {
-  "versionCode": 20,
-  "versionName": "1.11.7",
-  "notes": "Alama kwenye skrini ya kufungwa sasa inatoka kwa ofisi, hivyo kila kampuni inaonyesha yake. / The mark on the locked screen now comes from the office, so each company shows its own.",
+  "versionCode": 21,
+  "versionName": "1.11.8",
+  "notes": "Simu ikiachiwa sasa inasahau kabisa ilikuwa ya nani, hivyo inaweza kusajiliwa upya kampuni nyingine moja kwa moja. / A released phone now forgets whose it was, so it can be enrolled by the other company straight away.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

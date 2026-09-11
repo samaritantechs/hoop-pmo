@@ -815,6 +815,44 @@ Until then the counter procedure stands, and it costs two minutes: see **Gmail a
 
 ---
 
+## Achia now frees the handset completely, so it can go to the other company
+
+> *"a phone achia from hope or hope can be re-enrolled in the other company and works with its
+> same token"*
+
+**It could not, before 1.11.8 — and trying was how a handset got bricked.**
+
+One APK serves both companies. A released phone used to keep **both its old token and its old
+server**, and `EnrolReceiver` writes the server only when there is no token (`fresh`). So a
+handset released by HOPE and enrolled by Hoop:
+
+1. ignored `-e server`, silently;
+2. took Hoop's token (with `-e current`) — or answered `result=2` without it;
+3. went on beating at **HOPE**, which does not know that token;
+4. was never heard from by Hoop at all.
+
+Owned, hardened, unreachable from either desk — and `DISALLOW_FACTORY_RESET` means it cannot be
+wiped. That is the exact state the cable RELEASE exists to recover from, and achia should never
+have been able to create it.
+
+**From 1.11.8** a successful achia clears the token and the server. The next enrolment is
+therefore `fresh`: it writes the new server and the new token, and a phone moves between the two
+registers on the ordinary two-command bench with nothing special to remember.
+
+Three things worth being exact about:
+
+- **Only where the step-down actually took.** A phone the system refused to release keeps its
+  token and keeps beating, so the office can still reach it. A handset that has forgotten its
+  token is a handset nobody can reach at all.
+- **It is not "the same token".** A token is minted per IMEI *per register*, so the receiving
+  company mints its own. What survives is the phone, the app and Device Owner — which is the
+  part that costs a bench visit.
+- **Handsets on 1.11.7 and older do not do this.** They were released before the rule existed,
+  so they still carry the old token and the old server, and they still need the cable RELEASE
+  below. Check the version before assuming a released phone is free.
+
+---
+
 ## Never rotate a token on a phone that is in the field
 
 > *"so the tokens should be autoupdated"*
