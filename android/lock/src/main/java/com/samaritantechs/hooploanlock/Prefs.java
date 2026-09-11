@@ -25,6 +25,12 @@ class Prefs {
     static final String HELP_PHONE = "helpPhone";
     static final String REASON = "reason";
     static final String BRAND = "brand";            // company name atop the lock screen; from settings
+    /* WHICH BYTES THE CACHED WORDMARK IS, so an unchanged mark is never fetched twice -- see
+       LockLogo. Three states, and they are not interchangeable: ABSENT means nobody has ever
+       told this handset anything, so the mark compiled into the build stands; "none" means
+       the office said draw no mark, which is what keeps one company's logo off the other's
+       phone; anything else is the version of the file sitting in filesDir. */
+    static final String LOGO_VERSION = "logoVersion";
     /* The IMEI as the REGISTER holds it, which is a different fact from the one Imei.java
        reads off the modem: this is the number on Sipho's report, the one a caller reads out
        down the phone, and on a phone where provisioning half-failed it is the only one this
