@@ -740,3 +740,79 @@ test('the leave report: a period by start date, company-wide, with the desk\'s w
   const bare = fakeDb({ leave_requests: [] }, { missingColumns: { leave_requests: ['id'] } });
   assert.equal((await _FNS.leaveReport(bare, FINANCE, {})).notReady, true, 'names the migration rather than failing');
 });
+
+/* ==========================================================================================
+   THE RATE TABLE'S ROLE IS CHOSEN, NEVER TYPED.
+   ==========================================================================================
+     "at Viwango vya malazi / Accommodation rates roles should be a drop down of all existing
+      to make choice"
+
+   A TYPED ROLE IS A ROLE THAT MATCHES NOBODY. The nightly rate is found by NAME when a request
+   is priced, so "SALES CORDINATOR" with one letter missing is not a typo anybody notices -- it
+   is a rate row nothing will ever look up, and a traveller paid nothing for their nights with
+   no error on any screen to say why.
+   ========================================================================================== */
+test('the rate table is offered every role that exists, from one list', async () => {
+  const d = fakeDb({
+    imprest_roles: [{ role: 'CREDIT', accommodation_per_day: 40000 }],
+    imprest_requests: [], imprest_retirements: [], imprest_photos: [], leave_requests: [],
+    // A role that lives only in the roles table, and one that exists only on a code.
+    roles: [{ role: 'RSM', tabs: ['impreq'] }],
+    access_codes: [{ code: 'Z9', name: 'Mtu', role: 'STORE', teams: null, tabs: [] }],
+    settings: [],
+  });
+  const all = (await _FNS.impRoles(d, ADMIN_IMP)).all;
+  for (const r of ['RSM', 'STORE']) assert.ok(all.includes(r), r + ' exists, so it is offered');
+  /* THE SUGGESTED SET RIDES ALONG, and it is the CEO's new names -- one module constant shared
+     with the Access codes pane, because a rename that lands in one copy and not the other is
+     exactly the half-done job this system has been bitten by before. */
+  for (const r of ['SALES COORDINATOR', 'PORTFOLIO AND COMPLIANCE OFFICER', 'ADMIN']) {
+    assert.ok(all.includes(r), r + ' is on the suggested list');
+  }
+  assert.deepEqual(all, [...all].sort(), 'sorted, because it is drawn as a dropdown');
+  assert.equal(new Set(all).size, all.length, 'and each role appears once');
+
+  // The requester may read it too: their own form offers roles from this same answer.
+  assert.ok((await _FNS.impRoles(d, ASKER)).all.includes('RSM'));
+});
+
+test('a hidden role is not offered, and a missing table does not take the pane down', async () => {
+  const hidden = fakeDb({
+    imprest_roles: [], imprest_requests: [], imprest_retirements: [], imprest_photos: [],
+    leave_requests: [], roles: [], access_codes: [],
+    settings: [{ key: 'ROLES_HIDDEN', value: JSON.stringify(['AUDITOR']) }],
+  });
+  const all = (await _FNS.impRoles(hidden, ADMIN_IMP)).all;
+  assert.ok(!all.includes('AUDITOR'), 'the owner deleted it, so it stays deleted');
+  assert.ok(all.includes('ADMIN'), 'the rest of the suggested set is untouched');
+
+  /* THE RATE TABLE CAN BE MISSING AND THE CHOICES STILL ARRIVE. Somebody has to be able to see
+     what the options WOULD be while they go and run the migration. */
+  const bare = fakeDb({ imprest_requests: [], leave_requests: [], settings: [] },
+    { missingColumns: { imprest_roles: ['accommodation_per_day'] } });
+  const answer = await _FNS.impRoles(bare, ADMIN_IMP);
+  assert.equal(answer.notReady, true, 'the migration has not been run');
+  assert.deepEqual(answer.roles, []);
+  assert.ok(answer.all.includes('RSM'), 'and the choices arrive anyway');
+});
+
+test('the pane draws a select, and its options include every role that already holds a rate', () => {
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const draw = html.slice(html.indexOf('function drawImpAppr('), html.indexOf('function impDecideDrawer('));
+  assert.match(draw, /<select id="rlRole"/, 'chosen, not typed');
+  assert.ok(!/<input id="rlRole"/.test(draw), 'the free-text box is gone');
+  assert.match(draw, /Chagua wadhifa \/ choose a role/);
+
+  /* THE UNION IS LOAD-BEARING, and this is the assertion that protects it. Badili fills this
+     control from a rate row; setting a <select> to a value that is not among its options does
+     NOT stick -- the box silently keeps its previous selection and the save lands on the WRONG
+     ROLE. So a rate row for a role since deleted must still be in the list. */
+  assert.match(draw, /roles\.forEach\(function\(r\)\{ if\(opts\.indexOf\(r\.role\)<0\) opts\.push\(r\.role\); \}\);/);
+  assert.match(draw, /var opts=allRoles\.slice\(\)/);
+  assert.match(draw, /allRoles=a\[1\]\.all\|\|\[\]/, 'read off the same answer the table came from');
+
+  // A dropdown with no escape is where somebody gives up and pays by hand.
+  assert.match(draw, /Create it under <b>Access codes<\/b> first/);
+  // And the unset option is a real state the save refuses, next to the control that is empty.
+  assert.match(draw, /if\(!\$\('#rlRole'\)\.value\)\{ toast\('Chagua wadhifa kwanza/);
+});

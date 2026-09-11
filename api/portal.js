@@ -2117,6 +2117,50 @@ function requireNav(user, k) {
    the credit chart that sits on the DASHBOARD, so gating it on 'recovery' alone put an
    error string on the dashboard of anyone who holds dashboard without recovery. The data
    is the same team-scoped data either way; what differs is only which screen asked. */
+/* THE NAMES THE COMPANY OFFERS FOR A ROLE, IN ONE PLACE.
+   =========================================================================================
+   A SUGGESTION LIST, never a restriction: every role that already exists on a code or in the
+   roles table is merged in ahead of this, so a code still carrying an old name keeps working
+   and keeps appearing. Changing what is offered only changes what the NEXT one is called.
+
+   It is a module constant because two panes read it now -- Access codes and the imprest rate
+   table -- and the CEO's rename ("GENERAL DUTY into SALES COORDINATOR, CREDIT into PORTFOLIO
+   AND COMPLIANCE OFFICER") is exactly the kind of edit that lands in one copy and not the
+   other. A second list is a list that will eventually disagree with the first. */
+const SUGGESTED_ROLES = ['ADMIN', 'MANAGER', 'FINANCE', 'RSM',
+  'PORTFOLIO AND COMPLIANCE OFFICER', 'SALES COORDINATOR', 'STORE', 'IT', 'AUDITOR'];
+
+/** EVERY ROLE THAT EXISTS ANYWHERE, as plain names, derived exactly as the Access codes pane
+    derives its own list: the roles table, then roles seen only on codes, then the suggested
+    set minus any the owner has hidden.
+
+    READS ONLY THE `role` COLUMN off access_codes. The table holds credentials; this needs the
+    name of a job and nothing else, and a select that asked for more would be a wider door than
+    the question requires.
+
+    EVERY READ IS GUARDED SEPARATELY. This feeds a rate table an administrator uses to pay
+    people; a registry that has not had a migration run must leave that pane working with a
+    shorter list rather than taking it down. */
+async function roleNames(db) {
+  const seen = new Set();
+  let hiddenSet = new Set();
+  try {
+    const row = await db.from('settings').select('value').eq('key', 'ROLES_HIDDEN').maybeSingle();
+    const raw = JSON.parse((row && row.data && row.data.value) || '[]') || [];
+    hiddenSet = new Set(raw.map(K));
+  } catch (ignored) { /* no settings row, or not valid JSON: nothing is hidden */ }
+  for (const table of ['roles', 'access_codes']) {
+    try {
+      for (const r of await fetchAll(() => db.from(table).select('role'))) {
+        const k = K(r.role);
+        if (k) seen.add(k);
+      }
+    } catch (ignored) { /* table not there yet; the suggested set still answers */ }
+  }
+  for (const k of SUGGESTED_ROLES) if (!hiddenSet.has(k)) seen.add(k);
+  return [...seen].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 function requireAnyNav(user, keys) {
   const have = navsFor(user);
   if (!keys.some(k => have.includes(k))) {
@@ -4835,11 +4879,24 @@ const FNS = {
       rows = await fetchAll(() => db.from('imprest_roles').select('role, accommodation_per_day, updated_by, updated_at'));
     } catch (e) {
       if (!tableMissing(e)) throw e;
-      return { ok: true, roles: [], notReady: true };
+      return { ok: true, roles: [], all: await roleNames(db), notReady: true };
     }
     return { ok: true, roles: rows.map(r => ({ role: K(r.role), rate: num(r.accommodation_per_day),
       by: r.updated_by || '', at: r.updated_at ? Date.parse(r.updated_at) : null }))
-      .sort((a, b) => a.role < b.role ? -1 : a.role > b.role ? 1 : 0) };
+      .sort((a, b) => a.role < b.role ? -1 : a.role > b.role ? 1 : 0),
+      /* THE ROLES THAT EXIST, so the rate table can be a CHOICE rather than a typed name.
+         -----------------------------------------------------------------------------------
+           "at Viwango vya malazi / Accommodation rates roles should be a drop down of all
+            existing to make choice"
+
+         A TYPED ROLE IS A ROLE THAT MATCHES NOBODY. The rate is looked up by name when a
+         request is priced, so "SALES CORDINATOR" with one letter missing is not a small
+         mistake -- it is a rate row that will never be found, and a traveller paid nothing
+         for their nights with no error anywhere to say why.
+
+         Sent even when the rate table itself is missing, above: the pane should still be
+         able to show what the choices WOULD be while somebody goes and runs the migration. */
+      all: await roleNames(db) };
   },
 
   /** "administrator can add roles and their accommodation per day". Held by the approval nav,
@@ -8486,8 +8543,7 @@ const FNS = {
        is merged in above this line, so a code still carrying GENERAL DUTY keeps working and
        keeps appearing. Changing what is offered is what makes the next code created carry
        the new name; it takes nothing away from the ones that exist. */
-    ['ADMIN', 'MANAGER', 'FINANCE', 'RSM', 'PORTFOLIO AND COMPLIANCE OFFICER',
-      'SALES COORDINATOR', 'STORE', 'IT', 'AUDITOR']
+    SUGGESTED_ROLES
       .forEach(k => { if (!seen.has(k) && !hiddenSet.has(k)) seen.set(k, { role: k, tabs: [] }); });
     // How many codes hold each role decides whether the page may offer to delete it.
     const useCount = {};
