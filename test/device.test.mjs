@@ -1772,3 +1772,81 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   assert.match(rounds[1], /findstr \/e \/c:"device"/,
     'the device check runs inside the loop body, not only before it');
 });
+
+/* SHIFTING A HANDSET TO THE OTHER COMPANY, WITHOUT A FACTORY RESET.
+   -----------------------------------------------------------------------------------
+     "another button for shift so that hoop can shift a device to hope and viceversa
+      saving re-enlorrment energy"
+
+   Achia gives up Device Owner, and taking it back is refused while any account is signed
+   in -- so on a phone that has been in use, achia-then-enrol means a factory reset. Shift
+   writes an ORDER onto the row instead: the next beat hands the phone a server + batch,
+   exactly like a lock order, and the phone does the rest without ever letting go of
+   ownership -- see Shift.java in android/lock, and hope-pmo-v2's mirror of this test. */
+test('a shift order rides the next beat, exactly like a lock order does', async () => {
+  const d = fleet([{ imei: 'S1', state: 'enrolled', enrol_token: 'tokS1' }]);
+
+  assert.equal(await (async () => { try {
+    await _FNS.deviceShift(d, ADMIN, { imeis: 'S1', server: 'http://other.example', batch: 'a'.repeat(32) });
+    return 200;
+  } catch (e) { return e.status; } })(), 400, 'http, not https, is refused');
+  assert.equal(await (async () => { try {
+    await _FNS.deviceShift(d, ADMIN, { imeis: 'S1', server: 'https://other.example', batch: 'not-a-batch' });
+    return 200;
+  } catch (e) { return e.status; } })(), 400, 'a batch that is not 32 hex characters is refused');
+
+  const ordered = await _FNS.deviceShift(d, ADMIN,
+    { imeis: 'S1', server: 'https://other.example/', batch: 'b'.repeat(32) });
+  assert.equal(ordered.ordered, 1);
+  assert.equal(ordered.server, 'https://other.example', 'a trailing slash is trimmed');
+
+  const beat = await deviceApi(d, 'dev_beat', [{ token: 'tokS1' }], NOW);
+  assert.deepEqual(beat.shift, { server: 'https://other.example', batch: 'b'.repeat(32) });
+});
+
+test('the departing phone tells this office it left, and the row reads released', async () => {
+  const d = fleet([{ imei: 'S2', state: 'enrolled', enrol_token: 'tokS2' }]);
+  await _FNS.deviceShift(d, ADMIN, { imeis: 'S2', server: 'https://other.example', batch: 'd'.repeat(32) });
+
+  const said = await deviceApi(d, 'dev_shifted', [{ token: 'tokS2' }], NOW);
+  assert.equal(said.ok, true);
+
+  const row = d._dump('devices').find(r => r.imei === 'S2');
+  assert.equal(row.state, 'released');
+  assert.equal(row.shift_server, null, 'the order is cleared once it is confirmed');
+  const ev = d._dump('device_events').find(x => x.event === 'shifted');
+  assert.ok(ev, 'the transition is in the trail');
+});
+
+test('a released phone is not shiftable, and an unknown IMEI is refused up front', async () => {
+  const d = fleet([{ imei: 'S3', state: 'released', enrol_token: 'tokS3' }]);
+  const r = await _FNS.deviceShift(d, ADMIN, { imeis: 'S3', server: 'https://other.example', batch: 'e'.repeat(32) });
+  assert.equal(r.ordered, 0);
+  assert.equal(r.alreadyReleased, 1, 'a released phone is not beating here to receive it');
+
+  assert.equal(await (async () => { try {
+    await _FNS.deviceShift(fleet([]), ADMIN,
+      { imeis: 'GHOST', server: 'https://other.example', batch: 'f'.repeat(32) });
+    return 200;
+  } catch (e) { return e.status; } })(), 400, 'nothing on the register to order at all');
+});
+
+test('the state and reason a shift carries are trusted only in the safe direction', async () => {
+  const d = fleet([{ imei: 'S4', state: 'enrolled', enrol_token: 'tokS4',
+    enrol_batch: 'g'.repeat(32), enrol_batch_at: new Date(NOW).toISOString() }]);
+  const got = await deviceApi(d, 'dev_claim',
+    [{ batch: 'g'.repeat(32), imeis: ['S4'], state: 'locked', reason: 'ameacha kazi na simu' }], NOW);
+  assert.ok(got.token);
+  const row = d._dump('devices').find(r => r.imei === 'S4');
+  assert.equal(row.state, 'locked');
+  assert.match(row.state_reason, /ameacha kazi na simu/);
+
+  // A row this office already decided about is never overwritten by an incoming claim.
+  const d2 = fleet([{ imei: 'S5', state: 'locked', state_reason: 'ofisi hii iliamua',
+    enrol_token: 'tokS5', enrol_batch: 'h'.repeat(32), enrol_batch_at: new Date(NOW).toISOString() }]);
+  await deviceApi(d2, 'dev_claim',
+    [{ batch: 'h'.repeat(32), imeis: ['S5'], state: 'lost', reason: 'x' }], NOW);
+  const row2 = d2._dump('devices').find(r => r.imei === 'S5');
+  assert.equal(row2.state, 'locked', 'this office\'s own lock stands');
+  assert.equal(row2.state_reason, 'ofisi hii iliamua');
+});

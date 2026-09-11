@@ -124,6 +124,25 @@ class Beat {
      * phone must never be caught by the grace rule on its way out.
      */
     private static void apply(Context c, JSONObject r, boolean mayConfirm) {
+        /* A SHIFT IS ANSWERED BEFORE ANYTHING ELSE IN THIS REPLY, and then nothing else in it
+           is acted on at all.
+           -----------------------------------------------------------------------------------
+             "another button for shift so that hoop can shift a device to hope and viceversa
+              saving re-enlorrment energy"
+
+           Everything below this line -- the pace, the grace hours, the boot window, the lock
+           screen's words, the lock or unlock itself -- was written by the office this handset
+           is LEAVING. Once it belongs to the other register, obeying the rest would be taking
+           orders from a company that no longer holds the phone: its beat interval, its
+           message, its help number, and on the next tick the new office would overwrite them
+           anyway. So a successful shift returns, and the fresh beat Shift fires against the
+           new server is what fills all of it back in.
+
+           Ownership is never given up on this path -- see Shift -- which is the whole saving:
+           achia surrenders Device Owner, and taking it back is refused while any account is
+           signed in, so on a phone that has been in use it means a factory reset. */
+        if (Shift.apply(c, r)) return;
+
         String command = r.optString("command", "");
         /* WHAT WE WERE DOING WHEN THIS BEAT STARTED, so the confirming beat at the bottom can
            tell whether this answer actually changed anything. */

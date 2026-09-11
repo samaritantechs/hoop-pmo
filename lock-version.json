@@ -1,6 +1,6 @@
 {
-  "versionCode": 21,
-  "versionName": "1.11.8",
-  "notes": "Simu ikiachiwa sasa inasahau kabisa ilikuwa ya nani, hivyo inaweza kusajiliwa upya kampuni nyingine moja kwa moja. / A released phone now forgets whose it was, so it can be enrolled by the other company straight away.",
+  "versionCode": 22,
+  "versionName": "1.11.9",
+  "notes": "Simu inaweza kuhamishwa kati ya rejista mbili bila kufuta wala kebo. / A handset can be shifted between the two registers with no wipe and no cable.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
