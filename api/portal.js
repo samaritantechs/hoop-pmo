@@ -164,8 +164,8 @@ const EDITABLE_SETTINGS = [
   'SYSTEM_OPEN', 'CALL_BRAND', 'CALL_LOGO_URL', 'FU_STATUSES',
   'CALL_SCRIPT', 'KPI_DEFAULT_RATE',
   'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET',
-  // The locked handset's four lines, plus how long silence is forgiven. See device-core.js.
-  'DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE', 'DEVICE_LOCK_REASON',
+  // The locked handset's three lines, plus how long silence is forgiven. See device-core.js.
+  'DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE',
   'DEVICE_OFFLINE_GRACE_HOURS',
   /* WHO IS TOLD, by email, when somebody asks or something is decided. Blank means nobody --
      the panes are the record and work without these; see api/_lib/mail.js. EMAIL_FROM is the
@@ -4050,10 +4050,14 @@ const FNS = {
 
      NO REASON IS REQUIRED to lock or write a phone off, on purpose. A typed-per-phone reason
      bought no more than the lock screen already says on its own: DEVICE_LOCK_MESSAGE names
-     the company and a number to call, which is enough for the customer standing there. An
-     empty reason simply falls back to the standing DEVICE_LOCK_REASON in Settings -- see
-     lockWords() and beat() in device-core.js -- so the screen still shows a real sentence,
-     set once rather than typed at every lock. */
+     the company and a number to call, which is enough for the customer standing there.
+
+     "DROP THE REASON FILLING AND ITS DATA SINCE THE MESSAGE IS ENOUGH" -- the second half of
+     that took this further than a smaller fallback would have. There is no DEVICE_LOCK_REASON
+     setting to fall back to any more, and no REASON line on the lock screen at all, ordered
+     lock or write-off alike -- see LockActivity.java. A reason typed here still lands in
+     state_reason and the portal's own history (deviceHistory), it just never travels onto
+     glass a customer or an agent can read. */
   async deviceSetState(db, user, args) {
     requireWrite(user);
     const a = args || {};

@@ -3576,9 +3576,9 @@ function devAct_(m, imeis, state){
   /* NO REASON PROMPT. Funga used to stop and demand one, typed per phone -- friction that
      bought nothing a locked screen does not already say: DEVICE_LOCK_MESSAGE already names
      the company and a number to call, and that is enough for the customer standing there to
-     act on. A blank reason simply falls back to DEVICE_LOCK_REASON in Settings on the lock
-     screen -- see lockWords() in device-core.js -- so REASON: still reads as a real sentence,
-     just one set once in Settings instead of typed at every lock. */
+     act on. There is no REASON line on the lock screen any more to fall back onto -- see
+     LockActivity.java -- so a reason typed here goes straight to the row's own history and
+     nowhere else. */
   var reason='';
   /* ACHIA IS THE ONE-WAY DOOR AND IT ASKED NOTHING.
      ---------------------------------------------------------------------------------------
@@ -10094,13 +10094,12 @@ function drawSettings(m){
       +'<pre style="background:#0b2a6b;color:#fff;text-align:center;border-radius:8px;padding:12px;margin:8px 0;font-size:11.5px;line-height:1.6;white-space:pre-wrap">'
       +'HOOP LIMITED\n'
       +'SIMU HII IMEFUNGWA NA HOOP LIMITED.\nWASILIANA NASI KWA NAMBA 0700123456\n'
-      +'IMEI: 351388334583295\n'
-      +'REASON: STOCK, UNSOLD</pre>'
+      +'IMEI: 351388334583295</pre>'
       +'<b>DEVICE_LOCK_BRAND</b> = mstari wa kwanza, na <code>{brand}</code>. '
       +'<b>DEVICE_HELP_PHONE</b> = namba, na <code>{namba}</code>. '
       +'<b>DEVICE_LOCK_MESSAGE</b> = sentensi — weka <code>{brand}</code> na <code>{namba}</code> popote unapotaka. '
-      +'IMEI inatoka kwenye register, si kwenye simu yenyewe. '
-      +'<b>DEVICE_LOCK_REASON</b> hutumika <u>pale tu</u> simu ilipojifunga yenyewe kwa kukosa mtandao — ukifunga wewe kwa Funga, sababu uliyoandika ndiyo inayoonekana. '
+      +'IMEI inatoka kwenye register, si kwenye simu yenyewe. Hakuna mstari wa REASON kwenye simu — '
+      +'sababu ya kufunga bado inaonekana kwenye historia ya rejista pekee. '
       +'<b>DEVICE_OFFLINE_GRACE_HOURS</b> = saa za ukimya kabla simu ya mteja kujifunga (168 = wiki moja).</div>'
       +'</div>';
     $all('[data-sv]',m).forEach(function(b){

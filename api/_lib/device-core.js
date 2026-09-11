@@ -77,8 +77,7 @@ export function commandFor(state) {
    {brand} and {namba} are filled here rather than on the handset for the same reason: one
    substitution, on a machine we can fix, instead of the same little parser in every build
    of the app that is out there. */
-const LOCK_SETTINGS = ['DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE',
-  'DEVICE_LOCK_REASON'];
+const LOCK_SETTINGS = ['DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE'];
 
 const DEFAULT_BRAND = 'HOOP LIMITED';
 
@@ -137,11 +136,6 @@ async function lockWords(db) {
     brand,
     message: fill(raw, brand, phone),
     helpPhone: phone || null,
-    /* The reason a self-lock shows. An ordered lock always carries its own -- the portal
-       refuses to send one without -- but a phone that locked itself on the offline grace was
-       never given words by anybody, and REASON: (blank) on a customer's screen is worse than
-       a dull sentence from settings. */
-    fallbackReason: get('DEVICE_LOCK_REASON'),
   };
 }
 
@@ -388,7 +382,7 @@ async function beat(db, [payload], nowMs) {
   /* WITH ONE EXCEPTION: a phone being handed back for good gets no words at all. It is
      about to unharden, drop Device Owner and stop calling home, and leaving our lock
      message sitting in a former customer's storage is the opposite of releasing it. */
-  const words = retire ? { brand: null, message: null, helpPhone: null, fallbackReason: '' }
+  const words = retire ? { brand: null, message: null, helpPhone: null }
                        : await lockWords(db);
   const grace = await graceFor(db, dev);
   /* A retiring handset gets no boot window, and needs none: it is about to unharden and stop
@@ -406,9 +400,11 @@ async function beat(db, [payload], nowMs) {
     ok: true,
     command,                                   // lock | unlock
     state: dev.state,
-    /* Ordered locks carry their own reason; a self-lock has none to carry, so it gets the
-       one from settings. Either way the handset is never left with an empty REASON line. */
-    reason: retire ? null : (S(dev.state_reason) || words.fallbackReason || null),
+    /* DROPPED: DEVICE_LOCK_REASON, the fallback line a self-lock used to show. There is no
+       fallback any more -- see LockActivity.java, which no longer draws a REASON line at
+       all, ordered lock or self-lock alike. state_reason is still returned, for whatever
+       else on the wire might one day want it; the phone simply stopped reading it. */
+    reason: retire ? null : (S(dev.state_reason) || null),
     // The register's IMEI, not the handset's guess at it -- see Imei.java. This is the
     // number on Sipho's report and the one a caller will read out, and it is the only one
     // an Android 10+ phone can put on its own lock screen at all.
@@ -492,7 +488,7 @@ async function hello(db, [payload], nowMs) {
   await db.from('devices').update({ last_seen: at, updated_at: at }).eq('imei', dev.imei);
   const words = await lockWords(db);
   return { ok: true, imei: dev.imei, item: dev.item || null, state: dev.state,
-    command: commandFor(dev.state), reason: S(dev.state_reason) || words.fallbackReason || null,
+    command: commandFor(dev.state), reason: S(dev.state_reason) || null,
     brand: words.brand, message: words.message, helpPhone: words.helpPhone };
 }
 
