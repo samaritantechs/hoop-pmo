@@ -254,11 +254,13 @@ public class LockActivity extends Activity {
         brandView = row(root, 26, Color.WHITE, true, 0);
         reasonView = row(root, 16, 0xFFDCE6FA, false, 20);
         helpView = row(root, 22, Color.WHITE, true, 24);
-        /* THE IMEI is the last, reference line -- smaller, dimmer, because it is what
-           somebody reads OUT once they are already on the call. The message above is what
-           they read first. Monospace so fifteen digits can be tracked with a finger without
-           losing the place. No REASON line under it any more -- see refresh(). */
-        imeiView = row(root, 14, 0xFFA9BEE6, false, 22);
+        /* THE IMEI is the last, reference line -- smaller than the message above it, but not
+           dim: it is what somebody reads OUT digit by digit down a phone line, often to
+           someone typing it under pressure, so white and bold is what stays legible on a
+           screen glanced at, held at an angle, or lit by whatever is nearby. Monospace so
+           fifteen digits can be tracked with a finger without losing the place. No REASON
+           line under it any more -- see refresh(). */
+        imeiView = row(root, 14, Color.WHITE, true, 22);
         imeiView.setTypeface(Typeface.MONOSPACE);
 
         /* THE ONE THING A LOCKED PHONE MUST STILL DO. Emergency calls are not ours to take

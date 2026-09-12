@@ -1,6 +1,6 @@
 {
-  "versionCode": 23,
-  "versionName": "1.11.10",
-  "notes": "Skrini ya simu iliyofungwa haionyeshi tena sababu -- ujumbe unatosha. / The locked screen no longer shows a reason line -- the message is enough.",
+  "versionCode": 24,
+  "versionName": "1.11.11",
+  "notes": "Namba ya IMEI kwenye skrini iliyofungwa sasa ni nyeupe na nzito, si hafifu tena. / The IMEI line on the locked screen is now white and bold, not dim.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
