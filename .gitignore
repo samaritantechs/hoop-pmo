@@ -1,4 +1,7 @@
 node_modules/
+# Local live-browser click-through audit rig (server + mocks + Playwright script) -- scratch
+# tooling used to sweep every nav ahead of a staff training, not part of the shipped app.
+test-harness/
 .env
 .env.local
 .vercel/

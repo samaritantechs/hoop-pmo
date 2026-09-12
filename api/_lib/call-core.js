@@ -172,7 +172,7 @@ export function pseudoUser(cu) {
     : lt.map(t => K(t)).filter(Boolean);
   return { name: cu.name, role: cu.role, teams };
 }
-async function teamList(db) {
+export async function teamList(db) {
   const rows = await fetchAll(() => db.from('teams').select('team'));
   return rows.filter(r => r.team).map(r => r.team).sort();
 }

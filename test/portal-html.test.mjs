@@ -2522,3 +2522,68 @@ test('call-core: the calls app carries our brand and no second one', () => {
   // The field still travels, so nothing that reads it starts seeing undefined.
   assert.match(src, /teams: \[\], brand, motto, logo, systemOpen/);
 });
+
+/* =========================================================================================
+   FOUR THINGS AN AUDIT FOUND AHEAD OF A STAFF TRAINING, none of them caught by any existing
+   test because each is a wiring gap rather than a wrong answer: the button/tile/refresh
+   fires, just not at the thing it was supposed to.
+   ========================================================================================= */
+
+test('srv() forwards a 409\'s `changed` count onto the thrown Error', () => {
+  /* devSend_'s bulk-Funga confirmation reads e.changed to say "N already locked" when a mixed
+     batch partly succeeds before hitting a stuck (released-and-not-listening) phone -- a
+     feature added once already (the server always sent `changed`: api/_lib/auth.js) and
+     silently made permanently inert because srv() never copied it onto the error object. */
+  const src = read('portal.html');
+  const srv = src.slice(src.indexOf('function srv(fn,args,tries){'),
+    src.indexOf("$('#inBtn').onclick=function(){"));
+  assert.match(srv, /if\(b\.code\) er\.code=b\.code; if\(b\.imeis\) er\.imeis=b\.imeis;/);
+  assert.match(srv, /if\(typeof b\.changed===['"]number['"]\) er\.changed=b\.changed;/,
+    'changed must travel the same road code/imeis already do');
+});
+
+test('OLD STOCK\'s and NEW STOCK\'s informational tiles are not painted as clickable', () => {
+  /* tile() treats ANY truthy `go` as "this tile opens something": the .go CSS class (pointer
+     cursor, hover-lift) and an "fungua ›"/"open ›" hint, both indistinguishable from a real
+     filter tile sitting in the same row. go:function(){} is a no-op that still looks exactly
+     like the tile beside it that works -- worse than not having the hint at all. */
+  const src = read('portal.html');
+  const old = src.slice(src.indexOf('function osPaint_('), src.indexOf('function osNum_('));
+  const news = src.slice(src.indexOf('function drawNewStock('), src.indexOf('function drawStockRep('));
+  // Each tile() call closes with the options object right before its own `)` -- capture up to
+  // the FIRST `})` after the label so a comment elsewhere in the same function (which is
+  // allowed to keep saying "go:function(){}" as a record of the bug) is never mistaken for
+  // the tile's own wiring.
+  const tileCall = (text, label) => {
+    const m = new RegExp("tile\\('" + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "'[\\s\\S]*?\\}\\)")
+      .exec(text);
+    return m ? m[0] : '';
+  };
+  for (const label of ['Hazijafungwa', 'Zimefungwa', 'Ziliuzwa', 'Siku 180+', 'Wenye nazo', 'Mahali']) {
+    const call = tileCall(old, label);
+    assert.ok(call, 'OLD STOCK is missing its ' + label + ' tile');
+    assert.ok(!/go:/.test(call),
+      'no tile anywhere may be wired to a go: handler -- omit go/on/cta entirely for a plain KPI (' + label + ')');
+  }
+  const naCall = tileCall(news, 'Hazipigi ripoti');
+  assert.ok(naCall, 'NEW STOCK is missing its Hazipigi ripoti tile');
+  assert.ok(!/go:/.test(naCall),
+    'the "Hazipigi ripoti" tile must not be wired to a go: handler -- newStock has no matching filter value');
+});
+
+test('the top-up request pane refreshes after a successful submit, on its own tab key', () => {
+  /* TAB holds the sidebar's short key ('tureq'), never the nav permission key ('topupreq') --
+     see the NAV array entry `{ t:'tureq', nav:'topupreq', ... }`. Comparing against the nav
+     key left both the post-submit refresh and the shared verify/pay/unlock/note/reject
+     refresh permanently dead on this one pane: the request list never showed the row just
+     created, and the Send button -- disabled at the start of every click, re-enabled only in
+     the .catch branch -- stayed disabled after a SUCCESSFUL submit, reading as "broken" on a
+     second request. */
+  const src = read('portal.html');
+  assert.ok(!/TAB===['"]topupreq['"]/.test(src),
+    'topupreq is the nav/permission key, never a value TAB is ever assigned -- see goTab()');
+  const form = src.slice(src.indexOf('function drawTopupReq('), src.indexOf('function drawTopups('));
+  assert.match(form, /topupRaiseWire\('tu', function\(\)\{ if\(TAB==='tureq'\) drawTopupReq\(m\); \}\);/);
+  const drawer = src.slice(src.indexOf('function topupDrawer('), src.indexOf('function drawTopupReq('));
+  assert.match(drawer, /if\(TAB==='topups'\) drawTopups\(m\); else if\(TAB==='tureq'\) drawTopupReq\(m\);/);
+});

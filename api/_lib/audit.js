@@ -168,6 +168,13 @@ const AUDIT_DIFF = {
   /* ONE HANDSET, ONE ORDER. deviceSetState takes a LIST and is deliberately absent: a diff
      that described one of four hundred phones would be a lie about the other 399. */
   deviceDelete:    { table: 'devices', key: a => ({ imei: a.imei }), fields: ['state', 'holder'] },
+
+  /* TRANSFERS. Only who signed and when -- never sender_signature/receiver_signature, which
+     are the pen-stroke images themselves and have no business sitting in a second, unguarded
+     copy inside audit_log. transferCreate is deliberately absent, the same reason deviceDelete
+     names deviceEnrol's absence: a fresh row has no "before" to diff against. */
+  transferSign:    { table: 'transfers', key: a => ({ id: a.id }),
+                     fields: ['sender_signed_by', 'sender_signed_at', 'receiver_signed_by', 'receiver_signed_at'] },
 };
 const K_ = s => String(s == null ? '' : s).trim().toUpperCase();
 

@@ -2093,3 +2093,256 @@ test('stockAccount pivots managers by the register\'s own role labels, the store
     'team leaders and field officers are the field; a name nobody registered is a field holder too');
   assert.equal(r.company.totals.held, 6);
 });
+
+/* =========================================================================================
+   REPORT()'S TIMU FILTER MUST OFFER REAL TEAMS -- not reportCore's own `teams` field, which
+   groups by the CUSTOMER's branch (Watu's display-only zone label, never a fence -- see
+   RUN-ME-2026-08-17-offline-queue.sql) while a call log's own `team` column is the OFFICER's
+   real one. Offering a branch name in the dropdown and then filtering by team silently zeroed
+   the whole report for anybody who picked exactly the option the box itself just offered --
+   found by an audit ahead of a staff training, not by a complaint, because it asks nothing
+   and shows nothing wrong: a report that quietly returns 0/0 for a legitimate-looking choice.
+   ========================================================================================= */
+test('report() offers real teams to filter by, and a branch name never silently zeroes it', async () => {
+  const d = fakeDb({
+    call_users: [{ user_id: 'u1', name: 'Asha', team: 'TEAM A', role: 'AGENT', phone: '0700000001', active: true }],
+    call_logs: [{ user_id: 'u1', team: 'TEAM A', call_date: '2026-08-14', ref: '351929937378664',
+      phone: '0700000001', portfolio: true, duration: 60, outcome: 'CONNECTED' }],
+    teams: [{ team: 'TEAM A', rsm: 'RSM One' }],
+    // The branch grouping reportCore ALSO returns, kept deliberately different from the real
+    // team above -- if the dropdown offered this by mistake, filtering by it would prove the bug.
+    watu_loans: [{ imei: '351929937378664', agent: 'Asha', branch: 'Dar es salaam' }],
+    settings: [],
+  });
+  const all = await _FNS.report(d, ADMIN, { from: '2026-08-14', to: '2026-08-14' });
+  assert.equal(all.totals.calls, 1, 'the unfiltered report sees the call');
+  // teamChoices is the real vocabulary the Timu box must be built from; `teams` stays the
+  // (unrelated) branch breakdown reportCore has always returned for its own section.
+  assert.deepEqual(all.teamChoices, ['TEAM A']);
+  assert.ok(all.teams.some(t => t.team === 'Dar es salaam'), 'the branch breakdown is untouched');
+
+  // Picking exactly what the dropdown offers must actually filter, and must keep the call
+  // rather than losing it the way filtering by a branch name used to.
+  const picked = await _FNS.report(d, ADMIN, { from: '2026-08-14', to: '2026-08-14', team: 'TEAM A' });
+  assert.equal(picked.totals.calls, 1, 'picking the officer\'s real team keeps the call');
+  assert.equal(picked.team, 'TEAM A');
+
+  // A name that only ever appears in the branch grouping -- never a real team -- must not
+  // silently pass through as a scope. This is the exact case that used to return 0/0.
+  const bogus = await _FNS.report(d, ADMIN, { from: '2026-08-14', to: '2026-08-14', team: 'Dar es salaam' });
+  assert.equal(bogus.totals.calls, 1, 'a name that was never a real team choice narrows nothing');
+  assert.equal(bogus.team, '', 'and is not echoed back as though it had been picked');
+});
+
+/* =========================================================================================
+   'codes' IS ITS OWN GRANTABLE NAV, and every handler behind it must actually accept a code
+   whose only tab is 'codes' -- the Roles editor's own promise ("tick exactly the panes this
+   role opens ... every pane is yours to grant"). It used to gate on requireSettings(), the
+   SEPARATE 'settings' pane, so a role built exactly the way the Roles editor invites -- tick
+   only "Access codes" -- got a real, listed sidebar button that 403'd the instant it opened.
+   The `audit` nav was fixed the identical way once already; this is the same class of bug on
+   a second pane. Settings itself is untouched -- it is not smuggled in by holding 'codes'.
+   ========================================================================================= */
+test('a code holding only "codes" can actually open the Access codes pane', async () => {
+  const d = fakeDb({ access_codes: [], roles: [], settings: [] });
+  const CODES_ONLY = { code: 'C1', name: 'Codes clerk', role: 'CODES CLERK', teams: null,
+    tabs: ['codes'], readOnly: false };
+  const r = await _FNS.accessCodes(d, CODES_ONLY);
+  assert.equal(r.ok, true, 'codes alone must be enough -- the pane promises exactly this');
+  // And it is still a genuinely separate door: holding 'codes' does not smuggle in Settings.
+  await assert.rejects(() => _FNS.settings(d, CODES_ONLY), /Settings permission is required/);
+  // And the other way round still refuses, exactly as before this fix: 'settings' alone,
+  // with no 'codes', does not open the Access codes pane for an ordinary role.
+  const SETTINGS_ONLY = { code: 'S1', name: 'Settings clerk', role: 'SETTINGS CLERK', teams: null,
+    tabs: ['settings'], readOnly: false };
+  await assert.rejects(() => _FNS.accessCodes(d, SETTINGS_ONLY), /no access to the codes pane/i);
+});
+
+/* =========================================================================================
+   TRANSFERS -- the store keeper's blue-ink hand-off doc (2026-09-16):
+     "store keeper needs the transfer doc to be blue ink signed online on a transfers
+      navigation by sender and receiver so that we could export and print."
+   One form, two on-screen signatures, printed as one document -- see db/migrations/
+   RUN-ME-2026-09-16-transfers.sql for the schema.
+   ========================================================================================= */
+const TR_USER = { code: 'T1', name: 'Store keeper', role: 'STORE', teams: null,
+  tabs: ['transfers'], readOnly: false };
+const TR_PNG = 'data:image/png;base64,iVBORw0KGgo=';
+
+// The staff register the hierarchy rule below reads: two RSMs, the owner's named
+// distribution point ("SUPER AGENT", registered as an rsm-tier row), three field agents
+// under RSM DAR/RSM MWANZA by branch, and a fourth whose `manager` column explicitly
+// overrides the branch it sits in -- the same override column the sales-targets roll-up
+// reads (RUN-ME-2026-09-09-targets.sql).
+function staffDb(extra) {
+  return fakeDb(Object.assign({
+    hoop_agents: [
+      { name: 'RSM DAR', role: 'Regional_Manager', branch: 'Dar es salaam' },
+      { name: 'RSM MWANZA', role: 'Regional_Manager', branch: 'Mwanza' },
+      { name: 'SUPER AGENT', role: 'Regional_Manager', branch: null },
+      { name: 'AGENT ONE', role: 'Field_Officer', branch: 'Dar es salaam' },
+      { name: 'AGENT TWO', role: 'Field_Officer', branch: 'Dar es salaam' },
+      { name: 'AGENT THREE', role: 'Field_Officer', branch: 'Mwanza' },
+      { name: 'AGENT FOUR', role: 'Field_Officer', branch: 'Dar es salaam', manager: 'RSM MWANZA' },
+    ],
+  }, extra));
+}
+
+test('transferCreate opens a hand-off with the serials stamped as their own rows', async () => {
+  const d = staffDb();
+  const r = await _FNS.transferCreate(d, TR_USER, {
+    fromName: 'RSM DAR', toName: 'AGENT ONE', item: 'SAMSUNG A07-64GB', price: 120000,
+    imeis: ['351111111111111', '351111111111111', '351222222222222'], note: 'hand delivery',
+  });
+  assert.equal(r.ok, true);
+  assert.match(r.ref, /^TR-\d{8}-/);
+  assert.equal(r.changed, 2, 'the repeated IMEI is deduped, not double-counted');
+
+  const got = await _FNS.transferGet(d, TR_USER, { id: r.id });
+  assert.equal(got.transfer.fromName, 'RSM DAR');
+  assert.equal(got.transfer.toName, 'AGENT ONE');
+  assert.equal(got.transfer.items.length, 2);
+  assert.equal(got.transfer.totalQty, 2);
+  assert.equal(got.transfer.totalAmount, 240000);
+  assert.equal(got.transfer.senderSignedBy, '', 'unsigned until somebody actually signs');
+
+  const list = await _FNS.transferList(d, TR_USER, {});
+  assert.equal(list.rows.length, 1);
+  assert.equal(list.rows[0].status, 'pending');
+  assert.equal(list.counts.pending, 1);
+});
+
+test('transferCreate refuses an empty sender/receiver name, and an empty IMEI list', async () => {
+  const d = staffDb();
+  await assert.rejects(() => _FNS.transferCreate(d, TR_USER,
+    { fromName: '', toName: 'AGENT ONE', imeis: ['1'] }), /sender and a receiver name are required/);
+  await assert.rejects(() => _FNS.transferCreate(d, TR_USER,
+    { fromName: 'RSM DAR', toName: 'AGENT ONE', imeis: [] }), /Paste at least one IMEI/);
+});
+
+test('transferSign fills exactly one slot each, once, and completes the document', async () => {
+  const d = staffDb();
+  const created = await _FNS.transferCreate(d, TR_USER,
+    { fromName: 'RSM DAR', toName: 'AGENT ONE', imeis: ['351111111111111'] });
+
+  const s1 = await _FNS.transferSign(d, TR_USER,
+    { id: created.id, role: 'sender', signedBy: 'RSM DAR', signature: TR_PNG });
+  assert.equal(s1.ok, true);
+  assert.equal((await _FNS.transferList(d, TR_USER, {})).rows[0].status, 'partial');
+
+  // The same slot cannot be signed twice -- a mis-signed transfer gets a fresh document,
+  // never an edit to a signature a printed copy may already be holding.
+  await assert.rejects(() => _FNS.transferSign(d, TR_USER,
+    { id: created.id, role: 'sender', signedBy: 'Somebody else', signature: TR_PNG }),
+    /Already signed, by RSM DAR/);
+
+  const s2 = await _FNS.transferSign(d, TR_USER,
+    { id: created.id, role: 'receiver', signedBy: 'AGENT ONE', signature: TR_PNG });
+  assert.equal(s2.ok, true);
+  assert.equal((await _FNS.transferList(d, TR_USER, {})).rows[0].status, 'complete');
+
+  const got = await _FNS.transferGet(d, TR_USER, { id: created.id });
+  assert.equal(got.transfer.senderSignature, TR_PNG);
+  assert.equal(got.transfer.receiverSignature, TR_PNG);
+});
+
+test('transferSign refuses a signature that is not a PNG data URL, an oversized one, or a bad role', async () => {
+  const d = staffDb();
+  const created = await _FNS.transferCreate(d, TR_USER,
+    { fromName: 'RSM DAR', toName: 'AGENT ONE', imeis: ['1'] });
+  await assert.rejects(() => _FNS.transferSign(d, TR_USER,
+    { id: created.id, role: 'sender', signedBy: 'X', signature: 'not-a-png' }),
+    /signature was not recognised/i);
+  const huge = 'data:image/png;base64,' + 'A'.repeat(400001);
+  await assert.rejects(() => _FNS.transferSign(d, TR_USER,
+    { id: created.id, role: 'sender', signedBy: 'X', signature: huge }), /too large/i);
+  await assert.rejects(() => _FNS.transferSign(d, TR_USER,
+    { id: created.id, role: 'sideways', signedBy: 'X', signature: TR_PNG }), /Choose a role/);
+});
+
+test('transfers is a real, grantable nav -- and a view-only code can look but never sign', async () => {
+  const d = staffDb();
+  const NO_NAV = { code: 'N1', name: 'Nobody', role: 'CLERK', teams: null, tabs: [], readOnly: false };
+  await assert.rejects(() => _FNS.transferList(d, NO_NAV, {}), /no access to the transfers pane/i);
+  await assert.rejects(() => _FNS.transferCreate(d, NO_NAV,
+    { fromName: 'A', toName: 'B', imeis: ['1'] }), /no access to the transfers pane/i);
+
+  const VIEW_ONLY = { code: 'V1', name: 'Auditor', role: 'AUDITOR', teams: null,
+    tabs: ['transfers'], readOnly: true };
+  const list = await _FNS.transferList(d, VIEW_ONLY, {});
+  assert.equal(list.ok, true, 'view-only can still see the register -- reading is what a list is');
+  await assert.rejects(() => _FNS.transferCreate(d, VIEW_ONLY,
+    { fromName: 'RSM DAR', toName: 'AGENT ONE', imeis: ['1'] }), /view-only code/i);
+});
+
+test('transferList and transferGet say plainly when the migration has not run yet', async () => {
+  /* PostgREST answers a missing table with a relation-not-found, which the fake cannot
+     produce by simply not configuring the table -- see the identical stub on the advance
+     panes above; this is what a deployment actually says before the SQL is run. */
+  const d = {
+    from() {
+      return { select() { return this; }, eq() { return this; }, order() { return this; },
+        limit() { return this; }, range() { return this; }, maybeSingle() { return this; },
+        insert() { return this; }, update() { return this; },
+        then(res) { return Promise.resolve({ data: null,
+          error: { code: '42P01', message: 'relation "public.transfers" does not exist' } })
+          .then(res); } };
+    },
+  };
+  const list = await _FNS.transferList(d, TR_USER, {});
+  assert.equal(list.ok, true);
+  assert.equal(list.notReady, true);
+  assert.deepEqual(list.rows, []);
+  await assert.rejects(() => _FNS.transferGet(d, TR_USER, { id: 'x' }),
+    /RUN-ME-2026-09-16-transfers\.sql/);
+});
+
+/* =========================================================================================
+   THE HIERARCHY RULE (the owner, 2026-09-16): "it could be between super agent/store and
+   rsm, rsm and rsm, agent and agent, agent and super agent -- all possibilities between
+   these people, but an agent can't transfer to another rsm's agent unless [it goes] through
+   rsm or superagent." Every pairing is a normal hand-off EXCEPT one: two field agents who
+   report to two DIFFERENT RSMs, transferring stock straight to each other and skipping the
+   chain of custody both RSMs are meant to see. Resolved off the same register and the same
+   manager-derivation the sales-targets roll-up already uses (managerIndex) -- nobody types a
+   role on this form.
+   ========================================================================================= */
+test('two agents under the SAME rsm can transfer directly to each other', async () => {
+  const d = staffDb();
+  const r = await _FNS.transferCreate(d, TR_USER, { fromName: 'AGENT ONE', toName: 'AGENT TWO', imeis: ['1'] });
+  assert.equal(r.ok, true);
+});
+
+test('two agents under DIFFERENT rsms cannot transfer directly -- the rule\'s one restriction', async () => {
+  const d = staffDb();
+  await assert.rejects(
+    () => _FNS.transferCreate(d, TR_USER, { fromName: 'AGENT ONE', toName: 'AGENT THREE', imeis: ['1'] }),
+    /route this through an RSM or Super Agent/);
+});
+
+test('the block also catches a BRANCH-derived manager, not only an explicit one', async () => {
+  // AGENT ONE's rsm is derived from its branch (Dar -> RSM DAR); AGENT FOUR sits in that same
+  // branch but is EXPLICITLY overridden onto RSM MWANZA -- so the two chains still differ.
+  const d = staffDb();
+  await assert.rejects(
+    () => _FNS.transferCreate(d, TR_USER, { fromName: 'AGENT ONE', toName: 'AGENT FOUR', imeis: ['1'] }),
+    /route this through an RSM or Super Agent/,
+    'AGENT ONE (derived: RSM DAR) and AGENT FOUR (explicit: RSM MWANZA) are different chains');
+});
+
+test('an rsm, a super agent, or a name outside the register is never restricted by the rule', async () => {
+  const d = staffDb();
+  // rsm <-> rsm, even across two different regions.
+  assert.equal((await _FNS.transferCreate(d, TR_USER,
+    { fromName: 'RSM DAR', toName: 'RSM MWANZA', imeis: ['1'] })).ok, true);
+  // agent <-> the super agent -- an rsm-tier row by registration, whatever the owner calls it.
+  assert.equal((await _FNS.transferCreate(d, TR_USER,
+    { fromName: 'AGENT THREE', toName: 'SUPER AGENT', imeis: ['2'] })).ok, true);
+  // agent <-> a name that is not in the staff register at all (the store desk itself).
+  assert.equal((await _FNS.transferCreate(d, TR_USER,
+    { fromName: 'STORE DESK', toName: 'AGENT THREE', imeis: ['3'] })).ok, true);
+  // agent <-> the rsm of a DIFFERENT chain -- never triggers the rule, because an rsm is
+  // never the 'agent' side of the pairing.
+  assert.equal((await _FNS.transferCreate(d, TR_USER,
+    { fromName: 'AGENT THREE', toName: 'RSM DAR', imeis: ['4'] })).ok, true);
+});

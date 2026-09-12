@@ -371,6 +371,22 @@ body.dark .incard{background:var(--card)}
 body.dark tbody tr:hover{background:#16233C}
 /* The active nav pill is white in light mode; a slab of white in a dark column is a hole. */
 body.dark .tabs button.on{background:var(--b700);color:#fff}
+
+/* =====================================================================================
+   PRINTING ONE DOCUMENT OUT OF A SCREEN FULL OF OTHER THINGS.
+   -------------------------------------------------------------------------------------
+   Whatever calls window.print() marks its own content .printDoc, wherever it happens to
+   sit -- inside the sliding drawer, same as everything else that opens one. This rule does
+   not care: it hides every OTHER pixel on the page and pins .printDoc to the top of the
+   sheet, so the drawer's own fixed positioning, scrollbars and backdrop never reach paper.
+   First used by Transfers (the signed hand-off document); written generic so the next
+   thing that needs a clean printout is one class, not a second copy of this rule. */
+@media print{
+  body *{visibility:hidden}
+  .printDoc,.printDoc *{visibility:visible}
+  .printDoc{position:absolute;left:0;top:0;width:100%;padding:0;margin:0}
+  .noprint{display:none!important}
+}
 </style>
 </head>
 <body>
@@ -1491,6 +1507,11 @@ function srv(fn,args,tries){
     if(r.status<200||r.status>=300||b.ok===false){ var er=new Error(b.error||('HTTP '+r.status)); er.answered=true;
       // A refusal the caller can argue with carries the rows it is about -- see deviceSetState.
       if(b.code) er.code=b.code; if(b.imeis) er.imeis=b.imeis;
+      // A refusal that arrives AFTER work already happened says how much -- devSend_'s bulk
+      // Funga dialog reads this to say "N already locked" rather than leaving a mixed batch
+      // looking like the click did nothing. Dropped here for a while; the server always sent
+      // it (api/_lib/auth.js), only the client never copied it onto the thrown Error.
+      if(typeof b.changed==='number') er.changed=b.changed;
       throw er; } return b; }); })
   .then(function(v){ busy(false); return v; },
         function(e){
@@ -1617,6 +1638,13 @@ var NAV=[
     ic:'<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/><path d="M9 10V8a3 3 0 0 1 6 0"/><rect x="8" y="10" width="8" height="5" rx="1"/>' },
   { g:'stock', t:'move',     nav:'movement',   sw:'Mwenendo wa stoo', en:'Stock movement',
     ic:'<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/><path d="M11 18l-6-6 6-6"/>' },
+  /* TRANSFERS -- a hand-off between two named people, signed on screen by both, printable.
+     "store keeper needs the transfer doc to be blue ink signed online ... by sender and
+      receiver so that we could export and print". One pane: both signatures are captured
+      on the SAME device at the moment of handover, the same way the paper slip already
+      works, so this is not split into two navs the way locking/unlocking is. */
+  { g:'stock', t:'transfers',nav:'transfers',  sw:'Uhamisho wa stoo', en:'Transfers',
+    ic:'<path d="M16 3h5v5"/><path d="M21 3l-7 7"/><path d="M8 21H3v-5"/><path d="M3 21l7-7"/><rect x="9" y="9" width="6" height="6" rx="1"/>' },
   /* STOCK REQUESTS: ask, decide against the aging gate, hand over. Three panes because they
      are three different jobs -- the RSM who asks, the store keeper who releases, and whoever
      reads the tracker -- each granted on its own, like every other request here. */
@@ -1858,6 +1886,7 @@ function draw(){
   if(TAB==='score') return drawAgents(m);
   if(TAB==='stock') return drawStock(m);
   if(TAB==='move') return drawMove(m);
+  if(TAB==='transfers') return drawTransfers(m);
   if(TAB==='acct') return drawStockAccount(m);
   if(TAB==='targets') return drawTargets(m);
   if(TAB==='tureq') return drawTopupReq(m);
@@ -2565,7 +2594,10 @@ function drawRipoti(m){
       '<div class="card"><h2>Call reports — simu za '+DEPT.PCO+'</h2>'
       +'<div class="row"><input class="inp" type="date" id="rF" value="'+RIP.from+'"><input class="inp" type="date" id="rT" value="'+RIP.to+'">'
       +'<select class="inp" id="rTeam"><option value="">Timu zote</option>'
-      +(d.teams||[]).map(function(x){return '<option'+(x.team===RIP.team?' selected':'')+'>'+esc(x.team)+'</option>';}).join('')
+      /* teamChoices, NOT teams -- teams is grouped by the CUSTOMER's branch (display-only,
+         never a fence) and filtering by one of those names silently zeroes the whole report.
+         See the note on report() in api/portal.js. */
+      +(d.teamChoices||[]).map(function(x){return '<option'+(x===RIP.team?' selected':'')+'>'+esc(x)+'</option>';}).join('')
       +'</select></div>'
       /* EVERY TILE IS A COLUMN OF THE TABLE BELOW, so each one answers "who" by bringing
          that column to the top rather than by opening a second copy of the same table.
@@ -5914,7 +5946,7 @@ function topupDrawer(m, r, desk, checks){
     var a=Object.assign({id:r.id, step:step, comment:$('#tuC')?$('#tuC').value:'', checks:picked()}, extra||{});
     srv('topupUpdate',a).then(function(){
       toast('Imehifadhiwa / Saved'); closeDrawer();
-      if(TAB==='topups') drawTopups(m); else if(TAB==='topupreq') drawTopupReq(m);
+      if(TAB==='topups') drawTopups(m); else if(TAB==='tureq') drawTopupReq(m);
     }).catch(function(e){ toast(safeErr(e), true); });
   };
   if($('#tuVerify')) $('#tuVerify').onclick=function(){ this.disabled=true;
@@ -5941,7 +5973,12 @@ function drawTopupReq(m){
       +'</div>'
       +'<h3 style="margin:18px 0 6px">Maombi yangu / My requests</h3>'
       +(rows.length?topupTable(rows,false):'<div class="mut">Bado hujaomba top-up. / Nothing requested yet.</div>');
-    topupRaiseWire('tu', function(){ if(TAB==='topupreq') drawTopupReq(m); });
+    /* TAB HOLDS THE SIDEBAR'S OWN SHORT KEY ('tureq'), NEVER THE NAV PERMISSION KEY
+       ('topupreq') -- see the NAV array. This compared against the wrong one, so the
+       request list and the Send button never refreshed after a successful submit: the
+       button stayed disabled (only the .catch branch re-enables it) until the tab was
+       left and reopened, which read as "the button stopped working" on a second request. */
+    topupRaiseWire('tu', function(){ if(TAB==='tureq') drawTopupReq(m); });
     [].slice.call(m.querySelectorAll('[data-tuv]')).forEach(function(b){
       b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-tuv'); })[0];
         if(r) topupDrawer(m, r, false, []); };
@@ -7261,20 +7298,24 @@ function drawOldStock(m){
 function osPaint_(m, d){
   {
     var c=d.counts||{}, rows=d.rows||[];
+    /* SIX FACTS, NOT SIX BUTTONS. These used to pass go:function(){} -- a truthy `go` is what
+       tile() reads as "this one opens something" (the .go class: pointer cursor, hover-lift,
+       an "fungua ›" hint), so every one of them looked exactly as clickable as a real filter
+       tile sitting in the same row, and did nothing at all when pressed. Plain KPIs now, the
+       same way every other purely-informational tile in this file is written (no go/on/cta
+       at all) -- see e.g. the "Zilizochelewa" tile on the dashboard. */
     var tiles='<div class="tiles">'
-      +tile('Hazijafungwa',money(c.open||0),'kati ya '+money(c.listed||0)+' kwenye orodha',
-        {on:false,cta:'',go:function(){}})
-      +tile('Zimefungwa',money(c.locked||0),'ziliporwa kwenye ziara',Object.assign({color:'ok'},{on:false,cta:'',go:function(){}}))
-      +tile('Ziliuzwa',money(c.sold||0),'kabla hatujazifunga',{on:false,cta:'',go:function(){}})
-      +tile('Siku 180+',money(c.over180||0),money(c.d90||0)+' siku 90-179',
-        Object.assign({color:(c.over180?'bad':'')},{on:false,cta:'',go:function(){}}))
-      +tile('Wenye nazo',money(c.holders||0),'ziara za kufanya',{on:false,cta:'',go:function(){}})
+      +tile('Hazijafungwa',money(c.open||0),'kati ya '+money(c.listed||0)+' kwenye orodha',{})
+      +tile('Zimefungwa',money(c.locked||0),'ziliporwa kwenye ziara',{color:'ok'})
+      +tile('Ziliuzwa',money(c.sold||0),'kabla hatujazifunga',{})
+      +tile('Siku 180+',money(c.over180||0),money(c.d90||0)+' siku 90-179',{color:(c.over180?'bad':'')})
+      +tile('Wenye nazo',money(c.holders||0),'ziara za kufanya',{})
       /* HOW MUCH OF THE MAP IS BLANK. A pivot by place is only as good as how many rows have
          one, and that should be visible rather than discovered by adding the bars up and
          finding they fall short. */
       +tile('Mahali',money(c.places||0),
         (c.noPlace||0)?money(c.noPlace)+' hazijulikani zilipo':'zote zinajulikana zilipo',
-        Object.assign({color:((c.noPlace||0)?'bad':'ok')},{on:false,cta:'',go:function(){}}))
+        {color:((c.noPlace||0)?'bad':'ok')})
       +'</div>';
     /* THE UNSET OPTION NAMES ITS OWN COLUMN.
        -------------------------------------------------------------------------------------
@@ -7779,8 +7820,11 @@ function drawNewStock(m){
       +tile('Zimefungwa',money(c.locked||0),'sasa hivi',Object.assign({color:(c.locked?'bad':'')},pick('locked')))
       +tile('Zimefunguliwa',money(c.unlocked||0),'hazijafungwa',pick('unlocked'))
       +tile('Zimeachiwa',money(c.achia||0),'mkopo umeisha',Object.assign({color:'ok'},pick('achia')))
-      +tile('Hazipigi ripoti',money(c.never||0),money(c.quiet7||0)+' kimya siku 7+',
-        {on:false,cta:'',go:function(){}})
+      /* A PLAIN KPI, NOT A FILTER -- newStock's own status filter only ever matches
+         locked/unlocked/achia/lost (api/portal.js), never neverSeen/silentDays, so a
+         go:function(){} here used to look exactly as clickable as the four real filter
+         tiles beside it and do nothing at all when pressed. */
+      +tile('Hazipigi ripoti',money(c.never||0),money(c.quiet7||0)+' kimya siku 7+',{})
       +'</div>';
     /* THE GAP COUNT IS THE HEALTH OF THE STAMP. It should fall after every upload, and a number
        that never falls means a feed is not arriving -- which is invisible on a table of blanks
@@ -8988,6 +9032,223 @@ function drawMove(m){
       cb.onchange=function(){ MVSHOW[cb.value]=cb.checked; drawMove(m); };
     });
   }).catch(function(e){ paneFailed(m,e); });
+}
+
+/* =========================================================================================
+   TRANSFERS -- a stock hand-off, signed on screen by both the sender and the receiver.
+   =========================================================================================
+     "store keeper needs the transfer doc to be blue ink signed online on a transfers
+      navigation by sender and receiver so that we could export and print. as the signing
+      feature we implemented in hopeloan customer onboarding just on screen signature not
+      biometrics."
+
+   THE CANVAS PAD IS THE SAME IDEA AS HOPELOAN'S ONBOARDING SIGNATURE: a pointer-driven pen
+   stroke on a blank canvas, nothing else -- no fingerprint sensor is involved on either
+   system. Drawn in a ballpoint blue rather than black so a printed copy reads the way a
+   pen-signed paper slip already does.
+
+   ONE FORM, BOTH SIGNATURES, because the store keeper's own hand-off happens at one counter:
+   the sender signs, hands the same screen to the receiver, the receiver signs. See
+   api/portal.js's transferSign for why a signature, once written, is never overwritten. */
+var TRANSFERQ='';
+var TR_INK='#1a56db';
+function trStatusChip(r){
+  if(r.status==='complete') return '<span class="chip ok">Imesainiwa / Signed</span>';
+  if(r.status==='partial') return '<span class="chip warn">Sahihi 1/2</span>';
+  return '<span class="chip bad">Bado hakuna sahihi / Unsigned</span>';
+}
+function drawTransfers(m){
+  m.innerHTML='<div class="card"><h2>Uhamisho wa stoo / Transfers</h2><div class="sk"></div></div>';
+  srv('transferList',{status:TRANSFERQ}).then(function(d){
+    if(d.notReady){
+      m.innerHTML='<div class="note bad">Jedwali la uhamisho halijatengenezwa bado. Endesha '
+        +'<b>db/migrations/RUN-ME-2026-09-16-transfers.sql</b> kwenye Supabase, kisha rudi hapa. '
+        +'/ The transfers table has not been created yet — run that migration, then come back.</div>';
+      return;
+    }
+    var rows=d.rows||[], c=d.counts||{}, canW=!BOOT.readOnly;
+    var pick=function(k){ return function(){ TRANSFERQ=(TRANSFERQ===k?'':k); drawTransfers(m); }; };
+    m.innerHTML='<div class="tiles">'
+      +tile('Bado hakuna sahihi',money(c.pending||0),'sahihi 0/2',{color:c.pending?'bad':'',on:TRANSFERQ==='pending',cta:'chuja ›',go:pick('pending')})
+      +tile('Sahihi moja',money(c.partial||0),'inasubiri upande wa pili',{color:c.partial?'warn':'',on:TRANSFERQ==='partial',cta:'chuja ›',go:pick('partial')})
+      +tile('Imekamilika',money(c.complete||0),'sahihi 2/2',{color:'ok',on:TRANSFERQ==='complete',cta:'chuja ›',go:pick('complete')})
+      +tile('Jumla',money(c.total||0),'uhamisho wote',{})
+      +'</div>'
+      +'<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<button class="btn sm'+(TRANSFERQ===''?'':' ghost')+'" data-trq="">Zote / All</button>'
+      +'<input id="trQ" class="inp" placeholder="Tafuta: nambari, jina / search ref or name" style="width:220px">'
+      +'<span style="flex:1"></span>'
+      +(canW?'<button class="btn sm" id="trNew">+ Uhamisho mpya / New transfer</button>':'')
+      +'</div>'
+      +(rows.length?'<div class="scroll"><table><thead><tr><th>NAMBA</th><th>KUTOKA</th><th>KWENDA</th>'
+        +'<th class="r">SIMU</th><th class="r">THAMANI</th><th>HALI</th><th class="noxl"></th></tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(r.ref)+'</td>'
+            +'<td>'+esc(r.fromName)+(r.fromPhone?'<div class="mut" style="font-size:10px">'+esc(r.fromPhone)+'</div>':'')+'</td>'
+            +'<td>'+esc(r.toName)+(r.toPhone?'<div class="mut" style="font-size:10px">'+esc(r.toPhone)+'</div>':'')+'</td>'
+            +'<td class="r">'+money(r.itemCount)+'</td>'
+            +'<td class="r">'+money(r.totalAmount)+'</td>'
+            +'<td>'+trStatusChip(r)+'</td>'
+            +'<td class="r noxl"><button class="btn sm ghost" data-trv="'+esc(r.id)+'">Ona / Open</button></td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">Hakuna uhamisho hapa bado. / Nothing here yet.</div>');
+    wireTiles(m);
+    $all('[data-trq]').forEach(function(b){ b.onclick=function(){ TRANSFERQ=b.getAttribute('data-trq'); drawTransfers(m); }; });
+    var q=$('#trQ');
+    if(q) q.oninput=function(){
+      var v=q.value.toUpperCase();
+      $all('tbody tr',m).forEach(function(tr){ tr.style.display = tr.textContent.toUpperCase().indexOf(v)>=0 ? '' : 'none'; });
+    };
+    var nw=$('#trNew');
+    if(nw) nw.onclick=function(){ trNewForm(m); };
+    $all('[data-trv]').forEach(function(b){
+      b.onclick=function(){ trView(m, b.getAttribute('data-trv')); };
+    });
+  }).catch(function(e){ paneFailed(m,e); });
+}
+
+/** The creation form. One shared item/price for the whole pasted list -- see the note on
+    transferCreate in api/portal.js for why: a hand-off is almost always one model, many
+    serials, one price, the same shape the POS side's own move document already prints. */
+function trNewForm(m){
+  drawer('<h3>Uhamisho mpya / New transfer</h3>'
+    +'<div class="sub">Mtoaji na mpokeaji watasaini kwenye skrini hii hii mara hamisho likifunguliwa. '
+    +'/ The sender and receiver both sign on this same screen once the transfer is open.</div>'
+    +'<div class="fld"><label>Anayetoa / Sender name</label><input id="trFromName" class="inp"></div>'
+    +'<div class="fld"><label>Simu ya anayetoa / Sender phone (optional)</label><input id="trFromPhone" class="inp"></div>'
+    +'<div class="fld"><label>Anayepokea / Receiver name</label><input id="trToName" class="inp"></div>'
+    +'<div class="fld"><label>Simu ya anayepokea / Receiver phone (optional)</label><input id="trToPhone" class="inp"></div>'
+    +'<div class="fld"><label>Modeli / Item (optional)</label><input id="trItem" class="inp" placeholder="mf. SAMSUNG A07-64GB"></div>'
+    +'<div class="fld"><label>Bei kwa kila simu / Unit price (optional)</label><input id="trPrice" class="inp" type="number" min="0" step="1000"></div>'
+    +'<div class="fld"><label>IMEI (moja kwa mstari au comma)</label>'
+    +'<textarea id="trImeis" rows="8" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123"></textarea></div>'
+    +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+    +'<div class="fld"><label>Maelezo / Note (optional)</label><textarea id="trNote" rows="2" style="width:100%"></textarea></div>'
+    +'<button class="btn w" id="trGo">Fungua / Open</button>');
+  var ta=$('#trImeis'), out=$('#trCount');
+  var recount=function(){
+    var p=devParseImeis_(ta.value);
+    out.innerHTML=!p.list.length?'Bado hakuna IMEI. / No IMEIs yet.'
+      :'<b>'+money(p.list.length)+'</b> simu'+(p.dupes?' · '+money(p.dupes)+' zimerudiwa / repeated':'');
+  };
+  ta.oninput=recount; recount();
+  $('#trGo').onclick=function(){
+    var p=devParseImeis_(ta.value);
+    if(!$('#trFromName').value.trim()||!$('#trToName').value.trim()){
+      toast('Jina la anayetoa na anayepokea linahitajika. / Both names are required.', true); return;
+    }
+    if(!p.list.length){ toast('Bandika angalau IMEI moja. / Paste at least one IMEI.', true); return; }
+    var b=$('#trGo'); b.disabled=true;
+    srv('transferCreate',{
+      fromName:$('#trFromName').value, fromPhone:$('#trFromPhone').value,
+      toName:$('#trToName').value, toPhone:$('#trToPhone').value,
+      item:$('#trItem').value, price:$('#trPrice').value,
+      imeis:p.list, note:$('#trNote').value,
+    }).then(function(r){
+      toast('Imefunguliwa: '+r.ref);
+      closeDrawer();
+      if(TAB==='transfers'){ trView(m, r.id); }
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
+
+/** A signature pad, wired the same way hopeloan's onboarding wires one: pointer events cover
+    a finger on a phone and a mouse on a laptop identically. Blue ink, a thin exact line --
+    there is no thumbprint mode here, a transfer is never signed with a thumb. */
+function trWirePad_(canvasId){
+  var canvas=$('#'+canvasId); if(!canvas) return null;
+  var ctx=canvas.getContext('2d');
+  ctx.lineWidth=2.2; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle=TR_INK;
+  var drawing=false, dirty=false, last=null;
+  function pos(e){
+    var r=canvas.getBoundingClientRect();
+    return { x:(e.clientX-r.left)*(canvas.width/r.width), y:(e.clientY-r.top)*(canvas.height/r.height) };
+  }
+  function start(e){ e.preventDefault(); drawing=true; last=pos(e); try{ canvas.setPointerCapture(e.pointerId); }catch(err){} }
+  function move(e){
+    if(!drawing) return; e.preventDefault();
+    var p=pos(e); ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke();
+    last=p; dirty=true;
+  }
+  function end(){ drawing=false; }
+  canvas.addEventListener('pointerdown',start);
+  canvas.addEventListener('pointermove',move);
+  canvas.addEventListener('pointerup',end);
+  canvas.addEventListener('pointerleave',end);
+  canvas.addEventListener('pointercancel',end);
+  return {
+    isDirty:function(){ return dirty; },
+    dataUrl:function(){ return canvas.toDataURL('image/png'); },
+    clear:function(){ ctx.clearRect(0,0,canvas.width,canvas.height); dirty=false; },
+  };
+}
+/** One party's block on the printable document: the pad and a Sign button while unsigned,
+    the stored image once it is. */
+function trSigBlock_(label, role, t, padId, nameId, goId){
+  var signedBy = role==='sender' ? t.senderSignedBy : t.receiverSignedBy;
+  var signedAt = role==='sender' ? t.senderSignedAt : t.receiverSignedAt;
+  var img = role==='sender' ? t.senderSignature : t.receiverSignature;
+  if(signedBy){
+    return '<div class="fld"><label>'+esc(label)+'</label>'
+      +'<div style="border:1.5px solid var(--line);border-radius:9px;padding:8px;background:#fff">'
+      +'<img src="'+esc(img)+'" style="max-width:280px;max-height:110px;display:block">'
+      +'</div><div class="mut" style="font-size:11px;margin-top:3px">'+esc(signedBy)+' · '+esc(clock(signedAt))+'</div></div>';
+  }
+  if(BOOT.readOnly) return '<div class="fld"><label>'+esc(label)+'</label><div class="mut">Bado hakujasainiwa. / Not signed yet.</div></div>';
+  return '<div class="fld noprint"><label>'+esc(label)+'</label>'
+    +'<input id="'+nameId+'" class="inp" placeholder="Jina la anayesaini / Signer\'s name" style="margin-bottom:6px">'
+    +'<canvas id="'+padId+'" width="300" height="120" style="width:100%;max-width:300px;height:120px;border:1.5px solid var(--line);border-radius:9px;touch-action:none;background:#fff"></canvas>'
+    +'<div style="margin-top:4px"><button type="button" class="btn sm ghost" id="'+padId+'Clear">Futa / Clear</button> '
+    +'<button type="button" class="btn sm" id="'+goId+'">Saini / Sign</button></div></div>';
+}
+function trView(m, id){
+  drawer('<div class="sk"></div>');
+  srv('transferGet',{id:id}).then(function(d){
+    var t=d.transfer;
+    var brand='HOOPLOAN';
+    var html='<div class="printDoc">'
+      +'<h2 style="margin:0 0 2px">'+esc(brand)+'</h2>'
+      +'<div class="mut" style="margin-bottom:10px">Hati ya uhamisho wa stoo / Stock transfer document</div>'
+      +'<div class="row" style="gap:24px;flex-wrap:wrap;margin-bottom:10px">'
+      +'<div><b>Namba / Ref:</b> '+esc(t.ref)+'<br><b>Tarehe / Date:</b> '+esc(clock(t.at))+'<br><b>Iliyofunguliwa na / Opened by:</b> '+esc(t.createdBy)+'</div>'
+      +'<div><b>Kutoka / From:</b> '+esc(t.fromName)+(t.fromPhone?' · '+esc(t.fromPhone):'')+'<br>'
+      +'<b>Kwenda / To:</b> '+esc(t.toName)+(t.toPhone?' · '+esc(t.toPhone):'')+'</div>'
+      +'</div>'
+      +(t.note?'<div class="mut" style="margin-bottom:10px">'+esc(t.note)+'</div>':'')
+      +'<div class="scroll"><table><thead><tr><th>IMEI</th><th>MODELI</th><th class="r">IDADI</th><th class="r">BEI</th><th class="r">JUMLA</th></tr></thead><tbody>'
+      +t.items.map(function(x){
+        return '<tr><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(x.imei)+'</td>'
+          +'<td>'+esc(x.item||'—')+'</td><td class="r">'+money(x.qty)+'</td>'
+          +'<td class="r">'+money(x.price)+'</td><td class="r">'+money(x.subtotal)+'</td></tr>';
+      }).join('')+'</tbody><tfoot><tr class="totrow"><td colspan="2"><b>Jumla / Total</b></td>'
+      +'<td class="r"><b>'+money(t.totalQty)+'</b></td><td></td><td class="r"><b>'+money(t.totalAmount)+'</b></td></tr></tfoot></table></div>'
+      +'<div class="row" style="gap:20px;flex-wrap:wrap;margin-top:16px;align-items:flex-start">'
+      +trSigBlock_('Sahihi ya anayetoa / Sender signature','sender',t,'trPadS','trNameS','trGoS')
+      +trSigBlock_('Sahihi ya anayepokea / Receiver signature','receiver',t,'trPadR','trNameR','trGoR')
+      +'</div>'
+      +'</div>'
+      +'<div class="noprint" style="margin-top:16px"><button class="btn w" id="trPrint">🖨 Chapisha / Print</button></div>';
+    drawer('<h3>Uhamisho / Transfer '+esc(t.ref)+'</h3>'+html);
+    var padS=trWirePad_('trPadS'), padR=trWirePad_('trPadR');
+    var cs=$('#trPadSClear'); if(cs) cs.onclick=function(){ padS.clear(); };
+    var cr=$('#trPadRClear'); if(cr) cr.onclick=function(){ padR.clear(); };
+    var wireSign=function(goId, nameId, pad, role){
+      var b=$('#'+goId); if(!b) return;
+      b.onclick=function(){
+        var name=$('#'+nameId).value.trim();
+        if(!name){ toast('Andika jina la anayesaini. / Enter the signer\'s name.', true); return; }
+        if(!pad||!pad.isDirty()){ toast('Weka sahihi kwanza. / Draw a signature first.', true); return; }
+        b.disabled=true;
+        srv('transferSign',{id:id, role:role, signedBy:name, signature:pad.dataUrl()}).then(function(){
+          toast('Imesainiwa / Signed');
+          trView(m, id);
+        }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+      };
+    };
+    wireSign('trGoS','trNameS',padS,'sender');
+    wireSign('trGoR','trNameR',padR,'receiver');
+    var pr=$('#trPrint'); if(pr) pr.onclick=function(){ window.print(); };
+  }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
 }
 
 /* ---------- staff: THE OFFICE, from Sipho's register ---------- */
