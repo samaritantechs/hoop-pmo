@@ -7,7 +7,7 @@ import { sendMail, noticeHtml } from './_lib/mail.js';
 import { nudge } from './_lib/push.js';
 import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signin.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
-  agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS } from './_lib/call-core.js';
+  agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -126,6 +126,11 @@ AUDITED.add('enrolUpdate');
 AUDITED.add('itWeeklySend');
 AUDITED.add('signinReview');
 AUDITED.add('signinSend');
+/* TRANSFERS: opening one moves stock on paper before it moves in anyone's hand, and signing
+   one is the consequential act -- see audit.js's TRANSFER_DIFF for what it records (never
+   the signature image itself). */
+AUDITED.add('transferCreate');
+AUDITED.add('transferSign');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -320,7 +325,7 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    the safe direction. A missing case that defaulted to "allowed" is how a nav split quietly
    stops splitting anything. */
 const DEVICE_STATE_NAV = { locked: 'devlock', lost: 'devlock', enrolled: 'devunlock', released: 'devunlock' };
-const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'oldstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'audit', 'staff', 'codes', 'settings'];
+const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'transfers', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'oldstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'audit', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
    and used by every rule that follows. A read-only AUDITOR code rides along: it is supervision,
@@ -2581,14 +2586,34 @@ const FNS = {
       counts: { offJana: out.length, recovered: out.filter(r => r.recovered).length } };
   },
 
+  /* THE TIMU FILTER MUST OFFER REAL TEAMS, NOT reportCore's OWN `teams` field -- that one is
+     grouped by the CUSTOMER's branch (Watu's zone/dealer label, display-only, never a fence:
+     see RUN-ME-2026-08-17-offline-queue.sql), while a call log's `team` column is the OFFICER's
+     real one. Offering branch names in this box and then filtering by team silently zeroed
+     the whole report for anybody who picked exactly the option the box itself just offered --
+     found by an audit, not by a complaint, because it asks nothing and shows nothing wrong: a
+     dropdown that quietly returns 0/0 for a legitimate-looking choice.
+
+     call.html's own leader report already does this correctly -- teamChoices, built from the
+     real teams table, the same shape as here -- so this borrows that field name and that
+     function (teamList) rather than inventing a second way to ask the same question. */
   async report(db, user, args) {
     requireNav(user, 'reports');
     const a = args || {};
-    let scope = user.teams;
+    const allTeams = await teamList(db);
+    const choices = (user.teams && user.teams.length ? user.teams : allTeams)
+      .map(t => String(t || '').trim()).filter(Boolean)
+      .filter((t, i, arr) => arr.findIndex(x => K(x) === K(t)) === i).sort();
     const want = String(a.team || '').trim();
-    if (want && (!scope || scope.some(t => K(t) === K(want)))) scope = [want];
+    // Only a name the box actually offered can ever narrow the report -- typing or forging
+    // an arbitrary string here must not silently pass through to reportCore as a scope.
+    const picked = want && choices.find(t => K(t) === K(want)) || '';
+    let scope = user.teams;
+    if (picked && (!scope || scope.some(t => K(t) === K(picked)))) scope = [picked];
     const out = await reportCore(db, scope, a.from, a.to, null, Date.now());
     out.scope = scope || 'ALL';
+    out.teamChoices = choices;
+    out.team = picked;
     return out;
   },
 
@@ -8343,8 +8368,17 @@ const FNS = {
       newWatu: newWatu.slice(0, 300), leftWatu: leftWatu.slice(0, 300) };
   },
 
+  /* saveTeam/newTeamCode/officerActive/accessCodes/deleteRole/saveRole/saveAccessCode/
+     renameAccessCode/accessCodeSuspend/deleteAccessCode ALL BELONG TO THE 'codes' NAV, gated
+     accordingly -- not on requireSettings(), which is 'settings', a separate pane. Ticking
+     'codes' alone on a role produced exactly this button: a real sidebar entry, listed and
+     reachable (NAV_TABS includes 'codes' independently, the Roles editor offers it as its own
+     checkbox and promises "every pane is yours to grant"), that 403'd the instant it opened
+     because every handler underneath it was still checking for 'settings'. The `audit` nav
+     was fixed the identical way once already (see requireNav(user,'audit') above) -- this is
+     the second half of the same class of bug, not a new one. */
   async saveTeam(db, user, args) {
-    requireWrite(user); requireSettings(user);
+    requireWrite(user); requireNav(user, 'codes');
     const a = args || {};
     const team = K(a.team);
     if (!team) throw new Error('Team name is required.');
@@ -8358,7 +8392,7 @@ const FNS = {
 
   /** Rotating a code releases every handset on the team -- that is what it is FOR. */
   async newTeamCode(db, user, args) {
-    requireWrite(user); requireSettings(user);
+    requireWrite(user); requireNav(user, 'codes');
     const team = K(args && args.team);
     if (!team) throw new Error('Team name is required.');
     const teams = await fetchAll(() => db.from('teams').select('team, team_code'));
@@ -8561,7 +8595,7 @@ const FNS = {
 
   /** The one-person cut: switch an account off without rotating anybody's code. */
   async officerActive(db, user, args) {
-    requireWrite(user); requireSettings(user);
+    requireWrite(user); requireNav(user, 'codes');
     const uid = String((args && args.userId) || '').trim();
     if (!uid) throw new Error('userId is required.');
     const active = !!(args && args.active);
@@ -8571,7 +8605,7 @@ const FNS = {
   },
 
   async accessCodes(db, user) {
-    requireSettings(user);
+    requireNav(user, 'codes');
     const [rows, roleRows, hiddenRow] = await Promise.all([
       /* A CASCADE, for the same reason authCode has one: PostgREST refuses the whole select
          for one unknown column, and a pane that goes dark is how somebody loses the ability to
@@ -8643,7 +8677,7 @@ const FNS = {
       it sits outside settingSet's whitelist) or the next read would resurrect it.
       Budget: 1 bounded codes read + 1 keyed delete + 1 keyed read + 1 keyed write. */
   async deleteRole(db, user, args) {
-    requireWrite(user); requireSettings(user);
+    requireWrite(user); requireNav(user, 'codes');
     const role = K(args && args.role);
     if (!role) throw new Error('Role name is required.');
     const codes = await fetchAll(() => db.from('access_codes').select('code, name, role'));
@@ -8668,7 +8702,7 @@ const FNS = {
   /** A role is a name plus the doors it opens. Tabs come from a fixed vocabulary; every
       code carrying the role inherits them at sign-in (auth.js resolveTabs). */
   async saveRole(db, user, args) {
-    requireWrite(user); requireSettings(user);
+    requireWrite(user); requireNav(user, 'codes');
     const role = K(args && args.role);
     if (!role) throw new Error('Role name is required.');
     // Every nav pane is a grantable tab, plus the two ACTIONS (upload, audit). A pane
@@ -8685,7 +8719,7 @@ const FNS = {
   },
 
   async saveAccessCode(db, user, args) {
-    requireWrite(user); requireSettings(user);
+    requireWrite(user); requireNav(user, 'codes');
     const a = args || {};
     const code = String(a.code || '').trim();
     if (!code || !String(a.name || '').trim() || !String(a.role || '').trim()) {
@@ -8710,7 +8744,7 @@ const FNS = {
       and tabs, only the secret moves. The caller renaming themselves gets self:true so
       the page can re-sign them in with the new code instead of locking them out. */
   async renameAccessCode(db, user, args) {
-    requireWrite(user); requireSettings(user);
+    requireWrite(user); requireNav(user, 'codes');
     const from = String((args && args.from) || '').trim();
     const to = String((args && args.to) || '').trim();
     if (!from || !to) throw new Error('Both the old and the new code are required.');
@@ -8811,7 +8845,7 @@ const FNS = {
      a save that quietly restates fields nobody touched is how a person's navs get reverted
      by somebody setting their leave. */
   async accessCodeSuspend(db, user, args) {
-    requireWrite(user); requireSettings(user);
+    requireWrite(user); requireNav(user, 'codes');
     const code = String((args && args.code) || '').trim();
     if (!code) throw new Error('code is required.');
     const clean = v => {
@@ -8858,7 +8892,7 @@ const FNS = {
   },
 
   async deleteAccessCode(db, user, args) {
-    requireWrite(user); requireSettings(user);
+    requireWrite(user); requireNav(user, 'codes');
     const code = String((args && args.code) || '').trim();
     if (!code) throw new Error('code is required.');
     if (code === user.code) throw new Error('You cannot delete the code you are signed in with.');
@@ -9565,6 +9599,214 @@ const FNS = {
       from: a.from || null,
       to: a.to || null,
     })) };
+  },
+
+  /* =====================================================================================
+     TRANSFERS -- a stock hand-off, signed on screen by both the sender and the receiver.
+     =====================================================================================
+       "store keeper needs the transfer doc to be blue ink signed online on a transfers
+        navigation by sender and receiver so that we could export and print. as the signing
+        feature we implemented in hopeloan customer onboarding just on screen signature not
+        biometrics."
+
+     ONE FORM, TWO SIGNATURES, printed as one document -- the same shape as the paper hand-off
+     slip a store keeper already keeps, and the same on-screen capture hopeloan's onboarding
+     already proved: a pen stroke on a canvas, not a fingerprint sensor (see db/migrations/
+     RUN-ME-2026-09-16-transfers.sql for the schema and why the signatures are columns while
+     the serials are their own table).
+
+     A SIGNATURE IS WRITTEN ONCE. There is no re-sign endpoint: a mis-signed transfer is
+     corrected with a fresh transfer, the same discipline a mis-posted payment gets everywhere
+     else in this system, not by editing a document after the fact that a printed copy may
+     already be holding a different version of. */
+
+  /** The list. Deliberately narrow columns -- the two signature images never travel here,
+      only whether each one exists (signed_by is enough to say that without the bytes). */
+  async transferList(db, user, args) {
+    requireNav(user, 'transfers');
+    const a = args || {};
+    let rows;
+    try {
+      rows = await fetchAll(() => db.from('transfers')
+        .select('id, ref, created_at, created_by, from_name, from_phone, to_name, to_phone, '
+          + 'note, item_count, total_qty, total_amount, sender_signed_by, sender_signed_at, '
+          + 'receiver_signed_by, receiver_signed_at')
+        .order('created_at', { ascending: false }));
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true };
+    }
+    const q = K(a.q);
+    const want = String(a.status || '').trim();
+    const statusOf = r => !r.sender_signed_by ? 'pending'
+      : !r.receiver_signed_by ? 'partial' : 'complete';
+    let out = rows.map(r => ({
+      id: r.id, ref: r.ref, at: Date.parse(r.created_at), createdBy: r.created_by || '',
+      fromName: r.from_name, fromPhone: r.from_phone || '', toName: r.to_name, toPhone: r.to_phone || '',
+      note: r.note || '', itemCount: r.item_count, totalQty: r.total_qty, totalAmount: Number(r.total_amount) || 0,
+      senderSignedBy: r.sender_signed_by || '', senderSignedAt: r.sender_signed_at ? Date.parse(r.sender_signed_at) : null,
+      receiverSignedBy: r.receiver_signed_by || '', receiverSignedAt: r.receiver_signed_at ? Date.parse(r.receiver_signed_at) : null,
+      status: statusOf(r),
+    }));
+    if (want) out = out.filter(r => r.status === want);
+    if (q) out = out.filter(r => K(r.ref).includes(q) || K(r.fromName).includes(q) || K(r.toName).includes(q));
+    return { ok: true, rows: out, notReady: false,
+      counts: { total: rows.length, pending: rows.filter(r => statusOf(r) === 'pending').length,
+        partial: rows.filter(r => statusOf(r) === 'partial').length,
+        complete: rows.filter(r => statusOf(r) === 'complete').length } };
+  },
+
+  /** One transfer, in full -- the only read that ever names the signature columns, for the
+      print/detail view. */
+  async transferGet(db, user, args) {
+    requireNav(user, 'transfers');
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!id) bad('Weka ID ya uhamisho. / A transfer id is required.');
+    const { data: t, error } = await db.from('transfers').select('*').eq('id', id).maybeSingle();
+    if (error) { if (tableMissing(error)) bad('Jedwali la uhamisho halijatengenezwa. Endesha '
+      + '<b>db/migrations/RUN-ME-2026-09-16-transfers.sql</b>. / The transfers table does not '
+      + 'exist yet — run that migration first.'); throw new Error(error.message); }
+    if (!t) bad('Uhamisho huu haujulikani. / That transfer was not found.');
+    const items = await fetchAll(() => db.from('transfer_items').select('imei, item, qty, price').eq('transfer_id', id));
+    return { ok: true, transfer: {
+      id: t.id, ref: t.ref, at: Date.parse(t.created_at), createdBy: t.created_by || '',
+      fromName: t.from_name, fromPhone: t.from_phone || '', toName: t.to_name, toPhone: t.to_phone || '',
+      note: t.note || '', totalQty: t.total_qty, totalAmount: Number(t.total_amount) || 0,
+      items: items.map(i => ({ imei: i.imei, item: i.item || '', qty: i.qty, price: Number(i.price) || 0,
+        subtotal: i.qty * (Number(i.price) || 0) })),
+      senderSignature: t.sender_signature || null, senderSignedBy: t.sender_signed_by || '',
+      senderSignedAt: t.sender_signed_at ? Date.parse(t.sender_signed_at) : null,
+      receiverSignature: t.receiver_signature || null, receiverSignedBy: t.receiver_signed_by || '',
+      receiverSignedAt: t.receiver_signed_at ? Date.parse(t.receiver_signed_at) : null,
+    } };
+  },
+
+  /** Open a transfer: who is handing over, who is receiving, and the serials -- one shared
+      item name and unit price for the whole batch, the same shape the POS side's own move
+      document already prints (one product line, many serials, one price), rather than asking
+      the store keeper to type a price per phone for what is almost always one consignment of
+      one model. */
+  async transferCreate(db, user, args) {
+    requireWrite(user); requireNav(user, 'transfers');
+    const a = args || {};
+    const fromName = String(a.fromName || '').trim();
+    const toName = String(a.toName || '').trim();
+    if (!fromName || !toName) bad('Jina la anayetoa na anayepokea linahitajika. / Both a sender and a receiver name are required.');
+
+    /* THE HIERARCHY RULE (the owner, 2026-09-16): "it could be between super agent/store and
+       rsm, rsm and rsm, agent and agent, agent and super agent -- all possibilities between
+       these people, but an agent can't transfer to another rsm's agent unless [it goes]
+       through rsm or superagent." Every pairing is a normal hand-off EXCEPT one: two field
+       agents who report to two different RSMs, transferring stock directly to each other and
+       skipping the chain of custody both RSMs are meant to see. Nobody types a role on this
+       form -- it is resolved off the same register and the same manager-derivation the
+       targets roll-up already uses (managerIndex, see "WHICH RSM AN AGENT BELONGS TO" above),
+       so a name not in that roster at all (the store desk, "SUPER AGENT") is never restricted
+       by this rule, and neither is anybody who IS an RSM/country manager on either side. */
+    const agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager'));
+    const mgrIdx = managerIndex(agentsForRule);
+    const tierOf = name => {
+      const row = agentsForRule.find(r => nameKey(r.name) === nameKey(name));
+      if (!row) return 'other';
+      const role = K(row.role).replace(/\s+/g, '_');
+      return /REGIONAL|COUNTRY_SALES/.test(role) ? 'other' : 'agent';
+    };
+    if (tierOf(fromName) === 'agent' && tierOf(toName) === 'agent') {
+      const fromRsm = nameKey(mgrIdx.of(fromName));
+      const toRsm = nameKey(mgrIdx.of(toName));
+      if (fromRsm && toRsm && fromRsm !== toRsm) bad('Mawakala wawili wa RSM tofauti hawawezi '
+        + 'kuhamishiana moja kwa moja -- pitisha kwa RSM au Super Agent. / Two agents under '
+        + 'different RSMs cannot transfer directly to each other -- route this through an RSM '
+        + 'or Super Agent instead.');
+    }
+
+    const rawImeis = Array.isArray(a.imeis) ? a.imeis : [];
+    const seen = new Set();
+    const imeis = [];
+    for (const raw of rawImeis) {
+      const v = String(raw || '').trim();
+      if (!v || seen.has(v)) continue;
+      seen.add(v); imeis.push(v);
+    }
+    if (!imeis.length) bad('Bandika angalau IMEI moja. / Paste at least one IMEI.');
+    if (imeis.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). Gawa kwa makundi. '
+      + '/ Too many at once — 500 max. Split the list into batches.');
+    const item = String(a.item || '').trim();
+    const price = Math.max(0, Number(a.price) || 0);
+
+    /* THE REFERENCE IS MADE HERE, NOT BY THE DATABASE. A sequence-backed daily counter would
+       read nicer (TR-20260912-0007), but PostgREST has no way to read a bare `nextval()` short
+       of a wrapper function nobody has written, and the fake database every test in this repo
+       runs against knows nothing about column defaults at all -- either would make `ref`
+       silently absent in one of the two places this code has to work. Millisecond-plus-random
+       is unique enough for a store desk's volume and needs neither. */
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const ref = 'TR-' + day + '-' + Date.now().toString(36).toUpperCase()
+      + Math.random().toString(36).slice(2, 5).toUpperCase();
+
+    const at = new Date().toISOString();
+    const { data, error } = await db.from('transfers').insert([{
+      ref, from_name: fromName, from_phone: String(a.fromPhone || '').trim() || null,
+      to_name: toName, to_phone: String(a.toPhone || '').trim() || null,
+      note: String(a.note || '').trim() || null,
+      item_count: imeis.length, total_qty: imeis.length, total_amount: imeis.length * price,
+      created_by: user.name, created_at: at, updated_at: at,
+    }]).select('id, ref');
+    if (error) { if (tableMissing(error)) bad('Jedwali la uhamisho halijatengenezwa. Endesha '
+      + '<b>db/migrations/RUN-ME-2026-09-16-transfers.sql</b>. / The transfers table does not '
+      + 'exist yet — run that migration first.'); throw new Error(error.message); }
+    const inserted = data && data[0];
+    if (!inserted) throw new Error('transfers insert did not return the new row');
+
+    const { error: itemsErr } = await db.from('transfer_items').insert(
+      imeis.map(imei => ({ transfer_id: inserted.id, imei, item: item || null, qty: 1, price })));
+    if (itemsErr) throw new Error(itemsErr.message);
+
+    return { ok: true, id: inserted.id, ref: inserted.ref, changed: imeis.length };
+  },
+
+  /** Sign, once. `role` decides which of the two signature slots this fills; a slot already
+      signed refuses rather than silently overwriting a signature that may already be on a
+      printed copy somewhere. */
+  async transferSign(db, user, args) {
+    requireWrite(user); requireNav(user, 'transfers');
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    const role = String(a.role || '').trim();
+    if (!id) bad('Weka ID ya uhamisho. / A transfer id is required.');
+    if (role !== 'sender' && role !== 'receiver') bad('Chagua nafasi: mtoaji au mpokeaji. / Choose a role: sender or receiver.');
+    const signedBy = String(a.signedBy || '').trim();
+    if (!signedBy) bad('Andika jina la anayesaini. / The signer\'s name is required.');
+    const sig = String(a.signature || '');
+    if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sig)) bad('Sahihi haikutambulika. / That signature was not recognised.');
+    // A signature pad this small never legitimately produces a huge PNG; a data URL far past
+    // that is either a mistaken paste or something worth refusing rather than storing.
+    if (sig.length > 400000) bad('Sahihi ni kubwa mno. Jaribu tena. / That signature is too large. Please try again.');
+
+    let row;
+    try {
+      const { data, error } = await db.from('transfers')
+        .select('id, sender_signed_by, receiver_signed_by').eq('id', id).maybeSingle();
+      if (error) throw error;
+      row = data;
+    } catch (e) {
+      if (tableMissing(e)) bad('Jedwali la uhamisho halijatengenezwa. Endesha '
+        + '<b>db/migrations/RUN-ME-2026-09-16-transfers.sql</b>. / The transfers table does not '
+        + 'exist yet — run that migration first.');
+      throw e;
+    }
+    if (!row) bad('Uhamisho huu haujulikani. / That transfer was not found.');
+    const already = role === 'sender' ? row.sender_signed_by : row.receiver_signed_by;
+    if (already) bad('Tayari kimesainiwa na ' + already + '. / Already signed, by ' + already + '.');
+
+    const at = new Date().toISOString();
+    const patch = role === 'sender'
+      ? { sender_signature: sig, sender_signed_by: signedBy, sender_signed_at: at, updated_at: at }
+      : { receiver_signature: sig, receiver_signed_by: signedBy, receiver_signed_at: at, updated_at: at };
+    const { error: upErr } = await db.from('transfers').update(patch).eq('id', id);
+    if (upErr) throw new Error(upErr.message);
+    return { ok: true, id, role, signedBy };
   },
 };
 
