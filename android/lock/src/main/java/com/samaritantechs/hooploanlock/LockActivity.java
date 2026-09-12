@@ -254,12 +254,15 @@ public class LockActivity extends Activity {
         brandView = row(root, 26, Color.WHITE, true, 0);
         reasonView = row(root, 16, 0xFFDCE6FA, false, 20);
         helpView = row(root, 22, Color.WHITE, true, 24);
-        /* THE IMEI is the last, reference line -- smaller, dimmer, because it is what
-           somebody reads OUT once they are already on the call. The message above is what
-           they read first. Monospace so fifteen digits can be tracked with a finger without
-           losing the place. No REASON line under it any more -- see refresh(). */
-        imeiView = row(root, 14, 0xFFA9BEE6, false, 22);
-        imeiView.setTypeface(Typeface.MONOSPACE);
+        /* THE IMEI is the last, reference line -- smaller than the message above it (that is
+           still what somebody reads first), but white and bold rather than dim: it is what
+           gets read OUT, digit by digit, down a phone line, and a dim grey-blue line was hard
+           to read off the screen in that moment. Monospace so fifteen digits can be tracked
+           with a finger without losing the place; setTypeface(MONOSPACE, BOLD) keeps both,
+           since a plain setTypeface(MONOSPACE) would otherwise drop the bold row() just set.
+           No REASON line under it any more -- see refresh(). */
+        imeiView = row(root, 14, Color.WHITE, true, 22);
+        imeiView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
 
         /* THE ONE THING A LOCKED PHONE MUST STILL DO. Emergency calls are not ours to take
            away -- not for a debt, not for anything. The dialer opens outside lock task for
