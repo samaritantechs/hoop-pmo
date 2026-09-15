@@ -2450,3 +2450,48 @@ test('transferList and transferGet say plainly when the migration has not run ye
   await assert.rejects(() => _FNS.transferGet(d, STORE, { id: 'x' }),
     /RUN-ME-2026-09-16-transfers\.sql/);
 });
+
+/* =========================================================================================
+   BULK: one pasted list, many receivers -- "RSM to Agents, supplying" without eight separate
+   sends. Grouped by receiver, one document each, all-or-nothing.
+   ========================================================================================= */
+test('a bulk list opens one signed document per receiver, and nothing until every line passes', async () => {
+  const d = trDb();
+  // Straight off a spreadsheet: tabs, a comma, and a trailing blank line.
+  const text = '351000000000001\tRSM DAR\n351000000000002\tRSM DAR\n861000000000001, RSM MWANZA\n\n';
+  const r = await _FNS.transferCreateBulk(d, STORE, { text, item: 'MIXED', price: 50000, signature: TR_PNG });
+  assert.equal(r.documents, 2); assert.equal(r.serials, 3);
+  assert.deepEqual(r.created.map(c => [c.toName, c.count]).sort(), [['RSM DAR', 2], ['RSM MWANZA', 1]]);
+  const docs = d._dump('transfers');
+  assert.equal(docs.length, 2);
+  assert.ok(docs.every(t => t.sender_signed_by === 'SIPHO K' && t.status === 'sent'), 'each carries the sender\'s signature and waits');
+  assert.equal(d._dump('transfer_items').length, 3);
+  assert.equal(rowOf(d, 'devices', '351000000000001').holder, 'SIPHO K', 'still nothing moves before acceptance');
+  assert.ok(r.created.every(c => /^TR-/.test(c.ref)));
+
+  // ALL OR NOTHING: one receiver who is not a system user, and no document opens for anybody.
+  const e = trDb();
+  await assert.rejects(() => _FNS.transferCreateBulk(e, STORE, { text: '351000000000001\tRSM DAR\n351000000000002\tNOBODY HERE' }),
+    /nothing was sent.*NOBODY HERE: .*not a system user/i);
+  assert.equal(e._dump('transfers').length, 0, 'the good group was not opened either');
+  // An agent's list is held to the same rules as their single send: possession and the hierarchy.
+  await assert.rejects(() => _FNS.transferCreateBulk(e, AG1, { text: '351000000000004\tAGENT TWO\n861000000000001\tAGENT THREE', signature: TR_PNG }),
+    /AGENT THREE: .*route this through an RSM/i);
+  assert.equal(e._dump('transfers').length, 0);
+  // Unreadable lines are named by number; a serial under two names is refused.
+  await assert.rejects(() => _FNS.transferCreateBulk(e, STORE, { text: '351000000000001\tRSM DAR\njust words here\n\n351000000000002' }),
+    /line\(s\) could not be read.*#2, #4/i);
+  await assert.rejects(() => _FNS.transferCreateBulk(e, STORE, { text: '351000000000001\tRSM DAR\n351000000000001\tRSM MWANZA' }),
+    /two different receivers/i);
+  await assert.rejects(() => _FNS.transferCreateBulk(e, STORE, { text: '   \n' }), /Paste a list/);
+  assert.equal(e._dump('transfers').length, 0);
+});
+
+test('a dry run of transferCreate answers every question and writes nothing', async () => {
+  const d = trDb();
+  const r = await _FNS.transferCreate(d, AG1, { toName: 'rsm dar', imeis: ['351000000000004'], dryRun: true });
+  assert.deepEqual(r, { ok: true, dryRun: true, fromName: 'AGENT ONE', toName: 'RSM DAR', count: 1, unknown: 0 });
+  assert.equal(d._dump('transfers').length, 0); assert.equal(d._dump('transfer_items').length, 0);
+  await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', imeis: ['351000000000005'], dryRun: true }),
+    /not in your possession/, 'a dry run refuses exactly what the real thing refuses');
+});
