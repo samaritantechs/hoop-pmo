@@ -711,28 +711,34 @@ test('the leave report: a period by start date, company-wide, with the desk\'s w
   /* "REPORTS are seen by CEO, Admin, HR and Finance ... so for leaves we should have requests,
      approval and reports". The report is a grant of its own: whoever holds leaverep reads every
      department, and holding HR's desk or the asker's form says nothing about it. */
+  /* DATED OFF TODAY, NEVER OFF THE CALENDAR. "Away today" is judged against the real clock,
+     so a fixture pinned to September stopped being true the morning the calendar reached it
+     (JUMA's 14th-25th swallowed "today" and the count went to two). Every date here is a
+     distance from today: the past ones stay past, the future ones stay future, and the one
+     that must be running today runs to 2099. */
+  const P0 = inDays(-20), P1 = inDays(40);         // the period: three weeks back, six ahead
   const d = impDb({ leaves: [
     { id: uid('l1'), requested_at: '2026-09-01T08:00:00Z', staff_code: 'A1', staff_name: 'JUMA G', staff_role: 'CREDIT', leave_type: 'annual',
-      from_date: '2026-09-14', to_date: '2026-09-25', working_days: 10, status: 'approved', short_notice: false, decided_by: 'SIPHO K' },
+      from_date: inDays(7), to_date: inDays(18), working_days: 10, status: 'approved', short_notice: false, decided_by: 'SIPHO K' },
     { id: uid('l2'), requested_at: '2026-09-02T08:00:00Z', staff_code: 'B2', staff_name: 'ASHA', staff_role: 'STORE', leave_type: 'sick',
-      from_date: '2026-09-03', to_date: '2026-09-04', working_days: 2, status: 'approved', short_notice: false },
+      from_date: inDays(-12), to_date: inDays(-11), working_days: 2, status: 'approved', short_notice: false },
     { id: uid('l3'), requested_at: '2026-09-03T08:00:00Z', staff_code: 'C3', staff_name: 'BAKARI', staff_role: 'IT', leave_type: 'annual',
-      from_date: '2026-09-08', to_date: '2026-09-10', working_days: 3, status: 'pending', short_notice: true },
+      from_date: inDays(-7), to_date: inDays(-5), working_days: 3, status: 'pending', short_notice: true },
     { id: uid('l4'), requested_at: '2026-09-03T09:00:00Z', staff_code: 'A1', staff_name: 'JUMA G', staff_role: 'CREDIT', leave_type: 'other', other_type: 'Study',
-      from_date: '2026-09-21', to_date: '2026-09-22', working_days: 2, status: 'rejected', comment: 'no' },
-    // Started last month: outside a September period, but away today if today falls inside it.
+      from_date: inDays(14), to_date: inDays(15), working_days: 2, status: 'rejected', comment: 'no' },
+    // Started before the period: outside it by start date, but away today all the same.
     { id: uid('old'), requested_at: '2026-08-10T08:00:00Z', staff_code: 'D4', staff_name: 'DAUDI', staff_role: 'RSM', leave_type: 'maternity',
-      from_date: '2026-08-20', to_date: '2099-01-01', working_days: 999, status: 'approved', short_notice: false },
+      from_date: inDays(-40), to_date: '2099-01-01', working_days: 999, status: 'approved', short_notice: false },
   ] });
-  const r = await _FNS.leaveReport(d, FINANCE, { from: '2026-09-01', to: '2026-09-30' });
+  const r = await _FNS.leaveReport(d, FINANCE, { from: P0, to: P1 });
   assert.deepEqual(r.totals, { count: 4, pending: 1, approved: 2, rejected: 1, approvedDays: 12, shortNotice: 1, onLeaveToday: 1 });
   assert.deepEqual(r.rows.map(x => x.id), [uid('l4'), uid('l3'), uid('l2'), uid('l1')], 'newest first, every department');
   assert.ok(!('staffCode' in r.rows[0]), 'the access code never rides the wire');
   assert.equal(r.rows.find(x => x.id === uid('l4')).otherType, 'Study');
 
-  assert.deepEqual((await _FNS.leaveReport(d, FINANCE, { from: '2026-09-01', to: '2026-09-30', status: 'pending' })).rows.map(x => x.id), [uid('l3')]);
-  assert.deepEqual((await _FNS.leaveReport(d, FINANCE, { from: '2026-09-01', to: '2026-09-30', status: 'shortNotice' })).rows.map(x => x.id), [uid('l3')]);
-  assert.deepEqual((await _FNS.leaveReport(d, FINANCE, { from: '2026-09-01', to: '2026-09-30', status: 'today' })).rows.map(x => x.id), [uid('old')],
+  assert.deepEqual((await _FNS.leaveReport(d, FINANCE, { from: P0, to: P1, status: 'pending' })).rows.map(x => x.id), [uid('l3')]);
+  assert.deepEqual((await _FNS.leaveReport(d, FINANCE, { from: P0, to: P1, status: 'shortNotice' })).rows.map(x => x.id), [uid('l3')]);
+  assert.deepEqual((await _FNS.leaveReport(d, FINANCE, { from: P0, to: P1, status: 'today' })).rows.map(x => x.id), [uid('old')],
     '"away today" reaches outside the period: the person is still away this morning');
   assert.equal((await _FNS.leaveReport(d, FINANCE, {})).totals.count, 5, 'no dates means everything');
   assert.equal((await _FNS.leaveReport(d, OWNER, {})).totals.count, 5, 'ADMIN holds it as everything');

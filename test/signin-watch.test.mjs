@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { fakeDb } from './fake-db.mjs';
 import { _FNS } from '../api/portal.js';
 import { _setFetch } from '../api/_lib/mail.js';
@@ -268,4 +269,53 @@ test('the window can be sent to whoever watches the door, and says so when nobod
     await assert.rejects(() => _FNS.signinSend(nobody, IT, {}), /haikutumwa|was not sent/i,
       'silence would look exactly like a report nobody needed to read');
   } finally { mail.restore(); }
+});
+
+/* =========================================================================================
+   THE ONCE-A-DAY ROW MUST NEVER LEAN ON "ON CONFLICT". signin_attempts_ok_once is a PARTIAL
+   unique index (`where ok`, so failures keep every row), and Postgres will not infer a partial
+   index from a bare ON CONFLICT (day, door, code_key) -- PostgREST cannot send the predicate.
+   The upsert that used to sit here was refused with 42P10 on EVERY successful sign-in at every
+   door: swallowed as designed, the sign-in stood, `seen` was never marked, and the next call
+   tried again. Four days of one red line per request on the database dashboard, and not one
+   success ever recorded. The fake accepted the upsert, so no test saw it -- hence the guard on
+   the source itself, beside the behaviour.
+   ========================================================================================= */
+test('a success is checked-then-inserted, never upserted against the partial index', async () => {
+  const src = fs.readFileSync(new URL('../api/_lib/signin.js', import.meta.url), 'utf8');
+  // Code only: the comment beside the fix is allowed to say what the bug was called.
+  const body = src.slice(src.indexOf('export async function noteSignin('))
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  assert.ok(!/\.upsert\(/.test(body), 'noteSignin must not upsert -- see the note above');
+  assert.ok(!/onConflict/.test(body), 'and must never name ON CONFLICT columns the index cannot answer to');
+
+  /* TWO INSTANCES, ONE ROW. A second warm instance has its own empty memory; it must find the
+     row already there and write nothing. */
+  _resetSeen();
+  const db = fakeDb({ signin_attempts: [] }, { unique: { signin_attempts: [['day', 'door', 'code_key']] } });
+  const first = await noteSignin(db, { door: 'portal', ok: true, code: 'K4M9J2', who: { name: 'NEEMA M', role: 'OFFICER' } });
+  assert.ok(first && first.ok, 'instance one records the day\'s first sign-in');
+  _resetSeen();                                   // instance two wakes up with no memory
+  assert.equal(await noteSignin(db, { door: 'portal', ok: true, code: 'K4M9J2' }), null,
+    'instance two finds the row and writes nothing');
+  assert.equal((await db.from('signin_attempts').select('*')).data.length, 1, 'still one row');
+
+  /* THE RACE ITSELF: an instance whose check came back empty (the other instance's insert
+     landed a moment later) meets the index on its own insert. The duplicate-key answer must
+     read as "recorded" -- and mark the memo, so this instance never tries again all day. */
+  _resetSeen();
+  let writes = 0;
+  const racing = { from(t) {
+    const q = db.from(t);
+    const sel = q.select.bind(q), ins = q.insert.bind(q);
+    q.select = (...a) => { const r = sel(...a); r.then = (ok) => Promise.resolve({ data: [] }).then(ok); return r; };
+    q.insert = (...a) => { writes++; return ins(...a); };
+    return q;
+  } };
+  assert.equal(await noteSignin(racing, { door: 'portal', ok: true, code: 'K4M9J2' }), null,
+    'the duplicate-key answer is swallowed as success');
+  assert.equal(writes, 1, 'the insert was attempted once');
+  assert.equal(await noteSignin(racing, { door: 'portal', ok: true, code: 'K4M9J2' }), null);
+  assert.equal(writes, 1, 'and never again from this instance -- the duplicate marked the memo');
+  assert.equal((await db.from('signin_attempts').select('*')).data.length, 1, 'the table still holds one row');
 });

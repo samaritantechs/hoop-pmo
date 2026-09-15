@@ -159,17 +159,41 @@ export async function noteSignin(db, opts = {}) {
       ip: short(opts.ip, 60),
       ua: short(opts.ua, 200),
     };
-    /* A SUCCESS UPSERTS AND SHRUGS AT THE DUPLICATE. The several serverless instances serving
-       one morning each hold their own `seen`, so without this the "once a day" row would be
-       written once per warm instance. The unique index is partial (`where ok`), which is why
-       the failures below go through a plain insert -- every one of them is worth its own row. */
-    const q = ok
-      ? db.from('signin_attempts').upsert([row], { onConflict: 'day,door,code_key', ignoreDuplicates: true })
-      : db.from('signin_attempts').insert([row]);
+    /* A SUCCESS LOOKS BEFORE IT WRITES, AND NEVER SAYS "ON CONFLICT". The several serverless
+       instances serving one morning each hold their own `seen`, so without a check against the
+       table the "once a day" row would be written once per warm instance.
+
+       This used to be an upsert with onConflict 'day,door,code_key' -- and every one of them
+       was refused. The index that keeps a success unique is PARTIAL (`where ok`, so that the
+       failures below can keep every row), and Postgres will not infer a partial index from a
+       bare ON CONFLICT (day, door, code_key): it wants the predicate spelled out, which
+       PostgREST has no way to send. So the write failed with 42P10 on every call, this
+       function swallowed it as designed, the sign-in stood -- and `seen` was never marked, so
+       the NEXT call from the same code tried again. One refused write per request at every
+       door, all day: a wall of red on the database dashboard with nothing actually broken,
+       and not one success ever recorded. The fake database took the upsert happily, which is
+       why no test saw it; test/signin-watch.test.mjs now guards the source instead.
+
+       So: one small read (only until this instance has seen the code today), then a plain
+       insert. The partial index stays as the backstop for the genuine race between two
+       instances, and a duplicate-key answer there means the row exists -- which is success. */
+    if (ok && codeKey) {
+      const have = await db.from('signin_attempts').select('id')
+        .eq('day', day).eq('door', door).eq('code_key', codeKey).eq('ok', true).limit(1)
+        .then(r => r, () => null);
+      if (have && !have.error && (have.data || []).length) { seen.add(mark); return null; }
+    }
+    const q = db.from('signin_attempts').insert([row]);
     /* PostgREST reports a refusal by RESOLVING with an error rather than by throwing, so a
        plain await would have called an un-migrated database a successful write. Nothing here
        may reject either way -- the sign-in this accompanies still stands. */
     const res = (q && typeof q.then === 'function') ? await q.then(r => r, () => null) : null;
+    if (res && res.error && ok && mark
+        && /23505|duplicate key/i.test(String(res.error.code || '') + ' ' + String(res.error.message || ''))) {
+      // Another instance got there first. The row is down; that is all "seen" ever meant.
+      seen.add(mark);
+      return null;
+    }
     if (!res || res.error) return null;
     /* MARKED SEEN ONLY ONCE IT IS ACTUALLY DOWN. Marking before the write would mean that a
        morning spent before somebody ran the migration silently costs the whole day: the write

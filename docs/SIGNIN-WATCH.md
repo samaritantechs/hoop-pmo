@@ -70,7 +70,12 @@ than anybody trying to get in.
 Every portal call passes the same door, so a row per call would be tens of thousands a day and
 would bury the twelve that matter. One row per code per door per **EAT day** answers *"who used
 the system on Tuesday"*, which is the shape the question actually has, for a rounding error of
-the writes. The unique index does the real work; the in-process memory only saves the trip.
+the writes. The writer looks for today's row before inserting; the partial unique index is only
+the backstop for two serverless instances racing, and a duplicate-key answer from it is read as
+"already recorded". It deliberately never says `ON CONFLICT` — Postgres will not infer a
+**partial** unique index from a bare `ON CONFLICT (day, door, code_key)`, and the day it was
+written that way every success at every door was silently refused with `42P10`, one red line
+per request on the Supabase dashboard while nothing visible was wrong.
 
 ## Why the refusal was refused
 

@@ -85,8 +85,14 @@ create index if not exists signin_attempts_bad_idx on signin_attempts (at desc) 
 create index if not exists signin_attempts_key_idx on signin_attempts (code_key, at desc);
 create index if not exists signin_attempts_day_idx on signin_attempts (day);
 
--- ONE SUCCESS PER CODE PER DOOR PER DAY. The writer upserts and ignores the duplicate, so the
--- several serverless instances serving one morning cannot each add their own copy.
+-- ONE SUCCESS PER CODE PER DOOR PER DAY. The writer checks for today's row and then inserts;
+-- this index is the backstop for the race between two serverless instances, and a duplicate
+-- key from it is read as "already recorded". It is PARTIAL on purpose (failures keep every
+-- row) -- which is exactly why the writer must NOT say ON CONFLICT (day, door, code_key):
+-- Postgres will not infer a partial index from that without its predicate, and PostgREST
+-- cannot send one, so such an upsert is refused with 42P10 on every call. (It was, for four
+-- days, one red line per request on the database dashboard -- see noteSignin in
+-- api/_lib/signin.js.)
 create unique index if not exists signin_attempts_ok_once
   on signin_attempts (day, door, code_key) where ok;
 
