@@ -131,6 +131,8 @@ AUDITED.add('signinSend');
    the signature image itself). */
 AUDITED.add('transferCreate');
 AUDITED.add('transferSign');
+AUDITED.add('transferAccept');
+AUDITED.add('transferDecline');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -1902,6 +1904,150 @@ function resolveTarget(key, tree, tBy, seen) {
     from: (boss && boss.name) || p,
     of: n,
   };
+}
+
+/* =============================================================================================
+   WHO SEES WHICH STOCK, AND WHO CAN HAND IT TO WHOM.
+   =============================================================================================
+     "So RSM only see stock in old and new that's theirs already only, same for agents, Sipho
+      sees all. So at access codes I have roles RSM STORE and AGENT"
+
+   The role on the ACCESS CODE decides the fence, by name -- the same honest weakness the credit
+   roster's suspension matching already lives with (call-core.js, suspendedNamesOn): an access
+   code and a stock row share nothing but a person's name, so the name, token-sorted and
+   case-folded by nameKey, is what they are matched on. A code named differently from the
+   register sees an EMPTY pane, never somebody else's -- the fence fails closed, and the Access
+   codes pane is where the spelling gets corrected.
+
+   RSM = their region: handsets they hold themselves AND handsets held by the agents who report
+   to them (managerIndex below, the same line the sales targets roll up). AGENT = their own
+   possession only. Every other role (STORE, ADMIN, CSM, auditors...) is unfenced: "Sipho sees
+   all". The Transfers Stock window is stricter than the panes -- it lists only what the person
+   can SEND, which is what is in their own hands. */
+const STOCK_SCOPED_ROLES = new Set(['RSM', 'AGENT']);
+const roleWord = user => K(user && user.role).replace(/[\s_-]+/g, ' ');
+function stockScopeRole(user) {
+  if (isAdminRole(user)) return '';
+  const role = roleWord(user);
+  return STOCK_SCOPED_ROLES.has(role) ? role : '';
+}
+/** null = everything; otherwise a test over (holder, sellingAgent, rsm) for one stock row. */
+async function stockAllow(db, user) {
+  const role = stockScopeRole(user);
+  if (!role) return null;
+  const me = nameKey(user.name);
+  const mine = new Set(me ? [me] : []);
+  if (role === 'RSM' && me) {
+    let agents = [];
+    try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
+    catch (ignored) { agents = []; }
+    const idx = managerIndex(agents);
+    for (const ag of agents) if (ag.name && nameKey(idx.of(ag.name)) === me) mine.add(nameKey(ag.name));
+  }
+  return (holder, agent, rsm) => {
+    const h = nameKey(holder), g = nameKey(agent);
+    if (h && mine.has(h)) return true;
+    if (g && mine.has(g)) return true;
+    return role === 'RSM' && !!me && nameKey(rsm) === me;
+  };
+}
+/** The store desk sends on anybody's behalf and sees every document. ADMIN is full access. */
+const isStoreDesk = user => isAdminRole(user) || roleWord(user) === 'STORE' || roleWord(user) === 'GHALA';
+const sameName = (a, b) => !!nameKey(a) && nameKey(a) === nameKey(b);
+const refuse403 = msg => { const e = new Error(msg); e.status = 403; throw e; };
+
+/* THE PEOPLE A HAND-OFF CAN NAME: everybody whose ACCESS CODE carries one of these roles. It is
+   the login that accepts, so a name without a code cannot be a receiver -- and the pane says so
+   in those words, because "add them at Access codes" is the fix. */
+const TRANSFER_ROLES = new Set(['RSM', 'AGENT', 'STORE', 'ADMIN']);
+async function transferParties(db) {
+  let rows = [];
+  try { rows = await fetchAll(() => db.from('access_codes').select('name, role, suspend_from, suspend_to')); }
+  catch (e) { rows = await fetchAll(() => db.from('access_codes').select('name, role')); }
+  const day = todayKey();
+  const seen = new Map();
+  for (const r of rows) {
+    const role = K(r.role).replace(/[\s_-]+/g, ' ');
+    const k = nameKey(r.name);
+    if (!k || !TRANSFER_ROLES.has(role) || seen.has(k)) continue;
+    seen.set(k, { name: String(r.name).trim(), role, away: suspendedOn(r, day) });
+  }
+  return seen;
+}
+/** Where each serial lives today -- two bulk reads per 200, never one per phone. A phone that
+    has been enrolled is on the register, and that answer wins over the old-stock list. */
+async function locateStock(db, imeis) {
+  const out = new Map(imeis.map(i => [i, { source: 'unknown', holder: '', item: '', state: '', rsm: '', sold: false }]));
+  for (let i = 0; i < imeis.length; i += 200) {
+    const slice = imeis.slice(i, i + 200);
+    let devs = [], olds = [];
+    try { olds = await fetchAll(() => db.from('old_stock').select('imei, item, agent, rsm').in('imei', slice)); }
+    catch (ignored) { olds = []; }
+    try { devs = await fetchAll(() => db.from('devices').select('imei, item, holder, state, customer, sold_ref').in('imei', slice)); }
+    catch (ignored) { devs = []; }
+    for (const o of olds) out.set(String(o.imei), { source: 'old_stock', holder: o.agent || '', item: o.item || '', state: '', rsm: o.rsm || '', sold: false });
+    for (const d of devs) out.set(String(d.imei), { source: 'devices', holder: d.holder || '', item: d.item || '', state: String(d.state || ''), rsm: '', sold: !!(d.customer || d.sold_ref) });
+  }
+  return out;
+}
+const TR_COLS_BASE = 'id, ref, created_at, created_by, from_name, from_phone, to_name, to_phone, '
+  + 'note, item_count, total_qty, total_amount, sender_signed_by, sender_signed_at, '
+  + 'receiver_signed_by, receiver_signed_at';
+const TR_COLS_FLOW = ', status, from_role, to_role, accepted_at, accepted_by, declined_at, declined_by, decline_reason, moved';
+const TR_FLOW_RX = /\bstatus\b|from_role|to_role|accepted_at|accepted_by|declined_at|declined_by|decline_reason|\bmoved\b/;
+const TR_FILE = 'db/migrations/RUN-ME-2026-09-16-transfers.sql';
+const TR_FLOW_FILE = 'db/migrations/RUN-ME-2026-09-17-transfers-flow.sql';
+/** Every document, newest first. Tolerant of a database that has run neither migration or only
+    the first: needsFlow means the list reads but Send/Receive need the second file. */
+async function trReadAll(db) {
+  try {
+    const rows = await fetchAll(() => db.from('transfers').select(TR_COLS_BASE + TR_COLS_FLOW)
+      .order('created_at', { ascending: false }));
+    return { rows, notReady: false, needsFlow: false };
+  } catch (e) {
+    if (TR_FLOW_RX.test(String(e && e.message || ''))) {
+      const rows = await fetchAll(() => db.from('transfers').select(TR_COLS_BASE)
+        .order('created_at', { ascending: false }));
+      return { rows, notReady: false, needsFlow: true };
+    }
+    if (tableMissing(e)) return { rows: [], notReady: true, needsFlow: false };
+    throw e;
+  }
+}
+/* A document opened before the flow migration has no status column: both signatures meant
+   "done", so it reads as accepted; anything less is still waiting. */
+const trStatusOf = r => r.status || (r.receiver_signed_by ? 'accepted' : 'sent');
+function trRow(r) {
+  return {
+    id: r.id, ref: r.ref, at: Date.parse(r.created_at), createdBy: r.created_by || '',
+    fromName: r.from_name, fromPhone: r.from_phone || '', fromRole: r.from_role || '',
+    toName: r.to_name, toPhone: r.to_phone || '', toRole: r.to_role || '',
+    note: r.note || '', itemCount: r.item_count, totalQty: r.total_qty, totalAmount: Number(r.total_amount) || 0,
+    senderSignedBy: r.sender_signed_by || '', senderSignedAt: r.sender_signed_at ? Date.parse(r.sender_signed_at) : null,
+    receiverSignedBy: r.receiver_signed_by || '', receiverSignedAt: r.receiver_signed_at ? Date.parse(r.receiver_signed_at) : null,
+    status: trStatusOf(r),
+    acceptedAt: r.accepted_at ? Date.parse(r.accepted_at) : null, acceptedBy: r.accepted_by || '',
+    declinedAt: r.declined_at ? Date.parse(r.declined_at) : null, declinedBy: r.declined_by || '',
+    declineReason: r.decline_reason || '',
+    moved: r.moved == null ? null : Number(r.moved),
+    signed: (r.sender_signed_by ? 1 : 0) + (r.receiver_signed_by ? 1 : 0),
+  };
+}
+async function trOne(db, id) {
+  const { data, error } = await db.from('transfers').select('*').eq('id', id).maybeSingle();
+  if (error) {
+    if (tableMissing(error)) bad('Jedwali la uhamisho halijatengenezwa. Endesha <b>' + TR_FILE
+      + '</b>. / The transfers table does not exist yet — run that migration first.');
+    throw new Error(error.message);
+  }
+  if (!data) bad('Uhamisho huu haujulikani. / That transfer was not found.');
+  return data;
+}
+/* A signature pad this small never legitimately produces a huge PNG; a data URL far past that
+   is either a mistaken paste or something worth refusing rather than storing. */
+function trCheckSig(sig) {
+  if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sig)) bad('Sahihi haikutambulika. / That signature was not recognised.');
+  if (sig.length > 400000) bad('Sahihi ni kubwa mno. Jaribu tena. / That signature is too large. Please try again.');
 }
 
 /* WHICH RSM AN AGENT BELONGS TO. The register's own `manager` if somebody set one, else the
@@ -6335,7 +6481,10 @@ const FNS = {
         }
       }
     }
-    const open = idx.open.slice();
+    /* THE FENCE: an RSM sees their region, an agent their own hands, the desk and ADMIN all
+       -- see stockAllow. Applied before every count, so a fenced code's numbers are theirs. */
+    const allow = await stockAllow(db, user);
+    const open = allow ? idx.open.filter(r => allow(r.agent, r.agent, r.rsm)) : idx.open.slice();
     const q = String(a.q == null ? '' : a.q).replace(/\D/g, '');
     const who = K(a.agent || '');
     const boss = K(a.rsm || '');
@@ -6490,6 +6639,8 @@ const FNS = {
     requireNav(user, 'oldstock');
     const a = args || {};
     const idx = await oldStockIndex(db);
+    const allow = await stockAllow(db, user);          // the same fence the pane applies
+    const pool = allow ? idx.open.filter(r => allow(r.agent, r.agent, r.rsm)) : idx.open;
     const key = String(a.key == null ? '' : a.key);
     const min = (a.min == null || a.min === '') ? null : num(a.min);
     /* A GROUP IS A HOLDER OR A PLACE, and this is the same question either way: the outstanding
@@ -6503,8 +6654,8 @@ const FNS = {
     const scope = String(a.scope || '') === 'place' ? 'place' : 'holder';
     const place = String(a.place == null ? '' : a.place);
     const mine = scope === 'place'
-      ? idx.open.filter(r => K(r.location || '') === K(place))
-      : idx.open.filter(r => (nameKey(r.agent) || '?') === key);
+      ? pool.filter(r => K(r.location || '') === K(place))
+      : pool.filter(r => (nameKey(r.agent) || '?') === key);
     const rows = mine
       .filter(r => min == null || (r.age != null && r.age >= min))
       .sort((x, y) => (y.age == null ? -1 : y.age) - (x.age == null ? -1 : x.age)
@@ -6548,7 +6699,8 @@ const FNS = {
   async oldStockRound(db, user, args) {
     requireNav(user, 'oldstock');
     const idx = await oldStockIndex(db);
-    const open = idx.open;
+    const allow = await stockAllow(db, user);          // the same fence the pane applies
+    const open = allow ? idx.open.filter(r => allow(r.agent, r.agent, r.rsm)) : idx.open;
     /* The same grouping the board does, from the same index, so the totals on every line are
        the ones the card showed. */
     const by = new Map();
@@ -6743,7 +6895,7 @@ const FNS = {
       });
     } catch (ignored) { joined = []; }   // no old_stock table yet: the register alone, as before
 
-    const rows = [];
+    let rows = [];
     const changed = [];
     for (const o of joined) {
       /* Stamped exactly like a locked one -- a sale is a sale -- then given the shape of a row
@@ -6756,6 +6908,7 @@ const FNS = {
         imei,
         rsm: f.row.rsm || o.rsm || '', rsmPhone: f.row.rsm_phone || o.rsm_phone || '',
         agent: f.row.agent || o.agent || '', agentPhone: f.row.agent_phone || o.agent_phone || '',
+        holder: o.agent || '',
         customer: f.row.customer || '', customerPhone: f.row.customer_phone || '',
         price: f.row.price == null ? null : num(f.row.price),
         guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
@@ -6779,6 +6932,7 @@ const FNS = {
         imei,
         rsm: f.row.rsm || '', rsmPhone: f.row.rsm_phone || '',
         agent: f.row.agent || '', agentPhone: f.row.agent_phone || '',
+        holder: d.holder || '',                 // whose hands it is in -- what a transfer moves
         /* devices.customer is stamped at the till by whoever sold it, so it stands in where
            no sales feed has ever mentioned this handset. */
         customer: f.row.customer || d.customer || '', customerPhone: f.row.customer_phone || '',
@@ -6833,6 +6987,12 @@ const FNS = {
     rows.sort((x, y) => (y.neverSeen ? 1 : 0) - (x.neverSeen ? 1 : 0)
       || (y.silentDays || 0) - (x.silentDays || 0)
       || String(x.imei).localeCompare(String(y.imei)));
+
+    /* THE FENCE (stockAllow): an RSM sees their region -- handsets they or their agents hold,
+       or that their region sold -- an agent their own; the desk and ADMIN everything. Applied
+       before the tiles and the board, so a fenced code's numbers are their own numbers. */
+    const allow = await stockAllow(db, user);
+    if (allow) rows = rows.filter(r => allow(r.holder, r.agent, r.rsm));
 
     const want = String(a.status || '').trim();
     const q = K(a.q || '');
@@ -9602,108 +9762,215 @@ const FNS = {
   },
 
   /* =====================================================================================
-     TRANSFERS -- a stock hand-off, signed on screen by both the sender and the receiver.
+     TRANSFERS -- stock changing hands inside HOOP, signed on screen by both sides.
      =====================================================================================
        "store keeper needs the transfer doc to be blue ink signed online on a transfers
-        navigation by sender and receiver so that we could export and print. as the signing
-        feature we implemented in hopeloan customer onboarding just on screen signature not
-        biometrics."
+        navigation by sender and receiver so that we could export and print."
+       "RSM requests stock from sipho. 1. Sipho / Store transfers them to RSM -- IMEI, To and
+        Fro names, Tarehe, Qty, Model. 2. RSM to Agents -- supplying. 3. Agent to RSM (the
+        returns for re-allocations). 4. RSM / Agent to Sipho / Store. 5. RSM to RSM (Sipho
+        does it on system, they log in to sign)."
+       "Transfers -- Window 3: Stock (each can see stock in their possession), Send (can
+        select imei no or input list of imei nos and search system user to send to), Receive
+        (find received and decline or accept to overwrite stock ownership)."
 
-     ONE FORM, TWO SIGNATURES, printed as one document -- the same shape as the paper hand-off
-     slip a store keeper already keeps, and the same on-screen capture hopeloan's onboarding
-     already proved: a pen stroke on a canvas, not a fingerprint sensor (see db/migrations/
-     RUN-ME-2026-09-16-transfers.sql for the schema and why the signatures are columns while
-     the serials are their own table).
+     THREE WINDOWS, ONE LEDGER. A transfer is opened by the sender -- or by the store desk on
+     somebody's behalf, which is flow 5 word for word -- and sits as `sent` until the receiver
+     logs in and either ACCEPTS it, signing on their own screen, or DECLINES it with a reason.
+     Acceptance is the one moment stock changes hands: the holder on every handset in the
+     document is overwritten to the receiver -- on the register (devices.holder) for a locked
+     phone, on the old-stock list (old_stock.agent) for one never enrolled. Nothing moves on a
+     decline, and nothing moves while the document waits.
 
-     A SIGNATURE IS WRITTEN ONCE. There is no re-sign endpoint: a mis-signed transfer is
-     corrected with a fresh transfer, the same discipline a mis-posted payment gets everywhere
-     else in this system, not by editing a document after the fact that a printed copy may
-     already be holding a different version of. */
+     WHO CAN SEND WHAT. A sender who is not the store desk can only send stock in their own
+     possession -- the same list their Stock window shows. The desk (and ADMIN) may send
+     anything from anybody, and the two parties then log in to sign. The receiver must be a
+     SYSTEM USER -- an access code with the RSM, AGENT or STORE role, found by name -- because
+     it is their login that accepts. NOT a device moving to the other company: that is Shift,
+     on the locking desk, and it stays there.
 
-  /** The list. Deliberately narrow columns -- the two signature images never travel here,
-      only whether each one exists (signed_by is enough to say that without the bytes). */
+     A SIGNATURE IS WRITTEN ONCE. There is no re-sign: a mis-signed transfer is corrected with
+     a fresh one, the discipline a mis-posted payment gets everywhere else in this system.
+     Schema: db/migrations/RUN-ME-2026-09-16-transfers.sql (the document) and
+     RUN-ME-2026-09-17-transfers-flow.sql (sent / accepted / declined, and who is who). */
+
+  /** Everybody a transfer can be sent to: a name to type against, never a code. */
+  async transferUsers(db, user, args) {
+    requireNav(user, 'transfers');
+    const q = K((args || {}).q);
+    const parties = await transferParties(db);
+    const me = nameKey(user.name);
+    const users = [...parties.values()]
+      .filter(p => nameKey(p.name) !== me)
+      .filter(p => !q || K(p.name).includes(q) || K(p.role).includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 30);
+    // The desk may name who is handing over (flow 5); the page shows that box only to it.
+    return { ok: true, users, desk: isStoreDesk(user) };
+  },
+
+  /** THE STOCK WINDOW: what this person is holding right now -- exactly what they can send.
+      A locked or enrolled handset that has not gone out on a sale, plus anything on the
+      old-stock list that is still open. The store desk and ADMIN see everybody's. */
+  async transferStock(db, user, args) {
+    requireNav(user, 'transfers');
+    const a = args || {};
+    const q = K(a.q || '');
+    const all = isStoreDesk(user) || !stockScopeRole(user);
+    const me = nameKey(user.name);
+    let devs = [];
+    try {
+      devs = await fetchAll(() => db.from('devices')
+        .select('imei, item, holder, state, customer, sold_ref, last_seen'));
+    } catch (e) { if (!tableMissing(e)) throw e; }
+    const rows = [];
+    for (const d of devs) {
+      const st = String(d.state || '');
+      if (st === 'released' || st === 'lost' || d.customer || d.sold_ref) continue;
+      if (!all && nameKey(d.holder) !== me) continue;
+      rows.push({ imei: String(d.imei), item: d.item || '', holder: d.holder || '', source: 'devices',
+        state: st, seenAt: d.last_seen ? Date.parse(d.last_seen) : null, age: null });
+    }
+    let idx = null;
+    try { idx = await oldStockIndex(db); } catch (ignored) { idx = null; }
+    if (idx && !idx.notReady) {
+      const have = new Set(rows.map(r => r.imei));
+      for (const r of idx.open) {
+        if (have.has(String(r.imei))) continue;
+        if (!all && nameKey(r.agent) !== me) continue;
+        rows.push({ imei: String(r.imei), item: r.item || '', holder: r.agent || '', source: 'old_stock',
+          state: '', seenAt: null, age: r.age == null ? null : r.age });
+      }
+    }
+    const shown = (q ? rows.filter(r => K(r.imei).includes(q) || K(r.item).includes(q) || K(r.holder).includes(q)) : rows)
+      .sort((x, y) => String(x.holder).localeCompare(String(y.holder))
+        || String(x.item).localeCompare(String(y.item)) || x.imei.localeCompare(y.imei));
+    return { ok: true, all, me: user.name, total: rows.length,
+      rows: shown.slice(0, 3000), truncated: Math.max(0, shown.length - 3000) };
+  },
+
+  /** THE RECEIVE WINDOW: waiting for me, sent by me, and what was settled. */
+  async transferInbox(db, user, args) {
+    requireNav(user, 'transfers');
+    const r = await trReadAll(db);
+    if (r.notReady) return { ok: true, notReady: true, needsFlow: false, inbox: [], mine: [], settled: [] };
+    const me = nameKey(user.name);
+    const rows = r.rows.map(trRow);
+    const forMe = rows.filter(x => nameKey(x.toName) === me);
+    const byMe = rows.filter(x => nameKey(x.fromName) === me);
+    return { ok: true, notReady: false, needsFlow: r.needsFlow,
+      inbox: forMe.filter(x => x.status === 'sent'),
+      mine: byMe.slice(0, 100),
+      settled: forMe.filter(x => x.status !== 'sent').slice(0, 100) };
+  },
+
+  /** The register. The desk and ADMIN see every document; everybody else only the ones they
+      are a party to -- narrow columns, the signature images never travel here. */
   async transferList(db, user, args) {
     requireNav(user, 'transfers');
     const a = args || {};
-    let rows;
-    try {
-      rows = await fetchAll(() => db.from('transfers')
-        .select('id, ref, created_at, created_by, from_name, from_phone, to_name, to_phone, '
-          + 'note, item_count, total_qty, total_amount, sender_signed_by, sender_signed_at, '
-          + 'receiver_signed_by, receiver_signed_at')
-        .order('created_at', { ascending: false }));
-    } catch (e) {
-      if (!tableMissing(e)) throw e;
-      return { ok: true, rows: [], notReady: true };
+    const r = await trReadAll(db);
+    if (r.notReady) {
+      return { ok: true, rows: [], notReady: true, needsFlow: false, scoped: !isStoreDesk(user),
+        counts: { total: 0, sent: 0, accepted: 0, declined: 0 } };
     }
-    const q = K(a.q);
+    const me = nameKey(user.name);
+    const scoped = !isStoreDesk(user);
+    const all = r.rows.map(trRow)
+      .filter(x => !scoped || nameKey(x.fromName) === me || nameKey(x.toName) === me);
     const want = String(a.status || '').trim();
-    const statusOf = r => !r.sender_signed_by ? 'pending'
-      : !r.receiver_signed_by ? 'partial' : 'complete';
-    let out = rows.map(r => ({
-      id: r.id, ref: r.ref, at: Date.parse(r.created_at), createdBy: r.created_by || '',
-      fromName: r.from_name, fromPhone: r.from_phone || '', toName: r.to_name, toPhone: r.to_phone || '',
-      note: r.note || '', itemCount: r.item_count, totalQty: r.total_qty, totalAmount: Number(r.total_amount) || 0,
-      senderSignedBy: r.sender_signed_by || '', senderSignedAt: r.sender_signed_at ? Date.parse(r.sender_signed_at) : null,
-      receiverSignedBy: r.receiver_signed_by || '', receiverSignedAt: r.receiver_signed_at ? Date.parse(r.receiver_signed_at) : null,
-      status: statusOf(r),
-    }));
-    if (want) out = out.filter(r => r.status === want);
-    if (q) out = out.filter(r => K(r.ref).includes(q) || K(r.fromName).includes(q) || K(r.toName).includes(q));
-    return { ok: true, rows: out, notReady: false,
-      counts: { total: rows.length, pending: rows.filter(r => statusOf(r) === 'pending').length,
-        partial: rows.filter(r => statusOf(r) === 'partial').length,
-        complete: rows.filter(r => statusOf(r) === 'complete').length } };
+    const q = K(a.q);
+    let out = all;
+    if (want) out = out.filter(x => x.status === want);
+    if (q) out = out.filter(x => K(x.ref).includes(q) || K(x.fromName).includes(q) || K(x.toName).includes(q));
+    const n = s => all.filter(x => x.status === s).length;
+    return { ok: true, rows: out, notReady: false, needsFlow: r.needsFlow, scoped,
+      counts: { total: all.length, sent: n('sent'), accepted: n('accepted'), declined: n('declined') } };
   },
 
-  /** One transfer, in full -- the only read that ever names the signature columns, for the
-      print/detail view. */
+  /** One document, in full -- the only read that ever names the signature columns. */
   async transferGet(db, user, args) {
     requireNav(user, 'transfers');
     const a = args || {};
     const id = String(a.id || '').trim();
     if (!id) bad('Weka ID ya uhamisho. / A transfer id is required.');
-    const { data: t, error } = await db.from('transfers').select('*').eq('id', id).maybeSingle();
-    if (error) { if (tableMissing(error)) bad('Jedwali la uhamisho halijatengenezwa. Endesha '
-      + '<b>db/migrations/RUN-ME-2026-09-16-transfers.sql</b>. / The transfers table does not '
-      + 'exist yet — run that migration first.'); throw new Error(error.message); }
-    if (!t) bad('Uhamisho huu haujulikani. / That transfer was not found.');
-    const items = await fetchAll(() => db.from('transfer_items').select('imei, item, qty, price').eq('transfer_id', id));
-    return { ok: true, transfer: {
-      id: t.id, ref: t.ref, at: Date.parse(t.created_at), createdBy: t.created_by || '',
-      fromName: t.from_name, fromPhone: t.from_phone || '', toName: t.to_name, toPhone: t.to_phone || '',
-      note: t.note || '', totalQty: t.total_qty, totalAmount: Number(t.total_amount) || 0,
+    const t = await trOne(db, id);
+    if (!isStoreDesk(user) && !sameName(t.from_name, user.name) && !sameName(t.to_name, user.name)) {
+      refuse403('Uhamisho huu si wako. / This transfer is not yours to open.');
+    }
+    let items;
+    try {
+      items = await fetchAll(() => db.from('transfer_items')
+        .select('imei, item, qty, price, source, prev_holder').eq('transfer_id', id));
+    } catch (e) {
+      if (!/source|prev_holder/.test(String(e && e.message || ''))) throw e;
+      items = await fetchAll(() => db.from('transfer_items').select('imei, item, qty, price').eq('transfer_id', id));
+    }
+    const row = trRow(t);
+    return { ok: true, transfer: Object.assign(row, {
       items: items.map(i => ({ imei: i.imei, item: i.item || '', qty: i.qty, price: Number(i.price) || 0,
-        subtotal: i.qty * (Number(i.price) || 0) })),
-      senderSignature: t.sender_signature || null, senderSignedBy: t.sender_signed_by || '',
-      senderSignedAt: t.sender_signed_at ? Date.parse(t.sender_signed_at) : null,
-      receiverSignature: t.receiver_signature || null, receiverSignedBy: t.receiver_signed_by || '',
-      receiverSignedAt: t.receiver_signed_at ? Date.parse(t.receiver_signed_at) : null,
-    } };
+        subtotal: i.qty * (Number(i.price) || 0), source: i.source || '', prevHolder: i.prev_holder || '' })),
+      senderSignature: t.sender_signature || null,
+      receiverSignature: t.receiver_signature || null,
+      mine: { sender: sameName(t.from_name, user.name), receiver: sameName(t.to_name, user.name), desk: isStoreDesk(user) },
+    }) };
   },
 
-  /** Open a transfer: who is handing over, who is receiving, and the serials -- one shared
-      item name and unit price for the whole batch, the same shape the POS side's own move
-      document already prints (one product line, many serials, one price), rather than asking
-      the store keeper to type a price per phone for what is almost always one consignment of
-      one model. */
+  /** SEND. Who receives (a system user), which serials (in the sender's own hands, unless the
+      desk is doing this), one shared model and unit price for the batch, and the sender's
+      signature if the sender is the one at the keyboard. */
   async transferCreate(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
-    const fromName = String(a.fromName || '').trim();
-    const toName = String(a.toName || '').trim();
-    if (!fromName || !toName) bad('Jina la anayetoa na anayepokea linahitajika. / Both a sender and a receiver name are required.');
+    const desk = isStoreDesk(user);
+    const parties = await transferParties(db);
+
+    const toTyped = String(a.toName || '').trim();
+    if (!toTyped) bad('Chagua anayepokea. / Choose who receives.');
+    const to = parties.get(nameKey(toTyped));
+    if (!to) {
+      bad('"' + toTyped + '" si mtumiaji wa mfumo — anahitaji msimbo wa kuingia (RSM, AGENT au STORE) ili '
+        + 'aweze kupokea. / "' + toTyped + '" is not a system user — they need an access code (RSM, '
+        + 'AGENT or STORE) to be able to accept.');
+    }
+    /* WHO IS HANDING OVER: yourself -- unless the desk is doing it for somebody (flow 5). */
+    let fromName = String(user.name || '').trim();
+    let fromRole = roleWord(user);
+    const fromTyped = String(a.fromName || '').trim();
+    if (desk && fromTyped && !sameName(fromTyped, user.name)) {
+      const f = parties.get(nameKey(fromTyped));
+      if (!f) bad('"' + fromTyped + '" si mtumiaji wa mfumo. / "' + fromTyped + '" is not a system user.');
+      fromName = f.name; fromRole = f.role;
+    } else if (!desk && fromTyped && !sameName(fromTyped, user.name)) {
+      bad('Unaweza kutuma stoo yako tu. / You can only send as yourself.');
+    }
+    if (sameName(fromName, to.name)) bad('Anayetoa na anayepokea ni mtu mmoja. / Sender and receiver are the same person.');
+
+    const rawImeis = Array.isArray(a.imeis) ? a.imeis
+      : String(a.imeis || '').split(/[\s,;]+/);
+    const seen = new Set();
+    const imeis = [];
+    for (const raw of rawImeis) {
+      const v = String(raw || '').trim();
+      if (!v || seen.has(v)) continue;
+      seen.add(v); imeis.push(v);
+    }
+    if (!imeis.length) bad('Chagua au bandika angalau IMEI moja. / Pick or paste at least one IMEI.');
+    if (imeis.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). Gawa kwa makundi. '
+      + '/ Too many at once — 500 max. Split the list into batches.');
+    const item = String(a.item || '').trim();
+    const price = Math.max(0, Number(a.price) || 0);
 
     /* THE HIERARCHY RULE (the owner, 2026-09-16): "it could be between super agent/store and
        rsm, rsm and rsm, agent and agent, agent and super agent -- all possibilities between
        these people, but an agent can't transfer to another rsm's agent unless [it goes]
        through rsm or superagent." Every pairing is a normal hand-off EXCEPT one: two field
        agents who report to two different RSMs, transferring stock directly to each other and
-       skipping the chain of custody both RSMs are meant to see. Nobody types a role on this
-       form -- it is resolved off the same register and the same manager-derivation the
-       targets roll-up already uses (managerIndex, see "WHICH RSM AN AGENT BELONGS TO" above),
-       so a name not in that roster at all (the store desk, "SUPER AGENT") is never restricted
-       by this rule, and neither is anybody who IS an RSM/country manager on either side. */
+       skipping the chain of custody both RSMs are meant to see. Resolved off the same
+       register and the same manager-derivation the targets roll-up already uses
+       (managerIndex, see "WHICH RSM AN AGENT BELONGS TO" above), so a name not in that
+       roster at all (the store desk, "SUPER AGENT") is never restricted by this rule, and
+       neither is anybody who IS an RSM/country manager on either side. */
     const agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager'));
     const mgrIdx = managerIndex(agentsForRule);
     const tierOf = name => {
@@ -9712,28 +9979,35 @@ const FNS = {
       const role = K(row.role).replace(/\s+/g, '_');
       return /REGIONAL|COUNTRY_SALES/.test(role) ? 'other' : 'agent';
     };
-    if (tierOf(fromName) === 'agent' && tierOf(toName) === 'agent') {
+    if (tierOf(fromName) === 'agent' && tierOf(to.name) === 'agent') {
       const fromRsm = nameKey(mgrIdx.of(fromName));
-      const toRsm = nameKey(mgrIdx.of(toName));
+      const toRsm = nameKey(mgrIdx.of(to.name));
       if (fromRsm && toRsm && fromRsm !== toRsm) bad('Mawakala wawili wa RSM tofauti hawawezi '
         + 'kuhamishiana moja kwa moja -- pitisha kwa RSM au Super Agent. / Two agents under '
         + 'different RSMs cannot transfer directly to each other -- route this through an RSM '
         + 'or Super Agent instead.');
     }
 
-    const rawImeis = Array.isArray(a.imeis) ? a.imeis : [];
-    const seen = new Set();
-    const imeis = [];
-    for (const raw of rawImeis) {
-      const v = String(raw || '').trim();
-      if (!v || seen.has(v)) continue;
-      seen.add(v); imeis.push(v);
+    /* POSSESSION. You send what is in your hands. The desk is exempt -- "Sipho does it on
+       system" -- but even the desk's document records where each serial was, so the printed
+       copy says whose hands it left. */
+    const where = await locateStock(db, imeis);
+    if (!desk) {
+      const notMine = imeis.filter(i => {
+        const w = where.get(i);
+        return !w || w.source === 'unknown' || w.sold || nameKey(w.holder) !== nameKey(fromName);
+      });
+      if (notMine.length) {
+        const eg = notMine.slice(0, 5).join(', ') + (notMine.length > 5 ? ' …' : '');
+        bad('Simu ' + notMine.length + ' si za mkononi mwako (' + eg + '). Unaweza kutuma stoo iliyo '
+          + 'mkononi mwako tu — angalia dirisha la Stoo. / ' + notMine.length + ' IMEI(s) are not in '
+          + 'your possession (' + eg + '). You can only send stock you are holding — see the Stock window.');
+      }
     }
-    if (!imeis.length) bad('Bandika angalau IMEI moja. / Paste at least one IMEI.');
-    if (imeis.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). Gawa kwa makundi. '
-      + '/ Too many at once — 500 max. Split the list into batches.');
-    const item = String(a.item || '').trim();
-    const price = Math.max(0, Number(a.price) || 0);
+
+    const sig = String(a.signature || '');
+    if (sig) trCheckSig(sig);
+    const senderSigns = !!sig && sameName(fromName, user.name);
 
     /* THE REFERENCE IS MADE HERE, NOT BY THE DATABASE. A sequence-backed daily counter would
        read nicer (TR-20260912-0007), but PostgREST has no way to read a bare `nextval()` short
@@ -9744,68 +10018,168 @@ const FNS = {
     const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const ref = 'TR-' + day + '-' + Date.now().toString(36).toUpperCase()
       + Math.random().toString(36).slice(2, 5).toUpperCase();
-
     const at = new Date().toISOString();
-    const { data, error } = await db.from('transfers').insert([{
+    const row = {
       ref, from_name: fromName, from_phone: String(a.fromPhone || '').trim() || null,
-      to_name: toName, to_phone: String(a.toPhone || '').trim() || null,
+      to_name: to.name, to_phone: String(a.toPhone || '').trim() || null,
       note: String(a.note || '').trim() || null,
       item_count: imeis.length, total_qty: imeis.length, total_amount: imeis.length * price,
       created_by: user.name, created_at: at, updated_at: at,
-    }]).select('id, ref');
-    if (error) { if (tableMissing(error)) bad('Jedwali la uhamisho halijatengenezwa. Endesha '
-      + '<b>db/migrations/RUN-ME-2026-09-16-transfers.sql</b>. / The transfers table does not '
-      + 'exist yet — run that migration first.'); throw new Error(error.message); }
-    const inserted = data && data[0];
+      status: 'sent', from_role: fromRole, to_role: to.role,
+    };
+    if (senderSigns) { row.sender_signature = sig; row.sender_signed_by = user.name; row.sender_signed_at = at; }
+    let ins = await db.from('transfers').insert([row]).select('id, ref');
+    if (ins.error && TR_FLOW_RX.test(String(ins.error.message || ''))) {
+      /* The document migration ran, the flow one has not: the document still opens, and the
+         pane says which file to run before anybody can accept it. */
+      const { status, from_role, to_role, ...base } = row;
+      ins = await db.from('transfers').insert([base]).select('id, ref');
+    }
+    if (ins.error) {
+      if (tableMissing(ins.error)) bad('Jedwali la uhamisho halijatengenezwa. Endesha <b>' + TR_FILE
+        + '</b>. / The transfers table does not exist yet — run that migration first.');
+      throw new Error(ins.error.message);
+    }
+    const inserted = ins.data && ins.data[0];
     if (!inserted) throw new Error('transfers insert did not return the new row');
 
-    const { error: itemsErr } = await db.from('transfer_items').insert(
-      imeis.map(imei => ({ transfer_id: inserted.id, imei, item: item || null, qty: 1, price })));
-    if (itemsErr) throw new Error(itemsErr.message);
+    const lines = imeis.map(imei => {
+      const w = where.get(imei);
+      return { transfer_id: inserted.id, imei, item: item || w.item || null, qty: 1, price,
+        source: w.source, prev_holder: w.holder || null };
+    });
+    let itemsRes = await db.from('transfer_items').insert(lines);
+    if (itemsRes.error && /source|prev_holder/.test(String(itemsRes.error.message || ''))) {
+      itemsRes = await db.from('transfer_items').insert(lines.map(({ source, prev_holder, ...l }) => l));
+    }
+    if (itemsRes.error) throw new Error(itemsRes.error.message);
 
-    return { ok: true, id: inserted.id, ref: inserted.ref, changed: imeis.length };
+    return { ok: true, id: inserted.id, ref: inserted.ref, changed: imeis.length,
+      unknown: imeis.filter(i => where.get(i).source === 'unknown').length, senderSigned: senderSigns };
   },
 
-  /** Sign, once. `role` decides which of the two signature slots this fills; a slot already
-      signed refuses rather than silently overwriting a signature that may already be on a
-      printed copy somewhere. */
+  /** ACCEPT -- the receiver's signature, and the moment the stock changes hands. The move is
+      written BEFORE the document is marked accepted, so a write that fails halfway leaves a
+      document still waiting (and a retry that simply sets the same holders again) rather than
+      a document that says "accepted" over stock that never moved. */
+  async transferAccept(db, user, args) {
+    requireWrite(user); requireNav(user, 'transfers');
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!id) bad('Weka ID ya uhamisho. / A transfer id is required.');
+    const sig = String(a.signature || '');
+    trCheckSig(sig);
+    const t = await trOne(db, id);
+    const mine = sameName(t.to_name, user.name);
+    if (!mine && !isStoreDesk(user)) refuse403('Uhamisho huu haukutumwa kwako. / This transfer was not sent to you.');
+    const status = trStatusOf(t);
+    if (status !== 'sent') bad(status === 'accepted'
+      ? 'Uhamisho huu tayari umekubaliwa. / This transfer has already been accepted.'
+      : 'Uhamisho huu ulikataliwa. / This transfer was declined.');
+    if (t.receiver_signed_by) bad('Tayari kimesainiwa na ' + t.receiver_signed_by + '. / Already signed, by ' + t.receiver_signed_by + '.');
+    const signedBy = mine ? String(user.name) : (String(a.signedBy || '').trim() || String(t.to_name));
+
+    const items = await fetchAll(() => db.from('transfer_items').select('imei').eq('transfer_id', id));
+    const imeis = [...new Set(items.map(i => String(i.imei)))];
+    const at = new Date().toISOString();
+    const where = await locateStock(db, imeis);
+    const devIm = imeis.filter(i => where.get(i).source === 'devices');
+    const oldIm = imeis.filter(i => where.get(i).source === 'old_stock');
+
+    for (let i = 0; i < devIm.length; i += 200) {
+      const slice = devIm.slice(i, i + 200);
+      const { error } = await db.from('devices').update({ holder: t.to_name, updated_at: at }).in('imei', slice);
+      if (error) throw new Error(error.message);
+    }
+    if (devIm.length) {
+      // History gets the hand-over, one line per handset, the same trail a lock or a shift leaves.
+      await db.from('device_events').insert(devIm.map(imei => ({
+        imei, event: 'transfer', from_state: null, to_state: null,
+        reason: 'kutoka ' + t.from_name + ' kwenda ' + t.to_name + ' / from ' + t.from_name
+          + ' to ' + t.to_name + ' (' + t.ref + ')',
+        actor: user.name, at })));
+    }
+    if (oldIm.length) {
+      /* The old list carries the RSM beside the holder. It follows the receiver: an RSM is
+         their own, an agent's is whoever the register says they report to, and stock back at
+         the desk answers to nobody in the field. Left alone where nothing can be said. */
+      let toRole = K(t.to_role || '').replace(/[\s_-]+/g, ' ');
+      if (!toRole) { const p = (await transferParties(db)).get(nameKey(t.to_name)); toRole = p ? p.role : ''; }
+      const patch = { agent: t.to_name, updated_at: at };
+      if (toRole === 'RSM') patch.rsm = t.to_name;
+      else if (toRole === 'STORE' || toRole === 'ADMIN') patch.rsm = null;
+      else if (toRole === 'AGENT') {
+        let agents = [];
+        try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); } catch (ignored) { agents = []; }
+        const boss = managerIndex(agents).of(t.to_name);
+        if (boss) patch.rsm = boss;
+      }
+      for (let i = 0; i < oldIm.length; i += 200) {
+        const slice = oldIm.slice(i, i + 200);
+        const { error } = await db.from('old_stock').update(patch).in('imei', slice);
+        if (error) throw new Error(error.message);
+      }
+    }
+    const moved = devIm.length + oldIm.length;
+    const upd = { receiver_signature: sig, receiver_signed_by: signedBy, receiver_signed_at: at,
+      status: 'accepted', accepted_at: at, accepted_by: user.name, moved, updated_at: at };
+    let res = await db.from('transfers').update(upd).eq('id', id);
+    if (res.error && TR_FLOW_RX.test(String(res.error.message || ''))) {
+      const { status: s_, accepted_at, accepted_by, moved: m_, ...base } = upd;
+      res = await db.from('transfers').update(base).eq('id', id);
+    }
+    if (res.error) throw new Error(res.error.message);
+    return { ok: true, id, moved, devices: devIm.length, oldStock: oldIm.length, unknown: imeis.length - moved };
+  },
+
+  /** DECLINE -- the receiver says no, in words. Nothing moves. */
+  async transferDecline(db, user, args) {
+    requireWrite(user); requireNav(user, 'transfers');
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!id) bad('Weka ID ya uhamisho. / A transfer id is required.');
+    const reason = String(a.reason || '').trim();
+    if (!reason) bad('Andika sababu ya kukataa. / A reason is required to decline.');
+    const t = await trOne(db, id);
+    if (!sameName(t.to_name, user.name) && !isStoreDesk(user)) refuse403('Uhamisho huu haukutumwa kwako. / This transfer was not sent to you.');
+    const status = trStatusOf(t);
+    if (status !== 'sent') bad(status === 'accepted'
+      ? 'Uhamisho huu tayari umekubaliwa; hauwezi kukataliwa sasa. / Already accepted; it cannot be declined now.'
+      : 'Uhamisho huu tayari umekataliwa. / Already declined.');
+    const at = new Date().toISOString();
+    const { error } = await db.from('transfers')
+      .update({ status: 'declined', declined_at: at, declined_by: user.name, decline_reason: reason.slice(0, 400), updated_at: at })
+      .eq('id', id);
+    if (error) {
+      if (TR_FLOW_RX.test(String(error.message || ''))) bad('Endesha <b>' + TR_FLOW_FILE + '</b> kwanza. / Run '
+        + TR_FLOW_FILE + ' first — declining needs the status column it adds.');
+      throw new Error(error.message);
+    }
+    return { ok: true, id };
+  },
+
+  /** The SENDER's signature, once -- for the document the desk opened on their behalf, or one
+      they sent without signing. The receiver never signs here: their signature IS the
+      acceptance (transferAccept), because that is the write that moves the stock. */
   async transferSign(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
     const id = String(a.id || '').trim();
-    const role = String(a.role || '').trim();
+    const role = String(a.role || 'sender').trim();
     if (!id) bad('Weka ID ya uhamisho. / A transfer id is required.');
-    if (role !== 'sender' && role !== 'receiver') bad('Chagua nafasi: mtoaji au mpokeaji. / Choose a role: sender or receiver.');
-    const signedBy = String(a.signedBy || '').trim();
-    if (!signedBy) bad('Andika jina la anayesaini. / The signer\'s name is required.');
+    if (role !== 'sender') bad('Mpokeaji anasaini kwa kukubali kwenye dirisha la Pokea. / The receiver signs by accepting it in Receive.');
     const sig = String(a.signature || '');
-    if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sig)) bad('Sahihi haikutambulika. / That signature was not recognised.');
-    // A signature pad this small never legitimately produces a huge PNG; a data URL far past
-    // that is either a mistaken paste or something worth refusing rather than storing.
-    if (sig.length > 400000) bad('Sahihi ni kubwa mno. Jaribu tena. / That signature is too large. Please try again.');
-
-    let row;
-    try {
-      const { data, error } = await db.from('transfers')
-        .select('id, sender_signed_by, receiver_signed_by').eq('id', id).maybeSingle();
-      if (error) throw error;
-      row = data;
-    } catch (e) {
-      if (tableMissing(e)) bad('Jedwali la uhamisho halijatengenezwa. Endesha '
-        + '<b>db/migrations/RUN-ME-2026-09-16-transfers.sql</b>. / The transfers table does not '
-        + 'exist yet — run that migration first.');
-      throw e;
-    }
-    if (!row) bad('Uhamisho huu haujulikani. / That transfer was not found.');
-    const already = role === 'sender' ? row.sender_signed_by : row.receiver_signed_by;
-    if (already) bad('Tayari kimesainiwa na ' + already + '. / Already signed, by ' + already + '.');
-
+    trCheckSig(sig);
+    const t = await trOne(db, id);
+    const mine = sameName(t.from_name, user.name);
+    if (!mine && !isStoreDesk(user)) refuse403('Uhamisho huu si wako kusaini. / This transfer is not yours to sign.');
+    if (t.sender_signed_by) bad('Tayari kimesainiwa na ' + t.sender_signed_by + '. / Already signed, by ' + t.sender_signed_by + '.');
+    const signedBy = mine ? String(user.name) : (String(a.signedBy || '').trim() || String(t.from_name));
     const at = new Date().toISOString();
-    const patch = role === 'sender'
-      ? { sender_signature: sig, sender_signed_by: signedBy, sender_signed_at: at, updated_at: at }
-      : { receiver_signature: sig, receiver_signed_by: signedBy, receiver_signed_at: at, updated_at: at };
-    const { error: upErr } = await db.from('transfers').update(patch).eq('id', id);
-    if (upErr) throw new Error(upErr.message);
+    const { error } = await db.from('transfers')
+      .update({ sender_signature: sig, sender_signed_by: signedBy, sender_signed_at: at, updated_at: at })
+      .eq('id', id);
+    if (error) throw new Error(error.message);
     return { ok: true, id, role, signedBy };
   },
 };

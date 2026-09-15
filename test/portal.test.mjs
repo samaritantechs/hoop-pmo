@@ -2159,23 +2159,41 @@ test('a code holding only "codes" can actually open the Access codes pane', asyn
 });
 
 /* =========================================================================================
-   TRANSFERS -- the store keeper's blue-ink hand-off doc (2026-09-16):
+   TRANSFERS -- stock changing hands inside HOOP (2026-09-16 / 2026-09-17):
      "store keeper needs the transfer doc to be blue ink signed online on a transfers
       navigation by sender and receiver so that we could export and print."
-   One form, two on-screen signatures, printed as one document -- see db/migrations/
-   RUN-ME-2026-09-16-transfers.sql for the schema.
+     "1. Sipho / Store transfers them to RSM  2. RSM to Agents  3. Agent to RSM (the returns)
+      4. RSM / Agent to Sipho / Store  5. RSM to RSM (Sipho does it on system, they log in to
+      sign)"
+     "Window 3: Stock (each can see stock in their possession), Send (can select imei no or
+      input list of imei nos and search system user to send to), Receive (find received and
+      decline or accept to overwrite stock ownership)"
+     "So RSM only see stock in old and new that's theirs already only, same for agents, Sipho
+      sees all. So at access codes I have roles RSM STORE and AGENT"
+   Schema: db/migrations/RUN-ME-2026-09-16-transfers.sql + RUN-ME-2026-09-17-transfers-flow.sql.
    ========================================================================================= */
-const TR_USER = { code: 'T1', name: 'Store keeper', role: 'STORE', teams: null,
-  tabs: ['transfers'], readOnly: false };
 const TR_PNG = 'data:image/png;base64,iVBORw0KGgo=';
+const TR_TABS = ['transfers', 'oldstock', 'newstock'];
+const STORE   = { code: 'S1', name: 'SIPHO K',     role: 'STORE', teams: null, tabs: TR_TABS, readOnly: false };
+const RSM_DAR = { code: 'R1', name: 'RSM DAR',     role: 'RSM',   teams: null, tabs: TR_TABS, readOnly: false };
+const RSM_MWZ = { code: 'R2', name: 'RSM MWANZA',  role: 'RSM',   teams: null, tabs: TR_TABS, readOnly: false };
+const AG1     = { code: 'A1', name: 'AGENT ONE',   role: 'AGENT', teams: null, tabs: TR_TABS, readOnly: false };
+const AG2     = { code: 'A2', name: 'AGENT TWO',   role: 'AGENT', teams: null, tabs: TR_TABS, readOnly: false };
+const AG3     = { code: 'A3', name: 'AGENT THREE', role: 'AGENT', teams: null, tabs: TR_TABS, readOnly: false };
 
-// The staff register the hierarchy rule below reads: two RSMs, the owner's named
-// distribution point ("SUPER AGENT", registered as an rsm-tier row), three field agents
-// under RSM DAR/RSM MWANZA by branch, and a fourth whose `manager` column explicitly
-// overrides the branch it sits in -- the same override column the sales-targets roll-up
-// reads (RUN-ME-2026-09-09-targets.sql).
-function staffDb(extra) {
+/* The register the hierarchy rule and the RSM fence read (two RSMs by branch, the owner's
+   named distribution point "SUPER AGENT", four field agents -- FOUR is explicitly overridden
+   onto RSM MWANZA), the access codes that make people SYSTEM USERS, and a little stock: on the
+   register (devices) and on the old-stock list (old_stock). 351...009 is sold -- not stock. */
+function trDb(extra, opts) {
   return fakeDb(Object.assign({
+    access_codes: [
+      { code: 'S1', name: 'SIPHO K', role: 'STORE' }, { code: 'R1', name: 'RSM DAR', role: 'RSM' },
+      { code: 'R2', name: 'RSM MWANZA', role: 'RSM' }, { code: 'A1', name: 'AGENT ONE', role: 'AGENT' },
+      { code: 'A2', name: 'AGENT TWO', role: 'AGENT' }, { code: 'A3', name: 'AGENT THREE', role: 'AGENT' },
+      { code: 'A4', name: 'AGENT FOUR', role: 'AGENT' }, { code: 'X', name: 'Peter', role: 'ADMIN' },
+      { code: 'H1', name: 'HR DESK', role: 'HR' },
+    ],
     hoop_agents: [
       { name: 'RSM DAR', role: 'Regional_Manager', branch: 'Dar es salaam' },
       { name: 'RSM MWANZA', role: 'Regional_Manager', branch: 'Mwanza' },
@@ -2185,94 +2203,230 @@ function staffDb(extra) {
       { name: 'AGENT THREE', role: 'Field_Officer', branch: 'Mwanza' },
       { name: 'AGENT FOUR', role: 'Field_Officer', branch: 'Dar es salaam', manager: 'RSM MWANZA' },
     ],
-  }, extra));
+    devices: [
+      { imei: '351000000000001', item: 'SAMSUNG A07-64GB', holder: 'SIPHO K', state: 'enrolled' },
+      { imei: '351000000000002', item: 'SAMSUNG A07-64GB', holder: 'SIPHO K', state: 'enrolled' },
+      { imei: '351000000000003', item: 'RIMO-64GB', holder: 'RSM DAR', state: 'locked' },
+      { imei: '351000000000004', item: 'RIMO-64GB', holder: 'AGENT ONE', state: 'enrolled' },
+      { imei: '351000000000005', item: 'RIMO-64GB', holder: 'AGENT THREE', state: 'enrolled' },
+      { imei: '351000000000009', item: 'RIMO-64GB', holder: 'RSM DAR', state: 'locked', customer: 'A CUSTOMER' },
+    ],
+    old_stock: [
+      { imei: '861000000000001', item: 'ITEL A100', agent: 'AGENT ONE', rsm: 'RSM DAR', age_days: 40, as_of: '2026-09-10' },
+      { imei: '861000000000002', item: 'ITEL A100', agent: 'AGENT THREE', rsm: 'RSM MWANZA', age_days: 40, as_of: '2026-09-10' },
+    ],
+    transfers: [], transfer_items: [], device_events: [], settings: [],
+  }, extra), opts);
 }
+const imeisOf = r => r.rows.map(x => x.imei).sort();
+const rowOf = (db, table, imei) => db._dump(table).find(r => String(r.imei) === imei);
 
-test('transferCreate opens a hand-off with the serials stamped as their own rows', async () => {
-  const d = staffDb();
-  const r = await _FNS.transferCreate(d, TR_USER, {
-    fromName: 'RSM DAR', toName: 'AGENT ONE', item: 'SAMSUNG A07-64GB', price: 120000,
-    imeis: ['351111111111111', '351111111111111', '351222222222222'], note: 'hand delivery',
-  });
+test('the Stock window is what you hold: an agent their own, an RSM their own, the desk everybody', async () => {
+  const d = trDb();
+  assert.deepEqual(imeisOf(await _FNS.transferStock(d, AG1, {})), ['351000000000004', '861000000000001'],
+    'the register AND the old list, and only this person\'s hands');
+  assert.deepEqual(imeisOf(await _FNS.transferStock(d, RSM_DAR, {})), ['351000000000003'],
+    'an RSM can only SEND what is in their own hands, not their agents\' -- the returns come up first');
+  const desk = await _FNS.transferStock(d, STORE, {});
+  assert.equal(desk.all, true);
+  assert.deepEqual(imeisOf(desk), ['351000000000001', '351000000000002', '351000000000003', '351000000000004',
+    '351000000000005', '861000000000001', '861000000000002'], 'everything unsold, and never the sold one');
+  assert.deepEqual(imeisOf(await _FNS.transferStock(d, STORE, { q: 'ITEL' })), ['861000000000001', '861000000000002']);
+});
+
+test('Send: the receiver must be a system user, you send only what you hold, the desk sends for anybody', async () => {
+  const d = trDb();
+  await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'NOBODY AT ALL', imeis: ['351000000000004'] }),
+    /not a system user/, 'a name without an access code cannot accept, so it cannot be sent to');
+  await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'HR DESK', imeis: ['351000000000004'] }),
+    /not a system user/, 'a code with some other role is not a party to stock either');
+  await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', imeis: ['351000000000005'] }),
+    /not in your possession/, 'AGENT THREE\'s handset is not AGENT ONE\'s to send');
+  await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', fromName: 'RSM DAR', imeis: ['351000000000003'] }),
+    /only send as yourself/);
+  const r = await _FNS.transferCreate(d, AG1, { toName: 'rsm dar', imeis: ['351000000000004'], item: 'RIMO-64GB', price: 100000 });
   assert.equal(r.ok, true);
-  assert.match(r.ref, /^TR-\d{8}-/);
-  assert.equal(r.changed, 2, 'the repeated IMEI is deduped, not double-counted');
+  const row = d._dump('transfers')[0];
+  assert.equal(row.status, 'sent');
+  assert.equal(row.from_name, 'AGENT ONE'); assert.equal(row.from_role, 'AGENT');
+  assert.equal(row.to_name, 'RSM DAR', 'the register\'s spelling, not the typed one'); assert.equal(row.to_role, 'RSM');
+  assert.ok(!row.sender_signed_by, 'no signature was offered, none is written');
+  const line = d._dump('transfer_items')[0];
+  assert.equal(line.source, 'devices'); assert.equal(line.prev_holder, 'AGENT ONE');
 
-  const got = await _FNS.transferGet(d, TR_USER, { id: r.id });
-  assert.equal(got.transfer.fromName, 'RSM DAR');
-  assert.equal(got.transfer.toName, 'AGENT ONE');
-  assert.equal(got.transfer.items.length, 2);
-  assert.equal(got.transfer.totalQty, 2);
-  assert.equal(got.transfer.totalAmount, 240000);
-  assert.equal(got.transfer.senderSignedBy, '', 'unsigned until somebody actually signs');
-
-  const list = await _FNS.transferList(d, TR_USER, {});
-  assert.equal(list.rows.length, 1);
-  assert.equal(list.rows[0].status, 'pending');
-  assert.equal(list.counts.pending, 1);
+  // Flow 5: "RSM to RSM (Sipho does it on system, they log in to sign)".
+  const v = await _FNS.transferCreate(d, STORE, { fromName: 'RSM DAR', toName: 'RSM MWANZA', imeis: ['351000000000003'] });
+  const doc = d._dump('transfers').find(t => t.id === v.id);
+  assert.equal(doc.from_name, 'RSM DAR'); assert.equal(doc.created_by, 'SIPHO K');
+  assert.ok(!doc.sender_signed_by, 'the desk does not sign for the RSM -- they log in to');
+  // And the desk may send a serial nobody has told the system about: the document still opens.
+  const u = await _FNS.transferCreate(d, STORE, { toName: 'RSM DAR', imeis: ['999999999999999'] });
+  assert.equal(u.unknown, 1);
+  assert.equal(d._dump('transfer_items').find(l => l.imei === '999999999999999').source, 'unknown');
 });
 
-test('transferCreate refuses an empty sender/receiver name, and an empty IMEI list', async () => {
-  const d = staffDb();
-  await assert.rejects(() => _FNS.transferCreate(d, TR_USER,
-    { fromName: '', toName: 'AGENT ONE', imeis: ['1'] }), /sender and a receiver name are required/);
-  await assert.rejects(() => _FNS.transferCreate(d, TR_USER,
-    { fromName: 'RSM DAR', toName: 'AGENT ONE', imeis: [] }), /Paste at least one IMEI/);
+test('Receive: accepting signs, moves the holder on the register and the old list, and marks the document', async () => {
+  const d = trDb();
+  const s = await _FNS.transferCreate(d, STORE, { toName: 'RSM DAR', imeis: ['351000000000001', '861000000000001'] });
+  assert.equal((await _FNS.transferInbox(d, RSM_DAR, {})).inbox.length, 1, 'it is waiting for the RSM');
+  assert.equal((await _FNS.transferInbox(d, AG1, {})).inbox.length, 0, 'and for nobody else');
+  await assert.rejects(() => _FNS.transferAccept(d, AG1, { id: s.id, signature: TR_PNG }), /not sent to you/);
+  await assert.rejects(() => _FNS.transferAccept(d, RSM_DAR, { id: s.id, signature: 'not-a-png' }), /not recognised/);
+  assert.equal(rowOf(d, 'devices', '351000000000001').holder, 'SIPHO K', 'nothing moves before the signature');
+
+  const a = await _FNS.transferAccept(d, RSM_DAR, { id: s.id, signature: TR_PNG });
+  assert.deepEqual({ moved: a.moved, devices: a.devices, oldStock: a.oldStock, unknown: a.unknown }, { moved: 2, devices: 1, oldStock: 1, unknown: 0 });
+  assert.equal(rowOf(d, 'devices', '351000000000001').holder, 'RSM DAR', 'the register now says the RSM holds it');
+  const old = rowOf(d, 'old_stock', '861000000000001');
+  assert.equal(old.agent, 'RSM DAR', 'so does the old list');
+  assert.equal(old.rsm, 'RSM DAR', 'and an RSM answers for their own');
+  const doc = d._dump('transfers')[0];
+  assert.equal(doc.status, 'accepted'); assert.equal(doc.receiver_signed_by, 'RSM DAR'); assert.equal(doc.accepted_by, 'RSM DAR');
+  assert.equal(doc.moved, 2);
+  const ev = d._dump('device_events');
+  assert.equal(ev.length, 1, 'one trail line per HANDSET on the register, none for the old list');
+  assert.equal(ev[0].event, 'transfer'); assert.match(ev[0].reason, /SIPHO K.*RSM DAR/);
+  await assert.rejects(() => _FNS.transferAccept(d, RSM_DAR, { id: s.id, signature: TR_PNG }), /already been accepted/);
+  const box = await _FNS.transferInbox(d, RSM_DAR, {});
+  assert.equal(box.inbox.length, 0); assert.equal(box.settled.length, 1); assert.equal(box.settled[0].status, 'accepted');
+
+  // Now the RSM can pass that old-list handset down to an agent: the RSM line follows.
+  const down = await _FNS.transferCreate(d, RSM_DAR, { toName: 'AGENT TWO', imeis: ['861000000000001'] });
+  await _FNS.transferAccept(d, AG2, { id: down.id, signature: TR_PNG });
+  assert.equal(rowOf(d, 'old_stock', '861000000000001').agent, 'AGENT TWO');
+  assert.equal(rowOf(d, 'old_stock', '861000000000001').rsm, 'RSM DAR', 'derived from the register: AGENT TWO reports to RSM DAR');
 });
 
-test('transferSign fills exactly one slot each, once, and completes the document', async () => {
-  const d = staffDb();
-  const created = await _FNS.transferCreate(d, TR_USER,
-    { fromName: 'RSM DAR', toName: 'AGENT ONE', imeis: ['351111111111111'] });
-
-  const s1 = await _FNS.transferSign(d, TR_USER,
-    { id: created.id, role: 'sender', signedBy: 'RSM DAR', signature: TR_PNG });
-  assert.equal(s1.ok, true);
-  assert.equal((await _FNS.transferList(d, TR_USER, {})).rows[0].status, 'partial');
-
-  // The same slot cannot be signed twice -- a mis-signed transfer gets a fresh document,
-  // never an edit to a signature a printed copy may already be holding.
-  await assert.rejects(() => _FNS.transferSign(d, TR_USER,
-    { id: created.id, role: 'sender', signedBy: 'Somebody else', signature: TR_PNG }),
-    /Already signed, by RSM DAR/);
-
-  const s2 = await _FNS.transferSign(d, TR_USER,
-    { id: created.id, role: 'receiver', signedBy: 'AGENT ONE', signature: TR_PNG });
-  assert.equal(s2.ok, true);
-  assert.equal((await _FNS.transferList(d, TR_USER, {})).rows[0].status, 'complete');
-
-  const got = await _FNS.transferGet(d, TR_USER, { id: created.id });
-  assert.equal(got.transfer.senderSignature, TR_PNG);
-  assert.equal(got.transfer.receiverSignature, TR_PNG);
+test('Receive: declining needs a reason, moves nothing, and closes the document', async () => {
+  const d = trDb();
+  const s = await _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', imeis: ['351000000000004'] });
+  await assert.rejects(() => _FNS.transferDecline(d, RSM_DAR, { id: s.id }), /reason is required/);
+  await assert.rejects(() => _FNS.transferDecline(d, AG3, { id: s.id, reason: 'not mine' }), /not sent to you/);
+  const r = await _FNS.transferDecline(d, RSM_DAR, { id: s.id, reason: 'Wrong model' });
+  assert.equal(r.ok, true);
+  assert.equal(rowOf(d, 'devices', '351000000000004').holder, 'AGENT ONE', 'still in the sender\'s hands');
+  const doc = d._dump('transfers')[0];
+  assert.equal(doc.status, 'declined'); assert.equal(doc.decline_reason, 'Wrong model'); assert.equal(doc.declined_by, 'RSM DAR');
+  await assert.rejects(() => _FNS.transferAccept(d, RSM_DAR, { id: s.id, signature: TR_PNG }), /was declined/);
+  await assert.rejects(() => _FNS.transferDecline(d, RSM_DAR, { id: s.id, reason: 'again' }), /Already declined/);
 });
 
-test('transferSign refuses a signature that is not a PNG data URL, an oversized one, or a bad role', async () => {
-  const d = staffDb();
-  const created = await _FNS.transferCreate(d, TR_USER,
-    { fromName: 'RSM DAR', toName: 'AGENT ONE', imeis: ['1'] });
-  await assert.rejects(() => _FNS.transferSign(d, TR_USER,
-    { id: created.id, role: 'sender', signedBy: 'X', signature: 'not-a-png' }),
-    /signature was not recognised/i);
+test('the hierarchy rule still stands: agents under different RSMs never hand off directly', async () => {
+  const d = trDb();
+  assert.equal((await _FNS.transferCreate(d, AG1, { toName: 'AGENT TWO', imeis: ['351000000000004'] })).ok, true,
+    'the same RSM: fine');
+  await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'AGENT THREE', imeis: ['861000000000001'] }),
+    /route this through an RSM or Super Agent/, 'a different RSM by branch');
+  await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'AGENT FOUR', imeis: ['861000000000001'] }),
+    /route this through an RSM or Super Agent/, 'a different RSM by the register\'s explicit override');
+  // And the desk sending FOR an agent to another RSM's agent is refused the same way -- the rule
+  // is about the chain of custody, not about who is at the keyboard.
+  await assert.rejects(() => _FNS.transferCreate(d, STORE, { fromName: 'AGENT ONE', toName: 'AGENT THREE', imeis: ['861000000000001'] }),
+    /route this through an RSM or Super Agent/);
+  // Agent up to their RSM, RSM across to another RSM, RSM down to the desk: all normal.
+  assert.equal((await _FNS.transferCreate(d, AG3, { toName: 'RSM MWANZA', imeis: ['351000000000005'] })).ok, true);
+  assert.equal((await _FNS.transferCreate(d, RSM_DAR, { toName: 'RSM MWANZA', imeis: ['351000000000003'] })).ok, true);
+});
+
+test('the sender signs at Send or later from their own login; the receiver only ever signs by accepting', async () => {
+  const d = trDb();
+  const s = await _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', imeis: ['351000000000004'], signature: TR_PNG });
+  assert.equal(s.senderSigned, true);
+  const got = await _FNS.transferGet(d, AG1, { id: s.id });
+  assert.equal(got.transfer.senderSignedBy, 'AGENT ONE'); assert.equal(got.transfer.senderSignature, TR_PNG);
+  assert.equal(got.transfer.receiverSignedBy, '');
+  assert.deepEqual(got.transfer.mine, { sender: true, receiver: false, desk: false });
+  await assert.rejects(() => _FNS.transferSign(d, AG1, { id: s.id, role: 'sender', signature: TR_PNG }), /Already signed, by AGENT ONE/);
+
+  // Flow 5: the desk opened it, the RSM logs in and signs their own side.
+  const v = await _FNS.transferCreate(d, STORE, { fromName: 'RSM DAR', toName: 'RSM MWANZA', imeis: ['351000000000003'] });
+  await assert.rejects(() => _FNS.transferSign(d, AG1, { id: v.id, role: 'sender', signature: TR_PNG }), /not yours to sign/);
+  await assert.rejects(() => _FNS.transferSign(d, RSM_MWZ, { id: v.id, role: 'receiver', signature: TR_PNG }),
+    /signs by accepting/, 'the receiver\'s signature IS the acceptance -- the write that moves stock');
+  const sg = await _FNS.transferSign(d, RSM_DAR, { id: v.id, role: 'sender', signature: TR_PNG });
+  assert.equal(sg.signedBy, 'RSM DAR');
+  // A signature offered by the desk on somebody else's document is written in THAT name.
+  const w = await _FNS.transferCreate(d, STORE, { fromName: 'RSM DAR', toName: 'AGENT TWO', imeis: ['351000000000002'] });
+  const dsk = await _FNS.transferSign(d, STORE, { id: w.id, role: 'sender', signedBy: 'RSM DAR', signature: TR_PNG });
+  assert.equal(dsk.signedBy, 'RSM DAR');
   const huge = 'data:image/png;base64,' + 'A'.repeat(400001);
-  await assert.rejects(() => _FNS.transferSign(d, TR_USER,
-    { id: created.id, role: 'sender', signedBy: 'X', signature: huge }), /too large/i);
-  await assert.rejects(() => _FNS.transferSign(d, TR_USER,
-    { id: created.id, role: 'sideways', signedBy: 'X', signature: TR_PNG }), /Choose a role/);
+  await assert.rejects(() => _FNS.transferAccept(d, AG2, { id: w.id, signature: huge }), /too large/i);
 });
 
-test('transfers is a real, grantable nav -- and a view-only code can look but never sign', async () => {
-  const d = staffDb();
+test('the register is each party\'s own; the desk sees every document', async () => {
+  const d = trDb();
+  const one = await _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', imeis: ['351000000000004'] });
+  await _FNS.transferCreate(d, STORE, { fromName: 'RSM DAR', toName: 'RSM MWANZA', imeis: ['351000000000003'] });
+  const ag = await _FNS.transferList(d, AG1, {});
+  assert.equal(ag.scoped, true); assert.equal(ag.rows.length, 1); assert.equal(ag.counts.total, 1);
+  assert.equal((await _FNS.transferList(d, RSM_DAR, {})).rows.length, 2, 'a party to both');
+  assert.equal((await _FNS.transferList(d, RSM_MWZ, {})).rows.length, 1);
+  const desk = await _FNS.transferList(d, STORE, {});
+  assert.equal(desk.scoped, false); assert.equal(desk.rows.length, 2); assert.equal(desk.counts.sent, 2);
+  assert.equal((await _FNS.transferList(d, ADMIN, {})).rows.length, 2, 'ADMIN is full access everywhere');
+  await assert.rejects(() => _FNS.transferGet(d, AG3, { id: one.id }), /not yours to open/);
+  assert.equal((await _FNS.transferGet(d, STORE, { id: one.id })).transfer.mine.desk, true);
+  assert.deepEqual((await _FNS.transferList(d, STORE, { status: 'accepted' })).rows, []);
+  assert.equal((await _FNS.transferList(d, STORE, { q: 'mwanza' })).rows.length, 1);
+});
+
+test('OLD STOCK and NEW STOCK are fenced by the code\'s role: RSM their region, agent their own, desk all', async () => {
+  const d = trDb();
+  const olds = async u => (await _FNS.oldStock(d, u, {})).rows.map(r => r.imei).sort();
+  assert.deepEqual(await olds(STORE), ['861000000000001', '861000000000002'], 'Sipho sees all');
+  assert.deepEqual(await olds(ADMIN), ['861000000000001', '861000000000002']);
+  assert.deepEqual(await olds(RSM_DAR), ['861000000000001'], 'held by an agent who reports to this RSM');
+  assert.deepEqual(await olds(RSM_MWZ), ['861000000000002']);
+  assert.deepEqual(await olds(AG3), ['861000000000002'], 'an agent: their own hands only');
+  assert.deepEqual(await olds(AG2), [], 'a code with nothing in its hands sees an empty list -- never a neighbour\'s');
+  // The drawer and the round export are cut by the same fence, so a count never opens a longer list.
+  const holder = await _FNS.oldStockHolder(d, RSM_DAR, { key: 'agent three' });
+  assert.equal((holder.rows || []).length, 0, 'AGENT THREE is not in RSM DAR\'s region');
+  const round = await _FNS.oldStockRound(d, RSM_DAR, {});
+  assert.ok(JSON.stringify(round).includes('AGENT ONE') && !JSON.stringify(round).includes('AGENT THREE'));
+
+  const news = async u => (await _FNS.newStock(d, u, {})).rows.map(r => r.imei).sort();
+  const all = await news(STORE);
+  assert.ok(all.includes('351000000000001') && all.includes('351000000000005'), 'the desk: the whole register');
+  assert.deepEqual(await news(RSM_DAR), ['351000000000003', '351000000000004', '351000000000009'],
+    'their own hands, their agent\'s, and their sold one -- never Mwanza\'s or the desk\'s');
+  assert.deepEqual(await news(AG3), ['351000000000005']);
+  assert.deepEqual(await news(AG1), ['351000000000004']);
+});
+
+test('transferUsers finds people by name or role and never returns a code', async () => {
+  const d = trDb();
+  const r = await _FNS.transferUsers(d, AG1, { q: 'rsm' });
+  assert.deepEqual(r.users.map(u => u.name), ['RSM DAR', 'RSM MWANZA']);
+  assert.ok(r.users.every(u => !('code' in u)), 'a code is a secret; a name is what you send to');
+  assert.ok(!(await _FNS.transferUsers(d, AG1, {})).users.some(u => u.name === 'AGENT ONE'), 'never yourself');
+  assert.ok(!(await _FNS.transferUsers(d, AG1, {})).users.some(u => u.name === 'HR DESK'), 'only the stock roles');
+});
+
+test('transfers is a real, grantable nav -- and a view-only code can look but never send or accept', async () => {
+  const d = trDb();
   const NO_NAV = { code: 'N1', name: 'Nobody', role: 'CLERK', teams: null, tabs: [], readOnly: false };
   await assert.rejects(() => _FNS.transferList(d, NO_NAV, {}), /no access to the transfers pane/i);
-  await assert.rejects(() => _FNS.transferCreate(d, NO_NAV,
-    { fromName: 'A', toName: 'B', imeis: ['1'] }), /no access to the transfers pane/i);
+  await assert.rejects(() => _FNS.transferStock(d, NO_NAV, {}), /no access to the transfers pane/i);
+  // Read-only is a property of the ROLE (auth.js READONLY_ROLES), so an auditor who happens to
+  // carry a party's name still cannot send or accept in it.
+  const VIEW_ONLY = { code: 'V1', name: 'RSM DAR', role: 'AUDITOR', teams: null, tabs: ['transfers'], readOnly: true };
+  assert.equal((await _FNS.transferList(d, VIEW_ONLY, {})).ok, true, 'view-only can still see the register');
+  await assert.rejects(() => _FNS.transferCreate(d, VIEW_ONLY, { toName: 'AGENT ONE', imeis: ['351000000000003'] }), /view-only code/i);
+  const s = await _FNS.transferCreate(d, STORE, { toName: 'RSM DAR', imeis: ['351000000000001'] });
+  await assert.rejects(() => _FNS.transferAccept(d, VIEW_ONLY, { id: s.id, signature: TR_PNG }), /view-only code/i);
+});
 
-  const VIEW_ONLY = { code: 'V1', name: 'Auditor', role: 'AUDITOR', teams: null,
-    tabs: ['transfers'], readOnly: true };
-  const list = await _FNS.transferList(d, VIEW_ONLY, {});
-  assert.equal(list.ok, true, 'view-only can still see the register -- reading is what a list is');
-  await assert.rejects(() => _FNS.transferCreate(d, VIEW_ONLY,
-    { fromName: 'RSM DAR', toName: 'AGENT ONE', imeis: ['1'] }), /view-only code/i);
+test('before the flow migration the pane still opens, and says which file Send/Receive need', async () => {
+  const d = trDb({}, { missingColumns: { transfers: ['status', 'from_role', 'to_role', 'accepted_at', 'accepted_by', 'declined_at', 'declined_by', 'decline_reason', 'moved'] } });
+  const list = await _FNS.transferList(d, STORE, {});
+  assert.equal(list.needsFlow, true); assert.equal(list.notReady, false);
+  // A document can still be opened -- the flow columns are simply not written.
+  const s = await _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', imeis: ['351000000000004'] });
+  assert.equal(s.ok, true);
+  assert.equal(d._dump('transfers')[0].status, undefined, 'the column is not there to write');
+  assert.equal((await _FNS.transferInbox(d, RSM_DAR, {})).inbox.length, 1, 'no status column reads as still waiting');
+  await assert.rejects(() => _FNS.transferDecline(d, RSM_DAR, { id: s.id, reason: 'x' }), /transfers-flow\.sql/);
 });
 
 test('transferList and transferGet say plainly when the migration has not run yet', async () => {
@@ -2281,7 +2435,7 @@ test('transferList and transferGet say plainly when the migration has not run ye
      panes above; this is what a deployment actually says before the SQL is run. */
   const d = {
     from() {
-      return { select() { return this; }, eq() { return this; }, order() { return this; },
+      return { select() { return this; }, eq() { return this; }, order() { return this; }, in() { return this; },
         limit() { return this; }, range() { return this; }, maybeSingle() { return this; },
         insert() { return this; }, update() { return this; },
         then(res) { return Promise.resolve({ data: null,
@@ -2289,60 +2443,10 @@ test('transferList and transferGet say plainly when the migration has not run ye
           .then(res); } };
     },
   };
-  const list = await _FNS.transferList(d, TR_USER, {});
+  const list = await _FNS.transferList(d, STORE, {});
   assert.equal(list.ok, true);
   assert.equal(list.notReady, true);
   assert.deepEqual(list.rows, []);
-  await assert.rejects(() => _FNS.transferGet(d, TR_USER, { id: 'x' }),
+  await assert.rejects(() => _FNS.transferGet(d, STORE, { id: 'x' }),
     /RUN-ME-2026-09-16-transfers\.sql/);
-});
-
-/* =========================================================================================
-   THE HIERARCHY RULE (the owner, 2026-09-16): "it could be between super agent/store and
-   rsm, rsm and rsm, agent and agent, agent and super agent -- all possibilities between
-   these people, but an agent can't transfer to another rsm's agent unless [it goes] through
-   rsm or superagent." Every pairing is a normal hand-off EXCEPT one: two field agents who
-   report to two DIFFERENT RSMs, transferring stock straight to each other and skipping the
-   chain of custody both RSMs are meant to see. Resolved off the same register and the same
-   manager-derivation the sales-targets roll-up already uses (managerIndex) -- nobody types a
-   role on this form.
-   ========================================================================================= */
-test('two agents under the SAME rsm can transfer directly to each other', async () => {
-  const d = staffDb();
-  const r = await _FNS.transferCreate(d, TR_USER, { fromName: 'AGENT ONE', toName: 'AGENT TWO', imeis: ['1'] });
-  assert.equal(r.ok, true);
-});
-
-test('two agents under DIFFERENT rsms cannot transfer directly -- the rule\'s one restriction', async () => {
-  const d = staffDb();
-  await assert.rejects(
-    () => _FNS.transferCreate(d, TR_USER, { fromName: 'AGENT ONE', toName: 'AGENT THREE', imeis: ['1'] }),
-    /route this through an RSM or Super Agent/);
-});
-
-test('the block also catches a BRANCH-derived manager, not only an explicit one', async () => {
-  // AGENT ONE's rsm is derived from its branch (Dar -> RSM DAR); AGENT FOUR sits in that same
-  // branch but is EXPLICITLY overridden onto RSM MWANZA -- so the two chains still differ.
-  const d = staffDb();
-  await assert.rejects(
-    () => _FNS.transferCreate(d, TR_USER, { fromName: 'AGENT ONE', toName: 'AGENT FOUR', imeis: ['1'] }),
-    /route this through an RSM or Super Agent/,
-    'AGENT ONE (derived: RSM DAR) and AGENT FOUR (explicit: RSM MWANZA) are different chains');
-});
-
-test('an rsm, a super agent, or a name outside the register is never restricted by the rule', async () => {
-  const d = staffDb();
-  // rsm <-> rsm, even across two different regions.
-  assert.equal((await _FNS.transferCreate(d, TR_USER,
-    { fromName: 'RSM DAR', toName: 'RSM MWANZA', imeis: ['1'] })).ok, true);
-  // agent <-> the super agent -- an rsm-tier row by registration, whatever the owner calls it.
-  assert.equal((await _FNS.transferCreate(d, TR_USER,
-    { fromName: 'AGENT THREE', toName: 'SUPER AGENT', imeis: ['2'] })).ok, true);
-  // agent <-> a name that is not in the staff register at all (the store desk itself).
-  assert.equal((await _FNS.transferCreate(d, TR_USER,
-    { fromName: 'STORE DESK', toName: 'AGENT THREE', imeis: ['3'] })).ok, true);
-  // agent <-> the rsm of a DIFFERENT chain -- never triggers the rule, because an rsm is
-  // never the 'agent' side of the pairing.
-  assert.equal((await _FNS.transferCreate(d, TR_USER,
-    { fromName: 'AGENT THREE', toName: 'RSM DAR', imeis: ['4'] })).ok, true);
 });
