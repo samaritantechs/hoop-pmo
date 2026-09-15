@@ -9056,121 +9056,247 @@ function drawMove(m){
 }
 
 /* =========================================================================================
-   TRANSFERS -- a stock hand-off, signed on screen by both the sender and the receiver.
+   TRANSFERS -- stock changing hands inside HOOP, in three windows.
    =========================================================================================
-     "store keeper needs the transfer doc to be blue ink signed online on a transfers
-      navigation by sender and receiver so that we could export and print. as the signing
-      feature we implemented in hopeloan customer onboarding just on screen signature not
-      biometrics."
+     "1. Sipho / Store transfers them to RSM  2. RSM to Agents  3. Agent to RSM (the returns)
+      4. RSM / Agent to Sipho / Store  5. RSM to RSM (Sipho does it on system, they log in to
+      sign)"
+     "Transfers -- Window 3: Stock (each can see stock in their possession), Send (can select
+      imei no or input list of imei nos and search system user to send to), Receive (find
+      received and decline or accept to overwrite stock ownership)"
+
+   STOO is what I hold -- tick, then send. TUMA is the form: who (a system user, found by
+   name), which serials, one model and price for the batch, my signature. POKEA is what is
+   waiting for me: open it, sign to accept -- the moment every handset on it becomes mine on
+   every list -- or decline in words. NYARAKA is the register of documents, printable. Every
+   window shows a person their own; the desk's shows everybody's, and it is the SERVER that
+   fences that (api/portal.js, stockAllow / isStoreDesk), never this page.
 
    THE CANVAS PAD IS THE SAME IDEA AS HOPELOAN'S ONBOARDING SIGNATURE: a pointer-driven pen
    stroke on a blank canvas, nothing else -- no fingerprint sensor is involved on either
    system. Drawn in a ballpoint blue rather than black so a printed copy reads the way a
-   pen-signed paper slip already does.
+   pen-signed paper slip already does. A signature is written once (transferSign /
+   transferAccept say why).
 
-   ONE FORM, BOTH SIGNATURES, because the store keeper's own hand-off happens at one counter:
-   the sender signs, hands the same screen to the receiver, the receiver signs. See
-   api/portal.js's transferSign for why a signature, once written, is never overwritten. */
-var TRANSFERQ='';
+   NOT THE OTHER COMPANY. A handset moving HOOP <-> HOPE is Shift, on the locking desk, and
+   stays there: that is a device changing owner between two systems, not stock changing hands
+   between two people in this one. */
+var TRW='stock';           // which window: stock | send | receive | docs
+var TRSEL={};              // serials ticked in Stoo, carried into Tuma
+var TRQ='';                // Stoo search
+var TRDOCQ='';             // Nyaraka status filter
 var TR_INK='#1a56db';
+var TR_WINDOWS=[['stock','Stoo / Stock'],['send','Tuma / Send'],['receive','Pokea / Receive'],['docs','Nyaraka / Documents']];
 function trStatusChip(r){
-  if(r.status==='complete') return '<span class="chip ok">Imesainiwa / Signed</span>';
-  if(r.status==='partial') return '<span class="chip warn">Sahihi 1/2</span>';
-  return '<span class="chip bad">Bado hakuna sahihi / Unsigned</span>';
+  if(r.status==='accepted') return '<span class="chip ok">Imekubaliwa / Accepted</span>';
+  if(r.status==='declined') return '<span class="chip bad">Imekataliwa / Declined</span>';
+  return '<span class="chip warn">Inasubiri / Waiting'+(r.signed?' · sahihi '+r.signed+'/2':'')+'</span>';
+}
+function trSrc(s){
+  return s==='devices'?'<span class="chip">Rejista</span>'
+    :s==='old_stock'?'<span class="chip">OLD STOCK</span>'
+    :s==='unknown'?'<span class="chip bad">Haijulikani / Unknown</span>':'';
+}
+function trNotReady(body){
+  body.innerHTML='<div class="note bad">Jedwali la uhamisho halijatengenezwa bado. Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-16-transfers.sql</b> kisha <b>RUN-ME-2026-09-17-transfers-flow.sql</b> '
+    +'kwenye Supabase, kisha rudi hapa. / The transfers tables have not been created yet — run those '
+    +'two migrations, then come back.</div>';
+}
+function trFlowNote(d){
+  return (d&&d.needsFlow)?'<div class="note bad" style="margin-bottom:10px">Endesha '
+    +'<b>db/migrations/RUN-ME-2026-09-17-transfers-flow.sql</b> kwenye Supabase: bila hiyo Tuma/Pokea '
+    +'haziwezi kuweka hali ya "inasubiri / imekubaliwa / imekataliwa". / Run that migration: without '
+    +'it Send/Receive cannot mark a document waiting, accepted or declined.</div>':'';
 }
 function drawTransfers(m){
-  m.innerHTML='<div class="card"><h2>Uhamisho wa stoo / Transfers</h2><div class="sk"></div></div>';
-  srv('transferList',{status:TRANSFERQ}).then(function(d){
-    if(d.notReady){
-      m.innerHTML='<div class="note bad">Jedwali la uhamisho halijatengenezwa bado. Endesha '
-        +'<b>db/migrations/RUN-ME-2026-09-16-transfers.sql</b> kwenye Supabase, kisha rudi hapa. '
-        +'/ The transfers table has not been created yet — run that migration, then come back.</div>';
-      return;
-    }
-    var rows=d.rows||[], c=d.counts||{}, canW=!BOOT.readOnly;
-    var pick=function(k){ return function(){ TRANSFERQ=(TRANSFERQ===k?'':k); drawTransfers(m); }; };
-    m.innerHTML='<div class="tiles">'
-      +tile('Bado hakuna sahihi',money(c.pending||0),'sahihi 0/2',{color:c.pending?'bad':'',on:TRANSFERQ==='pending',cta:'chuja ›',go:pick('pending')})
-      +tile('Sahihi moja',money(c.partial||0),'inasubiri upande wa pili',{color:c.partial?'warn':'',on:TRANSFERQ==='partial',cta:'chuja ›',go:pick('partial')})
-      +tile('Imekamilika',money(c.complete||0),'sahihi 2/2',{color:'ok',on:TRANSFERQ==='complete',cta:'chuja ›',go:pick('complete')})
-      +tile('Jumla',money(c.total||0),'uhamisho wote',{})
+  m.innerHTML='<div class="card"><h2>Uhamisho wa stoo / Transfers</h2>'
+    +'<div class="row" style="gap:6px;flex-wrap:wrap;margin:6px 0 10px">'
+    +TR_WINDOWS.map(function(w){ return '<button class="btn sm'+(TRW===w[0]?'':' ghost')+'" data-trw="'+w[0]+'">'+esc(w[1])+'</button>'; }).join('')
+    +'</div><div id="trBody"><div class="sk"></div></div></div>';
+  $all('[data-trw]',m).forEach(function(b){ b.onclick=function(){ TRW=b.getAttribute('data-trw'); drawTransfers(m); }; });
+  var body=$('#trBody');
+  if(TRW==='send') trSendWin(m, body);
+  else if(TRW==='receive') trReceiveWin(m, body);
+  else if(TRW==='docs') trDocsWin(m, body);
+  else trStockWin(m, body);
+}
+
+/* STOO: what is in my hands -- the register's handsets and the old list's, unsold. Tick, then
+   send. The desk sees everybody's, with the holder beside each. */
+function trStockWin(m, body){
+  srv('transferStock',{q:TRQ}).then(function(d){
+    var rows=d.rows||[], canW=!BOOT.readOnly;
+    var nSel=Object.keys(TRSEL).length;
+    body.innerHTML='<div class="tiles">'
+      +tile(d.all?'Stoo yote':'Mkononi mwangu',money(d.total||0),d.all?'kila mtu / everybody':'ninazoshikilia / in my hands',{})
+      +tile('Rejista',money(rows.filter(function(r){return r.source==='devices';}).length),'zimefungwa na sisi / on the register',{})
+      +tile('OLD STOCK',money(rows.filter(function(r){return r.source==='old_stock';}).length),'hazijawahi kufungwa / never enrolled',{})
       +'</div>'
       +'<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
-      +'<button class="btn sm'+(TRANSFERQ===''?'':' ghost')+'" data-trq="">Zote / All</button>'
-      +'<input id="trQ" class="inp" placeholder="Tafuta: nambari, jina / search ref or name" style="width:220px">'
+      +'<input id="trStockQ" class="inp" placeholder="Tafuta IMEI, modeli'+(d.all?', jina':'')+' / search" value="'+esc(TRQ)+'" style="width:240px">'
       +'<span style="flex:1"></span>'
-      +(canW?'<button class="btn sm" id="trNew">+ Uhamisho mpya / New transfer</button>':'')
+      +(canW?'<button class="btn sm" id="trSendSel"'+(nSel?'':' disabled')+'>Tuma zilizochaguliwa / Send selected ('+nSel+')</button>':'')
       +'</div>'
-      +(rows.length?'<div class="scroll"><table><thead><tr><th>NAMBA</th><th>KUTOKA</th><th>KWENDA</th>'
+      +(d.truncated?'<div class="mut" style="margin-bottom:6px">Zinaonyeshwa '+money(rows.length)+' kati ya '+money(rows.length+d.truncated)+' — tafuta ili kupunguza. / Showing the first '+money(rows.length)+'; search to narrow.</div>':'')
+      +(rows.length?'<div class="scroll"><table><thead><tr>'+(canW?'<th class="noxl"><input type="checkbox" id="trAll" title="chagua zote / tick all"></th>':'')
+        +'<th>IMEI</th><th>MODELI</th><th>WAPI</th>'+(d.all?'<th>ANAYESHIKILIA</th>':'')+'<th>HALI</th></tr></thead><tbody>'
+        +rows.map(function(r){
+          return '<tr>'+(canW?'<td class="noxl"><input type="checkbox" data-trsel="'+esc(r.imei)+'"'+(TRSEL[r.imei]?' checked':'')+'></td>':'')
+            +'<td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(r.imei)+'</td>'
+            +'<td>'+esc(r.item||'—')+'</td><td>'+trSrc(r.source)+'</td>'
+            +(d.all?'<td>'+esc(r.holder||'—')+'</td>':'')
+            +'<td class="mut" style="font-size:11px">'+(r.source==='devices'
+              ?esc(r.state||'')+(r.seenAt?' · '+esc(clock(r.seenAt)):' · haijawahi kuongea / never spoke')
+              :(r.age!=null?'siku '+money(r.age)+' / days':''))+'</td></tr>';
+        }).join('')+'</tbody></table></div>'
+        :'<div class="mut">'+(d.all?'Hakuna stoo iliyo wazi. / No open stock.'
+          :'Hakuna simu mkononi mwako kwa jina <b>'+esc(d.me||'')+'</b>. Kama unashikilia simu, jina lako '
+          +'kwenye Access codes lazima lilingane na rejista. / Nothing in your hands under the name '
+          +'<b>'+esc(d.me||'')+'</b>. If you do hold stock, your name on Access codes must match the register.')+'</div>');
+    wireTiles(body);
+    var q=$('#trStockQ');
+    if(q){ var t=null; q.oninput=function(){ clearTimeout(t); t=setTimeout(function(){ TRQ=q.value; trStockWin(m, body); },300); }; }
+    var count=function(){ var n=Object.keys(TRSEL).length; var b=$('#trSendSel'); if(b){ b.disabled=!n; b.textContent='Tuma zilizochaguliwa / Send selected ('+n+')'; } };
+    $all('[data-trsel]',body).forEach(function(cb){
+      cb.onchange=function(){ var k=cb.getAttribute('data-trsel'); if(cb.checked) TRSEL[k]=1; else delete TRSEL[k]; count(); };
+    });
+    var all=$('#trAll');
+    if(all) all.onchange=function(){
+      $all('[data-trsel]',body).forEach(function(cb){ cb.checked=all.checked; var k=cb.getAttribute('data-trsel'); if(all.checked) TRSEL[k]=1; else delete TRSEL[k]; });
+      count();
+    };
+    var go=$('#trSendSel');
+    if(go) go.onclick=function(){ if(!Object.keys(TRSEL).length) return; TRW='send'; drawTransfers(m); };
+  }).catch(function(e){ paneFailed(body,e); });
+}
+
+/* TUMA: who, which serials, one model and price for the batch, my signature. The receiver is
+   found by name among SYSTEM USERS -- the desk may also name who is handing over (flow 5), in
+   which case there is no pad: that person logs in and signs their own side. */
+function trSendWin(m, body){
+  srv('transferUsers',{}).then(function(d){
+    var users=d.users||[], desk=!!d.desk, canW=!BOOT.readOnly;
+    if(!canW){ body.innerHTML='<div class="mut">Msimbo huu ni wa kuangalia tu. / This is a view-only code.</div>'; return; }
+    var pre=Object.keys(TRSEL).join('\n');
+    body.innerHTML='<div class="sub">Chagua anayepokea (mtumiaji wa mfumo), bandika au chagua IMEI kutoka Stoo, '
+      +'saini, tuma. Mpokeaji atakubali kwenye Pokea kwa msimbo wake. / Pick who receives (a system user), '
+      +'paste or tick IMEIs in Stock, sign, send. They accept under their own code, in Receive.</div>'
+      +'<datalist id="trUsers">'+users.map(function(u){ return '<option value="'+esc(u.name)+'">'+esc(u.role)+(u.away?' · amesimamishwa / suspended':'')+'</option>'; }).join('')+'</datalist>'
+      +(desk?'<div class="fld"><label>Anayetoa / Handing over (acha wazi = mimi / blank = me)</label>'
+        +'<input id="trFrom" class="inp" list="trUsers" placeholder="'+esc(BOOT.name||'')+'"></div>':'')
+      +'<div class="fld"><label>Anayepokea / Receiver</label><input id="trTo" class="inp" list="trUsers" placeholder="anza kuandika jina / start typing a name"></div>'
+      +'<div class="fld"><label>Modeli / Item (optional)</label><input id="trItem" class="inp" placeholder="mf. SAMSUNG A07-64GB"></div>'
+      +'<div class="fld"><label>Bei kwa kila simu / Unit price (optional)</label><input id="trPrice" class="inp" type="number" min="0" step="1000"></div>'
+      +'<div class="fld"><label>IMEI (moja kwa mstari au comma)</label>'
+      +'<textarea id="trImeis" rows="7" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123">'+esc(pre)+'</textarea></div>'
+      +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+      +'<div class="fld"><label>Maelezo / Note (optional)</label><textarea id="trNote" rows="2" style="width:100%"></textarea></div>'
+      +'<div class="fld" id="trPadWrap"><label>Sahihi yangu / My signature</label>'+trPadHtml_('trPadN')+'</div>'
+      +'<button class="btn w" id="trGo">Tuma / Send</button>';
+    var ta=$('#trImeis'), out=$('#trCount');
+    var recount=function(){
+      var p=devParseImeis_(ta.value);
+      out.innerHTML=!p.list.length?'Bado hakuna IMEI. / No IMEIs yet.'
+        :'<b>'+money(p.list.length)+'</b> simu'+(p.dupes?' · '+money(p.dupes)+' zimerudiwa / repeated':'');
+    };
+    ta.oninput=recount; recount();
+    var pad=trWirePad_('trPadN');
+    var cl=$('#trPadNClear'); if(cl) cl.onclick=function(){ pad.clear(); };
+    var from=$('#trFrom');
+    var isSelf=function(){ var v=from?from.value.trim():''; return !v||v.toUpperCase()===String(BOOT.name||'').toUpperCase(); };
+    if(from) from.oninput=function(){ $('#trPadWrap').style.display=isSelf()?'':'none'; };
+    $('#trGo').onclick=function(){
+      var p=devParseImeis_(ta.value);
+      var to=$('#trTo').value.trim();
+      if(!to){ toast('Chagua anayepokea. / Choose who receives.', true); return; }
+      if(!p.list.length){ toast('Chagua au bandika angalau IMEI moja. / Pick or paste at least one IMEI.', true); return; }
+      var self=isSelf();
+      if(self&&!pad.isDirty()){ toast('Weka sahihi yako kwanza. / Sign first.', true); return; }
+      var b=$('#trGo'); b.disabled=true;
+      srv('transferCreate',{
+        toName:to, fromName:from?from.value.trim():'',
+        item:$('#trItem').value, price:$('#trPrice').value,
+        imeis:p.list, note:$('#trNote').value,
+        signature:(self&&pad.isDirty())?pad.dataUrl():'',
+      }).then(function(r){
+        TRSEL={};
+        toast('Imetumwa: '+r.ref+(r.unknown?' · '+money(r.unknown)+' IMEI hazijulikani kwenye mfumo / unknown to the system':''));
+        TRW='docs'; drawTransfers(m); trView(m, r.id);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+  }).catch(function(e){ paneFailed(body,e); });
+}
+
+/* POKEA: waiting for me -- open, read the serials, sign to accept or decline in words. Below
+   it, what I sent (so a sender can see it land) and what was settled. */
+function trReceiveWin(m, body){
+  srv('transferInbox',{}).then(function(d){
+    if(d.notReady){ trNotReady(body); return; }
+    var inbox=d.inbox||[], mine=d.mine||[], settled=d.settled||[];
+    var row=function(r, act){
+      return '<tr><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(r.ref)+'</td><td>'+esc(clock(r.at))+'</td>'
+        +'<td>'+esc(r.fromName)+(r.fromRole?' <span class="mut" style="font-size:10px">'+esc(r.fromRole)+'</span>':'')+'</td>'
+        +'<td>'+esc(r.toName)+(r.toRole?' <span class="mut" style="font-size:10px">'+esc(r.toRole)+'</span>':'')+'</td>'
+        +'<td class="r">'+money(r.itemCount)+'</td><td>'+trStatusChip(r)+'</td>'
+        +'<td class="r noxl"><button class="btn sm'+(act?'':' ghost')+'" data-trv="'+esc(r.id)+'">'+(act?'Fungua / Open':'Ona / View')+'</button></td></tr>';
+    };
+    var table=function(rows, act, empty){
+      return rows.length?'<div class="scroll"><table><thead><tr><th>NAMBA</th><th>TAREHE</th><th>KUTOKA</th><th>KWENDA</th>'
+        +'<th class="r">SIMU</th><th>HALI</th><th class="noxl"></th></tr></thead><tbody>'
+        +rows.map(function(r){ return row(r, act); }).join('')+'</tbody></table></div>'
+        :'<div class="mut">'+empty+'</div>';
+    };
+    body.innerHTML=trFlowNote(d)
+      +'<div class="tiles">'
+      +tile('Zinanisubiri',money(inbox.length),'kubali au kataa / accept or decline',{color:inbox.length?'warn':''})
+      +tile('Nilizotuma',money(mine.length),'zangu / sent by me',{})
+      +tile('Zilizomalizika',money(settled.length),'zilizonijia / settled',{})
+      +'</div>'
+      +'<h3 style="margin:12px 0 6px">Zinanisubiri / Waiting for me</h3>'+table(inbox,true,'Hakuna uhamisho unaokusubiri. / Nothing is waiting for you.')
+      +'<h3 style="margin:14px 0 6px">Nilizotuma / Sent by me</h3>'+table(mine,false,'Bado hujatuma chochote. / You have not sent anything yet.')
+      +'<h3 style="margin:14px 0 6px">Zilizomalizika / Settled</h3>'+table(settled,false,'Hakuna bado. / Nothing yet.');
+    wireTiles(body);
+    $all('[data-trv]',body).forEach(function(b){ b.onclick=function(){ trView(m, b.getAttribute('data-trv')); }; });
+  }).catch(function(e){ paneFailed(body,e); });
+}
+
+/* NYARAKA: the register. Mine, or -- at the desk -- everybody's; the server decides which. */
+function trDocsWin(m, body){
+  srv('transferList',{status:TRDOCQ}).then(function(d){
+    if(d.notReady){ trNotReady(body); return; }
+    var rows=d.rows||[], c=d.counts||{};
+    var pick=function(k){ return function(){ TRDOCQ=(TRDOCQ===k?'':k); trDocsWin(m, body); }; };
+    body.innerHTML=trFlowNote(d)
+      +'<div class="tiles">'
+      +tile('Zinasubiri',money(c.sent||0),'bado hazijakubaliwa / not yet accepted',{color:c.sent?'warn':'',on:TRDOCQ==='sent',cta:'chuja ›',go:pick('sent')})
+      +tile('Zimekubaliwa',money(c.accepted||0),'stoo imehama / stock moved',{color:'ok',on:TRDOCQ==='accepted',cta:'chuja ›',go:pick('accepted')})
+      +tile('Zimekataliwa',money(c.declined||0),'hakuna kilichohama / nothing moved',{color:c.declined?'bad':'',on:TRDOCQ==='declined',cta:'chuja ›',go:pick('declined')})
+      +tile('Jumla',money(c.total||0),d.scoped?'nyaraka zangu / my documents':'nyaraka zote / every document',{})
+      +'</div>'
+      +'<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+      +'<button class="btn sm'+(TRDOCQ===''?'':' ghost')+'" id="trDocsAll">Zote / All</button>'
+      +'<input id="trQ" class="inp" placeholder="Tafuta: nambari, jina / search ref or name" style="width:220px">'
+      +'</div>'
+      +(rows.length?'<div class="scroll"><table><thead><tr><th>NAMBA</th><th>TAREHE</th><th>KUTOKA</th><th>KWENDA</th>'
         +'<th class="r">SIMU</th><th class="r">THAMANI</th><th>HALI</th><th class="noxl"></th></tr></thead><tbody>'
         +rows.map(function(r){
-          return '<tr><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(r.ref)+'</td>'
-            +'<td>'+esc(r.fromName)+(r.fromPhone?'<div class="mut" style="font-size:10px">'+esc(r.fromPhone)+'</div>':'')+'</td>'
-            +'<td>'+esc(r.toName)+(r.toPhone?'<div class="mut" style="font-size:10px">'+esc(r.toPhone)+'</div>':'')+'</td>'
-            +'<td class="r">'+money(r.itemCount)+'</td>'
-            +'<td class="r">'+money(r.totalAmount)+'</td>'
+          return '<tr><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(r.ref)+'</td><td>'+esc(clock(r.at))+'</td>'
+            +'<td>'+esc(r.fromName)+'</td><td>'+esc(r.toName)+'</td>'
+            +'<td class="r">'+money(r.itemCount)+'</td><td class="r">'+money(r.totalAmount)+'</td>'
             +'<td>'+trStatusChip(r)+'</td>'
             +'<td class="r noxl"><button class="btn sm ghost" data-trv="'+esc(r.id)+'">Ona / Open</button></td></tr>';
         }).join('')+'</tbody></table></div>'
-        :'<div class="mut">Hakuna uhamisho hapa bado. / Nothing here yet.</div>');
-    wireTiles(m);
-    $all('[data-trq]').forEach(function(b){ b.onclick=function(){ TRANSFERQ=b.getAttribute('data-trq'); drawTransfers(m); }; });
+        :'<div class="mut">Hakuna nyaraka hapa bado. / Nothing here yet.</div>');
+    wireTiles(body);
+    var all=$('#trDocsAll'); if(all) all.onclick=function(){ TRDOCQ=''; trDocsWin(m, body); };
     var q=$('#trQ');
     if(q) q.oninput=function(){
       var v=q.value.toUpperCase();
-      $all('tbody tr',m).forEach(function(tr){ tr.style.display = tr.textContent.toUpperCase().indexOf(v)>=0 ? '' : 'none'; });
+      $all('tbody tr',body).forEach(function(tr){ tr.style.display = tr.textContent.toUpperCase().indexOf(v)>=0 ? '' : 'none'; });
     };
-    var nw=$('#trNew');
-    if(nw) nw.onclick=function(){ trNewForm(m); };
-    $all('[data-trv]').forEach(function(b){
-      b.onclick=function(){ trView(m, b.getAttribute('data-trv')); };
-    });
-  }).catch(function(e){ paneFailed(m,e); });
-}
-
-/** The creation form. One shared item/price for the whole pasted list -- see the note on
-    transferCreate in api/portal.js for why: a hand-off is almost always one model, many
-    serials, one price, the same shape the POS side's own move document already prints. */
-function trNewForm(m){
-  drawer('<h3>Uhamisho mpya / New transfer</h3>'
-    +'<div class="sub">Mtoaji na mpokeaji watasaini kwenye skrini hii hii mara hamisho likifunguliwa. '
-    +'/ The sender and receiver both sign on this same screen once the transfer is open.</div>'
-    +'<div class="fld"><label>Anayetoa / Sender name</label><input id="trFromName" class="inp"></div>'
-    +'<div class="fld"><label>Simu ya anayetoa / Sender phone (optional)</label><input id="trFromPhone" class="inp"></div>'
-    +'<div class="fld"><label>Anayepokea / Receiver name</label><input id="trToName" class="inp"></div>'
-    +'<div class="fld"><label>Simu ya anayepokea / Receiver phone (optional)</label><input id="trToPhone" class="inp"></div>'
-    +'<div class="fld"><label>Modeli / Item (optional)</label><input id="trItem" class="inp" placeholder="mf. SAMSUNG A07-64GB"></div>'
-    +'<div class="fld"><label>Bei kwa kila simu / Unit price (optional)</label><input id="trPrice" class="inp" type="number" min="0" step="1000"></div>'
-    +'<div class="fld"><label>IMEI (moja kwa mstari au comma)</label>'
-    +'<textarea id="trImeis" rows="8" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123"></textarea></div>'
-    +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
-    +'<div class="fld"><label>Maelezo / Note (optional)</label><textarea id="trNote" rows="2" style="width:100%"></textarea></div>'
-    +'<button class="btn w" id="trGo">Fungua / Open</button>');
-  var ta=$('#trImeis'), out=$('#trCount');
-  var recount=function(){
-    var p=devParseImeis_(ta.value);
-    out.innerHTML=!p.list.length?'Bado hakuna IMEI. / No IMEIs yet.'
-      :'<b>'+money(p.list.length)+'</b> simu'+(p.dupes?' · '+money(p.dupes)+' zimerudiwa / repeated':'');
-  };
-  ta.oninput=recount; recount();
-  $('#trGo').onclick=function(){
-    var p=devParseImeis_(ta.value);
-    if(!$('#trFromName').value.trim()||!$('#trToName').value.trim()){
-      toast('Jina la anayetoa na anayepokea linahitajika. / Both names are required.', true); return;
-    }
-    if(!p.list.length){ toast('Bandika angalau IMEI moja. / Paste at least one IMEI.', true); return; }
-    var b=$('#trGo'); b.disabled=true;
-    srv('transferCreate',{
-      fromName:$('#trFromName').value, fromPhone:$('#trFromPhone').value,
-      toName:$('#trToName').value, toPhone:$('#trToPhone').value,
-      item:$('#trItem').value, price:$('#trPrice').value,
-      imeis:p.list, note:$('#trNote').value,
-    }).then(function(r){
-      toast('Imefunguliwa: '+r.ref);
-      closeDrawer();
-      if(TAB==='transfers'){ trView(m, r.id); }
-    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
-  };
+    $all('[data-trv]',body).forEach(function(b){ b.onclick=function(){ trView(m, b.getAttribute('data-trv')); }; });
+  }).catch(function(e){ paneFailed(body,e); });
 }
 
 /** A signature pad, wired the same way hopeloan's onboarding wires one: pointer events cover
@@ -9203,9 +9329,13 @@ function trWirePad_(canvasId){
     clear:function(){ ctx.clearRect(0,0,canvas.width,canvas.height); dirty=false; },
   };
 }
-/** One party's block on the printable document: the pad and a Sign button while unsigned,
-    the stored image once it is. */
-function trSigBlock_(label, role, t, padId, nameId, goId){
+function trPadHtml_(padId){
+  return '<canvas id="'+padId+'" width="300" height="120" style="width:100%;max-width:300px;height:120px;border:1.5px solid var(--line);border-radius:9px;touch-action:none;background:#fff"></canvas>'
+    +'<div style="margin-top:4px"><button type="button" class="btn sm ghost" id="'+padId+'Clear">Futa / Clear</button></div>';
+}
+/** One party's block on the printable document: the stored image once signed, else what the
+    document is waiting for. The pads themselves live below the document, off the print. */
+function trSigBlock_(label, role, t){
   var signedBy = role==='sender' ? t.senderSignedBy : t.receiverSignedBy;
   var signedAt = role==='sender' ? t.senderSignedAt : t.receiverSignedAt;
   var img = role==='sender' ? t.senderSignature : t.receiverSignature;
@@ -9215,59 +9345,89 @@ function trSigBlock_(label, role, t, padId, nameId, goId){
       +'<img src="'+esc(img)+'" style="max-width:280px;max-height:110px;display:block">'
       +'</div><div class="mut" style="font-size:11px;margin-top:3px">'+esc(signedBy)+' · '+esc(clock(signedAt))+'</div></div>';
   }
-  if(BOOT.readOnly) return '<div class="fld"><label>'+esc(label)+'</label><div class="mut">Bado hakujasainiwa. / Not signed yet.</div></div>';
-  return '<div class="fld noprint"><label>'+esc(label)+'</label>'
-    +'<input id="'+nameId+'" class="inp" placeholder="Jina la anayesaini / Signer\'s name" style="margin-bottom:6px">'
-    +'<canvas id="'+padId+'" width="300" height="120" style="width:100%;max-width:300px;height:120px;border:1.5px solid var(--line);border-radius:9px;touch-action:none;background:#fff"></canvas>'
-    +'<div style="margin-top:4px"><button type="button" class="btn sm ghost" id="'+padId+'Clear">Futa / Clear</button> '
-    +'<button type="button" class="btn sm" id="'+goId+'">Saini / Sign</button></div></div>';
+  return '<div class="fld"><label>'+esc(label)+'</label><div class="mut">'
+    +(role==='receiver'?(t.status==='declined'?'Imekataliwa / Declined':'Inasubiri kukubaliwa / Awaiting acceptance')
+      :'Bado hakujasainiwa / Not signed yet')+'</div></div>';
 }
+/* THE DOCUMENT, and what the person looking at it may do with it: the sender signs their side
+   (or the desk, in the sender's name); the receiver accepts -- which IS their signature and
+   the moment the stock moves -- or declines. Everything below the document is off the print. */
 function trView(m, id){
   drawer('<div class="sk"></div>');
   srv('transferGet',{id:id}).then(function(d){
-    var t=d.transfer;
-    var brand='HOOPLOAN';
+    var t=d.transfer, mine=t.mine||{}, canW=!BOOT.readOnly;
+    var waiting=t.status==='sent';
     var html='<div class="printDoc">'
-      +'<h2 style="margin:0 0 2px">'+esc(brand)+'</h2>'
+      +'<h2 style="margin:0 0 2px">HOOPLOAN</h2>'
       +'<div class="mut" style="margin-bottom:10px">Hati ya uhamisho wa stoo / Stock transfer document</div>'
       +'<div class="row" style="gap:24px;flex-wrap:wrap;margin-bottom:10px">'
-      +'<div><b>Namba / Ref:</b> '+esc(t.ref)+'<br><b>Tarehe / Date:</b> '+esc(clock(t.at))+'<br><b>Iliyofunguliwa na / Opened by:</b> '+esc(t.createdBy)+'</div>'
-      +'<div><b>Kutoka / From:</b> '+esc(t.fromName)+(t.fromPhone?' · '+esc(t.fromPhone):'')+'<br>'
-      +'<b>Kwenda / To:</b> '+esc(t.toName)+(t.toPhone?' · '+esc(t.toPhone):'')+'</div>'
-      +'</div>'
+      +'<div><b>Namba / Ref:</b> '+esc(t.ref)+'<br><b>Tarehe / Date:</b> '+esc(clock(t.at))
+      +'<br><b>Iliyofunguliwa na / Opened by:</b> '+esc(t.createdBy)+'<br><b>Hali / Status:</b> '+trStatusChip(t)+'</div>'
+      +'<div><b>Kutoka / From:</b> '+esc(t.fromName)+(t.fromRole?' ('+esc(t.fromRole)+')':'')+(t.fromPhone?' · '+esc(t.fromPhone):'')+'<br>'
+      +'<b>Kwenda / To:</b> '+esc(t.toName)+(t.toRole?' ('+esc(t.toRole)+')':'')+(t.toPhone?' · '+esc(t.toPhone):'')
+      +(t.status==='accepted'?'<br><b>Imekubaliwa / Accepted:</b> '+esc(clock(t.acceptedAt))+(t.moved!=null?' · simu '+money(t.moved)+' zimehama / moved':''):'')
+      +(t.status==='declined'?'<br><b>Imekataliwa / Declined:</b> '+esc(clock(t.declinedAt))+' — '+esc(t.declineReason||''):'')
+      +'</div></div>'
       +(t.note?'<div class="mut" style="margin-bottom:10px">'+esc(t.note)+'</div>':'')
-      +'<div class="scroll"><table><thead><tr><th>IMEI</th><th>MODELI</th><th class="r">IDADI</th><th class="r">BEI</th><th class="r">JUMLA</th></tr></thead><tbody>'
+      +'<div class="scroll"><table><thead><tr><th>IMEI</th><th>MODELI</th><th>ILIKUWA KWA</th><th>WAPI</th>'
+      +'<th class="r">IDADI</th><th class="r">BEI</th><th class="r">JUMLA</th></tr></thead><tbody>'
       +t.items.map(function(x){
         return '<tr><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(x.imei)+'</td>'
-          +'<td>'+esc(x.item||'—')+'</td><td class="r">'+money(x.qty)+'</td>'
-          +'<td class="r">'+money(x.price)+'</td><td class="r">'+money(x.subtotal)+'</td></tr>';
-      }).join('')+'</tbody><tfoot><tr class="totrow"><td colspan="2"><b>Jumla / Total</b></td>'
+          +'<td>'+esc(x.item||'—')+'</td><td>'+esc(x.prevHolder||'—')+'</td><td>'+trSrc(x.source)+'</td>'
+          +'<td class="r">'+money(x.qty)+'</td><td class="r">'+money(x.price)+'</td><td class="r">'+money(x.subtotal)+'</td></tr>';
+      }).join('')
+      +'</tbody><tfoot><tr class="totrow"><td colspan="4"><b>Jumla / Total</b></td>'
       +'<td class="r"><b>'+money(t.totalQty)+'</b></td><td></td><td class="r"><b>'+money(t.totalAmount)+'</b></td></tr></tfoot></table></div>'
       +'<div class="row" style="gap:20px;flex-wrap:wrap;margin-top:16px;align-items:flex-start">'
-      +trSigBlock_('Sahihi ya anayetoa / Sender signature','sender',t,'trPadS','trNameS','trGoS')
-      +trSigBlock_('Sahihi ya anayepokea / Receiver signature','receiver',t,'trPadR','trNameR','trGoR')
-      +'</div>'
-      +'</div>'
-      +'<div class="noprint" style="margin-top:16px"><button class="btn w" id="trPrint">🖨 Chapisha / Print</button></div>';
+      +trSigBlock_('Sahihi ya anayetoa / Sender signature','sender',t)
+      +trSigBlock_('Sahihi ya anayepokea / Receiver signature','receiver',t)
+      +'</div></div>';
+    var canSignS = canW && !t.senderSignedBy && t.status!=='declined' && (mine.sender||mine.desk);
+    if(canSignS) html+='<div class="noprint card" style="margin-top:12px;padding:12px">'
+      +'<b>'+(mine.sender?'Saini upande wako / Sign your side':'Sahihi ya anayetoa / Sender\'s signature')+'</b>'
+      +(mine.sender?'':'<div class="fld"><label>Jina la anayesaini / Signer</label><input id="trNameS" class="inp" value="'+esc(t.fromName)+'"></div>')
+      +trPadHtml_('trPadS')+'<div style="margin-top:6px"><button class="btn sm" id="trGoS">Saini / Sign</button></div></div>';
+    var canAct = canW && waiting && !t.receiverSignedBy && (mine.receiver||mine.desk);
+    if(canAct) html+='<div class="noprint card" style="margin-top:12px;padding:12px"><b>Kubali au kataa / Accept or decline</b>'
+      +'<div class="mut" style="font-size:11.5px;margin:4px 0 8px">Kukubali = kusaini, na simu zote hapa zinakuwa mkononi mwa '
+      +esc(t.toName)+' kwenye kila orodha. / Accepting signs, and every handset here becomes '+esc(t.toName)+'\'s on every list.</div>'
+      +(mine.receiver?'':'<div class="fld"><label>Anayesaini kwa niaba ya '+esc(t.toName)+' / Signing as</label><input id="trNameR" class="inp" value="'+esc(t.toName)+'"></div>')
+      +trPadHtml_('trPadR')
+      +'<div style="margin-top:6px"><button class="btn sm" id="trAccept">✔ Kubali na saini / Accept &amp; sign</button> '
+      +'<button class="btn sm ghost" id="trDecline">✖ Kataa / Decline</button></div></div>';
+    html+='<div class="noprint" style="margin-top:12px"><button class="btn w" id="trPrint">🖨 Chapisha / Print</button></div>';
     drawer('<h3>Uhamisho / Transfer '+esc(t.ref)+'</h3>'+html);
-    var padS=trWirePad_('trPadS'), padR=trWirePad_('trPadR');
-    var cs=$('#trPadSClear'); if(cs) cs.onclick=function(){ padS.clear(); };
-    var cr=$('#trPadRClear'); if(cr) cr.onclick=function(){ padR.clear(); };
-    var wireSign=function(goId, nameId, pad, role){
-      var b=$('#'+goId); if(!b) return;
-      b.onclick=function(){
-        var name=$('#'+nameId).value.trim();
-        if(!name){ toast('Andika jina la anayesaini. / Enter the signer\'s name.', true); return; }
-        if(!pad||!pad.isDirty()){ toast('Weka sahihi kwanza. / Draw a signature first.', true); return; }
-        b.disabled=true;
-        srv('transferSign',{id:id, role:role, signedBy:name, signature:pad.dataUrl()}).then(function(){
-          toast('Imesainiwa / Signed');
-          trView(m, id);
-        }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
-      };
+    var padS=canSignS?trWirePad_('trPadS'):null, padR=canAct?trWirePad_('trPadR'):null;
+    var cs=$('#trPadSClear'); if(cs&&padS) cs.onclick=function(){ padS.clear(); };
+    var cr=$('#trPadRClear'); if(cr&&padR) cr.onclick=function(){ padR.clear(); };
+    var refresh=function(){ trView(m, id); if(TAB==='transfers') drawTransfers(m); };
+    var gs=$('#trGoS');
+    if(gs) gs.onclick=function(){
+      if(!padS||!padS.isDirty()){ toast('Weka sahihi kwanza. / Draw a signature first.', true); return; }
+      var nm=$('#trNameS'); gs.disabled=true;
+      srv('transferSign',{id:id, role:'sender', signedBy:nm?nm.value.trim():'', signature:padS.dataUrl()})
+        .then(function(){ toast('Imesainiwa / Signed'); refresh(); })
+        .catch(function(e){ gs.disabled=false; toast(safeErr(e), true); });
     };
-    wireSign('trGoS','trNameS',padS,'sender');
-    wireSign('trGoR','trNameR',padR,'receiver');
+    var ga=$('#trAccept');
+    if(ga) ga.onclick=function(){
+      if(!padR||!padR.isDirty()){ toast('Weka sahihi kwanza. / Draw a signature first.', true); return; }
+      var nm=$('#trNameR'); ga.disabled=true;
+      srv('transferAccept',{id:id, signedBy:nm?nm.value.trim():'', signature:padR.dataUrl()}).then(function(r){
+        toast('Imekubaliwa: simu '+money(r.moved)+' zimehama'+(r.unknown?' · '+money(r.unknown)+' hazikujulikana kwenye mfumo':'')
+          +' / Accepted: '+money(r.moved)+' moved');
+        refresh();
+      }).catch(function(e){ ga.disabled=false; toast(safeErr(e), true); });
+    };
+    var gd=$('#trDecline');
+    if(gd) gd.onclick=function(){
+      var why=prompt('Sababu ya kukataa / Reason for declining:');
+      if(why==null) return;
+      if(!why.trim()){ toast('Andika sababu. / A reason is required.', true); return; }
+      gd.disabled=true;
+      srv('transferDecline',{id:id, reason:why}).then(function(){ toast('Imekataliwa / Declined'); refresh(); })
+        .catch(function(e){ gd.disabled=false; toast(safeErr(e), true); });
+    };
     var pr=$('#trPrint'); if(pr) pr.onclick=function(){ window.print(); };
   }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
 }

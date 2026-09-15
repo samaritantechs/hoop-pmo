@@ -175,6 +175,14 @@ const AUDIT_DIFF = {
      names deviceEnrol's absence: a fresh row has no "before" to diff against. */
   transferSign:    { table: 'transfers', key: a => ({ id: a.id }),
                      fields: ['sender_signed_by', 'sender_signed_at', 'receiver_signed_by', 'receiver_signed_at'] },
+  /* Accepting is the write that moves stock, so its diff carries the status and how many
+     handsets changed hands; the per-handset trail is in device_events. Declining carries the
+     reason -- the one free-text field admitted here, because "why was this refused" is
+     exactly what the log gets asked. */
+  transferAccept:  { table: 'transfers', key: a => ({ id: a.id }),
+                     fields: ['status', 'receiver_signed_by', 'receiver_signed_at', 'accepted_by', 'accepted_at', 'moved'] },
+  transferDecline: { table: 'transfers', key: a => ({ id: a.id }),
+                     fields: ['status', 'declined_by', 'declined_at', 'decline_reason'] },
 };
 const K_ = s => String(s == null ? '' : s).trim().toUpperCase();
 

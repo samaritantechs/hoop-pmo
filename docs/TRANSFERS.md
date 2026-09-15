@@ -1,59 +1,94 @@
-# Transfers — the store keeper's hand-off, signed on screen
+# Transfers — stock changing hands inside HOOP, signed on screen
 
 > *"store keeper needs the transfer doc to be blue ink signed online on a transfers navigation
 > by sender and receiver so that we could export and print. as the signing feature we
 > implemented in hopeloan customer onboarding just on screen signature not biometrics."*
 >
-> *"it could be between super agent/store and rsm, rsm and rsm, agent and agent, agent and
-> super agent — all possibilities between these people, but an agent can't transfer to another
-> rsm's agent unless [it goes] through rsm or superagent."*
+> *"RSM requests stock from sipho. 1. Sipho / Store transfers them to RSM — IMEI, To and Fro
+> names, Tarehe, Qty, Model. 2. RSM to Agents — supplying. 3. Agent to RSM (the returns for
+> re-allocations). 4. RSM / Agent to Sipho / Store. 5. RSM to RSM (Sipho does it on system, they
+> log in to sign)."*
+>
+> *"Transfers — Window 3: Stock (each can see stock in their possession), Send (can select imei
+> no or input list of imei nos and search system user to send to), Receive (find received and
+> decline or accept to overwrite stock ownership). So RSM only see stock in old and new that's
+> theirs already only, same for agents, Sipho sees all. So at access codes I have roles RSM
+> STORE and AGENT."*
 
-## What this is
+## Three windows, one ledger
 
-The paper slip a store keeper already keeps by hand whenever stock physically moves — from the
-store to an RSM, RSM to agent, agent to agent, agent back up — reproduced on screen: one shared
-item name and unit price for the whole batch, a pasted list of IMEIs, and two signatures captured
-with a finger or a mouse rather than on paper. See `db/migrations/RUN-ME-2026-09-16-transfers.sql`
-for the schema.
+| window | who sees what | what it does |
+|---|---|---|
+| **Stoo / Stock** | what is in *my* hands — the register's handsets and the old-stock list's, unsold. The desk: everybody's, holder beside each | tick serials, **Send selected** |
+| **Tuma / Send** | — | who receives (a **system user**, found by name), the serials (ticked or pasted), one model and unit price for the batch, a note, **my signature** |
+| **Pokea / Receive** | waiting for me · sent by me · settled | open a waiting document, **sign to accept** — or **decline** with a reason |
+| **Nyaraka / Documents** | mine; the desk: every document | the printable register, filtered by status |
 
-A transfer is opened once (`transferCreate`), then signed by the sender and the receiver, in
-either order, each **once** (`transferSign`). There is no re-sign endpoint — a mis-signed transfer
-is corrected with a fresh transfer, the same discipline a mis-posted payment gets everywhere else
-in this system, not by editing a document a printed copy may already be holding a different
-version of.
+A transfer is opened by the sender — or by the store desk **on somebody's behalf**, which is
+flow 5 word for word — and sits as `sent` until the receiver logs in and either **accepts** it,
+signing on their own screen, or **declines** it in words. Acceptance is the one moment stock
+changes hands: the holder on every handset in the document is overwritten to the receiver —
+`devices.holder` for a locked phone, `old_stock.agent` (and the RSM beside it) for one never
+enrolled. Nothing moves on a decline, and nothing moves while the document waits. Every handset
+on the register also gets a `device_events` line (`transfer`), the same trail a lock or a shift
+leaves.
 
 | status | meaning |
 |---|---|
-| `pending` | opened, neither side has signed |
-| `partial` | one side has signed |
-| `complete` | both sides have signed |
+| `sent` | waiting for the receiver |
+| `accepted` | receiver signed; every holder overwritten; `moved` says how many |
+| `declined` | receiver refused, with `decline_reason`; nothing moved |
 
-## The hierarchy rule
+## Who can send what
 
-Nobody types a role on the form — sender and receiver are typed as plain names, exactly like
-every other free-text field in this system, and the rule below is resolved off the same staff
-register (`hoop_agents`) and the same manager-derivation the sales-targets roll-up already uses
-(`managerIndex`, see `RUN-ME-2026-09-09-targets.sql`).
+- **You send what is in your hands.** A sender who is not the desk can only send stock in their
+  own possession — the same list their Stock window shows. Anything else is refused by IMEI.
+- **The desk sends for anybody.** STORE (and ADMIN) may name who is handing over, send serials
+  the system has never heard of (they go on the document as *unknown*, with nothing to
+  overwrite), and sign a slot in the party's name at the counter.
+- **The receiver must be a system user** — an access code carrying the RSM, AGENT, STORE or
+  ADMIN role — because it is their login that accepts. A name without a code is refused with
+  those words: *add them at Access codes* is the fix.
+- **The hierarchy rule stands.** Every pairing is a normal hand-off — store ↔ RSM, RSM ↔ RSM,
+  agent ↔ agent under the same RSM, agent ↔ super agent — *except* two field agents who report
+  to two different RSMs, whoever is at the keyboard. Resolved off the staff register and the
+  same manager-derivation the sales-targets roll-up uses (`managerIndex`).
 
-Every pairing is a normal hand-off **except one**: two field agents (`Field_Officer`/
-`Team_Leader`) who report to two *different* RSMs, transferring stock straight to each other and
-skipping the chain of custody both RSMs are meant to see. That one pairing is refused with a
-clear reason; every other combination — store ↔ RSM, RSM ↔ RSM even across regions, agent ↔ agent
-under the *same* RSM, agent ↔ the super agent, or either side being a name that is not in the
-staff register at all (the store desk, or anyone the register does not know) — goes through
-unrestricted.
+## Signatures
 
-An agent's RSM is whatever the sales-targets roll-up would say it is: the register's own
-`manager` column if somebody set one, else the `Regional_Manager` standing in the same branch.
-"SUPER AGENT" is not a separate role in the schema — it is the specific name the owner uses for
-the top-level distribution point, registered as an ordinary `Regional_Manager`-tier row, which is
-exactly why it is never on the restricted side of the rule.
+The sender signs at Send, or later from their own login (the desk may sign in the sender's
+name at the counter). **The receiver only ever signs by accepting** — that is the write that
+moves the stock, so there is no separate receiver-sign that could leave a signed document with
+stock still in the wrong hands. A signature is written once; a mis-signed transfer is corrected
+with a fresh one.
 
-## What is deliberately not here
+## The stock fence — who sees which stock
 
-- **No new UI for picking a role or an RSM.** The rule is enforced server-side against the
-  existing register; the store keeper still just types two names, the way every other pane in
-  this system already asks for a name.
-- **No signature re-do.** See above — a fresh transfer, not an edit.
-- **No link to `devices` or `hoop_aged_stock`.** A transfer can cover stock that was never
-  locked, so `transfer_items.imei` is plain text, the same tolerance `old_stock` has always had.
+The role on the **access code** decides, by name — the same honest weakness the credit roster's
+suspension matching already lives with: an access code and a stock row share nothing but a
+person's name, so the name (token-sorted, case-folded) is what they are matched on. A code named
+differently from the register sees an **empty** pane, never somebody else's — the fence fails
+closed, and the pane says whose name it looked for.
+
+| role on the code | OLD STOCK / NEW STOCK panes | Transfers → Stock (what you can *send*) |
+|---|---|---|
+| **AGENT** | own hands only | own hands only |
+| **RSM** | their region: their own hands **and** the agents who report to them (by the register's `manager`, else the branch) — and, on NEW STOCK, handsets their region sold | own hands only — an agent's stock comes back up as a return first |
+| **STORE**, **ADMIN**, everyone else | everything | everything |
+
+The drawer, the round export and the pivots on those panes are cut by the same fence, so a
+count never opens a longer list.
+
+## Not here, on purpose
+
+- **Not the other company.** A handset moving HOOP ↔ HOPE is *Shift*, on the locking desk, and
+  stays there: that is a device changing owner between two systems, not stock changing hands
+  between two people in this one.
+- **No re-sign, no edit after signing.** A fresh transfer, not an edit.
+- **No link to `devices` or `hoop_aged_stock` from the items.** A transfer can carry stock that was
+  never locked, so `transfer_items.imei` is plain text; each line remembers where the serial was
+  found (`source`) and whose hands it was in (`prev_holder`).
+
+Schema: `db/migrations/RUN-ME-2026-09-16-transfers.sql` (the document) then
+`RUN-ME-2026-09-17-transfers-flow.sql` (status, roles, accept/decline). Until the second runs
+the pane still opens and prints; Send and Receive say which file to run.
