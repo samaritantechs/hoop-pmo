@@ -220,8 +220,18 @@ APK, then `dpm set-device-owner com.samaritantechs.hooploanlock/.LockAdmin`, the
 com.samaritantechs.hooploanlock/.EnrolReceiver -e server https://hoop-pmo.vercel.app -e token`
 followed by that phone's token. Read it, don't assemble it.
 
-Download the APK from **<https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk>** first — it lands in
-Downloads, which is where the command looks.
+There is nothing to download first: the line begins with `curl` (built into Windows since
+10 1803) fetching the **current** `/HOOPLOAN-Lock.apk` into `%TEMP%`, and installs that.
+
+> **Why it no longer looks in Downloads.** It used to install
+> `%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk` — a fixed name. The first download kept that
+> name and every later one was saved as `HOOPLOAN-Lock (1).apk`, `(2)`…, so the command went on
+> installing the *oldest* build on the laptop. On a box-fresh phone that looked fine (an old
+> build went on, and self-updated later). On a handset back from the field it was refused —
+> `INSTALL_FAILED_VERSION_DOWNGRADE: Update version code 20 is older than current 24` — and
+> the `&&` stopped the line before `set-device-owner` and the enrol ever ran, which read at
+> the bench as "re-enrolling is broken". Telling people to download it fresh each time did not
+> survive a Downloads folder that keeps the old name for the old file.
 
 > **Why `&&` once and `&` once, and not three `&&`.**
 >
