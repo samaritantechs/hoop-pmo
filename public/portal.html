@@ -4011,7 +4011,10 @@ function srvOther_(server,code,fn,args){
 function devShiftForm(m){
   var ticked=devVisibleTicks_().filter(function(c){ return c.checked; }).map(function(c){ return c.value; });
   var savedCode=''; try{ savedCode=localStorage.getItem('hpShiftCode')||''; }catch(e){}
-  var quiet=ticked.length>0 && !!savedCode;
+  /* Quiet no longer waits for a saved code: with DEVICE_SHIFT_SECRET on both servers the
+     batch is fetched server-to-server and no code is ever needed. The code path is the
+     fallback the server asks for by name ("need-batch") when that is not configured. */
+  var quiet=ticked.length>0;
   var fields='<div class="fld"><label>IMEI (moja kwa mstari / one per line)</label>'
     +'<textarea id="dvShiftImeis" rows="6" style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'
     +esc(ticked.join('\n'))+'</textarea></div>'
@@ -4091,15 +4094,32 @@ function devShiftForm(m){
     /* MANUAL WINS IF FILLED IN -- the folded box is a deliberate override, not a fallback
        tried after the automatic path fails silently. */
     if(manualBatch){ finish(manualBatch); return; }
-    if(!code){ toast('Weka msimbo wako wa ofisi nyingine, au bandika batch kwa mkono. / Enter your code for the other office, or paste a batch by hand.', true); return; }
-    /* THE AUTO-FETCH: HOPE's own deviceEnrol for these same IMEIs, with the operator's HOPE
-       code -- the batch that comes back is identical to one copied over by eye. Nothing is
-       written on THIS register until HOPE has answered. */
+    /* THE CODE-ONCE PATH, kept as the fallback: HOPE's own deviceEnrol for these IMEIs,
+       with the operator's HOPE code. Only reached when the server says need-batch. */
+    var byCode=function(){
+      if(!code){
+        var fld=$('#dvShiftCodeOk'); if(fld){ var det=fld.closest('details'); if(det) det.open=true; showCodeField(); }
+        toast('Weka msimbo wako wa ofisi nyingine (mara moja), au bandika batch kwa mkono. / Enter your code for the other office (once), or paste a batch by hand.', true); return;
+      }
+      devBusy_(true);
+      srvOther_(server,code,'deviceEnrol',{imeis:p.list}).then(function(r){
+        if(!r||!r.batch){ devBusy_(false); toast('Ofisi nyingine haikurudisha batch. / The other office did not hand back a batch.', true); return; }
+        return finish(r.batch);
+      }).catch(function(e){ devBusy_(false); toast(safeErr(e), true); });
+    };
+    /* FIRST, NO BATCH AT ALL: the server fetches one from HOPE itself when DEVICE_SHIFT_SECRET
+       is set on both sides -- "hope><hoop needs no verification". */
     devBusy_(true);
-    srvOther_(server,code,'deviceEnrol',{imeis:p.list}).then(function(r){
-      if(!r||!r.batch){ devBusy_(false); toast('Ofisi nyingine haikurudisha batch. / The other office did not hand back a batch.', true); return; }
-      return finish(r.batch);
-    }).catch(function(e){ devBusy_(false); toast(safeErr(e), true); });
+    srv('deviceShift',{imeis:p.list,server:server}).then(function(r){
+      toast('Zimeagizwa kuhama: '+money(r.ordered)
+        +(r.alreadyReleased?' · '+money(r.alreadyReleased)+' tayari zimeachiwa':'')
+        +(r.unknown?' · '+money(r.unknown)+' hazipo kwenye register':''));
+      closeDrawer(); drawDevices(m);
+    }).catch(function(e){
+      devBusy_(false);
+      if(e && (e.code==='need-batch' || /need-batch/i.test(String(e.message||'')))){ byCode(); return; }
+      toast(safeErr(e), true);
+    });
   };
 }
 /* THE STATION'S SCRIPT. A token on its own is a string nobody can act on -- what the bench
