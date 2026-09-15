@@ -1854,3 +1854,77 @@ test('the state and reason a shift carries are trusted only in the safe directio
   assert.equal(row2.state, 'locked', 'this office\'s own lock stands');
   assert.equal(row2.state_reason, 'ofisi hii iliamua');
 });
+
+/* NO VERIFICATION, AND SEEN IN ONE PLACE ONLY -- see hope-pmo-v2's mirror of these.
+     "hope><hoop needs no verification" / "and should be seen in only hoop/hope" */
+test('deviceShift with no batch: no secret says need-batch; with the secret it asks the other office itself', async () => {
+  const d = fleet([{ imei: 'S10', state: 'enrolled', enrol_token: 'tokS10' }]);
+  const saved = process.env.DEVICE_SHIFT_SECRET;
+  delete process.env.DEVICE_SHIFT_SECRET;
+  await assert.rejects(() => _FNS.deviceShift(d, ADMIN, { imeis: 'S10', server: 'https://other.example' }),
+    x => x.status === 400 && x.code === 'need-batch');
+  process.env.DEVICE_SHIFT_SECRET = 'shared-secret-xyz';
+  const realFetch = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url, opts) => { calls.push({ url, body: JSON.parse(opts.body) });
+    return { ok: true, status: 200, json: async () => ({ ok: true, batch: 'f'.repeat(32) }) }; };
+  try {
+    const r = await _FNS.deviceShift(d, ADMIN, { imeis: 'S10', server: 'https://other.example/' });
+    assert.equal(r.ordered, 1);
+    assert.equal(calls[0].url, 'https://other.example/api/shift-batch');
+    assert.equal(calls[0].body.secret, 'shared-secret-xyz');
+    assert.deepEqual(calls[0].body.imeis, ['S10']);
+    const beat = await deviceApi(d, 'dev_beat', [{ token: 'tokS10' }], NOW);
+    assert.deepEqual(beat.shift, { server: 'https://other.example', batch: 'f'.repeat(32) });
+    globalThis.fetch = async () => ({ ok: false, status: 403, json: async () => ({ ok: false, error: 'Shift secret refused.' }) });
+    const d2 = fleet([{ imei: 'S11', state: 'enrolled', enrol_token: 'tokS11' }]);
+    await assert.rejects(() => _FNS.deviceShift(d2, ADMIN, { imeis: 'S11', server: 'https://other.example' }),
+      x => x.status === 400 && /refused/i.test(x.message));
+    assert.ok(!d2._dump('devices').find(r => r.imei === 'S11').shift_server, 'no order written');
+  } finally {
+    globalThis.fetch = realFetch;
+    if (saved === undefined) delete process.env.DEVICE_SHIFT_SECRET; else process.env.DEVICE_SHIFT_SECRET = saved;
+  }
+});
+
+test('the receiving side mints a batch only for the shared secret', async () => {
+  const { shiftBatch } = await import('../api/shift-batch.js');
+  const saved = process.env.DEVICE_SHIFT_SECRET;
+  try {
+    delete process.env.DEVICE_SHIFT_SECRET;
+    await assert.rejects(() => shiftBatch(fleet([]), { secret: 'x', imeis: ['S20'] }), x => x.status === 403);
+    process.env.DEVICE_SHIFT_SECRET = 'shared-secret-xyz';
+    await assert.rejects(() => shiftBatch(fleet([]), { secret: 'wrong-length', imeis: ['S20'] }), x => x.status === 403);
+    await assert.rejects(() => shiftBatch(fleet([]), { secret: 'shared-secret-xyx', imeis: ['S20'] }), x => x.status === 403);
+    const d = fleet([]);
+    const r = await shiftBatch(d, { secret: 'shared-secret-xyz', imeis: ['S20'], from: 'HOPE' });
+    assert.match(r.batch, /^[0-9a-f-]{32,36}$/);
+    const row = d._dump('devices').find(x => x.imei === 'S20');
+    assert.ok(row, 'enrolled here, ready to be claimed');
+    assert.match(String(row.enrolled_by || ''), /SHIFT:HOPE/);
+  } finally {
+    if (saved === undefined) delete process.env.DEVICE_SHIFT_SECRET; else process.env.DEVICE_SHIFT_SECRET = saved;
+  }
+});
+
+test('a phone that has shifted away is off the panes and counts, but a search still finds it', async () => {
+  const d = fleet([
+    { imei: '303030303030330', state: 'released', state_by: 'shift', enrol_token: 'tokA' },
+    { imei: '303030303030331', state: 'enrolled', enrol_token: 'tokB' },
+  ]);
+  const list = await _FNS.deviceList(d, ADMIN, {});
+  assert.deepEqual(list.rows.map(r => r.imei), ['303030303030331']);
+  assert.equal(list.counts.released, 0);
+  const rel = await _FNS.deviceList(d, ADMIN, { state: 'released' });
+  assert.equal(rel.rows.length, 0, 'not even on the released filter -- it is the other office\'s now');
+  const found = await _FNS.deviceList(d, ADMIN, { q: '303030303030330' });
+  assert.equal(found.rows.length, 1);
+});
+
+test('"[object PointerEvent]" is not two phones: a token with brackets, quotes or spaces is refused', async () => {
+  const d = fleet([]);
+  await assert.rejects(() => _FNS.deviceEnrol(d, ADMIN, { imeis: '[object PointerEvent]' }),
+    x => x.status === 400 && /Not an IMEI/.test(x.message));
+  await assert.rejects(() => _FNS.deviceShift(d, ADMIN, { imeis: ['[object', 'PointerEvent]'], server: 'https://x.example', batch: 'a'.repeat(32) }),
+    x => x.status === 400 && /Not an IMEI/.test(x.message));
+  assert.equal(d._dump('devices').length, 0, 'nothing reached the table');
+});

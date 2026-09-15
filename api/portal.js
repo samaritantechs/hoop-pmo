@@ -210,6 +210,58 @@ const EDITABLE_SETTINGS = [
 
    `bad()` is what a validation throw should have been all along: 400, the client's problem,
    with the same bilingual message the screen already shows. */
+/* IMEIs AS PEOPLE PASTE THEM, AND NOTHING THAT IS NOT ONE. Split on whitespace, commas and
+   semicolons, deduplicated -- and DIGITS ONLY. This register once enrolled "[object" and
+   "PointerEvent]" as two phones, because a client bug sent a stringified event as the list
+   and nothing here asked whether that was an IMEI. A row that cannot be a phone must never
+   reach the table. */
+function imeisOnly_(raw) {
+  const parts = Array.isArray(raw) ? raw : String(raw || '').split(/[\s,;]+/);
+  const bad = [];
+  const list = [...new Set(parts.map(x => String(x || '').trim()).filter(Boolean).filter(x => {
+    /* Letters and digits only. A real IMEI is fifteen digits; the looser rule is what lets
+       the test fixtures' short names through, and it still refuses anything carrying
+       brackets, quotes or spaces -- which is exactly what a stringified object looks like. */
+    if (/^[A-Za-z0-9]+$/.test(x)) return true;
+    bad.push(x); return false;
+  }))];
+  if (bad.length) {
+    const e = new Error('Si IMEI: ' + bad.slice(0, 3).join(', ') + (bad.length > 3 ? ' …' : '')
+      + ' / Not an IMEI (letters and digits only): ' + bad.slice(0, 3).join(', '));
+    e.status = 400; throw e;
+  }
+  return list;
+}
+
+/* THE OTHER OFFICE, ASKED SERVER-TO-SERVER. One POST to their /api/device with the shared
+   secret; what comes back is exactly what a person would have copied out of their Sajili
+   simu. Every failure names itself: not configured here (the client's cue to fall back to
+   the code-once path), refused there (secrets differ), or unreachable. Never silent. */
+async function shiftBatchFromPartner_(server, imeis) {
+  const secret = String(process.env.DEVICE_SHIFT_SECRET || '').trim();
+  if (!secret) {
+    const e = new Error('need-batch: DEVICE_SHIFT_SECRET haijawekwa kwenye seva hii, kwa hiyo Hamisha '
+      + 'inahitaji msimbo wako wa ofisi nyingine au batch. / need-batch: DEVICE_SHIFT_SECRET is not '
+      + 'set on this deployment, so Shift needs your code for the other office, or a pasted batch.');
+    e.status = 400; e.code = 'need-batch'; throw e;
+  }
+  let res, body;
+  try {
+    res = await fetch(server + '/api/shift-batch', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret, imeis, from: 'HOOP' }) });
+    body = await res.json().catch(() => ({}));
+  } catch (e) {
+    bad('Ofisi nyingine haipatikani: ' + server + ' / The other office could not be reached: '
+      + String((e && e.message) || e));
+  }
+  if (!res.ok || body.ok === false || !body.batch) {
+    bad('Ofisi nyingine imekataa kutoa batch / The other office refused to hand back a batch: '
+      + String(body.error || ('HTTP ' + res.status)));
+  }
+  return String(body.batch).trim();
+}
+
 function bad(msg) {
   const e = new Error(msg); e.status = 400; throw e;
 }
@@ -3788,6 +3840,11 @@ const FNS = {
          If the pane happened to be filtered to "tayari" and the handset is locked, an
          obedient search would report nothing found about a phone the operator can see. */
       if (find) return qy.ilike('imei', '%' + find + '%');
+      /* A PHONE THAT HAS SHIFTED AWAY IS THE OTHER OFFICE'S NOW -- "should be seen in only
+         hoop/hope". Its row stays (token and trail survive a shift back, see device-core.js
+         shifted()) but it is off both panes and every count. A search by IMEI still finds
+         it. `state_by.is.null` because NULL <> 'shift' is not true in SQL, and most rows
+         have no state_by at all. */
       if (['enrolled', 'locked', 'released', 'lost'].includes(want)) return qy.eq('state', want);
       return qy;
     };
@@ -3820,6 +3877,12 @@ const FNS = {
           counts: { enrolled: 0, locked: 0, lockPending: 0, released: 0, lost: 0, neverSeen: 0, stale: 0 } };
       } else throw e;
     }
+    /* A PHONE THAT HAS SHIFTED AWAY IS THE OTHER OFFICE'S NOW -- "should be seen in only
+       hoop/hope". Its row stays (token and trail survive a shift back, see device-core.js
+       shifted()) but it is off both panes and every count. A search by IMEI still finds it,
+       because "where did that phone go" deserves an answer. Filtered here rather than in the
+       query so the pre-migration path (no state_by column at all) is untouched. */
+    if (!find) rows = rows.filter(r => !(String(r.state) === 'released' && String(r.state_by || '') === 'shift'));
     const now = Date.now();
     const HOURS = 36 * 3600 * 1000;      // silent longer than this and it is worth asking why
     const out = rows.map(r => {
@@ -3962,8 +4025,7 @@ const FNS = {
        so enrolling belongs with locking. */
     requireWrite(user); requireNav(user, 'devlock');
     const a = args || {};
-    const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : String(a.imeis || '').split(/[\s,;]+/))
-      .map(x => String(x || '').trim()).filter(Boolean))];
+    const list = imeisOnly_(a.imeis);
     if (!list.length) bad('Weka angalau IMEI moja. / At least one IMEI is required.');
     if (list.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). / Too many at once — 500 max.');
 
@@ -4176,8 +4238,7 @@ const FNS = {
   async deviceShift(db, user, args) {
     requireWrite(user); requireNav(user, 'devlock');
     const a = args || {};
-    const list = [...new Set((Array.isArray(a.imeis) ? a.imeis : String(a.imeis || '').split(/[\s,;]+/))
-      .map(x => String(x || '').trim()).filter(Boolean))];
+    const list = imeisOnly_(a.imeis);
     if (!list.length) bad('Weka angalau IMEI moja. / At least one IMEI is required.');
     if (list.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). / Too many at once — 500 max.');
 
@@ -4186,7 +4247,12 @@ const FNS = {
       bad('Anwani ya ofisi nyingine lazima ianze na https:// . '
         + '/ The other office\'s address must start with https:// .');
     }
-    const batch = String(a.batch || '').trim();
+    let batch = String(a.batch || '').trim();
+    /* NO BATCH PASTED: ASK THE OTHER OFFICE OURSELVES -- "hope><hoop needs no verification".
+       With DEVICE_SHIFT_SECRET set to the SAME value on both deployments, HOPE's server hands
+       back the batch its own Sajili simu would have minted, and nobody types a code. Not set:
+       the client is told "need-batch" by name and falls back to the code-once path. */
+    if (!batch) batch = await shiftBatchFromPartner_(server, list);
     if (!/^[0-9a-f]{32}$/i.test(batch)) {
       bad('Batch si sahihi — nakili moja kwa moja kutoka \'Sajili simu\' ya ofisi nyingine. '
         + '/ That batch does not look right — copy it straight from the other office\'s own '
