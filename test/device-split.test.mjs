@@ -285,16 +285,20 @@ test('a known IMEI keeps its token: no server path mints a second one', async ()
 test('the Token drawer says why there is no new-token button', () => {
   const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
   const drawerSrc = html.slice(html.indexOf('function devToken(imei){'));
-  const card = drawerSrc.slice(0, 6000).replace(/'\s*\+\s*'/g, '');
+  // Comments out first: the note beside the fix is allowed to say what the old wording was.
+  const card = drawerSrc.slice(0, 6000).replace(/\/\*[\s\S]*?\*\//g, '').replace(/'\s*\+\s*'/g, '');
   // Said where somebody would look for the button, not only in a doc nobody opens at a bench.
   assert.match(card, /never changed for a handset that is in the field/i);
   assert.match(card, /self-locks after its grace week/i);
   assert.match(card, /Token haibadilishwi kwa simu iliyoko shambani/);
-  /* AND THE APK IS FETCHED FRESH. A field handset has self-updated, so an older file on the
-     laptop is refused as a downgrade -- and the station's one-liner joins with &&, so the
-     enrol broadcast then never runs. That reads at the bench as "re-enrolling is broken". */
-  assert.match(card, /Download it fresh every time/i);
+  /* AND THE APK IS FETCHED FRESH -- BY THE LINE ITSELF. A field handset has self-updated, so
+     an older file on the laptop is refused as a downgrade, and the station's one-liner joins
+     with &&, so the enrol broadcast then never runs. "Download it fresh every time" was the
+     first answer; it did not survive a Downloads folder that keeps the old name for the old
+     file (v20 against v24, 2026-09-15), so the command now fetches the build it installs. */
+  assert.match(card, /The command fetches the current APK itself/i);
   assert.match(card, /refused as a downgrade/i);
+  assert.ok(!/Download it fresh/i.test(card), 'the operator is no longer asked to download anything');
 });
 
 /* ============================================================================================

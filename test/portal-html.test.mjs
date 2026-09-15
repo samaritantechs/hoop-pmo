@@ -418,9 +418,17 @@ test('the provisioning command the portal hands out actually runs on a Windows b
   const enrol = body.indexOf('.ENROL');
   assert.ok(owner > 0 && enrol > owner, 'set-device-owner must come before the enrol broadcast');
 
-  // An absolute path, because "adb install HOOPLOAN-Lock.apk" only works if the operator
-  // happens to be standing in the right folder -- and reports "failed to stat" when not.
-  assert.match(body, /%USERPROFILE%/, 'the APK path must not depend on the current directory');
+  /* THE APK IS FETCHED BY THE LINE ITSELF. "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk" was
+     a fixed name: the first download kept it and every later one became "(1)", "(2)", so
+     the command went on installing the oldest build on the laptop -- refused as a downgrade
+     by any handset that had self-updated (v20 against v24, 2026-09-15), and the && then
+     stopped set-device-owner and the enrol too. An absolute path is still required: cmd
+     opens in C:\Users\<you>, not where any file is. */
+  assert.ok(body.includes("curl -fsSL -o \"%TEMP%\\\\HOOPLOAN-Lock.apk\" ' + location.origin + '/HOOPLOAN-Lock.apk'"),
+    'the current APK is fetched from this same origin into %TEMP% -- -f so an HTTP error is a failed step');
+  assert.ok(body.includes("&& adb install -r \"%TEMP%\\\\HOOPLOAN-Lock.apk\""),
+    'the install is chained behind the fetch and installs the file just fetched, absolute path');
+  assert.ok(!body.includes('Downloads'), 'nothing in Downloads may ever be what gets installed');
 
   /* THE ENROL MUST NOT BE CHAINED BEHIND THE OWNER STEP.
      ---------------------------------------------------------------------------------------
@@ -936,9 +944,13 @@ test('bulk enrolment gives one button per phone, each carrying that phone\'s own
   assert.match(hub, /set-device-owner/, '...and takes ownership, both identical on every phone');
   assert.match(hub, /"%b"=="device"/,
     'a handset still unauthorized or offline must be skipped, not half-provisioned');
-  assert.ok(!/ && /.test(hub),
-    'the steps join with a single & -- "already set" is the normal answer for a handset being '
-    + 'redone, and && would treat that as a reason to stop');
+  assert.match(hub, /^curl -fsSL -o "%TEMP%\\HOOPLOAN-Lock\.apk" https:\/\/hoop-pmo\.vercel\.app\/HOOPLOAN-Lock\.apk && for \/f /,
+    'the current APK is fetched ONCE before the loop, from this origin, and nothing runs on any phone if that fails');
+  assert.ok(!/Downloads/.test(hub), 'nothing in Downloads may ever be what gets installed');
+  const loop = hub.slice(hub.indexOf('for /f'));
+  assert.ok(!/ && /.test(loop),
+    'inside the loop the steps join with a single & -- "already set" is the normal answer for a '
+    + 'handset being redone, and && would treat that as a reason to stop');
   assert.ok(!/%%/.test(hub),
     'written to be PASTED into cmd, so single % -- %% is .bat syntax and would not expand');
   assert.ok(!/PASTE|<TOKEN>|<SERIAL>/.test(hub),

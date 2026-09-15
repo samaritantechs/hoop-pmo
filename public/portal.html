@@ -4072,8 +4072,23 @@ var DEVPKG='com.samaritantechs.hooploanlock';
 
    Guarded by the parentheses, not by cmd's precedence rules -- an explicit group is the same
    on every Windows this will ever touch, and this is not a line to be clever on. */
+/* THE APK IS FETCHED BY THE LINE ITSELF, never taken from Downloads.
+   -----------------------------------------------------------------------------------------
+   This used to install "%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk" -- a FIXED name. The
+   operator downloaded that file once, weeks ago; every download since was saved beside it as
+   "HOOPLOAN-Lock (1).apk", "(2)", so the line went on installing the OLDEST build on the
+   laptop. On a box-fresh phone that "works" (an old build goes on and self-updates later); on
+   a handset back from the field it is refused -- INSTALL_FAILED_VERSION_DOWNGRADE, the phone
+   had self-updated past it (v20 against v24, 2026-09-15) -- and the && stops the line before
+   set-device-owner and the enrol ever run, which reads at the bench as "re-enrolling is
+   broken". So the command fetches the current build from THIS origin into %TEMP%, which is
+   always writable and never holds a stale copy. curl has shipped in Windows since 10 1803;
+   -f turns an HTTP error into a failed step (rather than "installing" an error page), and on
+   a machine without curl the line stops at once with 'curl' is not recognized -- one error,
+   first, before anything touches the phone. */
 function devOneLiner(token){
-  return 'adb install -r "%USERPROFILE%\\Downloads\\HOOPLOAN-Lock.apk"'
+  return 'curl -fsSL -o "%TEMP%\\HOOPLOAN-Lock.apk" ' + location.origin + '/HOOPLOAN-Lock.apk'
+    + ' && adb install -r "%TEMP%\\HOOPLOAN-Lock.apk"'
     + ' && (adb shell dpm set-device-owner ' + DEVCMP
     + ' & adb shell am broadcast --include-stopped-packages'
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
@@ -4103,10 +4118,13 @@ function devOneLiner(token){
        `unauthorized` (the RSA prompt not yet accepted on its screen) or `offline` must be left
        alone rather than half-provisioned.
      - `&` and not `&&` between the two steps: "already set" is the normal answer for a handset
-       being redone, and && would treat that as a reason to stop. */
+       being redone, and && would treat that as a reason to stop.
+     - The APK is fetched ONCE, before the loop, and with && -- see devOneLiner for why it is
+       fetched at all. If the download fails nothing runs on any phone. */
 function devHubLine(batch){
-  return 'for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
-    + 'adb -s %a install -r "%USERPROFILE%\\Downloads\\HOOPLOAN-Lock.apk"'
+  return 'curl -fsSL -o "%TEMP%\\HOOPLOAN-Lock.apk" ' + location.origin + '/HOOPLOAN-Lock.apk'
+    + ' && for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
+    + 'adb -s %a install -r "%TEMP%\\HOOPLOAN-Lock.apk"'
     + ' & adb -s %a shell dpm set-device-owner ' + DEVCMP
     + ' & adb -s %a shell am broadcast --include-stopped-packages'
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
@@ -4150,7 +4168,8 @@ function devProvision(m, r){
     +'/ Paste into the black cmd window, press enter. '
     +(one?'':'Amri moja kwa kila simu — nakili mstari mmoja kwa simu moja. '
       +'/ One command per phone: copy ONE line for ONE handset. ')
-    +'Pakua APK kwanza kutoka <a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a>. '
+    +'Amri inapakua APK ya sasa yenyewe — hakuna cha kupakua kwanza. '
+    +'/ The command fetches the current APK itself — nothing to download first. '
     +'Simu lazima iwe mpya au imefutwa (bila akaunti yoyote). '
     +'/ The handset must have no accounts on it — box-fresh or factory reset.</div>'
     /* STEP ONE, AND ONLY FOR A BENCH WITH MORE THAN ONE PHONE ON IT. Install and take
@@ -4353,16 +4372,18 @@ function devToken(imei){
         : '')
       +'<div class="sub"><b>Bandika kwenye cmd, bonyeza enter. Ndiyo yote.</b> '
       +'/ Paste into the black cmd window, press enter. That is all. '
-      +'Pakua APK kwanza kutoka <a href="/HOOPLOAN-Lock.apk">/HOOPLOAN-Lock.apk</a> '
-      /* ALWAYS THE FRESH FILE, never the one already in Downloads. A handset that has been in
-         the field has SELF-UPDATED, so an older APK on the laptop is refused with
-         INSTALL_FAILED_VERSION_DOWNGRADE and the && stops the whole line before the enrol
-         broadcast ever runs -- which reads at the bench as "re-enrolling is broken". */
-      +'(kila mara upya — simu za shambani zimeshajiupdate). '
-      +'Usiisambaze — ndani mna token ya simu hii. '
-      +'/ Download it fresh every time — a handset back from the field has already '
-      +'self-updated, and an older file is refused as a downgrade. It carries this handset\'s '
-      +'token; do not share it.</div>'
+      /* ALWAYS THE FRESH FILE -- and the line fetches it itself now (see devOneLiner). A
+         handset that has been in the field has SELF-UPDATED, so an older APK on the laptop
+         was refused with INSTALL_FAILED_VERSION_DOWNGRADE and the && stopped the whole line
+         before the enrol broadcast ever ran, which read at the bench as "re-enrolling is
+         broken". Telling the operator to "download it fresh" did not survive a Downloads
+         folder that keeps the old name for the old file. */
+      +'Amri inapakua APK ya sasa yenyewe (simu za shambani zimeshajiupdate; faili la zamani '
+      +'lingekataliwa). Usiisambaze — ndani mna token ya simu hii. '
+      +'/ The command fetches the current APK itself — a handset back from the field has '
+      +'already self-updated, and an older file on the laptop is refused as a downgrade, which '
+      +'is exactly what used to stop this line. It carries this handset\'s token; do not '
+      +'share it.</div>'
       /* WHY THERE IS NO "NEW TOKEN" BUTTON, said where somebody would look for one.
          ---------------------------------------------------------------------------------
            "so the tokens should be autoupdated"
