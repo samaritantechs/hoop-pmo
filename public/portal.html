@@ -3983,24 +3983,75 @@ function devBulkForm(m, state){
      1. their own address (where their portal lives)
      2. a batch THEY minted, from THEIR OWN Sajili simu, for these same IMEIs
    Nothing here reaches across to fetch either automatically. */
+/* THE OTHER OFFICE, CALLED DIRECTLY. Same shape as srv(), pointed at their /api/portal with
+   THEIR code -- exactly the request a human would make by hand from their own Sajili simu.
+   Both portals already answer with Access-Control-Allow-Origin: * (api/_lib/auth.js), which
+   is what lets this page ask them from here. No retries: a shift is placed only after this
+   answers, so a dropped call is simply "press it again". */
+var DEV_SHIFT_PARTNER='https://hope-pmo-v2-ten.vercel.app';
+function srvOther_(server,code,fn,args){
+  return fetch(String(server).replace(/\/+$/,'')+'/api/portal',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({code:code,fn:fn,args:args||{}})})
+  .then(function(r){ return r.text().then(function(t){ var b; try{b=JSON.parse(t);}catch(e){throw new Error('Ofisi nyingine: HTTP '+r.status);}
+    if(r.status<200||r.status>=300||b.ok===false) throw new Error('Ofisi nyingine / the other office: '+(b.error||('HTTP '+r.status)));
+    return b; }); });
+}
+/* THE SHIFT DRAWER -- nothing to type, when there is nothing to ask.
+     "It shouldnt request nothing just select imeis and transfer wether hope to hoop or
+      viceversa."
+   This used to demand three things pasted by hand: the IMEIs, the other office's address,
+   and a batch copied by eye out of THEIR Sajili simu. All three were already knowable. The
+   IMEIs are the ticks on the register behind this button. The address is the one HOPE
+   office this company shifts to. The batch is what HOPE's own deviceEnrol hands back for
+   these same IMEIs -- so this asks HOPE for it, with the operator's HOPE code, saved on
+   THIS device only the first time it is typed and never sent to our own database. After
+   that: tick, press Hamisha, done. The fields stay in the page, folded under "change
+   something", for the one time in fifty the list or the address is not what was meant. */
 function devShiftForm(m){
-  drawer('<h3>Hamisha kwenda kampuni nyingine / Shift to the other company</h3>'
-    +'<div class="sub">Simu HAIACHI kuwa Device Owner — inahama tu. Hakuna kufuta wala kebo. '
-    +'Hazihitaji kuwa kwenye jedwali; zinasomwa kutoka kwenye register nzima. '
-    +'/ The phone does NOT give up ownership — it just moves. No wipe, no cable. They do not '
-    +'have to be on the table behind this — the whole register is searched.</div>'
-    +'<div class="fld"><label>IMEI</label>'
-    +'<textarea id="dvShiftImeis" rows="8" style="width:100%;font-family:ui-monospace,monospace;font-size:12px"></textarea></div>'
+  var ticked=devVisibleTicks_().filter(function(c){ return c.checked; }).map(function(c){ return c.value; });
+  var savedCode=''; try{ savedCode=localStorage.getItem('hpShiftCode')||''; }catch(e){}
+  var quiet=ticked.length>0 && !!savedCode;
+  var fields='<div class="fld"><label>IMEI (moja kwa mstari / one per line)</label>'
+    +'<textarea id="dvShiftImeis" rows="6" style="width:100%;font-family:ui-monospace,monospace;font-size:12px">'
+    +esc(ticked.join('\n'))+'</textarea></div>'
     +'<div id="dvShiftCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
     +'<div class="fld"><label>Anwani ya ofisi nyingine / The other office\'s address</label>'
-    +'<input id="dvShiftServer" placeholder="https://…"></div>'
-    +'<div class="fld"><label>Batch kutoka Sajili simu yao / Batch from THEIR Sajili simu</label>'
+    +'<input id="dvShiftServer" placeholder="https://…" value="'+esc(DEV_SHIFT_PARTNER)+'"></div>'
+    +(savedCode
+      ? '<div class="note ok" id="dvShiftCodeOk">✓ Umehifadhi msimbo wako wa HOPE kwenye simu hii. '
+        +'<a href="#" id="dvShiftCodeChange" style="text-decoration:underline">Badilisha</a>. '
+        +'/ This device already holds your HOPE code. '
+        +'<a href="#" id="dvShiftCodeChange2" style="text-decoration:underline">Change it</a>.</div>'
+      : '<div class="fld" id="dvShiftCodeFld"><label>Msimbo wako kwenye ofisi nyingine (mara moja) / '
+        +'Your code on the other office (once)</label>'
+        +'<input id="dvShiftCode" type="password" placeholder="msimbo / access code" style="font-family:ui-monospace,monospace"></div>'
+        +'<div class="note" style="font-size:11.5px">Inahifadhiwa kwenye simu HII TU — kamwe haiendi kwenye database yetu. '
+        +'Baada ya hapo, Hamisha haihitaji chochote kingine. / Saved on THIS DEVICE ONLY — never sent to our own '
+        +'database. After this, Shift needs nothing else typed.</div>')
+    +'<details style="margin-top:10px"><summary style="cursor:pointer;color:var(--mut);font-size:12.5px">'
+      +'Chaguo jingine — bandika batch mwenyewe / Another way — paste a batch by hand</summary>'
+    +'<div class="fld" style="margin-top:8px"><label>Batch kutoka Sajili simu yao / Batch from THEIR Sajili simu</label>'
     +'<input id="dvShiftBatch" style="font-family:ui-monospace,monospace" placeholder="32 hex characters"></div>'
-    +'<div class="note" style="font-size:11.5px">Batch hii ni ya OFISI NYINGINE — waombe wafungue '
-    +'Sajili simu kwa IMEI hizi hizi na wakupe batch iliyotolewa. Ni siri ya saa 24 tu. '
-    +'/ That batch belongs to THE OTHER office — ask them to open Sajili simu for these same '
-    +'IMEIs and hand you the batch it gives back. Good for 24 hours only.</div>'
-    +'<button class="btn w" id="dvShiftGo">Hamisha / Shift</button>');
+    +'<div class="note" style="font-size:11.5px">Ukijaza hii, Hamisha itatumia batch hii moja kwa moja badala ya kuomba moja '
+      +'kiotomatiki. Ni siri ya saa 24 tu. / Fill this and Shift uses it directly instead of fetching one '
+      +'automatically. Good for 24 hours only.</div></details>';
+  drawer('<h3>Hamisha kwenda kampuni nyingine / Shift to the other company</h3>'
+    +'<div class="sub">Simu HAIACHI kuwa Device Owner — inahama tu. Hakuna kufuta wala kebo. '
+    +'/ The phone does NOT give up ownership — it just moves. No wipe, no cable.</div>'
+    +(ticked.length
+      ? '<div class="note ok"><b>'+money(ticked.length)+'</b> zimechaguliwa kwenye orodha'
+        +(quiet ? ' — bonyeza Hamisha tu. / ticked on the register — just press Shift.'
+                : '. / taken from the ticks on the register — edit the list if that is not what you meant.')
+        +(quiet ? '<div class="mut" style="margin-top:4px;font-size:12px">→ '+esc(DEV_SHIFT_PARTNER)+'</div>' : '')
+        +'</div>'
+      : '')
+    +(quiet
+      ? '<button class="btn w" id="dvShiftGo">Hamisha / Shift</button>'
+        +'<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--mut);font-size:12.5px">'
+        +'Badilisha kitu — orodha, anwani, msimbo / Change something — list, address, code</summary>'
+        +'<div style="margin-top:8px">'+fields+'</div></details>'
+      : fields+'<button class="btn w" id="dvShiftGo">Hamisha / Shift</button>'));
   var ta=$('#dvShiftImeis'), out=$('#dvShiftCount');
   var recount=function(){
     var p=devParseImeis_(ta.value);
@@ -4010,17 +4061,44 @@ function devShiftForm(m){
         +(p.dupes?' · '+money(p.dupes)+' zimerudiwa / repeated':'');
   };
   ta.oninput=recount; recount();
+  var showCodeField=function(ev){
+    if(ev) ev.preventDefault();
+    var ok=$('#dvShiftCodeOk'); if(ok) ok.outerHTML=
+      '<div class="fld" id="dvShiftCodeFld"><label>Msimbo wako kwenye ofisi nyingine (mara moja) / '
+      +'Your code on the other office (once)</label>'
+      +'<input id="dvShiftCode" type="password" placeholder="msimbo / access code" style="font-family:ui-monospace,monospace"></div>';
+  };
+  var cc1=$('#dvShiftCodeChange'), cc2=$('#dvShiftCodeChange2');
+  if(cc1) cc1.onclick=showCodeField; if(cc2) cc2.onclick=showCodeField;
   $('#dvShiftGo').onclick=function(){
     var p=devParseImeis_(ta.value);
-    if(!p.list.length){ toast('Bandika angalau IMEI moja. / Paste at least one IMEI.', true); return; }
-    var server=($('#dvShiftServer').value||'').trim(), batch=($('#dvShiftBatch').value||'').trim();
-    if(!server||!batch){ toast('Anwani na batch vinahitajika. / Address and batch are both required.', true); return; }
+    if(!p.list.length){ toast('Chagua au bandika angalau IMEI moja. / Tick or paste at least one IMEI.', true); return; }
+    var server=($('#dvShiftServer').value||'').trim();
+    if(!/^https:\/\//i.test(server)){ toast('Anwani lazima ianze na https:// . / The address must start with https:// .', true); return; }
+    var manualBatch=(($('#dvShiftBatch')||{}).value||'').trim();
+    var codeInput=$('#dvShiftCode');
+    var code=codeInput ? (codeInput.value||'').trim() : savedCode;
+    if(codeInput && code){ try{ localStorage.setItem('hpShiftCode',code); }catch(e){} }   // saved the moment it is used
+    var finish=function(batch){
+      devBusy_(true);
+      return srv('deviceShift',{imeis:p.list,server:server,batch:batch}).then(function(r){
+        toast('Zimeagizwa kuhama: '+money(r.ordered)
+          +(r.alreadyReleased?' · '+money(r.alreadyReleased)+' tayari zimeachiwa':'')
+          +(r.unknown?' · '+money(r.unknown)+' hazipo kwenye register':''));
+        closeDrawer(); drawDevices(m);
+      }).catch(function(e){ devBusy_(false); toast(safeErr(e), true); });
+    };
+    /* MANUAL WINS IF FILLED IN -- the folded box is a deliberate override, not a fallback
+       tried after the automatic path fails silently. */
+    if(manualBatch){ finish(manualBatch); return; }
+    if(!code){ toast('Weka msimbo wako wa ofisi nyingine, au bandika batch kwa mkono. / Enter your code for the other office, or paste a batch by hand.', true); return; }
+    /* THE AUTO-FETCH: HOPE's own deviceEnrol for these same IMEIs, with the operator's HOPE
+       code -- the batch that comes back is identical to one copied over by eye. Nothing is
+       written on THIS register until HOPE has answered. */
     devBusy_(true);
-    srv('deviceShift',{imeis:p.list,server:server,batch:batch}).then(function(r){
-      toast('Zimeagizwa kuhama: '+money(r.ordered)
-        +(r.alreadyReleased?' · '+money(r.alreadyReleased)+' tayari zimeachiwa':'')
-        +(r.unknown?' · '+money(r.unknown)+' hazipo kwenye register':''));
-      closeDrawer(); drawDevices(m);
+    srvOther_(server,code,'deviceEnrol',{imeis:p.list}).then(function(r){
+      if(!r||!r.batch){ devBusy_(false); toast('Ofisi nyingine haikurudisha batch. / The other office did not hand back a batch.', true); return; }
+      return finish(r.batch);
     }).catch(function(e){ devBusy_(false); toast(safeErr(e), true); });
   };
 }
