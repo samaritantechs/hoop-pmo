@@ -133,6 +133,7 @@ AUDITED.add('transferCreate');
 AUDITED.add('transferSign');
 AUDITED.add('transferAccept');
 AUDITED.add('transferDecline');
+AUDITED.add('transferCreateBulk');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -2045,6 +2046,25 @@ async function trOne(db, id) {
 }
 /* A signature pad this small never legitimately produces a huge PNG; a data URL far past that
    is either a mistaken paste or something worth refusing rather than storing. */
+/* A BULK LINE IS A SERIAL AND A NAME. Straight off a spreadsheet: the IMEI, then a tab, comma or
+   semicolon (or just a space), then the receiver's name -- which may itself contain spaces, so
+   it is everything after the serial. One line per phone; blank lines are nothing; anything
+   else is named by its line number and stops the whole list. */
+function trParseBulk(text) {
+  const rows = [], bad = [];
+  String(text || '').split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line) return;
+    // A separator is REQUIRED after the serial and a name has letters -- otherwise a bare
+    // '351000000000002' would read as serial 3510000000000 handed to somebody called '02'.
+    const m = /^([0-9]{8,20})(?:\s*[,;]\s*|\s+)(.*)$/.exec(line.replace(/\s+/g, ' '));
+    const name = m ? m[2].trim().replace(/^[,;]\s*/, '') : '';
+    if (!m || !/[A-Za-z]/.test(name)) { bad.push({ line: i + 1, text: line.slice(0, 60) }); return; }
+    rows.push({ imei: m[1], toName: name });
+  });
+  return { rows, bad };
+}
+
 function trCheckSig(sig) {
   if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sig)) bad('Sahihi haikutambulika. / That signature was not recognised.');
   if (sig.length > 400000) bad('Sahihi ni kubwa mno. Jaribu tena. / That signature is too large. Please try again.');
@@ -10009,6 +10029,14 @@ const FNS = {
     if (sig) trCheckSig(sig);
     const senderSigns = !!sig && sameName(fromName, user.name);
 
+    /* A DRY RUN answers every question the real thing would -- who, what, whose hands -- and
+       writes nothing. transferCreateBulk asks it once per receiver before opening any document,
+       so a list with one bad line opens no documents at all. */
+    if (a.dryRun) {
+      return { ok: true, dryRun: true, fromName, toName: to.name, count: imeis.length,
+        unknown: imeis.filter(i => where.get(i).source === 'unknown').length };
+    }
+
     /* THE REFERENCE IS MADE HERE, NOT BY THE DATABASE. A sequence-backed daily counter would
        read nicer (TR-20260912-0007), but PostgREST has no way to read a bare `nextval()` short
        of a wrapper function nobody has written, and the fake database every test in this repo
@@ -10056,6 +10084,68 @@ const FNS = {
 
     return { ok: true, id: inserted.id, ref: inserted.ref, changed: imeis.length,
       unknown: imeis.filter(i => where.get(i).source === 'unknown').length, senderSigned: senderSigns };
+  },
+
+  /** BULK: one pasted list, many receivers -- "RSM to Agents, supplying" without eight separate
+      sends. Each line is a serial and who gets it (straight off a spreadsheet: IMEI, tab or
+      comma, name); the list is grouped by receiver and ONE document opened per person, every
+      one carrying the sender's signature. ALL OR NOTHING: every group is dry-run through
+      transferCreate first -- system user, possession, the hierarchy rule -- and a list with one
+      bad line opens no documents at all, naming the lines and the people that stopped it. */
+  async transferCreateBulk(db, user, args) {
+    requireWrite(user); requireNav(user, 'transfers');
+    const a = args || {};
+    const parsed = trParseBulk(a.text);
+    const rows = parsed.rows.concat(Array.isArray(a.lines) ? a.lines
+      .map(l => ({ imei: String((l && l.imei) || '').trim(), toName: String((l && l.toName) || '').trim() }))
+      .filter(l => l.imei && l.toName) : []);
+    if (parsed.bad.length) {
+      bad('Mistari ' + parsed.bad.length + ' haisomeki (IMEI kisha jina, mstari mmoja kwa simu): '
+        + parsed.bad.slice(0, 5).map(b => '#' + b.line + ' "' + b.text + '"').join(', ')
+        + (parsed.bad.length > 5 ? ' …' : '') + '. Hakuna kilichotumwa. / ' + parsed.bad.length
+        + ' line(s) could not be read (IMEI then name, one line per phone): '
+        + parsed.bad.slice(0, 5).map(b => '#' + b.line).join(', ') + '. Nothing was sent.');
+    }
+    if (!rows.length) bad('Bandika orodha: IMEI kisha jina la anayepokea, mstari mmoja kwa simu. / Paste a list: IMEI then the receiver\'s name, one line per phone.');
+    if (rows.length > 500) bad('Simu nyingi mno kwa mara moja (kikomo 500). Gawa orodha. / Too many at once — 500 max. Split the list.');
+
+    /* One serial, one receiver. The same IMEI under two names is a question, not an order. */
+    const seenTo = new Map();
+    const twice = [];
+    for (const r of rows) {
+      const had = seenTo.get(r.imei);
+      if (had && nameKey(had) !== nameKey(r.toName)) twice.push(r.imei);
+      else seenTo.set(r.imei, r.toName);
+    }
+    if (twice.length) bad('IMEI hizi zimeandikwa kwa wapokeaji wawili tofauti: ' + [...new Set(twice)].slice(0, 5).join(', ')
+      + '. Hakuna kilichotumwa. / These IMEIs are listed under two different receivers: '
+      + [...new Set(twice)].slice(0, 5).join(', ') + '. Nothing was sent.');
+
+    const groups = new Map();
+    for (const r of rows) {
+      const k = nameKey(r.toName);
+      if (!groups.has(k)) groups.set(k, { toName: r.toName, imeis: [] });
+      const g = groups.get(k);
+      if (!g.imeis.includes(r.imei)) g.imeis.push(r.imei);
+    }
+    const shared = { fromName: a.fromName, item: a.item, price: a.price, note: a.note, signature: a.signature };
+
+    // EVERY GROUP IS CHECKED BEFORE ANY IS OPENED.
+    const problems = [];
+    for (const g of groups.values()) {
+      try { await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis, dryRun: true })); }
+      catch (e) { problems.push(g.toName + ': ' + String((e && e.message) || e).replace(/<[^>]+>/g, '')); }
+    }
+    if (problems.length) {
+      bad('Orodha ina makosa — hakuna kilichotumwa. / The list has problems — nothing was sent. '
+        + problems.slice(0, 6).join(' | ') + (problems.length > 6 ? ' | …' : ''));
+    }
+    const created = [];
+    for (const g of groups.values()) {
+      const r = await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis }));
+      created.push({ toName: g.toName, id: r.id, ref: r.ref, count: g.imeis.length, unknown: r.unknown || 0 });
+    }
+    return { ok: true, documents: created.length, serials: rows.length, created };
   },
 
   /** ACCEPT -- the receiver's signature, and the moment the stock changes hands. The move is

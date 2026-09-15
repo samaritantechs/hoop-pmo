@@ -54,6 +54,22 @@ leaves.
   to two different RSMs, whoever is at the keyboard. Resolved off the staff register and the
   same manager-derivation the sales-targets roll-up uses (`managerIndex`).
 
+### A bulk list — many receivers in one paste
+
+> *"we also need bulk list transfer"*
+
+Send has a second shape: **Orodha ya wingi / Bulk list**. Paste one line per phone straight off
+a spreadsheet — `IMEI`, then a tab or comma, then the **receiver's name** — and the server groups
+the lines by receiver and opens **one document per person**, every one carrying your signature,
+each waiting for its own receiver to accept. That is "RSM to Agents, supplying" without eight
+separate sends.
+
+It is **all or nothing**: every group is dry-run through the single-send checks first (system
+user, possession, the hierarchy rule), so a wrong name on line 40 opens no documents at all and
+the refusal names the lines and the people that stopped it. A serial listed under two names is
+refused rather than guessed. The same model, price and note apply to every line; 500 phones per
+paste.
+
 ## Signatures
 
 The sender signs at Send, or later from their own login (the desk may sign in the sender's

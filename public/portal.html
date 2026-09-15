@@ -9251,53 +9251,100 @@ function trStockWin(m, body){
 
 /* TUMA: who, which serials, one model and price for the batch, my signature. The receiver is
    found by name among SYSTEM USERS -- the desk may also name who is handing over (flow 5), in
-   which case there is no pad: that person logs in and signs their own side. */
+   which case there is no pad: that person logs in and signs their own side.
+
+   TWO SHAPES OF THE SAME FORM. One receiver: a name and a list of serials. A BULK LIST: one
+   line per phone, "IMEI  name" straight off a spreadsheet, and the server opens one document
+   per receiver -- "RSM to Agents, supplying" without eight separate sends. The list is checked
+   whole before anything opens, so a wrong name on line 40 sends nothing and says so. */
+var TRMODE='one';          // 'one' receiver, or a 'bulk' list of IMEI + receiver per line
+function trParseBulkPreview_(text){
+  var rows=[], bad=[], who={};
+  String(text||'').split(/\r?\n/).forEach(function(raw, i){
+    var line=raw.trim(); if(!line) return;
+    var m=/^([0-9]{8,20})(?:\s*[,;]\s*|\s+)(.*)$/.exec(line.replace(/\s+/g,' '));
+    var name=m?m[2].trim().replace(/^[,;]\s*/,''):'';
+    if(!m||!/[A-Za-z]/.test(name)){ bad.push(i+1); return; }
+    rows.push({imei:m[1], toName:name});
+    var k=name.toUpperCase(); who[k]=(who[k]||0)+1;
+  });
+  return {rows:rows, bad:bad, who:who};
+}
 function trSendWin(m, body){
   srv('transferUsers',{}).then(function(d){
     var users=d.users||[], desk=!!d.desk, canW=!BOOT.readOnly;
     if(!canW){ body.innerHTML='<div class="mut">Msimbo huu ni wa kuangalia tu. / This is a view-only code.</div>'; return; }
+    var bulk=TRMODE==='bulk';
     var pre=Object.keys(TRSEL).join('\n');
-    body.innerHTML='<div class="sub">Chagua anayepokea (mtumiaji wa mfumo), bandika au chagua IMEI kutoka Stoo, '
-      +'saini, tuma. Mpokeaji atakubali kwenye Pokea kwa msimbo wake. / Pick who receives (a system user), '
-      +'paste or tick IMEIs in Stock, sign, send. They accept under their own code, in Receive.</div>'
+    body.innerHTML='<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">'
+      +'<button class="btn sm'+(bulk?' ghost':'')+'" data-trmode="one">Mpokeaji mmoja / One receiver</button>'
+      +'<button class="btn sm'+(bulk?'':' ghost')+'" data-trmode="bulk">Orodha ya wingi / Bulk list</button></div>'
+      +'<div class="sub">'+(bulk
+        ?'Bandika orodha kutoka Excel: <b>IMEI</b> kisha <b>jina la anayepokea</b>, mstari mmoja kwa simu. Mfumo utafungua hati moja kwa kila mpokeaji, zote zikiwa na sahihi yako; mstari mmoja ukiwa na kosa hakuna kinachotumwa. / Paste a list from Excel: <b>IMEI</b> then the <b>receiver\'s name</b>, one line per phone. One document opens per receiver, each with your signature; one bad line and nothing is sent.'
+        :'Chagua anayepokea (mtumiaji wa mfumo), bandika au chagua IMEI kutoka Stoo, saini, tuma. Mpokeaji atakubali kwenye Pokea kwa msimbo wake. / Pick who receives (a system user), paste or tick IMEIs in Stock, sign, send. They accept under their own code, in Receive.')+'</div>'
       +'<datalist id="trUsers">'+users.map(function(u){ return '<option value="'+esc(u.name)+'">'+esc(u.role)+(u.away?' · amesimamishwa / suspended':'')+'</option>'; }).join('')+'</datalist>'
       +(desk?'<div class="fld"><label>Anayetoa / Handing over (acha wazi = mimi / blank = me)</label>'
         +'<input id="trFrom" class="inp" list="trUsers" placeholder="'+esc(BOOT.name||'')+'"></div>':'')
-      +'<div class="fld"><label>Anayepokea / Receiver</label><input id="trTo" class="inp" list="trUsers" placeholder="anza kuandika jina / start typing a name"></div>'
+      +(bulk
+        ?'<div class="fld"><label>Orodha: IMEI kisha jina / List: IMEI then name</label>'
+          +'<textarea id="trBulk" rows="10" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123&#9;ANORD SAWE&#10;351234567890124&#9;ANORD SAWE&#10;861234567890125&#9;AISHA BARAZA"></textarea></div>'
+          +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+        :'<div class="fld"><label>Anayepokea / Receiver</label><input id="trTo" class="inp" list="trUsers" placeholder="anza kuandika jina / start typing a name"></div>')
       +'<div class="fld"><label>Modeli / Item (optional)</label><input id="trItem" class="inp" placeholder="mf. SAMSUNG A07-64GB"></div>'
       +'<div class="fld"><label>Bei kwa kila simu / Unit price (optional)</label><input id="trPrice" class="inp" type="number" min="0" step="1000"></div>'
-      +'<div class="fld"><label>IMEI (moja kwa mstari au comma)</label>'
-      +'<textarea id="trImeis" rows="7" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123">'+esc(pre)+'</textarea></div>'
-      +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+      +(bulk?'':'<div class="fld"><label>IMEI (moja kwa mstari au comma)</label>'
+          +'<textarea id="trImeis" rows="7" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123">'+esc(pre)+'</textarea></div>'
+          +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>')
       +'<div class="fld"><label>Maelezo / Note (optional)</label><textarea id="trNote" rows="2" style="width:100%"></textarea></div>'
       +'<div class="fld" id="trPadWrap"><label>Sahihi yangu / My signature</label>'+trPadHtml_('trPadN')+'</div>'
-      +'<button class="btn w" id="trGo">Tuma / Send</button>';
-    var ta=$('#trImeis'), out=$('#trCount');
+      +'<button class="btn w" id="trGo">'+(bulk?'Tuma orodha / Send the list':'Tuma / Send')+'</button>';
+    $all('[data-trmode]',body).forEach(function(b){ b.onclick=function(){ TRMODE=b.getAttribute('data-trmode'); trSendWin(m, body); }; });
+    var out=$('#trCount');
+    var ta=$('#trImeis'), tb=$('#trBulk');
     var recount=function(){
-      var p=devParseImeis_(ta.value);
-      out.innerHTML=!p.list.length?'Bado hakuna IMEI. / No IMEIs yet.'
-        :'<b>'+money(p.list.length)+'</b> simu'+(p.dupes?' · '+money(p.dupes)+' zimerudiwa / repeated':'');
+      if(bulk){
+        var p=trParseBulkPreview_(tb.value);
+        var names=Object.keys(p.who);
+        out.innerHTML=!p.rows.length&&!p.bad.length?'Bado hakuna mistari. / No lines yet.'
+          :'<b>'+money(p.rows.length)+'</b> simu kwa <b>'+money(names.length)+'</b> wapokeaji / phones for receivers'
+            +(names.length?': '+names.map(function(n){ return esc(n)+' ('+p.who[n]+')'; }).join(', '):'')
+            +(p.bad.length?' · <span style="color:var(--bad)">mistari '+p.bad.slice(0,8).join(', ')+' haisomeki / unreadable</span>':'');
+      } else {
+        var q=devParseImeis_(ta.value);
+        out.innerHTML=!q.list.length?'Bado hakuna IMEI. / No IMEIs yet.'
+          :'<b>'+money(q.list.length)+'</b> simu'+(q.dupes?' · '+money(q.dupes)+' zimerudiwa / repeated':'');
+      }
     };
-    ta.oninput=recount; recount();
+    (bulk?tb:ta).oninput=recount; recount();
     var pad=trWirePad_('trPadN');
     var cl=$('#trPadNClear'); if(cl) cl.onclick=function(){ pad.clear(); };
     var from=$('#trFrom');
     var isSelf=function(){ var v=from?from.value.trim():''; return !v||v.toUpperCase()===String(BOOT.name||'').toUpperCase(); };
     if(from) from.oninput=function(){ $('#trPadWrap').style.display=isSelf()?'':'none'; };
     $('#trGo').onclick=function(){
-      var p=devParseImeis_(ta.value);
-      var to=$('#trTo').value.trim();
-      if(!to){ toast('Chagua anayepokea. / Choose who receives.', true); return; }
-      if(!p.list.length){ toast('Chagua au bandika angalau IMEI moja. / Pick or paste at least one IMEI.', true); return; }
       var self=isSelf();
       if(self&&!pad.isDirty()){ toast('Weka sahihi yako kwanza. / Sign first.', true); return; }
-      var b=$('#trGo'); b.disabled=true;
-      srv('transferCreate',{
-        toName:to, fromName:from?from.value.trim():'',
-        item:$('#trItem').value, price:$('#trPrice').value,
-        imeis:p.list, note:$('#trNote').value,
-        signature:(self&&pad.isDirty())?pad.dataUrl():'',
-      }).then(function(r){
+      var shared={ fromName:from?from.value.trim():'', item:$('#trItem').value, price:$('#trPrice').value,
+        note:$('#trNote').value, signature:(self&&pad.isDirty())?pad.dataUrl():'' };
+      var b=$('#trGo');
+      if(bulk){
+        var p=trParseBulkPreview_(tb.value);
+        if(!p.rows.length){ toast('Bandika orodha kwanza. / Paste the list first.', true); return; }
+        if(p.bad.length){ toast('Mistari '+p.bad.slice(0,5).join(', ')+' haisomeki — IMEI kisha jina. / Lines '+p.bad.slice(0,5).join(', ')+' are unreadable — IMEI then name.', true); return; }
+        b.disabled=true;
+        srv('transferCreateBulk',Object.assign({text:tb.value},shared)).then(function(r){
+          TRSEL={};
+          toast('Nyaraka '+money(r.documents)+' zimefunguliwa kwa simu '+money(r.serials)+' / '+money(r.documents)+' documents opened for '+money(r.serials)+' phones');
+          TRW='docs'; drawTransfers(m);
+        }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+        return;
+      }
+      var q=devParseImeis_(ta.value);
+      var to=$('#trTo').value.trim();
+      if(!to){ toast('Chagua anayepokea. / Choose who receives.', true); return; }
+      if(!q.list.length){ toast('Chagua au bandika angalau IMEI moja. / Pick or paste at least one IMEI.', true); return; }
+      b.disabled=true;
+      srv('transferCreate',Object.assign({toName:to, imeis:q.list},shared)).then(function(r){
         TRSEL={};
         toast('Imetumwa: '+r.ref+(r.unknown?' · '+money(r.unknown)+' IMEI hazijulikani kwenye mfumo / unknown to the system':''));
         TRW='docs'; drawTransfers(m); trView(m, r.id);
