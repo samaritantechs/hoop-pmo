@@ -63,8 +63,13 @@ leaves.
   says how many lines were priced off the stock.
 - **The hierarchy rule stands.** Every pairing is a normal hand-off — store ↔ RSM, RSM ↔ RSM,
   agent ↔ agent under the same RSM, agent ↔ super agent — *except* two field agents who report
-  to two different RSMs, whoever is at the keyboard. Resolved off the staff register and the
-  same manager-derivation the sales-targets roll-up uses (`managerIndex`).
+  to two different RSMs, whoever is at the keyboard. Who is an agent: the staff register where
+  it has a row, otherwise the **access code's role** (an agent the stock lists without a phone
+  holds a code but no register row, and is still an agent). Whose agent: the register's
+  manager-derivation the sales-targets roll-up uses (`managerIndex`), else the **rsm column
+  beside their own handsets** on the stock lists. If neither answers, an agent-to-agent send is
+  **refused and says so** — enrol them with a phone, or route it through the RSM — because a
+  chain-of-custody check that cannot be made is not a pass.
 
 ### A bulk list — many receivers in one paste
 
@@ -114,15 +119,21 @@ those names are the list of people who can receive. Two things keep it filled:
 
 The rules are the same in both places. **Nobody is demoted**: a name that is an RSM on one row
 and an agent on another is an RSM. **Nobody is duplicated**: a name that already has a code —
-in any role, however spelled (case- and space-folded) — gets nothing, and a staff row that
-exists by phone or by name is left alone. **`SUPER AGENT` is the warehouse**, not a person;
-blank, numeric and two-letter names are spreadsheet noise. Codes carry no navs of their own —
-the RSM and AGENT roles' ticks on the Roles card are the grant. A view-only code writes nothing.
+in any role, the same words in any order, case or spacing (`nameKey`; `pg_temp.name_key` in the
+SQL) — gets nothing, and a staff row that exists by phone or by name is left alone. Two desks
+opening a pane in the same second cannot leave a person two codes either: the run re-reads
+after minting and drops its own where an earlier code now exists. **`SUPER AGENT` is the
+warehouse**, not a person; blank, numeric, dashed and two-letter names are spreadsheet noise.
+Codes carry no navs of their own — the RSM and AGENT roles' ticks on the Roles card are the
+grant, and the **role rows are made to exist** before a code is minted, because a role with no
+row at all would log in to the old default panes. A view-only code writes nothing. Before the
+targets migration the register has no `manager` column; staff rows are then written without it.
 
 The codes are live logins the moment they exist. Read them off **Access codes**, which is now
-**chipped by role** with a count per chip and a search box (*"the list will be long"*), and
-hand each to its person; a code minted for somebody who has left is deleted there like any
-other.
+**chipped by role** with a count per chip and a search box (*"the list will be long"*): the
+pane opens on the first chip so it is short, *Zote / All* is its own chip, and a search looks
+across every role. Hand each code to its person; a code minted for somebody who has left is
+deleted there like any other.
 
 ## The stock fence — who sees which stock
 

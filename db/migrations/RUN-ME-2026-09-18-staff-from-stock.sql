@@ -14,16 +14,24 @@
 -- a receiver by role and name from the first morning rather than after somebody opens each pane.
 --
 -- Paste the WHOLE FILE into the Supabase SQL editor and run it once. Safe to re-run: every insert
--- skips what already exists -- by phone and by name for staff, by name (case- and space-folded)
--- for codes -- so a second run adds nobody and re-mints nothing. NOBODY IS DEMOTED: a name that
--- is an RSM on one row and an agent on another is an RSM. NOBODY IS EDITED: a staff row or a code
--- that exists is left exactly as it is. "SUPER AGENT" is the warehouse, not a person; blank,
--- numeric and two-letter names are spreadsheet noise, not people.
+-- skips what already exists -- by phone and by name for staff, by name for codes -- so a second
+-- run adds nobody and re-mints nothing. NOBODY IS DEMOTED: a name that is an RSM on one row and
+-- an agent on another is an RSM. NOBODY IS EDITED: a staff row or a code that exists is left
+-- exactly as it is. "SUPER AGENT" is the warehouse, not a person; blank, numeric and two-letter
+-- names are spreadsheet noise, not people.
+--
+-- THE SAME NAME is the same words in any order, any case, any spacing -- "Anord Sawe" and
+-- "SAWE  ANORD" are one person, exactly as nameKey in api/portal.js reads them, so this file and
+-- the panes agree on who already has a code. A run of an earlier cut of this file matched on
+-- word ORDER too, so it could mint a second code for a person whose existing code spelled the
+-- names the other way round; step 4 removes such a minted duplicate, keeping the older code.
 --
 -- THE CODES ARE LIVE LOGINS the moment this runs, with whatever navs the RSM and AGENT roles have
--- ticked on the Roles card. Read them off the Access codes pane (chip: RSM / AGENT) and hand each
--- to its person; a code minted for somebody who has left is deleted there like any other.
--- Six characters from the same phone-safe alphabet a team code uses: no 0/O, no 1/I/L.
+-- ticked on the Roles card -- and the ROLE ROWS ARE MADE TO EXIST first (step 3), because a role
+-- with no row at all logs in to the old default panes, which nobody ticked for a field agent.
+-- Read the codes off the Access codes pane (chip: RSM / AGENT) and hand each to its person; a
+-- code minted for somebody who has left is deleted there like any other. Six characters from the
+-- same phone-safe alphabet a team code uses: no 0/O, no 1/I/L.
 --
 -- ONE BLOCK, ON PURPOSE. The Supabase SQL editor does not promise that two statements of a script
 -- run on the same connection, so a scratch table made by one statement can be gone by the next
@@ -43,12 +51,24 @@ declare
   no_phone   integer := 0;
   staff_new  integer := 0;
   minted     integer := 0;
+  dups       integer := 0;
 begin
+  -- -------------------------------------------------------------------------------------------
+  -- 0. THE ONE DEFINITION OF "THE SAME NAME": upper-cased words, sorted, single-spaced. Lives
+  --    for this session only (pg_temp), used by every match below -- the same rule as nameKey.
+  -- -------------------------------------------------------------------------------------------
+  create or replace function pg_temp.name_key(text) returns text
+    language sql immutable as $name_key$
+      select string_agg(t, ' ' order by t)
+        from unnest(string_to_array(regexp_replace(upper(trim(coalesce($1, ''))), '\s+', ' ', 'g'), ' ')) as t
+       where t <> '';
+    $name_key$;
+
   -- -------------------------------------------------------------------------------------------
   -- 1. WHO THE STOCK NAMES. One row per person: the two stock lists, RSMs and agents, best phone.
   -- -------------------------------------------------------------------------------------------
   create temporary table _stock_people (
-    name_key text primary key,     -- upper(name) with runs of space collapsed: the matching key
+    name_key text primary key,     -- pg_temp.name_key(name): the matching key
     name     text not null,        -- the spelling the stock uses (the RSM row's, or the one with a phone)
     role     text not null,        -- 'RSM' | 'AGENT'
     phone    text,                 -- the last nine digits: how everything in HOOP matches a number
@@ -66,19 +86,20 @@ begin
     select agent,        'AGENT',         agent_phone,          rsm                  from old_stock
   ),
   clean as (
-    select regexp_replace(upper(trim(name)), '\s+', ' ', 'g') as name_key,
-           trim(name)                                          as name,
+    select pg_temp.name_key(name) as name_key,
+           trim(name)             as name,
            role,
            -- +255 7.. / 255 7.. / 07.. / 7.. are one number: keep the last nine digits, and only
            -- where there ARE nine (a shorter scrawl is not a phone the register can be keyed on).
            case when length(regexp_replace(coalesce(phone, ''), '\D', '', 'g')) >= 9
                 then right(regexp_replace(coalesce(phone, ''), '\D', '', 'g'), 9) end as digits,
-           nullif(trim(manager), '')                            as manager
+           nullif(trim(manager), '') as manager
       from raw
      where name is not null
        and length(trim(name)) >= 3
-       and trim(name) !~ '^[0-9\s\-\.\+\(\)]+$'
-       and upper(trim(name)) not in ('N/A', 'NA', 'NONE', 'NULL', 'UNKNOWN', 'HAKUNA', 'SUPER AGENT', 'SUPERAGENT')
+       and trim(name) !~ '^[0-9\s\-\.\+\(\)—–]+$'
+       and upper(trim(name)) not in ('N/A', 'NA', 'NONE', 'NULL', 'UNKNOWN', 'HAKUNA')
+       and regexp_replace(upper(name), '\s+', '', 'g') <> 'SUPERAGENT'
   ),
   ranked as (
     -- RSM beats AGENT for the same name; a row with a phone beats one without; the spelling is
@@ -90,7 +111,7 @@ begin
            first_value(digits)  over (partition by name_key order by (digits is not null) desc)  as digits,
            first_value(manager) over (partition by name_key order by (manager is not null) desc) as manager
       from clean
-     order by name_key, (role = 'RSM') desc, (digits is not null) desc
+     order by name_key, (role = 'RSM') desc, (digits is not null) desc, name
   )
   select name_key, name, role, digits, case when role = 'AGENT' then manager end
     from ranked;
@@ -101,12 +122,12 @@ begin
      set manager = r.name
     from _stock_people r
    where a.role = 'AGENT' and a.manager is not null
-     and r.role = 'RSM' and r.name_key = regexp_replace(upper(trim(a.manager)), '\s+', ' ', 'g');
+     and r.role = 'RSM' and r.name_key = pg_temp.name_key(a.manager);
   update _stock_people a
      set manager = null
    where a.manager is not null
      and not exists (select 1 from _stock_people r
-                      where r.role = 'RSM' and r.name_key = regexp_replace(upper(trim(a.manager)), '\s+', ' ', 'g'));
+                      where r.role = 'RSM' and r.name_key = pg_temp.name_key(a.manager));
 
   select count(*), count(*) filter (where phone is null) into people, no_phone from _stock_people;
 
@@ -123,17 +144,19 @@ begin
    where sp.phone is not null
      and not exists (select 1 from hoop_agents a
                       where right(regexp_replace(coalesce(a.phone, ''), '\D', '', 'g'), 9) = sp.phone
-                         or regexp_replace(upper(trim(coalesce(a.name, ''))), '\s+', ' ', 'g') = sp.name_key)
+                         or pg_temp.name_key(a.name) = sp.name_key)
   on conflict (phone) do nothing;
   get diagnostics staff_new = row_count;
 
   -- -------------------------------------------------------------------------------------------
-  -- 3. THE ACCESS CODES. One per name that has none, in the role the stock says, secret minted here.
+  -- 3. THE ROLE ROWS, then THE ACCESS CODES: one per name that has none, in the role the stock
+  --    says, secret minted here. A role row that exists is not touched (its ticks are the grant).
   -- -------------------------------------------------------------------------------------------
+  insert into roles (role, tabs) values ('RSM', '{}'), ('AGENT', '{}') on conflict (role) do nothing;
+
   for p in
     select * from _stock_people sp
-     where not exists (select 1 from access_codes c
-                        where regexp_replace(upper(trim(coalesce(c.name, ''))), '\s+', ' ', 'g') = sp.name_key)
+     where not exists (select 1 from access_codes c where pg_temp.name_key(c.name) = sp.name_key)
   loop
     loop
       candidate := '';
@@ -148,8 +171,24 @@ begin
     minted := minted + 1;
   end loop;
 
-  raise notice 'people on stock: %  · without a phone (no staff row): %  · staff rows added: %  · codes minted: %',
-    people, no_phone, staff_new, minted;
+  -- -------------------------------------------------------------------------------------------
+  -- 4. A MINTED DUPLICATE GOES. A person who holds two codes because an earlier run matched
+  --    names by word order: the one this file's shape minted (six alphabet characters, RSM or
+  --    AGENT, nothing ticked, all teams) and the NEWER of the two is deleted; the older stays.
+  -- -------------------------------------------------------------------------------------------
+  delete from access_codes c
+   where upper(c.role) in ('RSM', 'AGENT')
+     and c.code ~ '^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$'
+     and coalesce(array_length(c.tabs, 1), 0) = 0
+     and c.teams is null
+     and exists (select 1 from access_codes o
+                  where o.code <> c.code
+                    and pg_temp.name_key(o.name) = pg_temp.name_key(c.name)
+                    and (o.created_at < c.created_at or (o.created_at = c.created_at and o.code < c.code)));
+  get diagnostics dups = row_count;
+
+  raise notice 'people on stock: %  · without a phone (no staff row): %  · staff rows added: %  · codes minted: %  · minted duplicates removed: %',
+    people, no_phone, staff_new, minted, dups;
   drop table if exists _stock_people;
 end $$;
 
