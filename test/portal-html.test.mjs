@@ -871,7 +871,10 @@ test('the access-codes table has no Kiongozi column and the page never calls the
   const cols = [...head[0].matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map(m => m[1]);
   assert.deepEqual(cols, ['Code', 'Jina', 'Role', 'Timu', 'Tabs', 'Yupo?', ''],
     'Yupo? is the one named control column, still before the actions cell');
-  const row = src.slice(src.indexOf("<tr><td class=\"code\">"));
+  // The row now carries its role (data-acrole) for the chips; the anchor is the first cell.
+  const rowAt = /<tr(?: [^>]*)?><td class="code">/.exec(src);
+  assert.ok(rowAt, 'the access-codes row has changed shape');
+  const row = src.slice(rowAt.index);
   const susp = row.indexOf('data-susp="'), edit = row.indexOf('data-ed="'), del = row.indexOf('data-del="');
   assert.ok(susp > 0 && edit > 0 && del > 0 && susp < edit && edit < del, 'Yupo?, then Hariri and Futa');
   assert.ok(!/data-lead\b|data-lead2|accessCodeLeader|acLead|Kiongozi wa idara|leaderKnown/.test(src),

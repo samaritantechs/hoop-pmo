@@ -1964,21 +1964,30 @@ function resolveTarget(key, tree, tBy, seen) {
    =============================================================================================
      "So RSM only see stock in old and new that's theirs already only, same for agents, Sipho
       sees all. So at access codes I have roles RSM STORE and AGENT"
+     "role store = superagent"
 
    The role on the ACCESS CODE decides the fence, by name -- the same honest weakness the credit
    roster's suspension matching already lives with (call-core.js, suspendedNamesOn): an access
    code and a stock row share nothing but a person's name, so the name, token-sorted and
    case-folded by nameKey, is what they are matched on. A code named differently from the
    register sees an EMPTY pane, never somebody else's -- the fence fails closed, and the Access
-   codes pane is where the spelling gets corrected.
+   codes pane is where the spelling gets corrected. (syncStaffFromStock below is what keeps the
+   two spellings the same in the first place: the code is minted FROM the stock row's name.)
 
    RSM = their region: handsets they hold themselves AND handsets held by the agents who report
    to them (managerIndex below, the same line the sales targets roll up). AGENT = their own
    possession only. Every other role (STORE, ADMIN, CSM, auditors...) is unfenced: "Sipho sees
    all". The Transfers Stock window is stricter than the panes -- it lists only what the person
-   can SEND, which is what is in their own hands. */
+   can SEND, which is what is in their own hands.
+
+   THE STORE IS THE SUPER AGENT. The register has always written the warehouse's stock under the
+   name "SUPER AGENT" (Sipho's list, RUN-ME-2026-09-12-sipho-september-load.sql), and the owner's
+   word is "role store = superagent" -- so stock accepted by a STORE code is written to that
+   holder, not to the clerk's own name, and the register keeps one name for the warehouse. */
 const STOCK_SCOPED_ROLES = new Set(['RSM', 'AGENT']);
+const STORE_NODE = 'SUPER AGENT';
 const roleWord = user => K(user && user.role).replace(/[\s_-]+/g, ' ');
+const isStoreRole = role => role === 'STORE' || role === 'GHALA' || role === 'SUPER AGENT' || role === 'SUPERAGENT';
 function stockScopeRole(user) {
   if (isAdminRole(user)) return '';
   const role = roleWord(user);
@@ -2004,14 +2013,14 @@ async function stockAllow(db, user) {
     return role === 'RSM' && !!me && nameKey(rsm) === me;
   };
 }
-/** The store desk sends on anybody's behalf and sees every document. ADMIN is full access. */
-const isStoreDesk = user => isAdminRole(user) || roleWord(user) === 'STORE' || roleWord(user) === 'GHALA';
+/** The store desk sees every document and every handset. ADMIN is full access. */
+const isStoreDesk = user => isAdminRole(user) || isStoreRole(roleWord(user));
 const sameName = (a, b) => !!nameKey(a) && nameKey(a) === nameKey(b);
 const refuse403 = msg => { const e = new Error(msg); e.status = 403; throw e; };
 
 /* THE PEOPLE A HAND-OFF CAN NAME: everybody whose ACCESS CODE carries one of these roles. It is
-   the login that accepts, so a name without a code cannot be a receiver -- and the pane says so
-   in those words, because "add them at Access codes" is the fix. */
+   the login that accepts, so a name without a code cannot be a receiver -- which is why the
+   stock panes mint one (syncStaffFromStock) the moment a name appears in stock. */
 const TRANSFER_ROLES = new Set(['RSM', 'AGENT', 'STORE', 'ADMIN']);
 async function transferParties(db) {
   let rows = [];
@@ -2027,22 +2036,150 @@ async function transferParties(db) {
   }
   return seen;
 }
-/** Where each serial lives today -- two bulk reads per 200, never one per phone. A phone that
-    has been enrolled is on the register, and that answer wins over the old-stock list. */
+/** Every model the stock has ever named, for the Send form to offer -- "always prelist all
+    existing models". Three lists, one set, best effort per list. */
+async function stockModels(db) {
+  const seen = new Map();
+  const add = v => { const s = String(v == null ? '' : v).trim(); if (s && !seen.has(K(s))) seen.set(K(s), s); };
+  const feed = async (t, col) => { try { (await fetchAll(() => db.from(t).select(col))).forEach(r => add(r[col])); } catch (ignored) {} };
+  await feed('devices', 'item');
+  await feed('old_stock', 'item');
+  await feed('stock_audit', 'model');
+  return [...seen.values()].sort((a, b) => a.localeCompare(b)).slice(0, 400);
+}
+/** Where each serial lives today, and what NEW STOCK priced it at -- bulk reads per 200, never
+    one per phone. A phone that has been enrolled is on the register, and that answer wins over
+    the old-stock list. */
 async function locateStock(db, imeis) {
-  const out = new Map(imeis.map(i => [i, { source: 'unknown', holder: '', item: '', state: '', rsm: '', sold: false }]));
+  const out = new Map(imeis.map(i => [i, { source: 'unknown', holder: '', item: '', state: '', rsm: '', sold: false, price: null }]));
   for (let i = 0; i < imeis.length; i += 200) {
     const slice = imeis.slice(i, i + 200);
-    let devs = [], olds = [];
+    let devs = [], olds = [], audit = [];
     try { olds = await fetchAll(() => db.from('old_stock').select('imei, item, agent, rsm').in('imei', slice)); }
     catch (ignored) { olds = []; }
     try { devs = await fetchAll(() => db.from('devices').select('imei, item, holder, state, customer, sold_ref').in('imei', slice)); }
     catch (ignored) { devs = []; }
-    for (const o of olds) out.set(String(o.imei), { source: 'old_stock', holder: o.agent || '', item: o.item || '', state: '', rsm: o.rsm || '', sold: false });
-    for (const d of devs) out.set(String(d.imei), { source: 'devices', holder: d.holder || '', item: d.item || '', state: String(d.state || ''), rsm: '', sold: !!(d.customer || d.sold_ref) });
+    try { audit = await fetchAll(() => db.from('stock_audit').select('imei, price, model').in('imei', slice)); }
+    catch (ignored) { audit = []; }
+    for (const o of olds) out.set(String(o.imei), { source: 'old_stock', holder: o.agent || '', item: o.item || '', state: '', rsm: o.rsm || '', sold: false, price: null });
+    for (const d of devs) out.set(String(d.imei), { source: 'devices', holder: d.holder || '', item: d.item || '', state: String(d.state || ''), rsm: '', sold: !!(d.customer || d.sold_ref), price: null });
+    // "price should pull from new stock if there": the stamped audit price, when it has one.
+    for (const s of audit) {
+      const w = out.get(String(s.imei));
+      if (!w) continue;
+      const p = Number(s.price);
+      if (Number.isFinite(p) && p > 0) w.price = p;
+      if (!w.item && s.model) w.item = String(s.model);
+    }
   }
   return out;
 }
+
+/* =============================================================================================
+   THE STAFF TABLE AND THE ACCESS CODES, FILLED FROM STOCK.
+   =============================================================================================
+     "always pull them auto from new stock whenever they appear and auto insert them in access
+      codes with autogenerated code ... autofill staff table by matching rsm and agents from new
+      stock and old stock data.. when we match rsm and agent on the same imei then that's done"
+
+   Every stock row already says who holds the handset and who that person answers to. So the
+   moment a name appears on NEW STOCK or OLD STOCK it becomes a SYSTEM USER: a row in the staff
+   register (hoop_agents -- keyed by phone, so only where the row carries one) and an access code
+   with the RSM or AGENT role and a freshly minted secret, the same phone-safe alphabet a team
+   code uses. That is what lets the Send form choose a receiver by role and name, and what lets
+   the fence match a code to its stock: the code is spelled exactly as the stock spells the name.
+
+   NOBODY IS DEMOTED, NOBODY IS DUPLICATED. A name that is an RSM on one row and an agent on
+   another is an RSM. A name that already has a code -- in any role, any spelling nameKey can
+   fold -- gets nothing. A staff row that exists by phone or by name is left exactly as it is
+   (the enrolment desk owns it). "SUPER AGENT" is the warehouse, not a person; blank, numeric and
+   two-letter names are noise off a spreadsheet, not people.
+
+   BEST EFFORT, NEVER FATAL. A view-only code writes nothing; a database missing a table writes
+   nothing; an insert that is refused is reported on the pane ("codes could not be minted") rather
+   than thrown, because the stock list must open whatever happens to the register beside it. */
+function isJunkName(name) {
+  const s = String(name || '').trim();
+  if (s.length < 3) return true;
+  if (/^[\d\s\-.+()]+$/.test(s)) return true;
+  if (/^(N\/?A|NONE|NULL|UNKNOWN|HAKUNA|-+|—+)$/i.test(s)) return true;
+  return nameKey(s) === nameKey(STORE_NODE);
+}
+async function syncStaffFromStock(db, user, pairs) {
+  const out = { staffAdded: 0, codesAdded: 0, noPhone: 0, note: '' };
+  if (!user || isReadOnly(user)) return out;
+  try {
+    // 1. Who the stock names, and what it says they are.
+    const people = new Map();   // nameKey -> { name, role: 'RSM'|'AGENT', phone, manager }
+    const note = (name, role, phone, manager) => {
+      if (isJunkName(name)) return;
+      const k = nameKey(name);
+      const had = people.get(k);
+      if (!had) { people.set(k, { name: String(name).trim(), role, phone: pnorm(phone || '') || '', manager: manager || '' }); return; }
+      if (role === 'RSM' && had.role !== 'RSM') { had.role = 'RSM'; had.manager = ''; }
+      if (!had.phone && phone) had.phone = pnorm(phone) || '';
+      if (had.role === 'AGENT' && !had.manager && manager) had.manager = manager;
+    };
+    for (const p of pairs || []) {
+      if (p.rsm) note(p.rsm, 'RSM', p.rsmPhone, '');
+      if (p.agent) note(p.agent, 'AGENT', p.agentPhone, isJunkName(p.rsm) ? '' : String(p.rsm || '').trim());
+    }
+    if (!people.size) return out;
+
+    // 2. What the register and the codes already know.
+    let staff = [], codes = [];
+    try { staff = await fetchAll(() => db.from('hoop_agents').select('phone, name, role')); }
+    catch (e) { if (!tableMissing(e)) throw e; staff = null; }
+    try { codes = await fetchAll(() => db.from('access_codes').select('code, name, role')); }
+    catch (e) { if (!tableMissing(e)) throw e; codes = null; }
+
+    // 3. Staff rows: only for a person with a phone (the register's key) the register lacks.
+    //    Stored the way the enrolment desk stores it (phone0: 0 + nine digits), matched the way
+    //    everything else matches (pnorm: the nine digits) -- so a number typed as +255 7.. on the
+    //    stock sheet and 07.. on the register is one person, not two.
+    if (staff) {
+      const byPhone = new Set(staff.map(s => pnorm(s.phone || '')).filter(Boolean));
+      const byName = new Set(staff.map(s => nameKey(s.name)).filter(Boolean));
+      const rows = [];
+      for (const p of people.values()) {
+        if (byName.has(nameKey(p.name))) continue;
+        const stored = phone0(p.phone);
+        if (!stored) { out.noPhone++; continue; }
+        if (byPhone.has(p.phone)) continue;
+        byPhone.add(p.phone);
+        rows.push({ phone: stored, name: p.name, role: p.role === 'RSM' ? 'Regional_Manager' : 'Field_Officer',
+          manager: p.role === 'AGENT' && p.manager ? p.manager : null, active: true });
+      }
+      for (let i = 0; i < rows.length; i += 200) {
+        const { error } = await db.from('hoop_agents').insert(rows.slice(i, i + 200));
+        if (error) { out.note = 'Rejista ya wafanyakazi haikuandikwa: ' + error.message + ' / staff rows could not be written'; break; }
+        out.staffAdded += Math.min(200, rows.length - i);
+      }
+    }
+
+    // 4. Codes: one per name that has none, minted like a team code, with the role the stock says.
+    if (codes) {
+      const named = new Set(codes.map(c => nameKey(c.name)).filter(Boolean));
+      const existing = new Set(codes.map(c => K(c.code || '').replace(/[^0-9A-Z]/g, '')).filter(Boolean));
+      const rows = [];
+      for (const p of people.values()) {
+        if (named.has(nameKey(p.name))) continue;
+        const code = mintCode(existing);
+        existing.add(code); named.add(nameKey(p.name));
+        rows.push({ code, name: p.name, role: p.role, teams: null, tabs: [] });
+      }
+      for (let i = 0; i < rows.length; i += 200) {
+        const { error } = await db.from('access_codes').insert(rows.slice(i, i + 200));
+        if (error) { out.note = (out.note ? out.note + ' · ' : '') + 'Misimbo haikutengenezwa: ' + error.message + ' / codes could not be minted'; break; }
+        out.codesAdded += Math.min(200, rows.length - i);
+      }
+    }
+  } catch (e) {
+    out.note = 'Usawazishaji wa wafanyakazi haukufanyika: ' + String((e && e.message) || e).slice(0, 160) + ' / staff sync did not run';
+  }
+  return out;
+}
+
 const TR_COLS_BASE = 'id, ref, created_at, created_by, from_name, from_phone, to_name, to_phone, '
   + 'note, item_count, total_qty, total_amount, sender_signed_by, sender_signed_at, '
   + 'receiver_signed_by, receiver_signed_at';
@@ -2096,8 +2233,6 @@ async function trOne(db, id) {
   if (!data) bad('Uhamisho huu haujulikani. / That transfer was not found.');
   return data;
 }
-/* A signature pad this small never legitimately produces a huge PNG; a data URL far past that
-   is either a mistaken paste or something worth refusing rather than storing. */
 /* A BULK LINE IS A SERIAL AND A NAME. Straight off a spreadsheet: the IMEI, then a tab, comma or
    semicolon (or just a space), then the receiver's name -- which may itself contain spaces, so
    it is everything after the serial. One line per phone; blank lines are nothing; anything
@@ -2116,7 +2251,8 @@ function trParseBulk(text) {
   });
   return { rows, bad };
 }
-
+/* A signature pad this small never legitimately produces a huge PNG; a data URL far past that
+   is either a mistaken paste or something worth refusing rather than storing. */
 function trCheckSig(sig) {
   if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sig)) bad('Sahihi haikutambulika. / That signature was not recognised.');
   if (sig.length > 400000) bad('Sahihi ni kubwa mno. Jaribu tena. / That signature is too large. Please try again.');
@@ -6571,6 +6707,8 @@ const FNS = {
        -- see stockAllow. Applied before every count, so a fenced code's numbers are theirs. */
     const allow = await stockAllow(db, user);
     const open = allow ? idx.open.filter(r => allow(r.agent, r.agent, r.rsm)) : idx.open.slice();
+    // Who the stock names becomes a system user -- off the WHOLE list, before the fence (see newStock).
+    const staffSync = await syncStaffFromStock(db, user, idx.open.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })));
     const q = String(a.q == null ? '' : a.q).replace(/\D/g, '');
     const who = K(a.agent || '');
     const boss = K(a.rsm || '');
@@ -6666,7 +6804,7 @@ const FNS = {
     return { ok: true, notReady: idx.notReady,
       notReadyNote: idx.notReady ? OLDSTOCK_NOT_READY : '',
       asOf: Date.now(), q, agent: String(a.agent || ''), rsm: String(a.rsm || ''),
-      location: String(a.location || ''), hasLoc: idx.hasLoc, placed, placeNote,
+      location: String(a.location || ''), hasLoc: idx.hasLoc, placed, placeNote, staffSync,
       rows: shown.slice(0, 2000), shown: shown.length,
       agents: [...new Set(open.map(r => r.agent).filter(Boolean))].sort(),
       rsms: [...new Set(open.map(r => r.rsm).filter(Boolean))].sort(),
@@ -7068,6 +7206,12 @@ const FNS = {
       }
     }
 
+    /* WHO THE STOCK NAMES BECOMES A SYSTEM USER -- see syncStaffFromStock. Off the fenced rows
+       would be wrong (an RSM's open must not be the only thing that minted their agents' codes
+       -- it is the DESK's open that should), so it reads the whole register's rsm/agent columns
+       before the fence; it writes only what is missing, and only for a code that can write. */
+    const staffSync = await syncStaffFromStock(db, user, rows.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })));
+
     /* WORST FIRST: a handset that has never once spoken, then the longest silence. That is the
        order somebody chasing stock wants, and every column still sorts on its own click. */
     rows.sort((x, y) => (y.neverSeen ? 1 : 0) - (x.neverSeen ? 1 : 0)
@@ -7090,7 +7234,7 @@ const FNS = {
     });
 
     const count = st => rows.filter(r => r.status === st).length;
-    return { ok: true, notReady, noDevices, hasLoc,
+    return { ok: true, notReady, noDevices, hasLoc, staffSync,
       /* `wk` slides the top-and-bottom board only -- never the table, the tiles or the two
          progress cards, which is why it is read here and nowhere else in this function. */
       newSales: newStockSales(rows, now, agents, a.wk),
@@ -9854,33 +9998,42 @@ const FNS = {
         navigation by sender and receiver so that we could export and print."
        "RSM requests stock from sipho. 1. Sipho / Store transfers them to RSM -- IMEI, To and
         Fro names, Tarehe, Qty, Model. 2. RSM to Agents -- supplying. 3. Agent to RSM (the
-        returns for re-allocations). 4. RSM / Agent to Sipho / Store. 5. RSM to RSM (Sipho
-        does it on system, they log in to sign)."
+        returns for re-allocations). 4. RSM / Agent to Sipho / Store. 5. RSM to RSM."
        "Transfers -- Window 3: Stock (each can see stock in their possession), Send (can
         select imei no or input list of imei nos and search system user to send to), Receive
         (find received and decline or accept to overwrite stock ownership)."
+       "sender must be current account settings. role store = superagent. ... choose receiver
+        by choosing role and then choose in list of users in the role ... model - always
+        prelist all existing models ... price should pull from new stock if there unless dont
+        fill. imei list as the blank fill implemented thats the 1st input by text in transfers
+        and optional note."
 
-     THREE WINDOWS, ONE LEDGER. A transfer is opened by the sender -- or by the store desk on
-     somebody's behalf, which is flow 5 word for word -- and sits as `sent` until the receiver
-     logs in and either ACCEPTS it, signing on their own screen, or DECLINES it with a reason.
-     Acceptance is the one moment stock changes hands: the holder on every handset in the
-     document is overwritten to the receiver -- on the register (devices.holder) for a locked
-     phone, on the old-stock list (old_stock.agent) for one never enrolled. Nothing moves on a
-     decline, and nothing moves while the document waits.
+     THREE WINDOWS, ONE LEDGER. A transfer is opened by the sender -- always the signed-in
+     account, never a typed name -- and sits as `sent` until the receiver logs in and either
+     ACCEPTS it, signing on their own screen, or DECLINES it with a reason. Acceptance is the
+     one moment stock changes hands: the holder on every handset in the document is
+     overwritten to the receiver -- on the register (devices.holder) for a locked phone, on
+     the old-stock list (old_stock.agent) for one never enrolled -- and a STORE code receives
+     as "SUPER AGENT", the register's one name for the warehouse. Nothing moves on a decline,
+     and nothing moves while the document waits.
 
      WHO CAN SEND WHAT. A sender who is not the store desk can only send stock in their own
-     possession -- the same list their Stock window shows. The desk (and ADMIN) may send
-     anything from anybody, and the two parties then log in to sign. The receiver must be a
-     SYSTEM USER -- an access code with the RSM, AGENT or STORE role, found by name -- because
-     it is their login that accepts. NOT a device moving to the other company: that is Shift,
-     on the locking desk, and it stays there.
+     possession -- the same list their Stock window shows. The desk (STORE, ADMIN) may send
+     any handset, because the warehouse's stock is written under SUPER AGENT and the desk is
+     that name. The receiver is chosen by ROLE and then by NAME among SYSTEM USERS -- access
+     codes carrying RSM, AGENT or STORE -- because it is their login that accepts; the stock
+     panes mint those codes the moment a name appears on stock (syncStaffFromStock). NOT a
+     device moving to the other company: that is Shift, on the locking desk, and it stays
+     there.
 
-     A SIGNATURE IS WRITTEN ONCE. There is no re-sign: a mis-signed transfer is corrected with
-     a fresh one, the discipline a mis-posted payment gets everywhere else in this system.
+     A SIGNATURE IS WRITTEN ONCE, BY ITS OWNER. There is no re-sign and nobody signs in
+     another's name: a mis-signed transfer is corrected with a fresh one, the discipline a
+     mis-posted payment gets everywhere else in this system.
      Schema: db/migrations/RUN-ME-2026-09-16-transfers.sql (the document) and
      RUN-ME-2026-09-17-transfers-flow.sql (sent / accepted / declined, and who is who). */
 
-  /** Everybody a transfer can be sent to: a name to type against, never a code. */
+  /** The Send form's vocabulary: everybody a transfer can be sent to, grouped by role on the
+      page; every model the stock has ever named; and who is sending, which is always you. */
   async transferUsers(db, user, args) {
     requireNav(user, 'transfers');
     const q = K((args || {}).q);
@@ -9889,10 +10042,10 @@ const FNS = {
     const users = [...parties.values()]
       .filter(p => nameKey(p.name) !== me)
       .filter(p => !q || K(p.name).includes(q) || K(p.role).includes(q))
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .slice(0, 30);
-    // The desk may name who is handing over (flow 5); the page shows that box only to it.
-    return { ok: true, users, desk: isStoreDesk(user) };
+      .sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name));
+    const models = await stockModels(db);
+    return { ok: true, users, models, desk: isStoreDesk(user),
+      sender: { name: String(user.name || ''), role: roleWord(user) } };
   },
 
   /** THE STOCK WINDOW: what this person is holding right now -- exactly what they can send.
@@ -10002,15 +10155,26 @@ const FNS = {
     }) };
   },
 
-  /** SEND. Who receives (a system user), which serials (in the sender's own hands, unless the
-      desk is doing this), one shared model and unit price for the batch, and the sender's
-      signature if the sender is the one at the keyboard. */
+  /** SEND. The serials (in the sender's own hands, unless the desk is doing this), who
+      receives (a system user), a model and a price for the batch -- the price pulled off NEW
+      STOCK per handset when the box is left blank -- and the sender's signature. The sender is
+      the signed-in account, full stop. */
   async transferCreate(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
     const desk = isStoreDesk(user);
     const parties = await transferParties(db);
 
+    /* WHO IS HANDING OVER: you. "sender must be current account settings" -- a typed sender
+       is refused even from the desk, because a document that says RSM A handed over must have
+       been opened by RSM A's own login. */
+    const fromName = String(user.name || '').trim();
+    const fromRole = roleWord(user);
+    const fromTyped = String(a.fromName || '').trim();
+    if (fromTyped && !sameName(fromTyped, fromName)) {
+      bad('Anayetoa ni wewe uliyeingia (' + fromName + '); uhamisho hufunguliwa na mtoaji mwenyewe. '
+        + '/ The sender is the signed-in account (' + fromName + '); a transfer is opened by the sender themselves.');
+    }
     const toTyped = String(a.toName || '').trim();
     if (!toTyped) bad('Chagua anayepokea. / Choose who receives.');
     const to = parties.get(nameKey(toTyped));
@@ -10018,17 +10182,6 @@ const FNS = {
       bad('"' + toTyped + '" si mtumiaji wa mfumo — anahitaji msimbo wa kuingia (RSM, AGENT au STORE) ili '
         + 'aweze kupokea. / "' + toTyped + '" is not a system user — they need an access code (RSM, '
         + 'AGENT or STORE) to be able to accept.');
-    }
-    /* WHO IS HANDING OVER: yourself -- unless the desk is doing it for somebody (flow 5). */
-    let fromName = String(user.name || '').trim();
-    let fromRole = roleWord(user);
-    const fromTyped = String(a.fromName || '').trim();
-    if (desk && fromTyped && !sameName(fromTyped, user.name)) {
-      const f = parties.get(nameKey(fromTyped));
-      if (!f) bad('"' + fromTyped + '" si mtumiaji wa mfumo. / "' + fromTyped + '" is not a system user.');
-      fromName = f.name; fromRole = f.role;
-    } else if (!desk && fromTyped && !sameName(fromTyped, user.name)) {
-      bad('Unaweza kutuma stoo yako tu. / You can only send as yourself.');
     }
     if (sameName(fromName, to.name)) bad('Anayetoa na anayepokea ni mtu mmoja. / Sender and receiver are the same person.');
 
@@ -10045,7 +10198,8 @@ const FNS = {
     if (imeis.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). Gawa kwa makundi. '
       + '/ Too many at once — 500 max. Split the list into batches.');
     const item = String(a.item || '').trim();
-    const price = Math.max(0, Number(a.price) || 0);
+    const priceTyped = String(a.price == null ? '' : a.price).trim();
+    const priceAll = priceTyped === '' ? null : Math.max(0, Number(priceTyped) || 0);
 
     /* THE HIERARCHY RULE (the owner, 2026-09-16): "it could be between super agent/store and
        rsm, rsm and rsm, agent and agent, agent and super agent -- all possibilities between
@@ -10074,9 +10228,9 @@ const FNS = {
         + 'or Super Agent instead.');
     }
 
-    /* POSSESSION. You send what is in your hands. The desk is exempt -- "Sipho does it on
-       system" -- but even the desk's document records where each serial was, so the printed
-       copy says whose hands it left. */
+    /* POSSESSION. You send what is in your hands. The desk is exempt -- the warehouse's stock
+       is written under SUPER AGENT and the desk is that name -- but even the desk's document
+       records where each serial was, so the printed copy says whose hands it left. */
     const where = await locateStock(db, imeis);
     if (!desk) {
       const notMine = imeis.filter(i => {
@@ -10090,17 +10244,21 @@ const FNS = {
           + 'your possession (' + eg + '). You can only send stock you are holding — see the Stock window.');
       }
     }
+    /* THE PRICE, PER HANDSET: the box if it was filled, else what NEW STOCK stamped for that
+       serial, else nothing -- "price should pull from new stock if there unless dont fill". */
+    const priceOf = imei => priceAll != null ? priceAll : (where.get(imei).price || 0);
+    const total = imeis.reduce((s, i) => s + priceOf(i), 0);
+    const priced = priceAll != null ? imeis.length : imeis.filter(i => where.get(i).price).length;
 
     const sig = String(a.signature || '');
     if (sig) trCheckSig(sig);
-    const senderSigns = !!sig && sameName(fromName, user.name);
 
     /* A DRY RUN answers every question the real thing would -- who, what, whose hands -- and
        writes nothing. transferCreateBulk asks it once per receiver before opening any document,
        so a list with one bad line opens no documents at all. */
     if (a.dryRun) {
       return { ok: true, dryRun: true, fromName, toName: to.name, count: imeis.length,
-        unknown: imeis.filter(i => where.get(i).source === 'unknown').length };
+        unknown: imeis.filter(i => where.get(i).source === 'unknown').length, priced };
     }
 
     /* THE REFERENCE IS MADE HERE, NOT BY THE DATABASE. A sequence-backed daily counter would
@@ -10114,14 +10272,14 @@ const FNS = {
       + Math.random().toString(36).slice(2, 5).toUpperCase();
     const at = new Date().toISOString();
     const row = {
-      ref, from_name: fromName, from_phone: String(a.fromPhone || '').trim() || null,
-      to_name: to.name, to_phone: String(a.toPhone || '').trim() || null,
+      ref, from_name: fromName, from_phone: null,
+      to_name: to.name, to_phone: null,
       note: String(a.note || '').trim() || null,
-      item_count: imeis.length, total_qty: imeis.length, total_amount: imeis.length * price,
+      item_count: imeis.length, total_qty: imeis.length, total_amount: total,
       created_by: user.name, created_at: at, updated_at: at,
       status: 'sent', from_role: fromRole, to_role: to.role,
     };
-    if (senderSigns) { row.sender_signature = sig; row.sender_signed_by = user.name; row.sender_signed_at = at; }
+    if (sig) { row.sender_signature = sig; row.sender_signed_by = user.name; row.sender_signed_at = at; }
     let ins = await db.from('transfers').insert([row]).select('id, ref');
     if (ins.error && TR_FLOW_RX.test(String(ins.error.message || ''))) {
       /* The document migration ran, the flow one has not: the document still opens, and the
@@ -10139,7 +10297,7 @@ const FNS = {
 
     const lines = imeis.map(imei => {
       const w = where.get(imei);
-      return { transfer_id: inserted.id, imei, item: item || w.item || null, qty: 1, price,
+      return { transfer_id: inserted.id, imei, item: item || w.item || null, qty: 1, price: priceOf(imei),
         source: w.source, prev_holder: w.holder || null };
     });
     let itemsRes = await db.from('transfer_items').insert(lines);
@@ -10148,8 +10306,8 @@ const FNS = {
     }
     if (itemsRes.error) throw new Error(itemsRes.error.message);
 
-    return { ok: true, id: inserted.id, ref: inserted.ref, changed: imeis.length,
-      unknown: imeis.filter(i => where.get(i).source === 'unknown').length, senderSigned: senderSigns };
+    return { ok: true, id: inserted.id, ref: inserted.ref, changed: imeis.length, priced,
+      unknown: imeis.filter(i => where.get(i).source === 'unknown').length, senderSigned: !!sig };
   },
 
   /** BULK: one pasted list, many receivers -- "RSM to Agents, supplying" without eight separate
@@ -10194,7 +10352,7 @@ const FNS = {
       const g = groups.get(k);
       if (!g.imeis.includes(r.imei)) g.imeis.push(r.imei);
     }
-    const shared = { fromName: a.fromName, item: a.item, price: a.price, note: a.note, signature: a.signature };
+    const shared = { item: a.item, price: a.price, note: a.note, signature: a.signature };
 
     // EVERY GROUP IS CHECKED BEFORE ANY IS OPENED.
     const problems = [];
@@ -10214,8 +10372,8 @@ const FNS = {
     return { ok: true, documents: created.length, serials: rows.length, created };
   },
 
-  /** ACCEPT -- the receiver's signature, and the moment the stock changes hands. The move is
-      written BEFORE the document is marked accepted, so a write that fails halfway leaves a
+  /** ACCEPT -- the receiver's own signature, and the moment the stock changes hands. The move
+      is written BEFORE the document is marked accepted, so a write that fails halfway leaves a
       document still waiting (and a retry that simply sets the same holders again) rather than
       a document that says "accepted" over stock that never moved. */
   async transferAccept(db, user, args) {
@@ -10226,14 +10384,18 @@ const FNS = {
     const sig = String(a.signature || '');
     trCheckSig(sig);
     const t = await trOne(db, id);
-    const mine = sameName(t.to_name, user.name);
-    if (!mine && !isStoreDesk(user)) refuse403('Uhamisho huu haukutumwa kwako. / This transfer was not sent to you.');
+    if (!sameName(t.to_name, user.name)) refuse403('Uhamisho huu haukutumwa kwako; mpokeaji anakubali kwa msimbo wake mwenyewe. / This transfer was not sent to you; the receiver accepts under their own code.');
     const status = trStatusOf(t);
     if (status !== 'sent') bad(status === 'accepted'
       ? 'Uhamisho huu tayari umekubaliwa. / This transfer has already been accepted.'
       : 'Uhamisho huu ulikataliwa. / This transfer was declined.');
     if (t.receiver_signed_by) bad('Tayari kimesainiwa na ' + t.receiver_signed_by + '. / Already signed, by ' + t.receiver_signed_by + '.');
-    const signedBy = mine ? String(user.name) : (String(a.signedBy || '').trim() || String(t.to_name));
+
+    /* WHOSE HANDS IT GOES INTO. The receiver's name -- unless the receiver is the store desk,
+       whose stock the register has always written under SUPER AGENT ("role store =
+       superagent"): one name for the warehouse, whichever clerk signed for it. */
+    let toRole = K(t.to_role || '').replace(/[\s_-]+/g, ' ') || roleWord(user);
+    const holder = isStoreRole(toRole) ? STORE_NODE : String(t.to_name);
 
     const items = await fetchAll(() => db.from('transfer_items').select('imei').eq('transfer_id', id));
     const imeis = [...new Set(items.map(i => String(i.imei)))];
@@ -10244,26 +10406,24 @@ const FNS = {
 
     for (let i = 0; i < devIm.length; i += 200) {
       const slice = devIm.slice(i, i + 200);
-      const { error } = await db.from('devices').update({ holder: t.to_name, updated_at: at }).in('imei', slice);
+      const { error } = await db.from('devices').update({ holder, updated_at: at }).in('imei', slice);
       if (error) throw new Error(error.message);
     }
     if (devIm.length) {
       // History gets the hand-over, one line per handset, the same trail a lock or a shift leaves.
       await db.from('device_events').insert(devIm.map(imei => ({
         imei, event: 'transfer', from_state: null, to_state: null,
-        reason: 'kutoka ' + t.from_name + ' kwenda ' + t.to_name + ' / from ' + t.from_name
-          + ' to ' + t.to_name + ' (' + t.ref + ')',
+        reason: 'kutoka ' + t.from_name + ' kwenda ' + holder + ' / from ' + t.from_name
+          + ' to ' + holder + ' (' + t.ref + ')',
         actor: user.name, at })));
     }
     if (oldIm.length) {
       /* The old list carries the RSM beside the holder. It follows the receiver: an RSM is
          their own, an agent's is whoever the register says they report to, and stock back at
          the desk answers to nobody in the field. Left alone where nothing can be said. */
-      let toRole = K(t.to_role || '').replace(/[\s_-]+/g, ' ');
-      if (!toRole) { const p = (await transferParties(db)).get(nameKey(t.to_name)); toRole = p ? p.role : ''; }
-      const patch = { agent: t.to_name, updated_at: at };
+      const patch = { agent: holder, updated_at: at };
       if (toRole === 'RSM') patch.rsm = t.to_name;
-      else if (toRole === 'STORE' || toRole === 'ADMIN') patch.rsm = null;
+      else if (isStoreRole(toRole) || toRole === 'ADMIN') patch.rsm = null;
       else if (toRole === 'AGENT') {
         let agents = [];
         try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); } catch (ignored) { agents = []; }
@@ -10277,7 +10437,7 @@ const FNS = {
       }
     }
     const moved = devIm.length + oldIm.length;
-    const upd = { receiver_signature: sig, receiver_signed_by: signedBy, receiver_signed_at: at,
+    const upd = { receiver_signature: sig, receiver_signed_by: String(user.name), receiver_signed_at: at,
       status: 'accepted', accepted_at: at, accepted_by: user.name, moved, updated_at: at };
     let res = await db.from('transfers').update(upd).eq('id', id);
     if (res.error && TR_FLOW_RX.test(String(res.error.message || ''))) {
@@ -10285,7 +10445,7 @@ const FNS = {
       res = await db.from('transfers').update(base).eq('id', id);
     }
     if (res.error) throw new Error(res.error.message);
-    return { ok: true, id, moved, devices: devIm.length, oldStock: oldIm.length, unknown: imeis.length - moved };
+    return { ok: true, id, moved, holder, devices: devIm.length, oldStock: oldIm.length, unknown: imeis.length - moved };
   },
 
   /** DECLINE -- the receiver says no, in words. Nothing moves. */
@@ -10297,7 +10457,7 @@ const FNS = {
     const reason = String(a.reason || '').trim();
     if (!reason) bad('Andika sababu ya kukataa. / A reason is required to decline.');
     const t = await trOne(db, id);
-    if (!sameName(t.to_name, user.name) && !isStoreDesk(user)) refuse403('Uhamisho huu haukutumwa kwako. / This transfer was not sent to you.');
+    if (!sameName(t.to_name, user.name)) refuse403('Uhamisho huu haukutumwa kwako. / This transfer was not sent to you.');
     const status = trStatusOf(t);
     if (status !== 'sent') bad(status === 'accepted'
       ? 'Uhamisho huu tayari umekubaliwa; hauwezi kukataliwa sasa. / Already accepted; it cannot be declined now.'
@@ -10314,9 +10474,9 @@ const FNS = {
     return { ok: true, id };
   },
 
-  /** The SENDER's signature, once -- for the document the desk opened on their behalf, or one
-      they sent without signing. The receiver never signs here: their signature IS the
-      acceptance (transferAccept), because that is the write that moves the stock. */
+  /** The SENDER's own signature, once -- for a document sent without signing. The receiver
+      never signs here: their signature IS the acceptance (transferAccept), because that is
+      the write that moves the stock. */
   async transferSign(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
@@ -10327,16 +10487,14 @@ const FNS = {
     const sig = String(a.signature || '');
     trCheckSig(sig);
     const t = await trOne(db, id);
-    const mine = sameName(t.from_name, user.name);
-    if (!mine && !isStoreDesk(user)) refuse403('Uhamisho huu si wako kusaini. / This transfer is not yours to sign.');
+    if (!sameName(t.from_name, user.name)) refuse403('Uhamisho huu si wako kusaini; mtoaji anasaini kwa msimbo wake mwenyewe. / This transfer is not yours to sign; the sender signs under their own code.');
     if (t.sender_signed_by) bad('Tayari kimesainiwa na ' + t.sender_signed_by + '. / Already signed, by ' + t.sender_signed_by + '.');
-    const signedBy = mine ? String(user.name) : (String(a.signedBy || '').trim() || String(t.from_name));
     const at = new Date().toISOString();
     const { error } = await db.from('transfers')
-      .update({ sender_signature: sig, sender_signed_by: signedBy, sender_signed_at: at, updated_at: at })
+      .update({ sender_signature: sig, sender_signed_by: String(user.name), sender_signed_at: at, updated_at: at })
       .eq('id', id);
     if (error) throw new Error(error.message);
-    return { ok: true, id, role, signedBy };
+    return { ok: true, id, role, signedBy: String(user.name) };
   },
 };
 
