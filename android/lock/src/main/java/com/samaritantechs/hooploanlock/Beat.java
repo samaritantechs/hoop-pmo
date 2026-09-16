@@ -76,6 +76,11 @@ class Beat {
                    class of mystery. Empty on a build with no push compiled in. */
                 String fcm = Prefs.str(c, Prefs.FCM_TOKEN, "");
                 if (fcm != null && !fcm.isEmpty()) payload.put("fcmToken", fcm);
+                /* WHAT THIS PHONE MADE OF THE RESET-PROTECTION POLICY -- set, cleared,
+                   unsupported or error -- so the register counts the handsets actually fenced
+                   rather than assuming every one that was sent the accounts took them. */
+                String frp = Frp.state(c);
+                if (!frp.isEmpty()) payload.put("frp", frp);
                 /* WHERE IT WAS WHEN IT LAST SPOKE.
                    -------------------------------------------------------------------------
                      "the management gets headache on aged stock [stolen, lost, sold-by-cash
@@ -192,6 +197,11 @@ class Beat {
            that sends neither field -- see LockLogo.apply. Deliberately ABOVE the retire block,
            so a released handset's `logo: null` clears our mark off it on the way out. */
         LockLogo.apply(c, r);
+        /* WHO MAY SET THIS PHONE UP AGAIN AFTER A WIPE -- see Frp. Above the retire block for
+           the same reason as the logo: a retiring handset is sent an empty list, and applying
+           it here is what takes the fence off on the way out, before ownership is dropped and
+           the app can no longer write it. */
+        Frp.apply(c, r);
 
         if (r.optBoolean("retire", false)) {
             /* A RELEASED PHONE NEVER SELF-LOCKS AGAIN, and this line is load-bearing now that

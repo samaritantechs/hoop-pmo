@@ -38,8 +38,10 @@ const BEAT_COLS_LEGACY = 'imei, item, state, state_reason, reported, enrol_token
 const BEAT_COLS_SHIFT = ', shift_server, shift_batch';
 // fcm_token is read only so the beat can tell whether the handset's address has CHANGED --
 // two hundred phones beating every minute would otherwise be two hundred needless writes a
-// minute. See byToken for what happens where the migration has not run yet.
+// minute. See byToken for what happens where the migration has not run yet. frp likewise:
+// read so the handset's word on its reset protection is written only when it changes.
 const BEAT_COLS = BEAT_COLS_LEGACY + ', fcm_token';
+const BEAT_COLS_FRP = ', frp';
 
 const S = v => String(v == null ? '' : v).trim();
 
@@ -246,6 +248,40 @@ async function bootGraceFor(db) {
   };
 }
 
+/* WHO MAY SET A WIPED HANDSET UP AGAIN -- Factory Reset Protection, named by the office.
+   =========================================================================================
+     "does our lock persist through OS rebootings of (Flashing ROMs / Fastboot flashing,
+      Odin (Samsung), SP Flash Tool, Fastboot/ADB commands)"
+
+   It does not, and no app can: a full reflash replaces the partition this app lives in. What
+   DOES outlive a wipe is the FRP record in the persistent partition, which Odin and fastboot
+   leave alone. A Device Owner may write that record without any Google account being signed
+   in on the phone (setFactoryResetProtectionPolicy, Android 11+, Google services present):
+   after ANY wipe -- recovery, Odin with CSC, fastboot -w -- the setup wizard then demands one
+   of the accounts named here before the phone is usable. It does not survive a MediaTek
+   "Format all", which erases that partition too; said plainly in DEVICE-LOCKING.md.
+
+   ACCOUNT IDS, NOT ADDRESSES. The policy takes each Google account's numeric ID (what the
+   People API returns as people/<id>), not its e-mail; the Settings pane says how to read one
+   off the account. Digits only, so a pasted address cannot reach the handset as a policy that
+   names nobody.
+
+   THREE STATES, AND THE DIFFERENCE IS THE WHOLE SAFETY OF IT: an UNREADABLE settings table
+   sends NO field, so the handset keeps the policy it has (a wobble must not strip the fleet's
+   protection); a key that is SET BUT BLANK sends an empty list, which clears the policy on
+   every phone -- the office's decision, carried out; a retiring handset is sent an empty list
+   too, because a paid-off phone is nobody's to fence, and the customer's own account then
+   protects it the ordinary way. What each handset made of it comes back on the beat as `frp`
+   (set / cleared / unsupported / error), kept on the row so the register can say which phones
+   are actually protected rather than assume all of them are. */
+async function frpFor(db) {
+  const rows = await readSettings(db, ['DEVICE_FRP_ACCOUNT_IDS']);
+  if (rows === null) return undefined;                          // could not ask: say nothing
+  const raw = rows.length ? S(rows[0].value) : '';
+  const ids = raw.split(/[\s,;]+/).map(x => x.replace(/\D/g, '')).filter(x => x.length >= 6);
+  return [...new Set(ids)].slice(0, 10);
+}
+
 /* THE TOKEN IS THE IDENTITY, and the handset's claim about itself is not.
 
    An earlier cut of this asked the phone for its IMEI and matched the pair. That put the
@@ -269,20 +305,29 @@ async function byToken(db, p) {
   let rows;
   try {
     rows = await fetchAll(() => db.from('devices')
-      .select(BEAT_COLS + BEAT_COLS_SHIFT).eq('enrol_token', token));
+      .select(BEAT_COLS + BEAT_COLS_SHIFT + BEAT_COLS_FRP).eq('enrol_token', token));
   } catch (e) {
-    if (/shift_server|shift_batch/.test(String(e && e.message || ''))) {
+    /* One optional column at a time has been added to this read, and each migration may or
+       may not have been run: the frp column (2026-09-18), the shift pair (2026-09-15), the
+       push address (2026-08-28). Rather than a ladder of every combination, drop whichever
+       column the refusal NAMES and ask again, down to the columns that have always existed. */
+    const optional = [
+      { cols: BEAT_COLS_FRP, rx: /\bfrp\b/ },
+      { cols: BEAT_COLS_SHIFT, rx: /shift_server|shift_batch/ },
+      { cols: ', fcm_token', rx: /fcm_token/ },
+    ];
+    let keep = optional.slice();
+    let err = e;
+    for (;;) {
+      const msg = String(err && err.message || '');
+      const hit = keep.find(o => o.rx.test(msg));
+      if (!hit) throw err;
+      keep = keep.filter(o => o !== hit);
       try {
-        rows = await fetchAll(() => db.from('devices').select(BEAT_COLS).eq('enrol_token', token));
-      } catch (e2) {
-        if (!/fcm_token/.test(String(e2 && e2.message || ''))) throw e2;
         rows = await fetchAll(() => db.from('devices')
-          .select(BEAT_COLS_LEGACY).eq('enrol_token', token));
-      }
-    } else if (/fcm_token/.test(String(e && e.message || ''))) {
-      rows = await fetchAll(() => db.from('devices').select(BEAT_COLS_LEGACY).eq('enrol_token', token));
-    } else {
-      throw e;
+          .select(BEAT_COLS_LEGACY + keep.map(o => o.cols).join('')).eq('enrol_token', token));
+        break;
+      } catch (e2) { err = e2; }
     }
   }
   const dev = rows.find(r => S(r.enrol_token) === token) || null;
@@ -323,6 +368,10 @@ async function beat(db, [payload], nowMs) {
   // A battery reading is only ever 0-100; anything else is a bug on the handset, not a fact.
   const bat = Number(p.battery);
   if (Number.isFinite(bat) && bat >= 0 && bat <= 100) patch.battery = Math.round(bat);
+  /* WHAT THE HANDSET MADE OF THE RESET-PROTECTION POLICY -- see frpFor. A short word
+     (set:2, cleared, unsupported:android<11, unsupported:no-gms, error:...), written only
+     when it changes, so the register can count the phones that are actually fenced. */
+  if (S(p.frp) && S(p.frp) !== S(dev.frp)) patch.frp = S(p.frp).slice(0, 80);
   /* WHERE THE HANDSET WAS WHEN IT LAST SPOKE, with the age of the fix beside it.
      -----------------------------------------------------------------------------------------
        "am asked if the app could trap last sync with location coordinates"
@@ -356,9 +405,9 @@ async function beat(db, [payload], nowMs) {
      than any of them -- a phone that cannot report its state is a phone the office has lost,
      while a phone that cannot report its battery, its push address or where it was is merely
      one the office cannot hurry or cannot find. */
-  if (error && /reported_imei|fcm_token|last_lat|last_lng|last_loc_acc|last_loc_at/
+  if (error && /reported_imei|fcm_token|last_lat|last_lng|last_loc_acc|last_loc_at|\bfrp\b/
         .test(String(error.message || ''))) {
-    const { reported_imei, fcm_token, last_lat, last_lng, last_loc_acc, last_loc_at,
+    const { reported_imei, fcm_token, last_lat, last_lng, last_loc_acc, last_loc_at, frp,
             ...rest } = patch;
     ({ error } = await db.from('devices').update(rest).eq('imei', imei));
   }
@@ -389,6 +438,10 @@ async function beat(db, [payload], nowMs) {
      calling home, so there is no lock screen for a window to be a window INTO. Sending one
      would only leave a stale number in a former customer's storage. */
   const boot = retire ? { minutes: 0, everyHours: 0 } : await bootGraceFor(db);
+  /* THE RESET-PROTECTION ACCOUNTS ride on every beat like the words do, so a phone that was
+     out before the office named them is fenced on its next beat -- no re-enrol, no cable. A
+     retiring phone is sent an empty list: the fence comes off with the rest of ownership. */
+  const frpAccounts = retire ? [] : await frpFor(db);
   /* HAS THIS PHONE DONE WHAT IT WAS TOLD? Compare the order against what the handset just
      said it is doing -- `reported` from this very beat when it spoke, the stored value when
      it did not. A phone that has never reported at all counts as unlocked, which is true:
@@ -423,6 +476,9 @@ async function beat(db, [payload], nowMs) {
     bootGraceEveryHours: boot.everyHours,
     // So a released phone can stop calling home for good rather than beating forever.
     retire,
+    /* Who may set this handset up after a wipe. ABSENT when settings could not be read, so
+       the phone keeps what it has; [] when the office cleared it or the phone is retiring. */
+    frpAccounts,
     /* WHEN TO COME BACK -- decided here, because only the server knows whether an order is
        still outstanding.
        =====================================================================================
@@ -487,9 +543,12 @@ async function hello(db, [payload], nowMs) {
   const at = new Date(nowMs).toISOString();
   await db.from('devices').update({ last_seen: at, updated_at: at }).eq('imei', dev.imei);
   const words = await lockWords(db);
+  /* The reset-protection accounts go down with the handshake too, so a phone is fenced while
+     it is still on the bench with the box open -- before it can leave in anybody's pocket. */
+  const frpAccounts = await frpFor(db);
   return { ok: true, imei: dev.imei, item: dev.item || null, state: dev.state,
     command: commandFor(dev.state), reason: S(dev.state_reason) || null,
-    brand: words.brand, message: words.message, helpPhone: words.helpPhone };
+    brand: words.brand, message: words.message, helpPhone: words.helpPhone, frpAccounts };
 }
 
 /* ---------------------------------------------------------------------------------------

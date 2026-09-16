@@ -226,6 +226,13 @@ public class LockAdmin extends DeviceAdminReceiver {
             }
         }
         try { d.setUninstallBlocked(me, c.getPackageName(), false); } catch (Exception ignored) { }
+        /* AND THE RESET-PROTECTION FENCE COMES OFF. A paid-off phone is nobody's to fence: from
+           here the customer's own account protects it the ordinary way. Cleared HERE as well as
+           by the retiring beat (Frp.apply on an empty list), because the cable RELEASE and the
+           fourteen-day self-release reach this without any beat having said so -- and a former
+           customer whose phone still demanded HOOP's account after a wipe would be the exact
+           thing achia promises not to leave behind. */
+        try { Frp.clear(c); } catch (Exception ignored) { }
         // And step down as Device Owner entirely, which is what actually hands the phone back.
         // Deprecated since API 26 but still the only way for an app to give up ownership, and
         // present on every version this stock spans -- so it is called unguarded.

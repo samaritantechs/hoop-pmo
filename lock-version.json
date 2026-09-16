@@ -1,6 +1,6 @@
 {
-  "versionCode": 24,
-  "versionName": "1.11.11",
-  "notes": "Nambari ya IMEI kwenye skrini iliyofungwa sasa ni nyeupe na nzito -- rahisi kusoma unapoisoma kwa simu. / The IMEI on the locked screen is white and bold now -- easier to read out over a phone call.",
+  "versionCode": 25,
+  "versionName": "1.12.0",
+  "notes": "Ulinzi baada ya kufutwa (Factory Reset Protection): simu iliyofutwa kwa recovery, Odin au fastboot inasimama kwenye setup ikiomba akaunti ya Google ya HOOP iliyowekwa kwenye Settings (DEVICE_FRP_ACCOUNT_IDS); inaondolewa simu ikiachiwa. / After a wipe (recovery, Odin, fastboot) the setup wizard now demands the HOOP Google account named in Settings; cleared on release.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
