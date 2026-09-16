@@ -63,6 +63,11 @@ class Prefs {
        told. See bootGraceFor() in device-core.js. */
     static final String BOOT_GRACE_MINUTES = "bootGraceMinutes";
     static final String BOOT_GRACE_EVERY_HOURS = "bootGraceEveryHours";
+    /* THE RESET-PROTECTION ACCOUNTS LAST APPLIED, and what the system made of it -- see Frp.
+       The list is kept so an unchanged answer never rewrites the persistent partition; the
+       state is what the beat reports, so the register can count the phones actually fenced. */
+    static final String FRP_IDS = "frpIds";
+    static final String FRP_STATE = "frpState";
     /** ms; when the window now open runs out. 0 = no window open. */
     static final String GRACE_UNTIL = "graceUntil";
     /* ms; when a window was last GRANTED -- the fence that makes rebooting twice pointless.
