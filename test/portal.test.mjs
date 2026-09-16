@@ -2530,14 +2530,20 @@ test('opening NEW STOCK or OLD STOCK mints a code and a staff row for every RSM 
   assert.ok(ns.staffSync.codesAdded >= 2, 'RSM DAR and AGENT ONE off the stamped audit: ' + JSON.stringify(ns.staffSync));
   assert.ok(n._dump('access_codes').some(c => c.name === 'RSM DAR' && c.role === 'RSM'));
 
-  // THE ROLE ROW EXISTS before the code does: a role with no row is the legacy nav set
-  // (resolveTabs), which is not what anybody ticked for a field agent.
+  // THE ROLE ROW EXISTS before the code does -- but only where NO code yet holds the role. A
+  // role with no row is the legacy nav set (resolveTabs), which is not what anybody ticked for a
+  // field agent; yet a code that ALREADY holds the role was promised those doors (ROLE-GRANT.md),
+  // so pinning behind its back would take them away overnight. AGENT had no code: pinned. RSM
+  // had 'rsm dar': left alone, and said so.
   const roleRows = Object.fromEntries(d._dump('roles').map(r => [r.role, r.tabs]));
-  assert.deepEqual(roleRows.RSM, []); assert.deepEqual(roleRows.AGENT, []);
+  assert.deepEqual(roleRows.AGENT, []); assert.ok(!('RSM' in roleRows), 'RSM is held by R1: not pinned behind its back');
+  assert.deepEqual(r.staffSync.rolesCreated, ['AGENT']);
+  assert.deepEqual(r.staffSync.rolesUnconfigured, ['RSM'], 'the pane is told which role still opens on the old defaults');
   const pre = trDb({ access_codes: [{ code: 'S1', name: 'SIPHO K', role: 'STORE' }], roles: [{ role: 'AGENT', tabs: ['transfers'] }] });
-  await _FNS.oldStock(pre, STORE, {});
+  const pr = await _FNS.oldStock(pre, STORE, {});
   assert.deepEqual(pre._dump('roles').find(r => r.role === 'AGENT').tabs, ['transfers'], 'a row that exists is never touched');
-  assert.ok(pre._dump('roles').some(r => r.role === 'RSM'));
+  assert.ok(pre._dump('roles').some(r => r.role === 'RSM'), 'no code held RSM, so its row is made');
+  assert.deepEqual(pr.staffSync.rolesCreated, ['RSM']); assert.deepEqual(pr.staffSync.rolesUnconfigured, []);
 });
 
 test('staff rows are still written on a register without the manager column, and the junk list matches the SQL', async () => {
@@ -2558,8 +2564,13 @@ test('staff rows are still written on a register without the manager column, and
     'the warehouse in any spelling, and a row of dashes, are not people');
 });
 
-test('two desks opening a pane in the same second do not leave a person with two codes', async () => {
-  const d = trDb({ access_codes: [{ code: 'S1', name: 'SIPHO K', role: 'STORE' }], hoop_agents: [] });
+test('two desks opening a pane in the same second do not leave a person with two codes, nor a red note for rows that exist', async () => {
+  // The real schema's keys: a phone may be on the register once, a code once.
+  const d = trDb({ access_codes: [{ code: 'S1', name: 'SIPHO K', role: 'STORE' }], hoop_agents: [],
+    old_stock: [
+      { imei: '861000000000001', item: 'ITEL A100', agent: 'AGENT ONE', agent_phone: '0700000011', rsm: 'RSM DAR', rsm_phone: '0700000001', age_days: 40, as_of: '2026-09-10' },
+      { imei: '861000000000002', item: 'ITEL A100', agent: 'AGENT THREE', agent_phone: '0700000013', rsm: 'RSM MWANZA', rsm_phone: '0700000002', age_days: 40, as_of: '2026-09-10' },
+    ] }, { unique: { hoop_agents: [['phone']], access_codes: [['code']] } });
   const both = await Promise.all([_FNS.oldStock(d, STORE, {}), _FNS.oldStock(d, STORE, {})]);
   const codes = d._dump('access_codes').filter(c => c.role === 'RSM' || c.role === 'AGENT');
   const perName = {};
@@ -2568,6 +2579,38 @@ test('two desks opening a pane in the same second do not leave a person with two
   assert.deepEqual(Object.keys(perName).sort(), ['AGENT ONE', 'AGENT THREE', 'RSM DAR', 'RSM MWANZA']);
   const added = both.reduce((s, r) => s + r.staffSync.codesAdded, 0);
   assert.equal(added, 4, 'and the two runs together report exactly the codes that exist -- a dropped duplicate is not "added"');
+  assert.ok(both.every(r => !r.staffSync.note), 'the second desk is not shown a duplicate-key failure for rows that exist: ' + JSON.stringify(both.map(r => r.staffSync.note)));
+  assert.equal(d._dump('hoop_agents').length, 4, 'each phone once');
+  assert.equal(both.reduce((s, r) => s + r.staffSync.staffAdded, 0), 4, 'and the two runs together report exactly the rows that exist');
+});
+
+test('the hierarchy rule reads the stock by nameKey (any word order or spacing), refuses a tie, and survives a register without manager', async () => {
+  const AG7 = { code: 'A7', name: 'AGENT SEVEN', role: 'AGENT', teams: null, tabs: TR_TABS, readOnly: false };
+  const d = trDb({
+    access_codes: [
+      { code: 'S1', name: 'SIPHO K', role: 'STORE' }, { code: 'R1', name: 'RSM DAR', role: 'RSM' },
+      { code: 'A1', name: 'AGENT ONE', role: 'AGENT' }, { code: 'A3', name: 'AGENT THREE', role: 'AGENT' },
+      { code: 'Z9', name: 'Sawe Anord', role: 'AGENT' },     // the stock spells him the other way round
+      { code: 'A7', name: 'AGENT SEVEN', role: 'AGENT' },    // named beside two RSMs equally often
+    ],
+    old_stock: [
+      { imei: '861000000000001', item: 'ITEL A100', agent: 'AGENT ONE', rsm: 'RSM DAR', age_days: 40, as_of: '2026-09-10' },
+      { imei: '861000000000002', item: 'ITEL A100', agent: 'AGENT THREE', rsm: 'RSM MWANZA', age_days: 40, as_of: '2026-09-10' },
+      { imei: '861000000000020', item: 'ITEL A100', agent: 'ANORD  SAWE', rsm: 'RSM DAR', age_days: 40, as_of: '2026-09-10' },
+      { imei: '861000000000021', item: 'ITEL A100', agent: 'anord sawe', rsm: 'RSM DAR', age_days: 40, as_of: '2026-09-10' },
+      { imei: '861000000000030', item: 'ITEL A100', agent: 'AGENT SEVEN', rsm: 'RSM DAR', age_days: 40, as_of: '2026-09-10' },
+      { imei: '861000000000031', item: 'ITEL A100', agent: 'AGENT SEVEN', rsm: 'RSM MWANZA', age_days: 40, as_of: '2026-09-10' },
+    ],
+  });
+  assert.equal((await _FNS.transferCreate(d, AG1, { toName: 'Sawe Anord', imeis: ['861000000000001'] })).ok, true,
+    'the stock says ANORD SAWE is Dar\'s, however it spells him');
+  await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'AGENT SEVEN', imeis: ['861000000000001'] }),
+    /not known which RSM AGENT SEVEN reports to.*Chaneli/, 'a tie is not an answer, and the remedy names the Staff pane');
+  // No manager column yet (targets migration not run): the rule still runs off branch and stock.
+  const old = trDb({}, { missingColumns: { hoop_agents: ['manager'] } });
+  assert.equal((await _FNS.transferCreate(old, AG1, { toName: 'RSM DAR', imeis: ['351000000000004'] })).ok, true);
+  await assert.rejects(() => _FNS.transferCreate(old, AG1, { toName: 'AGENT THREE', imeis: ['861000000000001'] }),
+    /route this through an RSM or Super Agent/, 'different branches, no manager column: still refused, not a column error');
 });
 
 test('transferUsers offers exactly the people the sync made, so Send can pick by role then name', async () => {

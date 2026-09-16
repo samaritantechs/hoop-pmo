@@ -869,7 +869,10 @@ test('the access-codes pane opens on one role chip, has an All chip, and a searc
   const src = read('portal.html');
   const pane = src.slice(src.indexOf('function drawCodes('), src.indexOf("$('#acAdd').onclick="));
   assert.match(pane, /data-acrole="\*"[^>]*>Zote \/ All · '\+money\(\(d\.codes\|\|\[\]\)\.length\)/, 'the All chip carries the total');
-  assert.match(pane, /var ACROLE=roleKeys\.length\?roleKeys\[0\]:'\*';/, 'one chip is on from the start');
+  assert.match(pane, /var ACROLE=\(ACSTATE\.role&&\(ACSTATE\.role==='\*'\|\|roleKeys\.indexOf\(ACSTATE\.role\)>=0\)\)\?ACSTATE\.role:\(roleKeys\.length\?roleKeys\[0\]:'\*'\);/,
+    'one chip is on from the start, and a redraw puts the chosen one back');
+  assert.match(src, /var ACSTATE=\{role:'',q:''\};/, 'the choice lives outside the draw, so Hifadhi / Futa / Yupo? do not reset it');
+  assert.match(pane, /ACSTATE\.role=ACROLE; ACSTATE\.q=/, 'and every filter run records it');
   assert.match(pane, /var role=q\?'\*':ACROLE;/, 'a search ignores the chip');
   assert.match(pane, /applyCodesFilter\(\);\s*$/, 'the filter is applied as the pane is drawn, not only on a click');
   assert.match(pane, /if\(q\) q\.value='';\s*applyCodesFilter\(\);/, 'picking a chip clears the search box');

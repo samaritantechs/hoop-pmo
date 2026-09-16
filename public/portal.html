@@ -9233,6 +9233,13 @@ function staffSyncNote_(d){
   if(s.codesAdded) bits.push('misimbo mipya <b>'+money(s.codesAdded)+'</b> imetengenezwa kwa RSM/mawakala wapya (angalia Access codes) / '+money(s.codesAdded)+' new access codes minted');
   if(s.staffAdded) bits.push('wafanyakazi <b>'+money(s.staffAdded)+'</b> wameongezwa kwenye rejista / '+money(s.staffAdded)+' added to the staff register');
   if(s.noPhone) bits.push(money(s.noPhone)+' bila namba ya simu — msimbo tu, siyo safu ya rejista / without a phone: a code, no register row');
+  if(s.duplicatesDropped) bits.push(money(s.duplicatesDropped)+' msimbo wa pili kwa jina moja umeondolewa (dawati lingine lilishatengeneza) / duplicate code(s) dropped, another desk minted first');
+  /* THE ROLE ROW, SAID OUT LOUD -- see the roles note in syncStaffFromStock. A row made with
+     nothing ticked means the minted codes open on nothing until somebody ticks; a role that
+     could NOT be pinned (codes already held it) means every code in it, new and old, still
+     gets the old default panes. Either way the Roles card is the next stop. */
+  if(s.rolesCreated&&s.rolesCreated.length) bits.push('<span style="color:var(--bad)">nafasi <b>'+esc(s.rolesCreated.join(', '))+'</b> imetengenezwa kwenye kadi ya Roles bila nav — tiki navs zake ndipo misimbo ifungue kitu / role row created with nothing ticked: tick its navs on the Roles card</span>');
+  if(s.rolesUnconfigured&&s.rolesUnconfigured.length) bits.push('<span style="color:var(--bad)">nafasi <b>'+esc(s.rolesUnconfigured.join(', '))+'</b> haina safu kwenye kadi ya Roles — misimbo yake yote (mipya na za zamani) inapata kurasa za zamani za chaguo-msingi; iweke kwenye Roles / role has no row on the Roles card: every code in it gets the legacy default panes until it is configured there</span>');
   if(s.note) bits.push('<span style="color:var(--bad)">'+esc(s.note)+'</span>');
   return bits.length?'<div class="mut" style="font-size:11.5px;margin:4px 0 8px">'+bits.join(' · ')+'</div>':'';
 }
@@ -10398,6 +10405,7 @@ function drawStaff(m){
 
 /* ---------- access codes ---------- */
 var EDIT_FROM='';
+var ACSTATE={role:'',q:''};   // the codes pane's chip and search, kept across its redraws
 function drawCodes(m){
   m.innerHTML='<div class="card"><h2>Access codes</h2><div class="sk"></div></div>';
   EDIT_FROM='';
@@ -10625,9 +10633,14 @@ function drawCodes(m){
        the first role in the order (ADMIN), never the three hundred agents. Zote / All is its
        own chip, chosen on purpose. Typing in the search box looks across EVERY role -- a name
        is what somebody is hunting, not a role -- and picking a chip clears the search. */
-    var ACROLE=roleKeys.length?roleKeys[0]:'*';
+    /* AND THE CHIP SURVIVES A REDRAW. Every save, delete and Yupo? edit redraws this pane; a
+       chip that reset to ADMIN each time would hide the very row just edited. The choice and
+       the search live outside the draw (ACSTATE) and are put back here. */
+    var ACROLE=(ACSTATE.role&&(ACSTATE.role==='*'||roleKeys.indexOf(ACSTATE.role)>=0))?ACSTATE.role:(roleKeys.length?roleKeys[0]:'*');
+    if($('#acQ')&&ACSTATE.q) $('#acQ').value=ACSTATE.q;
     function applyCodesFilter(){
       var q=($('#acQ')?$('#acQ').value.trim().toUpperCase():'');
+      ACSTATE.role=ACROLE; ACSTATE.q=$('#acQ')?$('#acQ').value:'';
       var role=q?'*':ACROLE;
       $all('tr[data-acrole]',m).forEach(function(tr){
         var okQ=!q||tr.textContent.toUpperCase().indexOf(q)>=0;

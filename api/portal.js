@@ -2053,15 +2053,20 @@ async function stockModels(db) {
     (no phone on the sheet, so no row) it is the only word there is on whose agent they are.
     Two small reads, asked only on an agent-to-agent hand-off. */
 async function stockRsmOf(db, name) {
-  const who = String(name || '').trim();
+  const who = nameKey(name);
   if (!who) return '';
+  /* THE SAME NAME, THE SAME WAY AS EVERYWHERE ELSE ON THIS PATH: the database is asked for rows
+     whose agent contains the longest word of the name (ilike folds case only), and what comes
+     back is matched on nameKey -- words in any order, any spacing -- exactly as the code, the
+     register and the possession check match. */
+  const needle = who.split(' ').sort((a, b) => b.length - a.length)[0] || who;
   const tally = new Map();
   const feed = async t => {
     try {
-      const { data, error } = await db.from(t).select('rsm').ilike('agent', who).limit(500);
+      const { data, error } = await db.from(t).select('agent, rsm').ilike('agent', '%' + needle + '%').limit(1000);
       if (error) throw error;
       for (const r of data || []) {
-        if (isJunkName(r.rsm)) continue;
+        if (nameKey(r.agent) !== who || isJunkName(r.rsm)) continue;
         const k = nameKey(r.rsm);
         const had = tally.get(k) || { n: 0, name: String(r.rsm).trim() };
         had.n++; tally.set(k, had);
@@ -2070,9 +2075,12 @@ async function stockRsmOf(db, name) {
   };
   await feed('old_stock');
   await feed('stock_audit');
-  let best = '', bestN = 0;
-  for (const v of tally.values()) if (v.n > bestN) { best = v.name; bestN = v.n; }
-  return best;
+  /* A TIE IS NOT AN ANSWER. Two RSMs named equally often beside one agent (a move between
+     regions with the old rows still on the sheet) would otherwise be settled by row order, and
+     the same hand-off would pass one minute and be refused the next. Unknown, and said so. */
+  const ranked = [...tally.values()].sort((x, y) => y.n - x.n);
+  if (!ranked.length || (ranked.length > 1 && ranked[0].n === ranked[1].n)) return '';
+  return ranked[0].name;
 }
 /** Where each serial lives today, and what NEW STOCK priced it at -- bulk reads per 200, never
     one per phone. A phone that has been enrolled is on the register, and that answer wins over
@@ -2133,8 +2141,16 @@ function isJunkName(name) {
   // The warehouse, however it is spelled -- the SAME list RUN-ME-2026-09-18-staff-from-stock.sql keeps.
   return nameKey(s) === nameKey(STORE_NODE) || K(s).replace(/\s+/g, '') === 'SUPERAGENT';
 }
+/* A timestamp that never repeats inside one process: the clock to the millisecond, then a tick
+   in the microsecond digits Postgres keeps and a string comparison orders. Two runs on two
+   servers are ordered by their clocks, which is the truth of who minted first. */
+let mintTick = 0;
+function mintStamp() {
+  mintTick = (mintTick + 1) % 1000;
+  return new Date().toISOString().replace('Z', String(mintTick).padStart(3, '0') + 'Z');
+}
 async function syncStaffFromStock(db, user, pairs) {
-  const out = { staffAdded: 0, codesAdded: 0, noPhone: 0, note: '' };
+  const out = { staffAdded: 0, codesAdded: 0, noPhone: 0, note: '', rolesCreated: [], rolesUnconfigured: [] };
   if (!user || isReadOnly(user)) return out;
   try {
     // 1. Who the stock names, and what it says they are.
@@ -2188,6 +2204,16 @@ async function syncStaffFromStock(db, user, pairs) {
           slice = slice.map(({ manager, ...rest }) => rest);
           ({ error } = await db.from('hoop_agents').insert(slice));
         }
+        /* TWO DESKS, ONE SECOND, on the register: the other run's rows landed first and the
+           phone key refused ours. Not a failure to report in red -- the rows exist. Re-read,
+           and write only what is still missing. */
+        if (error && /duplicate key|23505/i.test(String(error.message || '') + String(error.code || ''))) {
+          try {
+            const there = new Set((await fetchAll(() => db.from('hoop_agents').select('phone'))).map(s => pnorm(s.phone || '')).filter(Boolean));
+            slice = slice.filter(r => !there.has(pnorm(r.phone)));
+            ({ error } = slice.length ? await db.from('hoop_agents').insert(slice) : { error: null });
+          } catch (e2) { error = { message: String((e2 && e2.message) || e2) }; }
+        }
         if (error) { out.note = 'Rejista ya wafanyakazi haikuandikwa: ' + error.message + ' / staff rows could not be written'; break; }
         out.staffAdded += slice.length;
       }
@@ -2202,19 +2228,35 @@ async function syncStaffFromStock(db, user, pairs) {
         if (named.has(nameKey(p.name))) continue;
         const code = mintCode(existing);
         existing.add(code); named.add(nameKey(p.name));
-        rows.push({ code, name: p.name, role: p.role, teams: null, tabs: [] });
+        /* created_at is written rather than left to the column's default so that the order the
+           codes were MINTED in is the order the dedupe below reads them back in -- to the
+           microsecond, with a tick past the millisecond a clock hands out twice. */
+        rows.push({ code, name: p.name, role: p.role, teams: null, tabs: [], created_at: mintStamp() });
       }
       /* A ROLE WITH NO ROW IS THE OLD DEFAULTS (resolveTabs): a code minted as RSM before anybody
          has ticked RSM on the Roles card would log in to the legacy panes. A row that ticks
          nothing is the answer "nothing yet", so the row is made to exist before the code does. */
+      /* BUT NEVER BEHIND THE BACK OF A CODE THAT ALREADY HOLDS THE ROLE. docs/ROLE-GRANT.md
+         promises that a never-configured role keeps the old defaults for every code it already
+         has; making the row exist would silently take those panes off them the next morning.
+         So the row is pinned only where NO existing code carries the role -- the minted ones are
+         then the first, and see nothing until somebody ticks. Where codes exist with no row,
+         nothing is written and the pane SAYS so (rolesUnconfigured): the minted codes get the
+         old defaults too, and the Roles card is where that ends. */
       if (rows.length) {
         const want = [...new Set(rows.map(r => r.role))];
+        const held = new Set(codes.map(c => K(c.role)));
         try {
           const { data, error } = await db.from('roles').select('role').in('role', want);
           if (error) throw error;
           const have = new Set((data || []).map(r => r.role));
-          const missing = want.filter(r => !have.has(r)).map(role => ({ role, tabs: [] }));
-          if (missing.length) await db.from('roles').insert(missing);
+          const missing = want.filter(r => !have.has(r));
+          out.rolesUnconfigured = missing.filter(r => held.has(r));
+          const pin = missing.filter(r => !held.has(r)).map(role => ({ role, tabs: [] }));
+          if (pin.length) {
+            const { error: pinErr } = await db.from('roles').insert(pin);
+            if (!pinErr) out.rolesCreated = pin.map(r => r.role);
+          }
         } catch (ignored) { /* no roles table: nothing to pin */ }
       }
       const mintedNow = new Set(rows.map(r => r.code));
@@ -2241,7 +2283,13 @@ async function syncStaffFromStock(db, user, pairs) {
           if (drop.length) {
             const { error } = await db.from('access_codes').delete().in('code', drop);
             if (!error) { out.codesAdded -= drop.length; out.duplicatesDropped = drop.length; }
+            else out.note = (out.note ? out.note + ' · ' : '') + 'Msimbo wa pili kwa jina moja haukuweza kuondolewa: '
+              + error.message + ' / a second code for one name could not be removed -- delete it on Access codes';
           }
+          /* WHAT THIS CANNOT CLOSE, said here: a run whose insert is still in flight while the
+             other has already re-read sees only its own code, and both can stay. Milliseconds
+             wide; the Access codes pane then lists the name twice, and the older code is the
+             one to keep. */
         } catch (ignored) { /* the list opens regardless */ }
       }
     }
@@ -10302,7 +10350,17 @@ const FNS = {
        (managerIndex, see "WHICH RSM AN AGENT BELONGS TO" above), so a name not in that
        roster at all (the store desk, "SUPER AGENT") is never restricted by this rule, and
        neither is anybody who IS an RSM/country manager on either side. */
-    const agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager'));
+    let agentsForRule = [];
+    try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
+    catch (e) {
+      /* Before the targets migration there is no `manager` column, and before the register
+         exists at all there is no table: the rule then reads the code's role and the stock
+         lists (below) rather than refusing every hand-off in the company with a column error. */
+      if (/manager/i.test(String((e && e.message) || ''))) {
+        try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch')); }
+        catch (e2) { if (!tableMissing(e2)) throw e2; }
+      } else if (!tableMissing(e)) throw e;
+    }
     const mgrIdx = managerIndex(agentsForRule);
     /* WHO IS AN AGENT: the register's word where it has a row, otherwise the ACCESS CODE's role.
        The register is keyed by phone, and a name the stock lists without one holds a code
@@ -10323,10 +10381,10 @@ const FNS = {
       const toRsm = await rsmOf(to.name);
       if (!fromRsm || !toRsm) {
         const who = !fromRsm ? fromName : to.name;
-        bad('Haijulikani ' + who + ' ni wakala wa RSM gani -- mwandikishe kwenye rejista ya wafanyakazi '
-          + '(na namba ya simu) au pitisha kwa RSM au Super Agent. / It is not known which RSM ' + who
-          + ' reports to -- enrol them on the staff register (with a phone) or route this through an '
-          + 'RSM or Super Agent.');
+        bad('Haijulikani ' + who + ' ni wakala wa RSM gani -- weka RSM wake kwenye safu ya Chaneli '
+          + 'kwenye ukurasa wa Staff, au pitisha kwa RSM au Super Agent. / It is not known which RSM ' + who
+          + ' reports to -- set their RSM in the Chaneli column on the Staff pane, or route this '
+          + 'through an RSM or Super Agent.');
       }
       if (fromRsm !== toRsm) bad('Mawakala wawili wa RSM tofauti hawawezi '
         + 'kuhamishiana moja kwa moja -- pitisha kwa RSM au Super Agent. / Two agents under '
