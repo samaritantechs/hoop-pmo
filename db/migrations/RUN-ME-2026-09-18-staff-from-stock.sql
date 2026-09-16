@@ -14,44 +14,71 @@
 -- a receiver by role and name from the first morning rather than after somebody opens each pane.
 --
 -- Paste the WHOLE FILE into the Supabase SQL editor and run it once. Safe to re-run: every insert
--- skips what already exists -- by phone and by name for staff, by name (case- and space-folded)
--- for codes -- so a second run adds nobody and re-mints nothing. NOBODY IS DEMOTED: a name that
--- is an RSM on one row and an agent on another is an RSM. NOBODY IS EDITED: a staff row or a code
--- that exists is left exactly as it is. "SUPER AGENT" is the warehouse, not a person; blank,
--- numeric and two-letter names are spreadsheet noise, not people.
+-- skips what already exists -- by phone and by name for staff, by name for codes -- so a second
+-- run adds nobody and re-mints nothing. NOBODY IS DEMOTED: a name that is an RSM on one row and
+-- an agent on another is an RSM. NOBODY IS EDITED, NOBODY IS DELETED: a staff row or a code that
+-- exists is left exactly as it is, whoever made it. "SUPER AGENT" is the warehouse, not a person;
+-- blank, numeric and two-letter names are spreadsheet noise, not people.
+--
+-- THE SAME NAME is the same words in any order, any case, any spacing -- "Anord Sawe" and
+-- "SAWE  ANORD" are one person, exactly as nameKey in api/_lib/call-core.js reads them. That rule
+-- lives in ONE place here, public.hoop_name_key(), created below so this file and the summary at
+-- the end read it the same way whatever connection the editor runs each statement on. A person
+-- who ends up holding two codes (a run of an earlier cut of this file matched on word ORDER too)
+-- is LISTED at the end, never deleted here: which of two live logins to keep is a person's call,
+-- on the Access codes pane.
 --
 -- THE CODES ARE LIVE LOGINS the moment this runs, with whatever navs the RSM and AGENT roles have
--- ticked on the Roles card. Read them off the Access codes pane (chip: RSM / AGENT) and hand each
--- to its person; a code minted for somebody who has left is deleted there like any other.
+-- ticked on the Roles card. A role with no row on that card logs in to the OLD DEFAULT panes
+-- (resolveTabs), which nobody ticked for a field agent -- so where NO code yet holds RSM or AGENT
+-- the row is created here with nothing ticked (step 3); where codes already hold the role with no
+-- row, nothing is written (docs/ROLE-GRANT.md: an existing code keeps every door it had) and the
+-- NOTICE says so. Either way: tick the RSM and AGENT navs on the Roles card.
 -- Six characters from the same phone-safe alphabet a team code uses: no 0/O, no 1/I/L.
 --
 -- ONE BLOCK, ON PURPOSE. The Supabase SQL editor does not promise that two statements of a script
 -- run on the same connection, so a scratch table made by one statement can be gone by the next
 -- ("relation _stock_people does not exist" -- the first cut of this file died exactly there).
--- Everything that needs the scratch list therefore happens inside a single DO block, which is one
--- statement on one connection whatever the editor does; the SELECT after it reads only the real
--- tables, so it is true wherever it runs.
+-- Everything that needs the scratch list therefore happens inside a single DO block; the function
+-- and the SELECT outside it depend on nothing but the real tables.
+--
+-- WORKS WITH OR WITHOUT RUN-ME-2026-09-09-targets.sql: the register's `manager` column (an
+-- agent's RSM) is filled where it exists and skipped where it does not.
 -- =============================================================================================
+
+-- The one definition of "the same name": upper-cased words, sorted, single-spaced. Mirrors
+-- nameKey() in api/_lib/call-core.js; kept as a real function so every statement here, on any
+-- connection, matches names the same way.
+create or replace function public.hoop_name_key(text) returns text
+  language sql immutable as $name_key$
+    select string_agg(t, ' ' order by t)
+      from unnest(string_to_array(regexp_replace(upper(trim(coalesce($1, ''))), '\s+', ' ', 'g'), ' ')) as t
+     where t <> '';
+  $name_key$;
 
 do $$
 declare
-  p          record;
-  alphabet   constant text := '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-  candidate  text;
-  i          integer;
-  people     integer := 0;
-  no_phone   integer := 0;
-  staff_new  integer := 0;
-  minted     integer := 0;
+  p           record;
+  alphabet    constant text := '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+  candidate   text;
+  i           integer;
+  people      integer := 0;
+  no_phone    integer := 0;
+  staff_new   integer := 0;
+  minted      integer := 0;
+  roles_new   integer := 0;
+  roles_held  text    := '';
+  dups        integer := 0;
+  has_manager boolean := false;
 begin
   -- -------------------------------------------------------------------------------------------
   -- 1. WHO THE STOCK NAMES. One row per person: the two stock lists, RSMs and agents, best phone.
   -- -------------------------------------------------------------------------------------------
   create temporary table _stock_people (
-    name_key text primary key,     -- upper(name) with runs of space collapsed: the matching key
+    name_key text primary key,     -- public.hoop_name_key(name): the matching key
     name     text not null,        -- the spelling the stock uses (the RSM row's, or the one with a phone)
     role     text not null,        -- 'RSM' | 'AGENT'
-    phone    text,                 -- the last nine digits: how everything in HOOP matches a number
+    phone    text,                 -- the nine digits, as pnorm() reads a number
     manager  text                  -- for an agent: the RSM on the same row
   ) on commit drop;
 
@@ -65,20 +92,27 @@ begin
     union all
     select agent,        'AGENT',         agent_phone,          rsm                  from old_stock
   ),
-  clean as (
-    select regexp_replace(upper(trim(name)), '\s+', ' ', 'g') as name_key,
-           trim(name)                                          as name,
-           role,
-           -- +255 7.. / 255 7.. / 07.. / 7.. are one number: keep the last nine digits, and only
-           -- where there ARE nine (a shorter scrawl is not a phone the register can be keyed on).
-           case when length(regexp_replace(coalesce(phone, ''), '\D', '', 'g')) >= 9
-                then right(regexp_replace(coalesce(phone, ''), '\D', '', 'g'), 9) end as digits,
-           nullif(trim(manager), '')                            as manager
+  digits as (
+    -- pnorm()'s rule, exactly: digits only, a leading 255 dropped, leading zeros dropped ...
+    select name, role, manager,
+           regexp_replace(regexp_replace(regexp_replace(coalesce(phone, ''), '\D', '', 'g'), '^255', ''), '^0+', '') as d
       from raw
+  ),
+  clean as (
+    select public.hoop_name_key(name) as name_key,
+           trim(name)                 as name,
+           role,
+           -- ... and phone0() keeps only a number that is then exactly nine digits.
+           case when d ~ '^[0-9]{9}$' then d end as digits,
+           nullif(trim(manager), '')  as manager
+      from digits
      where name is not null
        and length(trim(name)) >= 3
-       and trim(name) !~ '^[0-9\s\-\.\+\(\)]+$'
-       and upper(trim(name)) not in ('N/A', 'NA', 'NONE', 'NULL', 'UNKNOWN', 'HAKUNA', 'SUPER AGENT', 'SUPERAGENT')
+       and trim(name) !~ '^[0-9\s\-\.\+\(\)—–]+$'
+       and upper(trim(name)) not in ('N/A', 'NA', 'NONE', 'NULL', 'UNKNOWN', 'HAKUNA')
+       -- the warehouse in any spelling: isJunkName's two tests, the same two
+       and public.hoop_name_key(name) <> 'AGENT SUPER'
+       and regexp_replace(upper(name), '\s+', '', 'g') <> 'SUPERAGENT'
   ),
   ranked as (
     -- RSM beats AGENT for the same name; a row with a phone beats one without; the spelling is
@@ -90,7 +124,7 @@ begin
            first_value(digits)  over (partition by name_key order by (digits is not null) desc)  as digits,
            first_value(manager) over (partition by name_key order by (manager is not null) desc) as manager
       from clean
-     order by name_key, (role = 'RSM') desc, (digits is not null) desc
+     order by name_key, (role = 'RSM') desc, (digits is not null) desc, name
   )
   select name_key, name, role, digits, case when role = 'AGENT' then manager end
     from ranked;
@@ -101,12 +135,12 @@ begin
      set manager = r.name
     from _stock_people r
    where a.role = 'AGENT' and a.manager is not null
-     and r.role = 'RSM' and r.name_key = regexp_replace(upper(trim(a.manager)), '\s+', ' ', 'g');
+     and r.role = 'RSM' and r.name_key = public.hoop_name_key(a.manager);
   update _stock_people a
      set manager = null
    where a.manager is not null
      and not exists (select 1 from _stock_people r
-                      where r.role = 'RSM' and r.name_key = regexp_replace(upper(trim(a.manager)), '\s+', ' ', 'g'));
+                      where r.role = 'RSM' and r.name_key = public.hoop_name_key(a.manager));
 
   select count(*), count(*) filter (where phone is null) into people, no_phone from _stock_people;
 
@@ -114,26 +148,54 @@ begin
   -- 2. THE STAFF REGISTER. Only a person with a phone can have a row (phone is the key), and only
   --    where neither that phone nor that name is already on it. Stored as the enrolment desk
   --    stores it -- 0 followed by the nine digits -- so the two are one register, not two shapes.
+  --    With the manager column where the targets migration has made one, without it otherwise.
   -- -------------------------------------------------------------------------------------------
-  insert into hoop_agents (phone, name, role, manager, active)
-  select '0' || sp.phone, sp.name,
-         case when sp.role = 'RSM' then 'Regional_Manager' else 'Field_Officer' end,
-         sp.manager, true
-    from _stock_people sp
-   where sp.phone is not null
-     and not exists (select 1 from hoop_agents a
-                      where right(regexp_replace(coalesce(a.phone, ''), '\D', '', 'g'), 9) = sp.phone
-                         or regexp_replace(upper(trim(coalesce(a.name, ''))), '\s+', ' ', 'g') = sp.name_key)
-  on conflict (phone) do nothing;
+  select exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'hoop_agents' and column_name = 'manager')
+    into has_manager;
+  if has_manager then
+    insert into hoop_agents (phone, name, role, manager, active)
+    select '0' || sp.phone, sp.name,
+           case when sp.role = 'RSM' then 'Regional_Manager' else 'Field_Officer' end,
+           sp.manager, true
+      from _stock_people sp
+     where sp.phone is not null
+       and not exists (select 1 from hoop_agents a
+                        where regexp_replace(regexp_replace(regexp_replace(coalesce(a.phone, ''), '\D', '', 'g'), '^255', ''), '^0+', '') = sp.phone
+                           or public.hoop_name_key(a.name) = sp.name_key)
+    on conflict (phone) do nothing;
+  else
+    insert into hoop_agents (phone, name, role, active)
+    select '0' || sp.phone, sp.name,
+           case when sp.role = 'RSM' then 'Regional_Manager' else 'Field_Officer' end,
+           true
+      from _stock_people sp
+     where sp.phone is not null
+       and not exists (select 1 from hoop_agents a
+                        where regexp_replace(regexp_replace(regexp_replace(coalesce(a.phone, ''), '\D', '', 'g'), '^255', ''), '^0+', '') = sp.phone
+                           or public.hoop_name_key(a.name) = sp.name_key)
+    on conflict (phone) do nothing;
+  end if;
   get diagnostics staff_new = row_count;
 
   -- -------------------------------------------------------------------------------------------
-  -- 3. THE ACCESS CODES. One per name that has none, in the role the stock says, secret minted here.
+  -- 3. THE ROLE ROWS, only where no code yet holds the role (see the header), then THE ACCESS
+  --    CODES: one per name that has none, in the role the stock says, secret minted here.
   -- -------------------------------------------------------------------------------------------
+  insert into roles (role, tabs)
+  select r.role, '{}'::text[]
+    from (values ('RSM'), ('AGENT')) as r(role)
+   where not exists (select 1 from roles x where x.role = r.role)
+     and not exists (select 1 from access_codes c where upper(trim(c.role)) = r.role);
+  get diagnostics roles_new = row_count;
+  select string_agg(r.role, ', ') into roles_held
+    from (values ('RSM'), ('AGENT')) as r(role)
+   where not exists (select 1 from roles x where x.role = r.role)
+     and exists (select 1 from access_codes c where upper(trim(c.role)) = r.role);
+
   for p in
     select * from _stock_people sp
-     where not exists (select 1 from access_codes c
-                        where regexp_replace(upper(trim(coalesce(c.name, ''))), '\s+', ' ', 'g') = sp.name_key)
+     where not exists (select 1 from access_codes c where public.hoop_name_key(c.name) = sp.name_key)
   loop
     loop
       candidate := '';
@@ -148,18 +210,33 @@ begin
     minted := minted + 1;
   end loop;
 
-  raise notice 'people on stock: %  · without a phone (no staff row): %  · staff rows added: %  · codes minted: %',
-    people, no_phone, staff_new, minted;
+  -- -------------------------------------------------------------------------------------------
+  -- 4. TWO CODES, ONE PERSON -- counted here, listed by the SELECT below, deleted by nobody but
+  --    a person on the Access codes pane.
+  -- -------------------------------------------------------------------------------------------
+  select count(*) into dups
+    from (select 1 from access_codes group by public.hoop_name_key(name) having count(*) > 1) x;
+
+  raise notice 'people on stock: %  · without a phone (no staff row): %  · staff rows added: %  · codes minted: %  · role rows created: %  · roles held by codes but not on the Roles card: %  · names holding two codes: %',
+    people, no_phone, staff_new, minted, roles_new, coalesce(roles_held, 'none'), dups;
   drop table if exists _stock_people;
 end $$;
 
 -- What was done, said out loud -- off the real tables, so it reads the same wherever it runs
--- (the editor may not show the block's NOTICE): what the last five minutes added, and what the
--- register holds now. Re-run inside five minutes and the first two still count the first run.
-select
-  (select count(*) from access_codes where upper(role) in ('RSM', 'AGENT')
-                                       and created_at > now() - interval '5 minutes') as rsm_agent_codes_created_last_5_min,
-  (select count(*) from hoop_agents   where updated_at > now() - interval '5 minutes') as staff_rows_written_last_5_min,
-  (select count(*) from access_codes where upper(role) = 'RSM')                        as rsm_codes_now,
-  (select count(*) from access_codes where upper(role) = 'AGENT')                      as agent_codes_now,
-  (select count(*) from hoop_agents   where coalesce(active, true))                    as active_staff_now;
+-- (the editor may not show the block's NOTICE). The first row is the summary: what the last five
+-- minutes added (re-run inside five minutes and it still counts the first run) and what the
+-- register holds now. Every row after it is a PERSON WHO HOLDS TWO CODES, oldest code first:
+-- decide which to keep on the Access codes pane; this file never deletes one.
+select 'summary' as what, null::text as name,
+       format('rsm/agent codes created in the last 5 min: %s · staff rows written in the last 5 min: %s · rsm codes now: %s · agent codes now: %s · active staff: %s',
+         (select count(*) from access_codes where upper(role) in ('RSM', 'AGENT') and created_at > now() - interval '5 minutes'),
+         (select count(*) from hoop_agents   where updated_at > now() - interval '5 minutes'),
+         (select count(*) from access_codes where upper(role) = 'RSM'),
+         (select count(*) from access_codes where upper(role) = 'AGENT'),
+         (select count(*) from hoop_agents   where coalesce(active, true))) as detail
+union all
+select 'two codes, one person', min(name),
+       string_agg(code || ' (' || role || ', ' || to_char(created_at, 'YYYY-MM-DD') || ')', ' · ' order by created_at, code)
+  from access_codes
+ group by public.hoop_name_key(name)
+having count(*) > 1;

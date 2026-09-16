@@ -862,6 +862,23 @@ test('the approval drawer opens at the requested amount and cannot go above it',
     'the decide drawer must seed the dropdown from the requested amount, both ways');
 });
 
+/* "chip this list since its too long (Access codes — mfumo (portal) · 347)": the pane opens on
+   ONE chip, never on the whole list; Zote / All is a chip of its own; a search looks across every
+   role whatever chip is on, and choosing a chip clears the search. */
+test('the access-codes pane opens on one role chip, has an All chip, and a search crosses every role', () => {
+  const src = read('portal.html');
+  const pane = src.slice(src.indexOf('function drawCodes('), src.indexOf("$('#acAdd').onclick="));
+  assert.match(pane, /data-acrole="\*"[^>]*>Zote \/ All · '\+money\(\(d\.codes\|\|\[\]\)\.length\)/, 'the All chip carries the total');
+  assert.match(pane, /var ACROLE=\(ACSTATE\.role&&\(ACSTATE\.role==='\*'\|\|roleKeys\.indexOf\(ACSTATE\.role\)>=0\)\)\?ACSTATE\.role:\(roleKeys\.length\?roleKeys\[0\]:'\*'\);/,
+    'one chip is on from the start, and a redraw puts the chosen one back');
+  assert.match(src, /var ACSTATE=\{role:'',q:''\};/, 'the choice lives outside the draw, so Hifadhi / Futa / Yupo? do not reset it');
+  assert.match(pane, /ACSTATE\.role=ACROLE; ACSTATE\.q=/, 'and every filter run records it');
+  assert.match(pane, /var role=q\?'\*':ACROLE;/, 'a search ignores the chip');
+  assert.match(pane, /applyCodesFilter\(\);\s*$/, 'the filter is applied as the pane is drawn, not only on a click');
+  assert.match(pane, /if\(q\) q\.value='';\s*applyCodesFilter\(\);/, 'picking a chip clears the search box');
+  assert.match(pane, /roleKeys\.map\(function\(k\)\{ return '<button class="chip" data-acrole="'\+esc\(k\)/, 'a chip per role, counted');
+});
+
 /* The Kiongozi switch is gone (2026-09-07): one approver for the company, and the nav is the
    grant. What is pinned now is its absence, so it cannot drift back in through a merge. */
 test('the access-codes table has no Kiongozi column and the page never calls the old toggle', () => {

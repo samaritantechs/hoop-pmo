@@ -51,9 +51,10 @@ leaves.
 - **The desk sends anything.** STORE (and ADMIN) may send serials the system has never heard of
   (they go on the document as *unknown*, with nothing to overwrite).
 - **The receiver is picked by role, then by name** from the system users in that role — an
-  access code carrying RSM, AGENT, STORE or ADMIN — because it is their login that accepts. The
-  list is what the stock names (see *Who the stock names becomes a system user*); a name that is
-  on no code is refused with those words.
+  access code carrying RSM, AGENT, ADMIN or the store desk in any of its spellings (STORE,
+  GHALA, SUPER AGENT) — because it is their login that accepts. The list is what the stock
+  names (see *Who the stock names becomes a system user*); a name that is on no code is refused
+  with those words.
 - **STORE receives as the warehouse.** *"role store = superagent"*: a document accepted under a
   STORE code lands the handsets on the holder **`SUPER AGENT`** — the register's warehouse node,
   the same one the old-stock list uses — not on the store keeper's own name, so the desk's
@@ -63,8 +64,15 @@ leaves.
   says how many lines were priced off the stock.
 - **The hierarchy rule stands.** Every pairing is a normal hand-off — store ↔ RSM, RSM ↔ RSM,
   agent ↔ agent under the same RSM, agent ↔ super agent — *except* two field agents who report
-  to two different RSMs, whoever is at the keyboard. Resolved off the staff register and the
-  same manager-derivation the sales-targets roll-up uses (`managerIndex`).
+  to two different RSMs, whoever is at the keyboard. Who is an agent: the staff register where
+  it has a row, otherwise the **access code's role** (an agent the stock lists without a phone
+  holds a code but no register row, and is still an agent). Whose agent: the register's
+  manager-derivation the sales-targets roll-up uses (`managerIndex`), else the **rsm column
+  beside their own handsets** on the stock lists (matched by `nameKey`, so the sheet's spelling
+  does not matter; two RSMs named equally often is no answer). If neither answers, an
+  agent-to-agent send is **refused and says so** — set their RSM in the *Chaneli* column on the
+  Staff pane, or route it through the RSM — because a chain-of-custody check that cannot be
+  made is not a pass.
 
 ### A bulk list — many receivers in one paste
 
@@ -114,15 +122,28 @@ those names are the list of people who can receive. Two things keep it filled:
 
 The rules are the same in both places. **Nobody is demoted**: a name that is an RSM on one row
 and an agent on another is an RSM. **Nobody is duplicated**: a name that already has a code —
-in any role, however spelled (case- and space-folded) — gets nothing, and a staff row that
-exists by phone or by name is left alone. **`SUPER AGENT` is the warehouse**, not a person;
-blank, numeric and two-letter names are spreadsheet noise. Codes carry no navs of their own —
-the RSM and AGENT roles' ticks on the Roles card are the grant. A view-only code writes nothing.
+in any role, the same words in any order, case or spacing (`nameKey`; `public.hoop_name_key()`
+in the SQL, created by that file) — gets nothing, and a staff row that exists by phone or by
+name is left alone. Two desks opening a pane in the same second cannot leave a person two codes
+either: the run re-reads after minting and drops **its own** where an earlier code now exists
+(never anybody else's), and a phone the other desk registered first is simply skipped, not
+reported as a failure. **Nobody is deleted by the SQL**: a person who already holds two codes is
+*listed* under the summary, and which login to keep is decided on the Access codes pane.
+**`SUPER AGENT` is the warehouse**, not a person; blank, numeric, dashed and two-letter names
+are spreadsheet noise. Codes carry no navs of their own — the RSM and AGENT roles' ticks on the
+Roles card are the grant. A role with no row on that card opens on the *old default* panes, so
+where **no code yet holds** RSM or AGENT the row is made to exist (with nothing ticked) before
+the first code is minted; where codes already hold the role without a row, nothing is written —
+`docs/ROLE-GRANT.md` promises an existing code keeps every door it had — and the pane says so
+in red until the role is configured on the Roles card. A view-only code writes nothing. Before
+the targets migration the register has no `manager` column; staff rows are then written without
+it, and the hierarchy rule reads branch and stock instead.
 
 The codes are live logins the moment they exist. Read them off **Access codes**, which is now
-**chipped by role** with a count per chip and a search box (*"the list will be long"*), and
-hand each to its person; a code minted for somebody who has left is deleted there like any
-other.
+**chipped by role** with a count per chip and a search box (*"the list will be long"*): the
+pane opens on the first chip so it is short, *Zote / All* is its own chip, and a search looks
+across every role. Hand each code to its person; a code minted for somebody who has left is
+deleted there like any other.
 
 ## The stock fence — who sees which stock
 

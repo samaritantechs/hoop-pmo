@@ -9233,6 +9233,13 @@ function staffSyncNote_(d){
   if(s.codesAdded) bits.push('misimbo mipya <b>'+money(s.codesAdded)+'</b> imetengenezwa kwa RSM/mawakala wapya (angalia Access codes) / '+money(s.codesAdded)+' new access codes minted');
   if(s.staffAdded) bits.push('wafanyakazi <b>'+money(s.staffAdded)+'</b> wameongezwa kwenye rejista / '+money(s.staffAdded)+' added to the staff register');
   if(s.noPhone) bits.push(money(s.noPhone)+' bila namba ya simu — msimbo tu, siyo safu ya rejista / without a phone: a code, no register row');
+  if(s.duplicatesDropped) bits.push(money(s.duplicatesDropped)+' msimbo wa pili kwa jina moja umeondolewa (dawati lingine lilishatengeneza) / duplicate code(s) dropped, another desk minted first');
+  /* THE ROLE ROW, SAID OUT LOUD -- see the roles note in syncStaffFromStock. A row made with
+     nothing ticked means the minted codes open on nothing until somebody ticks; a role that
+     could NOT be pinned (codes already held it) means every code in it, new and old, still
+     gets the old default panes. Either way the Roles card is the next stop. */
+  if(s.rolesCreated&&s.rolesCreated.length) bits.push('<span style="color:var(--bad)">nafasi <b>'+esc(s.rolesCreated.join(', '))+'</b> imetengenezwa kwenye kadi ya Roles bila nav — tiki navs zake ndipo misimbo ifungue kitu / role row created with nothing ticked: tick its navs on the Roles card</span>');
+  if(s.rolesUnconfigured&&s.rolesUnconfigured.length) bits.push('<span style="color:var(--bad)">nafasi <b>'+esc(s.rolesUnconfigured.join(', '))+'</b> haina safu kwenye kadi ya Roles — misimbo yake yote (mipya na za zamani) inapata kurasa za zamani za chaguo-msingi; iweke kwenye Roles / role has no row on the Roles card: every code in it gets the legacy default panes until it is configured there</span>');
   if(s.note) bits.push('<span style="color:var(--bad)">'+esc(s.note)+'</span>');
   return bits.length?'<div class="mut" style="font-size:11.5px;margin:4px 0 8px">'+bits.join(' · ')+'</div>':'';
 }
@@ -10398,6 +10405,7 @@ function drawStaff(m){
 
 /* ---------- access codes ---------- */
 var EDIT_FROM='';
+var ACSTATE={role:'',q:''};   // the codes pane's chip and search, kept across its redraws
 function drawCodes(m){
   m.innerHTML='<div class="card"><h2>Access codes</h2><div class="sk"></div></div>';
   EDIT_FROM='';
@@ -10413,6 +10421,7 @@ function drawCodes(m){
       +'<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'
       +'<input class="inp" id="acQ" placeholder="Tafuta jina, code, role / search" style="width:220px">'
       +roleKeys.map(function(k){ return '<button class="chip" data-acrole="'+esc(k)+'" style="border:1px solid transparent;cursor:pointer">'+esc(k)+' · '+money(roleCounts[k])+'</button>'; }).join('')
+      +'<button class="chip" data-acrole="*" style="border:1px solid transparent;cursor:pointer">Zote / All · '+money((d.codes||[]).length)+'</button>'
       +'</div>'
       +'<div class="scroll"><table><thead><tr><th>Code</th><th>Jina</th><th>Role</th><th>Timu</th><th>Tabs</th><th>Yupo?</th><th class="noxl"></th></tr></thead><tbody>'
       +(d.codes||[]).map(function(c){
@@ -10620,21 +10629,32 @@ function drawCodes(m){
     };
     if($('#acRole')) $('#acRole').onchange=acPreview;
     acPreview();
-    var ACROLE='';
+    /* ONE CHIP IS ALWAYS ON, so the pane opens SHORT -- "chip this list since it's too long":
+       the first role in the order (ADMIN), never the three hundred agents. Zote / All is its
+       own chip, chosen on purpose. Typing in the search box looks across EVERY role -- a name
+       is what somebody is hunting, not a role -- and picking a chip clears the search. */
+    /* AND THE CHIP SURVIVES A REDRAW. Every save, delete and Yupo? edit redraws this pane; a
+       chip that reset to ADMIN each time would hide the very row just edited. The choice and
+       the search live outside the draw (ACSTATE) and are put back here. */
+    var ACROLE=(ACSTATE.role&&(ACSTATE.role==='*'||roleKeys.indexOf(ACSTATE.role)>=0))?ACSTATE.role:(roleKeys.length?roleKeys[0]:'*');
+    if($('#acQ')&&ACSTATE.q) $('#acQ').value=ACSTATE.q;
     function applyCodesFilter(){
       var q=($('#acQ')?$('#acQ').value.trim().toUpperCase():'');
+      ACSTATE.role=ACROLE; ACSTATE.q=$('#acQ')?$('#acQ').value:'';
+      var role=q?'*':ACROLE;
       $all('tr[data-acrole]',m).forEach(function(tr){
         var okQ=!q||tr.textContent.toUpperCase().indexOf(q)>=0;
-        var okR=!ACROLE||tr.getAttribute('data-acrole')===ACROLE;
+        var okR=role==='*'||tr.getAttribute('data-acrole')===role;
         tr.style.display=(okQ&&okR)?'':'none';
       });
       $all('[data-acrole].chip',m).forEach(function(c){
-        var on=c.getAttribute('data-acrole')===ACROLE;
+        var on=c.getAttribute('data-acrole')===role;
         c.style.borderColor=on?'var(--b700)':'transparent'; c.style.background=on?'var(--b100)':'';
       });
     }
-    $all('[data-acrole].chip',m).forEach(function(c){ c.onclick=function(){ var k=c.getAttribute('data-acrole'); ACROLE=(ACROLE===k?'':k); applyCodesFilter(); }; });
+    $all('[data-acrole].chip',m).forEach(function(c){ c.onclick=function(){ ACROLE=c.getAttribute('data-acrole'); var q=$('#acQ'); if(q) q.value=''; applyCodesFilter(); }; });
     var acq=$('#acQ'); if(acq) acq.oninput=applyCodesFilter;
+    applyCodesFilter();
     $('#acAdd').onclick=function(){
       var role=$('#acRole').value;
       var tabs=role==='ADMIN'?['upload','settings']:[];
