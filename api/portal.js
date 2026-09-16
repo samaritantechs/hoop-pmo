@@ -174,7 +174,7 @@ const EDITABLE_SETTINGS = [
   'CALL_SYNC_SECONDS', 'CALL_MIN_SECS', 'OFFLINE_PACK', 'SALES_DAILY_TARGET',
   // The locked handset's three lines, plus how long silence is forgiven. See device-core.js.
   'DEVICE_LOCK_BRAND', 'DEVICE_LOCK_MESSAGE', 'DEVICE_HELP_PHONE',
-  'DEVICE_OFFLINE_GRACE_HOURS',
+  'DEVICE_OFFLINE_GRACE_HOURS', 'DEVICE_FRP_ACCOUNT_IDS',   // the last: see frpFor()
   /* WHO IS TOLD, by email, when somebody asks or something is decided. Blank means nobody --
      the panes are the record and work without these; see api/_lib/mail.js. EMAIL_FROM is the
      sender, and needs a domain verified with the provider before mail stops landing in spam. */
@@ -4061,6 +4061,8 @@ const FNS = {
     const CORE = 'imei, item, holder, state, state_reason, state_at, state_by, reported, '
       + 'last_seen, app_version, battery, android, sold_ref, customer, enrolled_at';
     const LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
+    // What the handset said about its reset protection (RUN-ME-2026-09-18-device-frp.sql).
+    const FRP = ', frp';
     const build = (cols) => {
       const qy = db.from('devices').select(cols);
       /* A SEARCH OUTRANKS THE STATE CHIP. The desk is holding ONE phone and wants THAT row.
@@ -4084,8 +4086,15 @@ const FNS = {
        An empty register and a register that is not there yet are still DIFFERENT facts, so
        `notReady` rides along and the screen says which one it is looking at. */
     let rows;
-    try { rows = await fetchAll(() => build(CORE + LOC)); }
-    catch (e) {
+    try { rows = await fetchAll(() => build(CORE + LOC + FRP)); }
+    catch (e0) {
+      let e = e0;
+      /* The frp column is the newest optional one: without it, the same read minus that
+         column, and the pane simply does not know which phones are fenced. */
+      if (/\bfrp\b/.test(String(e && e.message || ''))) {
+        try { rows = await fetchAll(() => build(CORE + LOC)); e = null; } catch (e1) { e = e1; }
+      }
+      if (e === null) { /* read without frp */ } else {
       /* THE LOCATION COLUMNS MAY NOT BE THERE YET, which is a different failure from a missing
          table and must not look like one. PostgREST refuses an entire select for a single
          unknown column, so naming last_lat on a deployment whose migration has not been run
@@ -4101,8 +4110,9 @@ const FNS = {
         rows = await fetchAll(() => build(CORE));
       } else if (tableMissing(e)) {
         return { ok: true, rows: [], total: 0, notReady: true,
-          counts: { enrolled: 0, locked: 0, lockPending: 0, released: 0, lost: 0, neverSeen: 0, stale: 0 } };
+          counts: { enrolled: 0, locked: 0, lockPending: 0, released: 0, lost: 0, neverSeen: 0, stale: 0, frpSet: 0, frpNot: 0 } };
       } else throw e;
+      }
     }
     /* A PHONE THAT HAS SHIFTED AWAY IS THE OTHER OFFICE'S NOW -- "should be seen in only
        hoop/hope". Its row stays (token and trail survive a shift back, see device-core.js
@@ -4196,6 +4206,13 @@ const FNS = {
            `enrol_token is not null` does NOT rule it out, and that is the trap: the token
            proves the SERVER has an identity for this IMEI, never that the phone received it. */
         lockedNeverSpoke: K(r.state) === 'LOCKED' && !r.last_seen,
+        /* WHAT THE HANDSET SAID ABOUT ITS RESET PROTECTION -- see frpFor in device-core.js.
+           Three answers the screen can act on: fenced (set:N), not fenced and it said why
+           (unsupported / cleared / error), or it has never said (older APK, or the column is
+           not there yet). Never collapsed to a boolean: "not fenced" and "unknown" send the
+           bench to different places. */
+        frp: String(r.frp || ''),
+        frpState: /^set/.test(String(r.frp || '')) ? 'set' : String(r.frp || '') ? 'not' : '',
       };
     }).sort((x, y) => {
       /* THE PHONES YOU JUST ADDED COME FIRST.
@@ -4236,6 +4253,9 @@ const FNS = {
         lost: count(r => r.state === 'lost'),
         neverSeen: count(r => r.neverSeen),
         stale: count(r => r.stale && !r.neverSeen),
+        // Fenced after a wipe, and told us so -- against the ones that said they are not.
+        frpSet: count(r => r.frpState === 'set'),
+        frpNot: count(r => r.frpState === 'not'),
         /* The alarm, counted separately from everything else because it is not a category of
            phone -- it is a category of MISTAKE, and one the office cannot see any other way. */
         lockedNeverSpoke: count(r => r.lockedNeverSpoke),

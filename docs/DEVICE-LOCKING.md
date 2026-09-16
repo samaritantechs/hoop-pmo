@@ -634,6 +634,7 @@ new phone number is one row in Settings and not a build.
 | `DEVICE_LOCK_MESSAGE` | see below | the sentence under it; `{brand}` and `{namba}` are substituted |
 | `DEVICE_HELP_PHONE` | — | the number to call, and `{namba}` |
 | `DEVICE_OFFLINE_GRACE_HOURS` | `168` | silence before a customer's phone self-locks |
+| `DEVICE_FRP_ACCOUNT_IDS` | — | Google account **IDs** (not addresses) that may set a wiped phone up again — see *After a wipe* below |
 
 The default message is `Simu hii imefungwa na {brand}. Wasiliana nasi kwa namba {namba}.` —
 and, with no `DEVICE_HELP_PHONE` set, `…Wasiliana nasi kumaliza malipo.` instead. A sentence
@@ -1150,7 +1151,7 @@ Stated plainly, because a security feature oversold is worse than none.
 - **A determined attacker with the bootloader unlocked can flash the phone clean.** Device
   Owner survives ordinary resets, not a full firmware reflash. This raises the cost from
   "hold power and pick Reset" to "have the tools and know how"; it does not make it
-  impossible.
+  impossible. What a wiped phone runs into next is the section *After a wipe* below.
 - **Emergency calls always work.** Not negotiable, not a bug, and in most places the law.
 - **A stolen token lets that one handset lie about its own status.** It cannot read the
   register, reach another IMEI, or change what the office decided — `state` is never writable
@@ -1168,6 +1169,49 @@ Stated plainly, because a security feature oversold is worse than none.
   bench, not a button in the office.
 - **The first handset found three bugs the CI could not.** It compiles in CI; that has never
   been the same as tested. Expect a new model of phone to find something.
+
+## After a wipe — Factory Reset Protection, named by the office
+
+> *"does our lock persist through OS rebootings of (Flashing ROMs / Fastboot flashing, Odin
+> (Samsung), SP Flash Tool, Fastboot/ADB commands)"*
+
+It does not, and no app can. This app lives in the data partition, and a recovery wipe, an
+Odin flash with CSC, or `fastboot -w` replaces it. What **does** outlive those is the FRP record
+in the persistent partition, which they leave alone. A Device Owner may write that record
+without any Google account being signed in on the phone (`setFactoryResetProtectionPolicy`,
+Android 11+, Google services present). After any such wipe the setup wizard then demands one of
+the accounts the office named before the phone is usable.
+
+**Where it is set:** Portal → Settings → `DEVICE_FRP_ACCOUNT_IDS`. It takes each Google
+account's numeric **ID**, not its address: sign in to the account (the office chose
+`hope.pmo24@gmail.com`), open the People API's `people.get` reference page, *Try this method*
+with `resourceName = people/me` and `personFields = names`, and the answer's
+`"resourceName": "people/1234…"` is the ID. Several, comma-separated. Whoever holds that
+account's password (and its 2-step codes) is who can set a wiped phone up again, so it is a
+company account, not a person's.
+
+**How it reaches the fleet:** on every beat and on the provisioning handshake, like the lock
+screen's words — so a phone that was already out takes it on its next beat, no re-enrol, no
+cable. The phone applies it only when the list changes, and reports what the system made of it
+(`frp` on the beat: `set:N`, `cleared`, `unsupported:android<11`, `unsupported:no-gms`,
+`error:…`). The Devices pane shows it per phone and counts the fleet, because *sent* is not
+*fenced*: a phone below Android 11, or without Google services, is not protected and says so.
+
+**What it does not beat, said plainly:** a MediaTek *Format all* in SP Flash Tool erases the
+persistent partition too; leaked flashing tools exist for the cheap chipsets; a phone that was
+never provisioned has no policy. For Samsung stock the firmware-level answer is Knox Guard,
+which sits under this, not instead of it.
+
+**And the customer:** the policy decides who can pass *setup after a wipe*, nothing else. They
+add and use their own Gmail day to day exactly as before. **Achia clears it** — both the
+retiring beat (an empty list) and `unharden` itself, so the cable release and the fourteen-day
+self-release take the fence off too — and from then on their own account protects their phone
+the ordinary way. A blank setting clears it on every phone at its next beat; an unreadable
+settings table sends nothing, so a wobble can never strip the fleet's protection.
+
+Schema: `db/migrations/RUN-ME-2026-09-18-device-frp.sql` adds `devices.frp`; every path works
+without it (the beat drops the column from its write, the pane reads without it and simply
+cannot count the fenced phones).
 
 ## A locked phone that is switched on again
 

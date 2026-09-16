@@ -3164,6 +3164,11 @@ function devPaint_(m, d, at){
        been fixed for twice already. Onyesha upya re-reads, and so does every chip. */
     +'<span class="mut" style="font-size:11px">Ilisomwa '+esc(clock(at))+'</span>'
     +'<button class="btn sm ghost" id="dvRefresh" title="Soma upya kutoka seva / re-read from the server">↻</button>'
+    /* HOW MUCH OF THE FLEET IS FENCED AFTER A WIPE (DEVICE_FRP_ACCOUNT_IDS). Two numbers, not
+       one, because the phones that have never said are neither: they are on an older APK, or
+       the column is not there yet, and a percentage that counted them as "no" would send the
+       bench chasing phones that are fine. Shown only once something has answered at all. */
+    +((c.frpSet||0)+(c.frpNot||0) ? '<span class="mut" style="font-size:11px" title="Factory Reset Protection: zimeweka / hazikuweza">· FRP ✓ '+money(c.frpSet||0)+(c.frpNot?' · ✗ '+money(c.frpNot):'')+'</span>' : '')
     +'<span style="flex:1"></span>'
     +(BOOT.readOnly||!canLock?'':'<button class="btn sm" id="dvEnrol">+ Sajili simu / Enrol phones</button>')+'</div>';
   /* THE FOUR ORDERS, ABOVE THE TABLE RATHER THAN UNDER IT.
@@ -3301,7 +3306,13 @@ function devPaint_(m, d, at){
               +esc(clock(r.orderAt)||agoMins(r.orderAgeMins))
               +(r.orderBy?' · '+esc(r.orderBy):'')+'</div>':'')
           +'</td>'
-          +'<td>'+esc(r.reported||'—')+devWhere(r)+'</td><td>'+seen+'</td>'
+          +'<td>'+esc(r.reported||'—')+devWhere(r)
+          /* FENCED AFTER A WIPE, OR NOT, in the handset's own words (frp on the beat). A phone
+             that never said is left blank rather than read as either: an older APK has not
+             been asked yet, and silence is not "no". */
+          +(r.frpState==='set'?'<div class="mut" style="font-size:10px;color:var(--ok)" title="Factory Reset Protection: '+esc(r.frp)+'">FRP ✓</div>'
+            :r.frpState==='not'?'<div class="mut" style="font-size:10px;color:var(--bad)" title="'+esc(r.frp)+'">FRP ✗ '+esc(r.frp.replace(/^unsupported:/,'').replace(/^error:.*/,'error'))+'</div>':'')
+          +'</td><td>'+seen+'</td>'
           /* Historia is a read and stays for everyone. Token DISCLOSES A CREDENTIAL and
              Futa erases a row -- the server treats both as writes, so a view-only code is
              not offered either. */
@@ -10747,6 +10758,20 @@ function drawSettings(m){
       +'IMEI inatoka kwenye register, si kwenye simu yenyewe. Hakuna mstari wa REASON kwenye simu — '
       +'sababu ya kufunga bado inaonekana kwenye historia ya rejista pekee. '
       +'<b>DEVICE_OFFLINE_GRACE_HOURS</b> = saa za ukimya kabla simu ya mteja kujifunga (168 = wiki moja).</div>'
+      /* THE FENCE THAT OUTLIVES A WIPE. The lock app itself does not survive recovery, Odin or
+         fastboot; the FRP record in the persistent partition does. Named by account ID, not
+         address -- the API takes the number, and a pasted address would reach the fleet as a
+         policy that names nobody. How to read the ID off the account is written here because
+         nobody will remember it in six months. */
+      +'<div class="mut" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">'
+      +'<b>DEVICE_FRP_ACCOUNT_IDS</b> = <b>Factory Reset Protection</b>: simu iliyofutwa (recovery, Odin, fastboot) inasimama kwenye setup ikiomba mojawapo ya akaunti hizi za Google. '
+      +'Weka <b>ID ya akaunti</b> (namba ndefu), si anwani ya barua pepe: ingia kwenye akaunti (mfano hope.pmo24@gmail.com), fungua '
+      +'<a href="https://developers.google.com/people/api/rest/v1/people/get" target="_blank" rel="noopener">people.get</a> → &quot;Try this method&quot;, '
+      +'resourceName = <code>people/me</code>, personFields = <code>names</code>, Execute — jibu lina <code>"resourceName": "people/1234567890…"</code>; namba hiyo ndiyo ID. '
+      +'Akaunti kadhaa: tenganisha kwa comma. Inatumika kwenye Android 11+ yenye Google services; simu zilizoko sokoni zinaipata kwenye beat inayofuata; inaondolewa simu ikiachiwa. '
+      +'Tupu = hakuna ulinzi (na simu zote zinaondolewa ulinzi kwenye beat inayofuata). '
+      +'/ FRP: a wiped phone stops at setup asking for one of these Google accounts. Paste the numeric account ID (People API, people/me), not the e-mail; several IDs comma-separated. '
+      +'Android 11+ with Google services; phones already in the field take it on their next beat; cleared on release. Blank = no fence, and every phone drops it on its next beat.</div>'
       +'</div>';
     $all('[data-sv]',m).forEach(function(b){
       b.onclick=function(){

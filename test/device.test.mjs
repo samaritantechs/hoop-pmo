@@ -1928,3 +1928,77 @@ test('"[object PointerEvent]" is not two phones: a token with brackets, quotes o
     x => x.status === 400 && /Not an IMEI/.test(x.message));
   assert.equal(d._dump('devices').length, 0, 'nothing reached the table');
 });
+
+/* =========================================================================================
+   AFTER A WIPE -- Factory Reset Protection, named by the office (2026-09-18).
+     "does our lock persist through OS rebootings of (Flashing ROMs / Fastboot flashing, Odin
+      (Samsung), SP Flash Tool, Fastboot/ADB commands)"
+   It does not; what outlives a wipe is the FRP record, and the office names who may pass
+   setup afterwards. The beat carries the accounts down and the handset's verdict back up.
+   ========================================================================================= */
+test('the beat and the handshake carry the FRP account IDs: digits only, de-duplicated, capped', async () => {
+  const d = fleet([{ imei: 'D1', state: 'enrolled', enrol_token: 'tok1' }],
+    [{ key: 'DEVICE_FRP_ACCOUNT_IDS', value: ' 123456789012345678901, hope.pmo24@gmail.com ; 123456789012345678901\n 99887766 ' }]);
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: false }], NOW);
+  assert.deepEqual(r.frpAccounts, ['123456789012345678901', '99887766'],
+    'an address pasted by mistake never reaches a handset as a policy naming nobody; a repeat is one');
+  const h = await deviceApi(d, 'dev_hello', [{ token: 'tok1' }], NOW);
+  assert.deepEqual(h.frpAccounts, ['123456789012345678901', '99887766'], 'fenced on the bench, before it leaves');
+});
+
+test('FRP: blank clears, unreadable says nothing, and a retiring phone is sent an empty list', async () => {
+  const blank = fleet([{ imei: 'D1', state: 'enrolled', enrol_token: 'tok1' }], [{ key: 'DEVICE_FRP_ACCOUNT_IDS', value: '' }]);
+  assert.deepEqual((await deviceApi(blank, 'dev_beat', [{ token: 'tok1', locked: false }], NOW)).frpAccounts, [],
+    'the office blanked it: every phone drops the fence on its next beat');
+  const unset = fleet([{ imei: 'D1', state: 'enrolled', enrol_token: 'tok1' }], []);
+  assert.deepEqual((await deviceApi(unset, 'dev_beat', [{ token: 'tok1', locked: false }], NOW)).frpAccounts, [],
+    'never set is the same as blank: no fence');
+  // A settings table that cannot be read: the field is ABSENT, so the handset keeps what it has.
+  const wobble = fakeDb({ devices: [{ imei: 'D1', state: 'enrolled', enrol_token: 'tok1' }], device_events: [], settings: [] },
+    { missingColumns: { settings: ['value'] } });
+  const w = await deviceApi(wobble, 'dev_beat', [{ token: 'tok1', locked: false }], NOW);
+  assert.equal(w.ok, true, 'the beat itself never fails over settings');
+  assert.ok(!('frpAccounts' in w) || w.frpAccounts === undefined, 'a wobble must not strip the fleet: ' + JSON.stringify(w.frpAccounts));
+  const rel = fleet([{ imei: 'D1', state: 'released', enrol_token: 'tok1' }], [{ key: 'DEVICE_FRP_ACCOUNT_IDS', value: '123456789' }]);
+  const q = await deviceApi(rel, 'dev_beat', [{ token: 'tok1', locked: false }], NOW);
+  assert.equal(q.retire, true);
+  assert.deepEqual(q.frpAccounts, [], 'a paid-off phone is nobody\'s to fence');
+});
+
+test('FRP: what the handset made of it is kept on the row, only when it changes, and the register counts it', async () => {
+  const d = fleet([
+    { imei: 'D1', state: 'enrolled', enrol_token: 'tok1' },
+    { imei: 'D2', state: 'enrolled', enrol_token: 'tok2' },
+    { imei: 'D3', state: 'enrolled', enrol_token: 'tok3' },
+  ]);
+  await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: false, frp: 'set:1' }], NOW);
+  await deviceApi(d, 'dev_beat', [{ token: 'tok2', locked: false, frp: 'unsupported:android<11' }], NOW);
+  await deviceApi(d, 'dev_beat', [{ token: 'tok3', locked: false }], NOW);
+  const rows = Object.fromEntries(d._dump('devices').map(r => [r.imei, r]));
+  assert.equal(rows.D1.frp, 'set:1'); assert.equal(rows.D2.frp, 'unsupported:android<11');
+  assert.ok(!rows.D3.frp, 'an older APK that never said leaves the column alone');
+  const list = await _FNS.deviceList(d, ADMIN, {});
+  const by = Object.fromEntries(list.rows.map(r => [r.imei, r]));
+  assert.equal(by.D1.frpState, 'set'); assert.equal(by.D2.frpState, 'not'); assert.equal(by.D3.frpState, '',
+    'never said is neither fenced nor not -- the screen must not read silence as "no"');
+  assert.equal(list.counts.frpSet, 1); assert.equal(list.counts.frpNot, 1);
+  // A long or odd report is capped, never refused: the beat is the contract.
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok3', locked: false, frp: 'error:' + 'x'.repeat(200) }], NOW);
+  assert.equal(r.ok, true);
+  assert.equal(d._dump('devices').find(x => x.imei === 'D3').frp.length, 80);
+});
+
+test('FRP: before RUN-ME-2026-09-18-device-frp.sql the beat still lands and the pane still opens', async () => {
+  const d = fakeDb({ devices: [{ imei: 'D1', state: 'locked', enrol_token: 'tok1', reported: null }], device_events: [],
+    settings: [{ key: 'DEVICE_FRP_ACCOUNT_IDS', value: '123456789' }] },
+    { missingColumns: { devices: ['frp'] } });
+  const r = await deviceApi(d, 'dev_beat', [{ token: 'tok1', locked: true, frp: 'set:1' }], NOW);
+  assert.equal(r.ok, true); assert.equal(r.command, 'lock');
+  assert.deepEqual(r.frpAccounts, ['123456789'], 'the accounts still go down: the column is only the report');
+  const row = d._dump('devices')[0];
+  assert.equal(row.reported, 'locked', 'the beat wrote everything else');
+  assert.ok(!('frp' in row) || row.frp == null, 'and dropped the one column the database lacks');
+  const list = await _FNS.deviceList(d, ADMIN, {});
+  assert.equal(list.rows.length, 1); assert.equal(list.rows[0].frpState, '');
+  assert.equal(list.counts.frpSet, 0);
+});
