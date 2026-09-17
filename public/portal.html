@@ -1951,10 +1951,22 @@ function drawDash(m){
       { go:function(){ goWith('cust',function(){ CUST.list='leo45'; }); }, cta:'wateja ›' })
     +tile('Simu leo',n(s.calls),DEPT.PCO,
       { go:function(){ goWith('ripoti',function(){ RIP.sort='calls'; }); }, cta:'ripoti ›' })
-    +tile('Reached — yesterday',(s.reached&&s.reached.pct!=null?pct(s.reached.pct):'—'),
-      (s.reached&&s.reached.den?money(s.reached.num)+' / '+money(s.reached.den)+' · ':'')
-        +'last week avg: '+(s.weekAvg&&s.weekAvg.pct!=null?pct(s.weekAvg.pct):'—'),
-      { color:'ok', go:function(){ goWith('ripoti',function(){ RIP.sort='ratio'; }); }, cta:'ripoti ›' })
+    /* EVERY LOCK INSIDE THE WINDOW, where "Reached — yesterday" used to sit.
+         "should be summary of total locked <=45 since the list of officers doesn't have that,
+          put it there so that we see overall weekly progress"
+       The number is today's; the line under it is the week's first upload against today, so
+       the direction of the week is on the tile and not in a chart somebody has to open. */
+    +(function(){
+      var la=s.lockedAll||{}, ws=la.weekStart||null;
+      var l7=(s.locked7&&s.locked7.num!=null)?s.locked7.num:null;
+      var mid=(la.num!=null&&l7!=null)?money(la.num-l7):'—';
+      var week=ws
+        ? (function(){ var d=la.num-ws.num; var wd=['Jumapili','Jumatatu','Jumanne','Jumatano','Alhamisi','Ijumaa','Jumamosi'][new Date(ws.date+'T00:00:00').getDay()];
+            return ' · '+wd+' '+money(ws.num)+' → leo '+money(la.num)+' ('+(d>0?'⬆ +':d<0?'⬇ ':'')+money(d)+')'; })()
+        : ' · wiki hii: bado hakuna upload';
+      return tile('Locked · ndani ya siku 45',n(la),'7+: '+(l7==null?'—':money(l7))+' · 4–6: '+mid+week,
+        { color:'bad', go:function(){ goWith('recovery',function(){ REC.kind=''; }); }, cta:'marejesho ›' });
+    })()
     +'</div>'
     /* THE WEEK, LEFT AND RIGHT. These two answer halves of one question -- how much 7+ debt
        is on the books, and how much of it the credit team pulled back -- so reading them
@@ -2593,9 +2605,10 @@ function drawRipoti(m){
     m.innerHTML=
       '<div class="card"><h2>Call reports — simu za '+DEPT.PCO+'</h2>'
       +'<div class="row"><input class="inp" type="date" id="rF" value="'+RIP.from+'"><input class="inp" type="date" id="rT" value="'+RIP.to+'">'
-      +'<select class="inp" id="rTeam"><option value="">Timu zote</option>'
-      /* teamChoices, NOT teams -- teams is grouped by the CUSTOMER's branch (display-only,
-         never a fence) and filtering by one of those names silently zeroes the whole report.
+      +'<select class="inp" id="rTeam"><option value="">Matawi yote / all branches</option>'
+      /* teamChoices are the STAFF register's branches -- "the branches I always say such as of
+         navtab STAFF, not default KINONDONI" -- and picking one narrows to the officers in it.
+         `teams` (grouped by the CUSTOMER's branch) is a different thing and is not offered.
          See the note on report() in api/portal.js. */
       +(d.teamChoices||[]).map(function(x){return '<option'+(x===RIP.team?' selected':'')+'>'+esc(x)+'</option>';}).join('')
       +'</select></div>'
@@ -4107,10 +4120,18 @@ function devShiftForm(m){
     if(manualBatch){ finish(manualBatch); return; }
     /* THE CODE-ONCE PATH, kept as the fallback: HOPE's own deviceEnrol for these IMEIs,
        with the operator's HOPE code. Only reached when the server says need-batch. */
-    var byCode=function(){
+    var byCode=function(reason){
       if(!code){
-        var fld=$('#dvShiftCodeOk'); if(fld){ var det=fld.closest('details'); if(det) det.open=true; showCodeField(); }
-        toast('Weka msimbo wako wa ofisi nyingine (mara moja), au bandika batch kwa mkono. / Enter your code for the other office (once), or paste a batch by hand.', true); return;
+        /* THE FIELD IS SHOWN BEFORE IT IS ASKED FOR. "says weka msimbo wako wa ofisi nyingine
+           without even where to write it": the box lives under the "Change something" fold,
+           which stayed shut while the toast asked for what was in it. Open the fold, show the
+           field, put the cursor in it -- and say WHY a code is wanted at all (the server's own
+           words: DEVICE_SHIFT_SECRET is not set), because the real fix is that setting on both
+           deployments, after which nothing is ever typed here. */
+        var det=ta.closest('details'); if(det) det.open=true;
+        if($('#dvShiftCodeOk')) showCodeField();
+        var inp=$('#dvShiftCode'); if(inp){ try{ inp.focus(); }catch(e){} }
+        toast((reason?reason+' — ':'')+'Weka msimbo wako wa ofisi nyingine (mara moja) kwenye kisanduku hapa chini, au bandika batch kwa mkono. / Enter your code for the other office (once) in the box below, or paste a batch by hand.', true); return;
       }
       devBusy_(true);
       srvOther_(server,code,'deviceEnrol',{imeis:p.list}).then(function(r){
@@ -4128,7 +4149,7 @@ function devShiftForm(m){
       closeDrawer(); drawDevices(m);
     }).catch(function(e){
       devBusy_(false);
-      if(e && (e.code==='need-batch' || /need-batch/i.test(String(e.message||'')))){ byCode(); return; }
+      if(e && (e.code==='need-batch' || /need-batch/i.test(String(e.message||'')))){ byCode(String(safeErr(e)||'').replace(/^need-batch:\s*/i,'')); return; }
       toast(safeErr(e), true);
     });
   };
@@ -7434,7 +7455,7 @@ function osPaint_(m, d){
        tile sitting in the same row, and did nothing at all when pressed. Plain KPIs now, the
        same way every other purely-informational tile in this file is written (no go/on/cta
        at all) -- see e.g. the "Zilizochelewa" tile on the dashboard. */
-    var tiles=staffSyncNote_(d)+'<div class="tiles">'
+    var tiles=fenceNote_(d)+staffSyncNote_(d)+'<div class="tiles">'
       +tile('Hazijafungwa',money(c.open||0),'kati ya '+money(c.listed||0)+' kwenye orodha',{})
       +tile('Zimefungwa',money(c.locked||0),'ziliporwa kwenye ziara',{color:'ok'})
       +tile('Ziliuzwa',money(c.sold||0),'kabla hatujazifunga',{})
@@ -7959,7 +7980,7 @@ function drawNewStock(m){
     /* THE GAP COUNT IS THE HEALTH OF THE STAMP. It should fall after every upload, and a number
        that never falls means a feed is not arriving -- which is invisible on a table of blanks
        and obvious as one number. */
-    var head=staffSyncNote_(d)+'<div class="mut" style="font-size:11.5px;margin:8px 0">'
+    var head=fenceNote_(d)+staffSyncNote_(d)+'<div class="mut" style="font-size:11.5px;margin:8px 0">'
       +'Ilisomwa '+esc(clock(d.asOf))
       +(d.stamped?' · <b>'+money(d.stamped)+'</b> safu zimeongezwa taarifa mpya sasa hivi '
         +'/ rows gained new detail on this read':'')
@@ -9225,6 +9246,26 @@ function trFlowNote(d){
     +'<b>db/migrations/RUN-ME-2026-09-17-transfers-flow.sql</b> kwenye Supabase: bila hiyo Tuma/Pokea '
     +'haziwezi kuweka hali ya "inasubiri / imekubaliwa / imekataliwa". / Run that migration: without '
     +'it Send/Receive cannot mark a document waiting, accepted or declined.</div>':'';
+}
+/* WHOSE STOCK THIS PANE IS SHOWING -- said on the pane, every open.
+     "Now am giving rsms the old and new navs but each should only see their stock not the
+      whole company's... Also agents who sign in see their stock only."
+   The fence is the server's (stockAllow); this line is how an RSM knows they are looking at
+   their region and how the owner can tell, at a glance, which kind of code they are testing
+   with. An RSM whom no agent on the register reports to is told that too, because "I see
+   almost nothing" and "I see everything" have the same fix: the name on the code, and the
+   Chaneli / branch column on the Staff pane. */
+function fenceNote_(d){
+  if(!d||!('fence' in d)) return '';
+  var f=d.fence;
+  if(!f) return '<div class="mut" style="font-size:11.5px;margin:4px 0 2px">Stoo yote ya kampuni — msimbo wa dawati / ADMIN. / All of the company\'s stock: a desk or ADMIN code.</div>';
+  var who=f.role==='RSM'
+    ? 'Unaona eneo lako tu — <b>'+esc(f.name)+'</b> (RSM): mikononi mwako, mawakala wako <b>'+money(f.agents)+'</b> kwenye rejista ya wafanyakazi, na safu zinazokutaja kama RSM. / Your region only: your own hands, your '+money(f.agents)+' registered agents, and rows naming you as RSM.'
+    : 'Unaona stoo iliyo mikononi mwako tu — <b>'+esc(f.name)+'</b>. / Your own hands only.';
+  var warn=(f.role==='RSM'&&!f.agents)
+    ? ' <span style="color:var(--bad)">Hakuna wakala kwenye rejista ya wafanyakazi anayekuripoti kwa jina hili — weka RSM wao kwenye safu ya Chaneli (ukurasa wa Staff), na hakikisha jina la msimbo wako ni lile lile la NEW STOCK. / No agent on the staff register reports to this name: set their RSM in the Chaneli column on the Staff pane, and make sure the name on your code matches NEW STOCK.</span>'
+    : '';
+  return '<div class="mut" style="font-size:11.5px;margin:4px 0 2px">'+who+warn+'</div>';
 }
 /* WHAT THE STOCK PANES DID FOR THE REGISTER ON THIS OPEN -- said, never silent. */
 function staffSyncNote_(d){

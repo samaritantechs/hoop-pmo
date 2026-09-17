@@ -46,7 +46,13 @@ yenyewe; simu zinarekodiwa kiotomatiki (Android).
 - **Warehouse (Sipho):** hifadhi ukurasa wa SyscoPos **BAADA ya orodha kuonekana**,
   pakia HTML kwenye /upload (preview inaonyesha safu kabla). Aged Stock: kitufe cha CSV.
 - **Uongozi (Peter, Janeth):** Dashboard, **Mauzo kabla ya commission**, Recovery,
-  Call reports, Wateja.
+  Call reports, Wateja. Dashboard ina tile **Locked · ndani ya siku 45** — kila lock ya Watu
+  (4+ na 7+) ndani ya dirisha, leo, na upload ya kwanza ya wiki kando yake ili mwelekeo wa
+  wiki uonekane. Call reports inachujwa kwa **matawi ya rejista ya STAFF** (si timu za app),
+  na neno chini ya jina la afisa ni nafasi ya **access code yake ya sasa**. / The dashboard's
+  lock tile counts every Watu lock inside the 45-day window today, with the week's first upload
+  beside it; Call reports filters by the STAFF register's branches and shows each officer's
+  current access-code role.
 - **Admin:** Access codes, Roles, Teams, Staff.
 
 ## Kuingia / Signing in
