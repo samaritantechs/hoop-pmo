@@ -22,7 +22,7 @@
 | **Stoo / Stock** | what is in *my* hands — the register's handsets and the old-stock list's, unsold. The desk: everybody's, holder beside each | tick serials, **Send selected** |
 | **Tuma / Send** | — | the sender is **the account I signed in with** (fixed, shown, never typed); the serials (ticked or pasted — the first box); who receives, picked **by role, then by name** from the system users in that role; the model from a **prelisted** dropdown of every model the stock knows; the unit price, or **blank to take each phone's NEW STOCK price**; a note; **my signature** |
 | **Pokea / Receive** | waiting for me · sent by me · settled | open a waiting document, **sign to accept** — or **decline** with a reason |
-| **Nyaraka / Documents** | mine; the desk: every document | the printable register, filtered by status |
+| **Nyaraka / Documents** | mine; the desk: every document | the printable register, filtered by status. **Chapisha / Print** prints the document from a page of its own — every serial, numbered **S/N** on the left, the header repeated on each sheet, the signatures as images — not the first screen of the drawer |
 
 A transfer is opened by the sender — or by the store desk **on somebody's behalf**, which is
 flow 5 word for word — and sits as `sent` until the receiver logs in and either **accepts** it,

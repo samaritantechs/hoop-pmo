@@ -862,6 +862,29 @@ test('the approval drawer opens at the requested amount and cannot go above it',
     'the decide drawer must seed the dropdown from the requested amount, both ways');
 });
 
+/* "Sending and printing copy of sent items at transfers doesn't print the whole list, instead
+   just the front page only, also add S/N column on left": the document prints from a page of
+   its own (printDoc_), never from the one-screen-tall drawer, and the serial number leads the row. */
+test('the transfer document prints whole from its own frame, with S/N as the first column', () => {
+  const src = read('portal.html');
+  const view = src.slice(src.indexOf('function trView('), src.indexOf('function printDoc_('));
+  assert.match(view, /<th class="r">S\/N<\/th><th>IMEI<\/th>/, 'S/N is the first column');
+  assert.match(view, /t\.items\.map\(function\(x,i\)\{\s*return '<tr><td class="r mut">'\+\(i\+1\)\+'<\/td>/, 'numbered from 1');
+  assert.match(view, /<td colspan="5"><b>Jumla \/ Total<\/b>/, 'the total row spans the extra column');
+  assert.match(view, /pr\.onclick=function\(\)\{ printDoc_\(docHtml, 'Uhamisho \/ Transfer '\+t\.ref\); \}/, 'Print goes through printDoc_, never window.print() on the drawer');
+  assert.ok(!/pr\.onclick=function\(\)\{ window\.print\(\); \}/.test(view), 'the old drawer print is gone');
+  const helper = src.slice(src.indexOf('function printDoc_('), src.indexOf('function printDoc_(') + 2500);
+  assert.match(helper, /document\.createElement\('iframe'\)/, 'a frame of its own');
+  assert.match(helper, /doc\.write\('<!doctype html>/, 'holding only the document');
+  assert.match(helper, /w\.focus\(\); w\.print\(\);/, 'and printed from there');
+  assert.match(src, /thead\{display:table-header-group\}/, 'the header repeats on every sheet');
+  assert.match(src, /tr\{page-break-inside:avoid;break-inside:avoid\}/, 'a row is never cut in half');
+  // The generic fallback rule no longer prints one screen of a drawer either.
+  const print = src.slice(src.indexOf('@media print{'), src.indexOf('@media print{') + 900);
+  assert.match(print, /\.drawer\{max-height:none!important;overflow:visible!important/, 'the drawer is un-clipped on paper');
+  assert.match(print, /\.drawer-bg\{position:static!important/, 'and its fixed backdrop is not what gets printed');
+});
+
 /* "Transferring at locking says weka msimbo wako wa ofisi nyingine without even where to write
    it": the field lives under a fold, and the fold has to open before anything asks for it. */
 test('the shift drawer opens the fold and shows the code field before asking for a code, and says why', () => {
