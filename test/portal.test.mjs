@@ -2380,6 +2380,46 @@ test('Receive: accepting signs, moves the holder on the register and the old lis
   assert.equal(rowOf(d, 'old_stock', '861000000000001').rsm, 'RSM DAR', 'derived from the register: AGENT TWO reports to RSM DAR');
 });
 
+/* THE RSM COLUMN ON NEW STOCK, WHERE NO SALE CAN FILL IT.
+   =========================================================================================
+     "Currently exporting new stock and sorting those with new rsm, sipho sends the imeis the
+      rsms are receiving and they receive so that we dont have a list of new stock with no rsm
+      column filled"
+
+   The stamped RSM is read off the SALE, so stock that has not sold has never had one -- and
+   the hand-over the owner describes could not give it one either, because accepting a transfer
+   writes devices.holder and the old list and never this audit's stamp. The holder answers it
+   instead, live, which is what makes the round trip below do what the owner expects. */
+test('NEW STOCK: a blank RSM is answered by whose hands the handset is in, and a transfer moves it', async () => {
+  const d = trDb();
+  const open = async () => Object.fromEntries((await _FNS.newStock(d, STORE, {})).rows.map(r => [r.imei, r]));
+  let rows = await open();
+
+  assert.equal(rows['351000000000005'].rsm, 'RSM MWANZA', 'held by AGENT THREE, who answers to Mwanza');
+  assert.equal(rows['351000000000005'].src.rsm, 'holder', 'and the row says so: from the holder, not from a sale');
+  assert.equal(rows['351000000000009'].rsm, 'RSM DAR', 'an RSM holding it IS the answer -- the walk starts at the name');
+  assert.equal(rows['351000000000001'].rsm, '', 'the warehouse is not a person: stock at the desk keeps its blank');
+  assert.equal(rows['351000000000003'].rsm, 'RSM DAR');
+  assert.notEqual(rows['351000000000003'].src.rsm, 'holder', 'a stamped RSM is never re-attributed to the holder');
+
+  // DERIVED, NEVER STAMPED. Whose hands it is in changes with the next transfer; the audit
+  // captures facts that do not, so nothing about the holder is written back to it.
+  const audit = d._dump('stock_audit').find(r => String(r.imei) === '351000000000005');
+  assert.ok(!audit || !audit.rsm, 'the stamp keeps its blank: ' + JSON.stringify(audit));
+
+  // The owner's round trip -- Sipho sends, the RSM accepts, and the column follows the stock.
+  const s = await _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', imeis: ['351000000000001'] });
+  await _FNS.transferAccept(d, RSM_MWZ, { id: s.id, signature: TR_PNG });
+  rows = await open();
+  assert.equal(rows['351000000000001'].rsm, 'RSM MWANZA', 'accepted, held, and now on the RSM\'s line of the export');
+  assert.equal(rows['351000000000001'].holder, 'RSM MWANZA');
+
+  // A handset nobody holds still has nothing to say, and says nothing rather than guessing.
+  const e = trDb({ devices: [{ imei: '351000000000020', item: 'RIMO-64GB', holder: '', state: 'enrolled' }], stock_audit: [] });
+  const orphan = (await _FNS.newStock(e, STORE, {})).rows.find(r => r.imei === '351000000000020');
+  assert.equal(orphan.rsm, ''); assert.equal(orphan.rsmPhone, '');
+});
+
 test('"role store = superagent": stock accepted by a STORE code is held by SUPER AGENT, the register\'s one name for the warehouse', async () => {
   const d = trDb();
   // Flow 4: an agent returns a handset (register) and an old-list one to the store.

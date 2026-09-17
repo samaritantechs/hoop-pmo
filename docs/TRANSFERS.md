@@ -33,6 +33,12 @@ enrolled. Nothing moves on a decline, and nothing moves while the document waits
 on the register also gets a `device_events` line (`transfer`), the same trail a lock or a shift
 leaves.
 
+**And the NEW STOCK export's RSM column follows it.** That column is stamped off the *sale*, so
+stock that has not sold never had one — and an acceptance writes the register, not the audit's
+stamp. NEW STOCK therefore answers a blank RSM from **the holder**: send the serials to the RSM,
+let them accept, and that RSM is on those rows of the next export (`docs/NEW-STOCK.md`). Stock
+still at the desk keeps its blank — the warehouse is not a person.
+
 | status | meaning |
 |---|---|
 | `sent` | waiting for the receiver |

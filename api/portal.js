@@ -1693,6 +1693,51 @@ function rsmAbove(name, tree) {
   return null;
 }
 
+/** AND WHERE NO SALE CAN SAY WHO THE RSM IS -- WHOSE HANDS THE HANDSET IS IN.
+    ==========================================================================================
+      "Currently exporting new stock and sorting those with new rsm, sipho sends the imeis the
+       rsms are receiving and they receive so that we dont have a list of new stock with no rsm
+       column filled"
+
+    The stamped `rsm` is read off the SALE: walk up from the agent whose name is on it. Stock
+    that has not sold has no agent to walk up from, so that column stays blank however many
+    times this pane is re-read -- and the hand-over the owner is describing does not reach it
+    either, because accepting a transfer writes the REGISTER (`devices.holder`) and the old
+    list, and never this audit's stamp. Send the stock, say nothing else, and the column is
+    exactly as empty as it was.
+
+    So the blank is answered the only way stock in hand can answer it: from the holder. A
+    handset in an RSM's hands answers to that RSM; one in an agent's hands answers to whoever
+    the register says they report to -- rsmAbove starts at the name itself, so both are the one
+    walk. THE WAREHOUSE IS NOT A PERSON (isJunkName, the same list everywhere else): stock at
+    the desk answers to nobody in the field and keeps its blank, which is the honest reading of
+    "not issued yet".
+
+    DERIVED, NEVER STAMPED, and that is the whole of the difference. Who sold a handset is a
+    fact about a day in the past and is captured for good; whose hands it is in changes with the
+    next transfer, and a stamped holder would be a lie the morning after one. The row says which
+    it got -- `src.rsm` reads `holder` rather than `hierarchy`, and the cell says so on hover. */
+function rsmOfHolder(holder, ctx) {
+  const who = String(holder || '').trim();
+  if (!who || isJunkName(who)) return null;
+  return rsmAbove(who, ctx.tree);
+}
+
+/** THE RSM A ROW SHOWS, and where it came from. One answer for both of the pane's loops,
+    because two would be two answers that can disagree: the stamp first, then whatever the old
+    list had already paired this holder with, then the holder's own place in the register. */
+function newStockRsm(f, holder, ctx, hadRsm, hadPhone) {
+  const rsm = f.row.rsm || hadRsm || '';
+  const phone = f.row.rsm_phone || hadPhone || '';
+  if (!unanswered(rsm)) return { rsm, phone, src: f.src };
+  const boss = rsmOfHolder(holder, ctx);
+  if (!boss) return { rsm: '', phone: '', src: f.src };
+  const bp = phone0(boss.phone) || '';
+  const src = Object.assign({}, f.src, { rsm: 'holder' });
+  if (bp) src.rsm_phone = 'holder';
+  return { rsm: boss.name, phone: bp, src };
+}
+
 /** EVERY FEED'S ANSWER FOR ONE IMEI, richest first. Each entry is [source, {field: value}] and
     a field a feed cannot speak to is simply absent -- never null, which would read as "this
     feed says there isn't one" and is a different claim entirely.
@@ -7313,9 +7358,10 @@ const FNS = {
       const was = stampedBy.get(imei) || null;
       const f = newStockFill(imei, was, ctx);
       if (f.hits) changed.push(newStockRow(imei, f, was, at));
+      const R = newStockRsm(f, o.agent, ctx, o.rsm, o.rsm_phone);
       rows.push({
         imei,
-        rsm: f.row.rsm || o.rsm || '', rsmPhone: f.row.rsm_phone || o.rsm_phone || '',
+        rsm: R.rsm, rsmPhone: R.phone,
         agent: f.row.agent || o.agent || '', agentPhone: f.row.agent_phone || o.agent_phone || '',
         holder: o.agent || '',
         customer: f.row.customer || '', customerPhone: f.row.customer_phone || '',
@@ -7328,7 +7374,7 @@ const FNS = {
         seenAt: null, neverSeen: true, silentDays: null,
         lat: null, lng: null, locAcc: null, locAt: null,
         gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
-        src: f.src,
+        src: R.src,
       });
     }
     for (const d of devs) {
@@ -7336,10 +7382,13 @@ const FNS = {
       const was = stampedBy.get(imei) || null;
       const f = newStockFill(imei, was, ctx);
       if (f.hits) changed.push(newStockRow(imei, f, was, at));
+      /* THE BLANK RSM, ANSWERED FROM THE HOLDER -- see rsmOfHolder. Shown, searched and fenced
+         on exactly like a stamped one; written into stock_audit never. */
+      const R = newStockRsm(f, d.holder, ctx);
       const seen = d.last_seen ? Date.parse(d.last_seen) : null;
       rows.push({
         imei,
-        rsm: f.row.rsm || '', rsmPhone: f.row.rsm_phone || '',
+        rsm: R.rsm, rsmPhone: R.phone,
         agent: f.row.agent || '', agentPhone: f.row.agent_phone || '',
         holder: d.holder || '',                 // whose hands it is in -- what a transfer moves
         /* devices.customer is stamped at the till by whoever sold it, so it stands in where
@@ -7367,8 +7416,11 @@ const FNS = {
         locAt: d.last_loc_at ? Date.parse(d.last_loc_at) : null,
         seenAt: seen, neverSeen: !seen,
         silentDays: seen ? Math.max(0, Math.floor((now - seen) / 86400000)) : null,
+        /* THE GAP COUNT IS ABOUT THE STAMP, not the screen. A derived RSM does not close it:
+           `gappy` asks how much of the SALE the feeds have never answered, and whose hands the
+           handset is in today is not an answer to that question. */
         gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
-        src: f.src,
+        src: R.src,
       });
     }
 
