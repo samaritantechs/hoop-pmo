@@ -79,6 +79,32 @@ else.
 Where no Regional_Manager exists above somebody, the column stays **open** rather than being filled
 with the nearest available name.
 
+### And where there is no sale to walk up from — the holder
+
+> *"Currently exporting new stock and sorting those with new rsm, sipho sends the imeis the rsms are
+> receiving and they receive so that we dont have a list of new stock with no rsm column filled."*
+
+That walk starts at the **agent on the sale**, so stock that has not sold has nothing to start from
+and the column was blank however often the pane was re-read. Sending it does not stamp anything
+either: accepting a transfer writes the **register** (`devices.holder`) and the old list, never this
+audit — so the hand-off alone would have left the export exactly as empty as it was.
+
+So a blank RSM is answered from **whose hands the handset is in**. A handset an RSM holds answers to
+that RSM; one an agent holds answers to whoever the register says they report to — the same walk,
+started at the holder's own name. **The warehouse is not a person**: stock sitting at the desk
+(`SUPER AGENT`, and the rest of the junk-name list) keeps its blank, which is the honest reading of
+*not issued yet*. A handset nobody holds keeps its blank too.
+
+**Derived, never stamped**, and that is the whole difference: who sold a handset is a fact about a
+day in the past and is captured for good; whose hands it is in changes with the next transfer, and a
+stamped holder would be a lie the morning after one. The cell says which it got — hover and the
+source reads `holder` instead of `hierarchy` — and the **gap count is unmoved**, because `gappy` asks
+how much of the *sale* the feeds have never answered and today's holder is not an answer to that.
+
+The practical effect is the one the owner asked for: Sipho sends, the RSM accepts, and that RSM is on
+those rows of the next export. It costs no extra read — the holder is already on the row the fence
+uses.
+
 ## The population is the register
 
 *"Our existing imeis since we started locking on our own."* One row per IMEI in `devices`. A phone
@@ -192,6 +218,6 @@ that looks complete.
 | file | what changed |
 |---|---|
 | `db/migrations/RUN-ME-2026-09-11-new-stock.sql` | `stock_audit` |
-| `api/portal.js` | `NEWSTOCK_*`, `unanswered`, `rsmAbove`, `newStockOffers`, `newStockFill`, `newStockRow`, the `newStock` fn, the `newstock` nav |
+| `api/portal.js` | `NEWSTOCK_*`, `unanswered`, `rsmAbove`, `rsmOfHolder`, `newStockRsm`, `newStockOffers`, `newStockFill`, `newStockRow`, the `newStock` fn, the `newstock` nav |
 | `public/portal.html` | the catalog entry, `NSQ`/`NS_LABEL`/`nsCell`/`drawNewStock` |
 | `test/new-stock.test.mjs` | twenty-three tests |
