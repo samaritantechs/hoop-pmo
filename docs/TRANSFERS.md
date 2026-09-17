@@ -195,6 +195,11 @@ count never opens a longer list.
   stays there: that is a device changing owner between two systems, not stock changing hands
   between two people in this one.
 - **No re-sign, no edit after signing.** A fresh transfer, not an edit.
+- **Deleting a document is not an undo.** Acceptance is the write that moves stock, and from that
+  moment the handsets are in the receiver's hands on every list — their Stock window, their NEW
+  STOCK, their OLD STOCK — exactly as if they had been handed over at the counter. Removing the
+  row afterwards moves nothing back and takes `prev_holder` with it. Stock goes back the way it
+  came: **send it**, which leaves a document saying so.
 - **No link to `devices` or `hoop_aged_stock` from the items.** A transfer can carry stock that was
   never locked, so `transfer_items.imei` is plain text; each line remembers where the serial was
   found (`source`) and whose hands it was in (`prev_holder`).
@@ -204,3 +209,12 @@ Schema: `db/migrations/RUN-ME-2026-09-16-transfers.sql` (the document) then
 the pane still opens and prints; Send and Receive say which file to run. The one-off backfill of
 staff rows and codes from stock is `RUN-ME-2026-09-18-staff-from-stock.sql`; it is not a schema
 change, and the panes keep the register filled without it from then on.
+
+Two one-off clean-ups sit beside them, for stock that was only ever a rehearsal:
+`RUN-ME-2026-09-17-delete-training-transfers.sql` removes four training documents, with the stock
+restore as a step of its own that is **off until it is turned on**; and
+`RUN-ME-2026-09-17-delete-test-handset.sql` takes one rehearsal serial out of every list it
+reached — the register, its token, its history, the NEW STOCK stamp, the old list, the aged feed
+and any transfer line — because deleting the register row alone leaves the serial on the NEW STOCK
+pane, still standing in somebody's stock. Neither touches the morning uploads or the documents
+raised about a handset; both name what they left alone.
