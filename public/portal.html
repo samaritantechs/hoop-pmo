@@ -386,6 +386,13 @@ body.dark .tabs button.on{background:var(--b700);color:#fff}
   .printDoc,.printDoc *{visibility:visible}
   .printDoc{position:absolute;left:0;top:0;width:100%;padding:0;margin:0}
   .noprint{display:none!important}
+  /* AND THE DRAWER IS UN-CLIPPED. This rule alone printed one screen of a long document --
+     the drawer is a fixed box 90vh tall with its own scrollbar, and paper got the box. The
+     Transfers document now prints from a page of its own (printDoc_); this is the fallback
+     for anything else that prints out of a drawer, so the sheet is as long as the content. */
+  .drawer-bg{position:static!important;display:block!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important;background:none!important}
+  .drawer{max-height:none!important;overflow:visible!important;box-shadow:none!important}
+  .scroll{overflow:visible!important}
 }
 </style>
 </head>
@@ -9590,7 +9597,7 @@ function trView(m, id){
   srv('transferGet',{id:id}).then(function(d){
     var t=d.transfer, mine=t.mine||{}, canW=!BOOT.readOnly;
     var waiting=t.status==='sent';
-    var html='<div class="printDoc">'
+    var docHtml='<div class="printDoc">'
       +'<h2 style="margin:0 0 2px">HOOPLOAN</h2>'
       +'<div class="mut" style="margin-bottom:10px">Hati ya uhamisho wa stoo / Stock transfer document</div>'
       +'<div class="row" style="gap:24px;flex-wrap:wrap;margin-bottom:10px">'
@@ -9602,19 +9609,22 @@ function trView(m, id){
       +(t.status==='declined'?'<br><b>Imekataliwa / Declined:</b> '+esc(clock(t.declinedAt))+' — '+esc(t.declineReason||''):'')
       +'</div></div>'
       +(t.note?'<div class="mut" style="margin-bottom:10px">'+esc(t.note)+'</div>':'')
-      +'<div class="scroll"><table><thead><tr><th>IMEI</th><th>MODELI</th><th>ILIKUWA KWA</th><th>WAPI</th>'
+      /* S/N ON THE LEFT -- "add S/N column on left": a printed list of forty serials is counted
+         and ticked off against the box by that number, so it is the first thing on the row. */
+      +'<div class="scroll"><table><thead><tr><th class="r">S/N</th><th>IMEI</th><th>MODELI</th><th>ILIKUWA KWA</th><th>WAPI</th>'
       +'<th class="r">IDADI</th><th class="r">BEI</th><th class="r">JUMLA</th></tr></thead><tbody>'
-      +t.items.map(function(x){
-        return '<tr><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(x.imei)+'</td>'
+      +t.items.map(function(x,i){
+        return '<tr><td class="r mut">'+(i+1)+'</td><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(x.imei)+'</td>'
           +'<td>'+esc(x.item||'—')+'</td><td>'+esc(x.prevHolder||'—')+'</td><td>'+trSrc(x.source)+'</td>'
           +'<td class="r">'+money(x.qty)+'</td><td class="r">'+money(x.price)+'</td><td class="r">'+money(x.subtotal)+'</td></tr>';
       }).join('')
-      +'</tbody><tfoot><tr class="totrow"><td colspan="4"><b>Jumla / Total</b></td>'
+      +'</tbody><tfoot><tr class="totrow"><td colspan="5"><b>Jumla / Total</b> · simu '+money(t.items.length)+'</td>'
       +'<td class="r"><b>'+money(t.totalQty)+'</b></td><td></td><td class="r"><b>'+money(t.totalAmount)+'</b></td></tr></tfoot></table></div>'
       +'<div class="row" style="gap:20px;flex-wrap:wrap;margin-top:16px;align-items:flex-start">'
       +trSigBlock_('Sahihi ya anayetoa / Sender signature','sender',t)
       +trSigBlock_('Sahihi ya anayepokea / Receiver signature','receiver',t)
       +'</div></div>';
+    var html=docHtml;
     var canSignS = canW && !t.senderSignedBy && t.status!=='declined' && mine.sender;
     if(canSignS) html+='<div class="noprint card" style="margin-top:12px;padding:12px">'
       +'<b>Saini upande wako / Sign your side</b>'
@@ -9659,8 +9669,55 @@ function trView(m, id){
       srv('transferDecline',{id:id, reason:why}).then(function(){ toast('Imekataliwa / Declined'); refresh(); })
         .catch(function(e){ gd.disabled=false; toast(safeErr(e), true); });
     };
-    var pr=$('#trPrint'); if(pr) pr.onclick=function(){ window.print(); };
+    var pr=$('#trPrint'); if(pr) pr.onclick=function(){ printDoc_(docHtml, 'Uhamisho / Transfer '+t.ref); };
   }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
+}
+/* PRINTING THE WHOLE DOCUMENT, NOT THE FIRST SCREEN OF IT.
+   =====================================================================================
+     "Sending and printing copy of sent items at transfers doesn't print the whole list,
+      instead just the front page only"
+
+   The document sits in the drawer, and the drawer is a fixed box the height of the screen
+   with its own scrollbar. The print rule hid everything around it, but could not UN-CLIP it:
+   the browser printed the box, and the box is one screen tall, so a list of forty serials
+   came out as the first fifteen. So the document is printed from a page of its own -- a
+   hidden frame holding nothing but the document and the few styles it needs -- and that
+   page is exactly as long as the list. The table header repeats on every sheet, a row is
+   never cut in half, and the signatures ride along as the images they already are. The
+   frame is removed a minute later, well after the print dialog has taken what it needs. */
+var PRINT_CSS='body{margin:12mm 12mm;color:#111;font:13px/1.4 Arial,Helvetica,sans-serif}'
+  +'h2{margin:0 0 2px;font-size:20px}.mut{color:#555;font-size:12px}'
+  +'.row{display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px}'
+  +'table{width:100%;border-collapse:collapse;font-size:12px}'
+  +'th,td{padding:5px 7px;text-align:left;border-bottom:1px solid #ccc;vertical-align:top}'
+  +'th{background:#f1f5fb;font-size:10.5px;text-transform:uppercase}.r{text-align:right}'
+  +'thead{display:table-header-group}tfoot{display:table-footer-group}'
+  +'tr{page-break-inside:avoid;break-inside:avoid}.totrow td{font-weight:700;border-top:2px solid #333;border-bottom:0}'
+  +'.chip{display:inline-block;padding:1px 7px;border:1px solid #999;border-radius:999px;font-size:10px;font-weight:700;white-space:nowrap}'
+  +'.fld{margin:0 0 10px}.fld label{display:block;font-size:11px;font-weight:700;color:#555;margin-bottom:4px}'
+  +'img{max-width:280px;max-height:110px}.noprint{display:none}';
+function printDoc_(inner, title){
+  var f=document.createElement('iframe');
+  f.setAttribute('aria-hidden','true'); f.setAttribute('data-printdoc','1');
+  f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  document.body.appendChild(f);
+  var w=f.contentWindow, doc=w.document;
+  doc.open();
+  doc.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title||'HOOPLOAN')+'</title>'
+    +'<style>'+PRINT_CSS+'</style></head><body>'+inner+'</body></html>');
+  doc.close();
+  var go=function(){
+    try{ w.focus(); w.print(); }catch(e){ try{ window.print(); }catch(e2){} }
+    setTimeout(function(){ try{ f.parentNode.removeChild(f); }catch(e){} }, 60000);
+  };
+  // The signature images are data URLs, decoded in a tick but not synchronously: wait for them.
+  var imgs=Array.prototype.slice.call(doc.images||[]), left=imgs.length;
+  if(!left){ setTimeout(go, 50); return f; }
+  imgs.forEach(function(im){
+    var done=function(){ if(--left===0) go(); };
+    if(im.complete) done(); else { im.onload=done; im.onerror=done; }
+  });
+  return f;
 }
 
 /* ---------- staff: THE OFFICE, from Sipho's register ---------- */
