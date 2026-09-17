@@ -9592,6 +9592,197 @@ function trSigBlock_(label, role, t){
    side; the receiver accepts -- which IS their signature and the moment the stock moves -- or
    declines. Only the party themselves, ever: nobody signs in another's name. Everything below
    the document is off the print. */
+/* THE DOCUMENT AS A FILE IN THE PHONE'S DOWNLOADS -- because a phone cannot print.
+   =============================================================================================
+     "printing should allow / be able through app to b/se user may want to save the file into
+      phone downloads"
+
+   window.print() does nothing inside the Android wrapper's WebView: there is no print dialog
+   behind it, so Chapisha was a dead button on exactly the handsets a store keeper carries. Both
+   halves of the answer were already in this page and neither had ever been pointed at this
+   document: saveFile_ puts a file in the phone's own Downloads through HoopLoan.saveBase64, and
+   there is a PDF writer a few hundred lines up. What was missing is a PDF of THIS document --
+   the facts, every serial with its S/N, the totals, and both signatures -- so here it is, on A4
+   sheets that each carry the reference. Chapisha saves it when there is nothing to print to;
+   Hifadhi PDF saves it always, on a desk as much as on a phone.
+
+   THE INK IS REAL INK. The pads draw on a canvas and a canvas exports PNG, which cannot go into
+   a PDF without re-implementing PNG's per-scanline filters -- but a JPEG can, byte for byte, as
+   a /DCTDecode image. So each signature is redrawn on white (a JPEG carries no transparency, and
+   ink on black is not a signature) and embedded as it stands. A signature that will not load is
+   simply absent: the name and the moment underneath it are what the register holds anyway. */
+/* One word, not the screen's two: the column is narrow and "Haijulikani / Un.." on a printed
+   hand-off is worse than the Swahili alone, which is the language the sheet is read in. */
+function trSrcWord_(s){
+  return s==='devices'?'Rejista':s==='old_stock'?'OLD STOCK':s==='unknown'?'Haijulikani':'';
+}
+function trSigJpeg_(url){
+  return new Promise(function(done){
+    if(!url){ done(null); return; }
+    var im=new Image();
+    im.onload=function(){
+      try{
+        var c=document.createElement('canvas');
+        c.width=im.naturalWidth||im.width||300; c.height=im.naturalHeight||im.height||120;
+        var g=c.getContext('2d');
+        g.fillStyle='#ffffff'; g.fillRect(0,0,c.width,c.height);
+        g.drawImage(im,0,0,c.width,c.height);
+        done({ bin:atob(c.toDataURL('image/jpeg',0.92).split(',')[1]), w:c.width, h:c.height });
+      }catch(e){ done(null); }
+    };
+    im.onerror=function(){ done(null); };
+    im.src=url;
+  });
+}
+function trPdfDoc_(t, sigs){
+  var W=595,H=842,M=36,AVAIL=W-2*M;          // A4 portrait, in points
+  var RH=13, FS=8, HFS=7.6, BOT=M+18;
+  var imgs=(sigs||[]).filter(Boolean);
+  var cols=[['S/N','r',26],['IMEI','l',0],['MODELI','l',0],['ILIKUWA KWA','l',0],['WAPI','l',0],
+            ['IDADI','r',32],['BEI','r',56],['JUMLA','r',62]];
+  var fixed=0; cols.forEach(function(c){ fixed+=c[2]; });
+  var free=Math.max(120, AVAIL-fixed), share=[0.30,0.25,0.26,0.19], si=0;
+  var cw=cols.map(function(c){ return c[2] || free*share[si++]; });
+  var x=[M]; cw.forEach(function(w,i){ x.push(x[i]+w); });
+  var align=cols.map(function(c){ return c[1]; });
+  var rows=(t.items||[]).map(function(it,i){
+    return [String(i+1), String(it.imei||''), String(it.item||'-'), String(it.prevHolder||'-'),
+      trSrcWord_(it.source), money(it.qty), money(it.price), money(it.subtotal)];
+  });
+
+  var streams=[], o=null, y=0, pageNo=0;
+  var text=function(s,px,py,size,bold,grey){
+    return 'BT /'+(bold?'F2':'F1')+' '+size+' Tf '+(grey?'0.35 0.35 0.35 rg ':'0 0 0 rg ')
+      +px.toFixed(1)+' '+py.toFixed(1)+' Td ('+pdfEsc_(String(s==null?'':s))+') Tj ET';
+  };
+  var cell=function(v,ci,py,size,bold){
+    var s=pdfFit_(String(v==null?'':v), cw[ci]-6, size, bold);
+    var tx=align[ci]==='r' ? x[ci]+cw[ci]-3-pdfW_(s,size,bold) : x[ci]+3;
+    return text(s,tx,py,size,bold);
+  };
+  var tableHead=function(){
+    o.push('0.90 0.92 0.95 rg '+M+' '+(y-3).toFixed(1)+' '+AVAIL.toFixed(1)+' '+RH+' re f');
+    for(var c=0;c<cols.length;c++) o.push(cell(cols[c][0],c,y+0.5,HFS,true));
+    y-=RH;
+  };
+  /* Every sheet names the document, so a page that walks off a desk on its own still says
+     which hand-off it belongs to -- the whole reason a register is printed at all. */
+  var newPage=function(noTable){
+    if(o) streams.push(o.join('\n'));
+    o=[]; pageNo++; y=H-M;
+    if(pageNo===1){
+      o.push(text('HOOPLOAN',M,y-14,16,true)); y-=20;
+      o.push(text('Hati ya uhamisho wa stoo / Stock transfer document',M,y-8,8.5,false,true)); y-=20;
+      var L=[['Namba / Ref',t.ref],['Tarehe / Date',clock(t.at)],['Iliyofunguliwa na / Opened by',t.createdBy],
+             ['Hali / Status',t.status==='accepted'?'Imekubaliwa / Accepted':t.status==='declined'?'Imekataliwa / Declined':'Inasubiri / Waiting']];
+      var R=[['Kutoka / From',(t.fromName||'')+(t.fromRole?' ('+t.fromRole+')':'')+(t.fromPhone?' - '+t.fromPhone:'')],
+             ['Kwenda / To',(t.toName||'')+(t.toRole?' ('+t.toRole+')':'')+(t.toPhone?' - '+t.toPhone:'')],
+             ['Simu / Handsets',money((t.items||[]).length)+' - jumla '+money(t.totalAmount)]];
+      if(t.status==='accepted') R.push(['Imekubaliwa / Accepted',clock(t.acceptedAt)+(t.moved!=null?' - '+money(t.moved)+' zimehama':'')]);
+      if(t.status==='declined') R.push(['Imekataliwa / Declined',(clock(t.declinedAt)||'')+' - '+(t.declineReason||'')]);
+      var half=AVAIL/2-6, fy=y;
+      var put=function(list,px){
+        var ly=fy;
+        list.forEach(function(p){
+          o.push(text(p[0],px,ly,7,true,true));
+          o.push(text(pdfFit_(String(p[1]||'-'),half,8.5,false),px,ly-10,8.5,false));
+          ly-=21;
+        });
+        return ly;
+      };
+      y=Math.min(put(L,M), put(R,M+AVAIL/2+6))-2;
+      if(t.note){ o.push(text(pdfFit_('Maelezo / Note: '+t.note,AVAIL,8,false),M,y,8,false,true)); y-=14; }
+      y-=4;
+    } else {
+      o.push(text('HOOPLOAN - uhamisho / transfer '+(t.ref||''),M,y-11,10,true)); y-=22;
+    }
+    // A sheet carrying only the signatures gets no column headings: a header with no rows
+    // under it reads as a page whose list failed to print.
+    if(!noTable) tableHead();
+  };
+  newPage();
+  rows.forEach(function(r,ri){
+    if(y<BOT+RH){ newPage(); }
+    if(ri%2===1){
+      o.push('0.965 0.965 0.965 rg '+M+' '+(y-3).toFixed(1)+' '+AVAIL.toFixed(1)+' '+RH+' re f');
+    }
+    for(var c=0;c<cols.length;c++) o.push(cell(r[c],c,y+0.5,FS,false));
+    y-=RH;
+  });
+  if(y<BOT+RH) newPage();
+  o.push('0 0 0 RG 0.7 w '+M+' '+(y+RH-3).toFixed(1)+' m '+(M+AVAIL).toFixed(1)+' '+(y+RH-3).toFixed(1)+' l S');
+  /* THE TOTAL LABEL IS NOT A CELL. Put through cell() it is clipped to the S/N column's own
+     width and prints as "Ju.." -- the one line on the sheet that is read before any other. */
+  o.push(text('Jumla / Total - simu '+money(rows.length),M+3,y+0.5,FS,true));
+  o.push(cell(money(t.totalQty),5,y+0.5,FS,true));
+  o.push(cell(money(t.totalAmount),7,y+0.5,FS,true));
+  y-=RH+10;
+
+  /* THE TWO SIGNATURES, kept whole: rather than let a box break across sheets, the block moves
+     to a page of its own -- a hand-off document whose second signature is on another sheet is
+     an argument waiting to happen. */
+  var BOXH=96, BOXW=Math.min(232, AVAIL/2-8);
+  if(y-BOXH<BOT) newPage(true);
+  var sig=function(label, who, when, im, px){
+    o.push(text(label,px,y-9,7.5,true,true));
+    o.push('0.75 0.78 0.83 RG 0.8 w '+px.toFixed(1)+' '+(y-BOXH+18).toFixed(1)+' '+BOXW.toFixed(1)+' '+(BOXH-30).toFixed(1)+' re S');
+    if(im){
+      var maxW=BOXW-12, maxH=BOXH-42, sc=Math.min(maxW/im.w, maxH/im.h);
+      var dw=im.w*sc, dh=im.h*sc;
+      o.push('q '+dw.toFixed(1)+' 0 0 '+dh.toFixed(1)+' '+(px+6).toFixed(1)+' '
+        +(y-BOXH+24+(maxH-dh)/2).toFixed(1)+' cm /Im'+im.id+' Do Q');
+    } else {
+      o.push(text(who?'(sahihi haikupatikana / signature not available)':'Bado / not signed yet',
+        px+8, y-BOXH+48, 8, false, true));
+    }
+    o.push(text(who?(who+'  -  '+(clock(when)||'')):'—', px, y-BOXH+6, 7.5, false, true));
+  };
+  sig('Sahihi ya anayetoa / Sender signature', t.senderSignedBy, t.senderSignedAt, imgs[0]&&imgs[0].role==='sender'?imgs[0]:(imgs[1]&&imgs[1].role==='sender'?imgs[1]:null), M);
+  sig('Sahihi ya anayepokea / Receiver signature', t.receiverSignedBy, t.receiverSignedAt, imgs[0]&&imgs[0].role==='receiver'?imgs[0]:(imgs[1]&&imgs[1].role==='receiver'?imgs[1]:null), M+AVAIL-BOXW);
+  streams.push(o.join('\n'));
+
+  /* Objects: 1 catalog, 2 pages, 3-4 fonts, then one per signature image, then each page and
+     its content stream. The image bytes are the JPEG exactly as the canvas produced it. */
+  var objs=[], IMG0=5, PAGE0=IMG0+imgs.length;
+  var ids=streams.map(function(_,q){ return PAGE0+q*2; });
+  objs.push('<< /Type /Catalog /Pages 2 0 R >>');
+  objs.push('<< /Type /Pages /Count '+streams.length+' /Kids ['+ids.map(function(id){ return id+' 0 R'; }).join(' ')+'] >>');
+  objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+  objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+  imgs.forEach(function(im){
+    objs.push('<< /Type /XObject /Subtype /Image /Width '+im.w+' /Height '+im.h
+      +' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+im.bin.length
+      +' >>\nstream\n'+im.bin+'\nendstream');
+  });
+  var xo=imgs.length?(' /XObject << '+imgs.map(function(im,q){ return '/Im'+im.id+' '+(IMG0+q)+' 0 R'; }).join(' ')+' >>'):'';
+  streams.forEach(function(sc,q){
+    objs.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 '+W+' '+H+'] '
+      +'/Resources << /Font << /F1 3 0 R /F2 4 0 R >>'+xo+' >> /Contents '+(PAGE0+q*2+1)+' 0 R >>');
+    objs.push('<< /Length '+sc.length+' >>\nstream\n'+sc+'\nendstream');
+  });
+  var out='%PDF-1.4\n', offs=[];
+  objs.forEach(function(b,idx){ offs.push(out.length); out+=(idx+1)+' 0 obj\n'+b+'\nendobj\n'; });
+  var xref=out.length;
+  out+='xref\n0 '+(objs.length+1)+'\n0000000000 65535 f \n';
+  offs.forEach(function(p){ out+=('0000000000'+p).slice(-10)+' 00000 n \n'; });
+  out+='trailer\n<< /Size '+(objs.length+1)+' /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF';
+  var bytes=new Uint8Array(out.length);
+  for(var bi=0;bi<out.length;bi++) bytes[bi]=out.charCodeAt(bi)&0xff;
+  return bytes;
+}
+/** Build the PDF and hand it to saveFile_, which puts it in the phone's Downloads through the
+    wrapper's bridge and falls back to an ordinary browser download on a desk. */
+function trSaveDoc_(t){
+  return Promise.all([trSigJpeg_(t.senderSignature), trSigJpeg_(t.receiverSignature)])
+    .then(function(pair){
+      var sigs=[], n=1;
+      if(pair[0]){ pair[0].role='sender'; pair[0].id=n++; sigs.push(pair[0]); }
+      if(pair[1]){ pair[1].role='receiver'; pair[1].id=n++; sigs.push(pair[1]); }
+      saveFile_('HOOP-uhamisho-'+String(t.ref||'').replace(/[^A-Za-z0-9._-]/g,'')+'.pdf',
+        'application/pdf', trPdfDoc_(t, sigs));
+    })
+    .catch(function(e){ toast(safeErr(e), true); });
+}
 function trView(m, id){
   drawer('<div class="sk"></div>');
   srv('transferGet',{id:id}).then(function(d){
@@ -9636,7 +9827,14 @@ function trView(m, id){
       +trPadHtml_('trPadR')
       +'<div style="margin-top:6px"><button class="btn sm" id="trAccept">✔ Kubali na saini / Accept &amp; sign</button> '
       +'<button class="btn sm ghost" id="trDecline">✖ Kataa / Decline</button></div></div>';
-    html+='<div class="noprint" style="margin-top:12px"><button class="btn w" id="trPrint">🖨 Chapisha / Print</button></div>';
+    /* TWO WAYS OUT, because a phone has only one of them. Inside the app Chapisha saves the
+       PDF instead of pressing a print dialog that is not there -- and says so -- while Hifadhi
+       PDF is on both, for the copy that gets sent rather than carried. */
+    html+='<div class="noprint row" style="margin-top:12px;gap:8px">'
+      +'<button class="btn" id="trPrint" style="flex:1">🖨 Chapisha / Print</button>'
+      +'<button class="btn ghost" id="trPdf" style="flex:1">⤓ Hifadhi PDF / Save PDF</button></div>'
+      +'<div class="noprint mut" style="font-size:11.5px;margin-top:4px">Kwenye simu: PDF huhifadhiwa kwenye <b>Downloads</b>. '
+      +'/ On a phone the PDF is saved to Downloads.</div>';
     drawer('<h3>Uhamisho / Transfer '+esc(t.ref)+'</h3>'+html);
     var padS=canSignS?trWirePad_('trPadS'):null, padR=canAct?trWirePad_('trPadR'):null;
     var cs=$('#trPadSClear'); if(cs&&padS) cs.onclick=function(){ padS.clear(); };
@@ -9669,7 +9867,17 @@ function trView(m, id){
       srv('transferDecline',{id:id, reason:why}).then(function(){ toast('Imekataliwa / Declined'); refresh(); })
         .catch(function(e){ gd.disabled=false; toast(safeErr(e), true); });
     };
-    var pr=$('#trPrint'); if(pr) pr.onclick=function(){ printDoc_(docHtml, 'Uhamisho / Transfer '+t.ref); };
+    /* THE WRAPPER HAS NO PRINT DIALOG. window.print() in that WebView does nothing at all, so
+       on a phone Chapisha hands over the file the officer actually wanted; everywhere else it
+       prints the document from its own page (printDoc_). */
+    var inApp=!!(window.HoopLoan||window.HopeCalls);
+    var pr=$('#trPrint');
+    if(pr) pr.onclick=function(){
+      if(inApp){ toast('Simu haina printa — inahifadhi PDF kwenye Downloads. / No print dialog on a phone: saving the PDF to Downloads.'); trSaveDoc_(t); return; }
+      printDoc_(docHtml, 'Uhamisho / Transfer '+t.ref);
+    };
+    var pd=$('#trPdf');
+    if(pd) pd.onclick=function(){ pd.disabled=true; trSaveDoc_(t).then(function(){ pd.disabled=false; }); };
   }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
 }
 /* PRINTING THE WHOLE DOCUMENT, NOT THE FIRST SCREEN OF IT.

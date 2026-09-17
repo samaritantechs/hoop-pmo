@@ -22,7 +22,7 @@
 | **Stoo / Stock** | what is in *my* hands — the register's handsets and the old-stock list's, unsold. The desk: everybody's, holder beside each | tick serials, **Send selected** |
 | **Tuma / Send** | — | the sender is **the account I signed in with** (fixed, shown, never typed); the serials (ticked or pasted — the first box); who receives, picked **by role, then by name** from the system users in that role; the model from a **prelisted** dropdown of every model the stock knows; the unit price, or **blank to take each phone's NEW STOCK price**; a note; **my signature** |
 | **Pokea / Receive** | waiting for me · sent by me · settled | open a waiting document, **sign to accept** — or **decline** with a reason |
-| **Nyaraka / Documents** | mine; the desk: every document | the printable register, filtered by status. **Chapisha / Print** prints the document from a page of its own — every serial, numbered **S/N** on the left, the header repeated on each sheet, the signatures as images — not the first screen of the drawer |
+| **Nyaraka / Documents** | mine; the desk: every document | the printable register, filtered by status. **Chapisha / Print** prints the document from a page of its own — every serial, numbered **S/N** on the left, the header repeated on each sheet, the signatures as images — not the first screen of the drawer. **⤓ Hifadhi PDF** saves the same document as a PDF; see *Paper, and the phone* |
 
 A transfer is opened by the sender — or by the store desk **on somebody's behalf**, which is
 flow 5 word for word — and sits as `sent` until the receiver logs in and either **accepts** it,
@@ -89,6 +89,33 @@ user, possession, the hierarchy rule), so a wrong name on line 40 opens no docum
 the refusal names the lines and the people that stopped it. A serial listed under two names is
 refused rather than guessed. The same model, price and note apply to every line; 500 phones per
 paste.
+
+## Paper, and the phone
+
+> *"Sending and printing copy of sent items at transfers doesn't print the whole list, instead
+> just the front page only, also add S/N column on left"*
+> *"printing should allow / be able through app to b/se user may want to save the file into
+> phone downloads"*
+
+**Chapisha / Print** builds the document as a page of its own and prints that. It used to print
+the drawer, which is a fixed box one screen tall with its own scrollbar, so a list of forty
+serials came out as the first fifteen. The printed sheet now runs as long as the list, repeats
+the column headings on every page, never splits a row across two sheets, and carries both
+signatures as drawn.
+
+**⤓ Hifadhi PDF / Save PDF** writes the same document as a PDF and hands it to `saveFile_` —
+the one route every export in this system already takes: the wrapper's `HoopLoan.saveBase64`
+puts it straight into the phone's **Downloads**, and an ordinary browser downloads it. A4
+portrait, the reference on every sheet, `S/N` leading each row, the totals, and **both
+signatures as ink**: the pads draw on a canvas, and a canvas PNG cannot go into a PDF without
+re-implementing PNG's scanline filters, so each signature is re-drawn on white and embedded as
+a JPEG (`/DCTDecode`). A signature that will not load is simply absent — the name and the
+moment underneath it are what the register holds anyway.
+
+**Inside the app there is no print dialog at all.** `window.print()` does nothing in that
+WebView, so Chapisha there saves the PDF instead and says so. That is the whole answer to
+"printing should work through the app": the officer gets the file in Downloads, to open, keep
+or send.
 
 ## Signatures
 

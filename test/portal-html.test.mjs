@@ -871,7 +871,7 @@ test('the transfer document prints whole from its own frame, with S/N as the fir
   assert.match(view, /<th class="r">S\/N<\/th><th>IMEI<\/th>/, 'S/N is the first column');
   assert.match(view, /t\.items\.map\(function\(x,i\)\{\s*return '<tr><td class="r mut">'\+\(i\+1\)\+'<\/td>/, 'numbered from 1');
   assert.match(view, /<td colspan="5"><b>Jumla \/ Total<\/b>/, 'the total row spans the extra column');
-  assert.match(view, /pr\.onclick=function\(\)\{ printDoc_\(docHtml, 'Uhamisho \/ Transfer '\+t\.ref\); \}/, 'Print goes through printDoc_, never window.print() on the drawer');
+  assert.match(view, /printDoc_\(docHtml, 'Uhamisho \/ Transfer '\+t\.ref\);/, 'Print goes through printDoc_, never window.print() on the drawer');
   assert.ok(!/pr\.onclick=function\(\)\{ window\.print\(\); \}/.test(view), 'the old drawer print is gone');
   const helper = src.slice(src.indexOf('function printDoc_('), src.indexOf('function printDoc_(') + 2500);
   assert.match(helper, /document\.createElement\('iframe'\)/, 'a frame of its own');
@@ -883,6 +883,30 @@ test('the transfer document prints whole from its own frame, with S/N as the fir
   const print = src.slice(src.indexOf('@media print{'), src.indexOf('@media print{') + 900);
   assert.match(print, /\.drawer\{max-height:none!important;overflow:visible!important/, 'the drawer is un-clipped on paper');
   assert.match(print, /\.drawer-bg\{position:static!important/, 'and its fixed backdrop is not what gets printed');
+});
+
+/* "printing should allow / be able through app to b/se user may want to save the file into phone
+   downloads": the wrapper's WebView has no print dialog, so the document is also a PDF, saved
+   through the same bridge every other export already uses. */
+test('the transfer document saves as a PDF through the phone bridge, and Print saves instead of dying in the app', () => {
+  const src = read('portal.html');
+  assert.match(src, /function trPdfDoc_\(t, sigs\)\{/, 'the document has its own PDF');
+  assert.match(src, /function trSaveDoc_\(t\)\{/, 'and a way out to a file');
+  assert.match(src, /saveFile_\('HOOP-uhamisho-'\+String\(t\.ref\|\|''\)\.replace\(\/\[\^A-Za-z0-9\._-\]\/g,''\)\+'\.pdf',\s*'application\/pdf'/,
+    'saved through saveFile_, which is the bridge into the phone\'s Downloads');
+  assert.match(src, /var inApp=!!\(window\.HoopLoan\|\|window\.HopeCalls\);/, 'the app is recognised');
+  assert.match(src, /if\(inApp\)\{ toast\([^)]*Downloads[\s\S]{0,80}trSaveDoc_\(t\); return; \}/,
+    'inside the app Chapisha saves the PDF and says so, instead of a print dialog that is not there');
+  assert.match(src, /id="trPdf"[^>]*>⤓ Hifadhi PDF \/ Save PDF/, 'and the button is there on every platform');
+  // The ink: a canvas PNG cannot be embedded in a PDF, a JPEG can, so the pad image is re-drawn
+  // on white and carried as /DCTDecode. Losing it must never lose the document.
+  assert.match(src, /toDataURL\('image\/jpeg',0\.92\)/, 'the signature becomes a JPEG');
+  assert.match(src, /\/Filter \/DCTDecode \/Length '\+im\.bin\.length/, 'embedded as it stands');
+  assert.match(src, /im\.onerror=function\(\)\{ done\(null\); \};/, 'a signature that will not load is absent, not fatal');
+  // The two defects the first cut printed: a clipped total label and a header with no rows.
+  assert.match(src, /o\.push\(text\('Jumla \/ Total - simu '\+money\(rows\.length\),M\+3/, 'the total label is not squeezed into the S/N column');
+  assert.match(src, /if\(!noTable\) tableHead\(\);/, 'a signatures-only sheet carries no empty column headings');
+  assert.match(src, /if\(y-BOXH<BOT\) newPage\(true\);/);
 });
 
 /* "Transferring at locking says weka msimbo wako wa ofisi nyingine without even where to write
