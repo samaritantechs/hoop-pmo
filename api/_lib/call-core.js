@@ -989,16 +989,31 @@ async function summaryCompute(db, user, nowMs) {
   /* Watu's flag, inside our window -- see the note above isLocked7. Both halves, or this
      tile reads 283 on a book of 41. */
   const locked7 = deck.filter(r => isLocked7(r, today)).length;
+  /* EVERY LOCK INSIDE THE WINDOW, not only 7+: "the reached-yesterday widget at dashboard
+     should be summary of total locked <=45 ... so that we see overall weekly progress". Watu's
+     two flags (4+ and 7+) inside our 45-day window, today -- and the same count as it stood on
+     the week's first upload, so the tile can say which way the week is going. */
+  const lockedAny = (r, day) => (r.locked7 === true || r.locked4 === true) && inWindowOf(r, day);
+  const lockedAll = deck.filter(r => lockedAny(r, today)).length;
   // The performance bar is always YESTERDAY (a finished day), never today's half-story,
   // plus last week's average -- company-wide here ("other roles get average of all
   // company"; the per-person cut lives in dailySummary and in Ripoti).
   const hist = await histFor(db, nowMs);
+  let lockedWeekStart = null;
+  const thisMon = weekMondayKey(nowMs);
+  for (let i = 0; i < 7; i++) {
+    const d = addDaysKey(thisMon, i);
+    if (d >= today) break;
+    const m = hist.deckByDate.get(d);
+    if (m && m.size) { lockedWeekStart = { date: d, num: [...m.values()].filter(r => lockedAny(r, d)).length }; break; }
+  }
   const den = deck.length;
   return {
     ok: true,
     deckDate,
     list: { num: den },
     locked7: { num: locked7 },
+    lockedAll: { num: lockedAll, weekStart: lockedWeekStart },
     inWindow: { num: inWin },
     calls: { num: logs.length },
     reached: reachedOn(hist.yDate, hist, null, []) || { pct: null, num: 0, den: 0 },

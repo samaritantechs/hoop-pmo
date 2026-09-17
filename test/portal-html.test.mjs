@@ -862,6 +862,29 @@ test('the approval drawer opens at the requested amount and cannot go above it',
     'the decide drawer must seed the dropdown from the requested amount, both ways');
 });
 
+/* "Transferring at locking says weka msimbo wako wa ofisi nyingine without even where to write
+   it": the field lives under a fold, and the fold has to open before anything asks for it. */
+test('the shift drawer opens the fold and shows the code field before asking for a code, and says why', () => {
+  const src = read('portal.html');
+  const fn = src.slice(src.indexOf('var byCode=function(reason){'), src.indexOf("srvOther_(server,code,'deviceEnrol'"));
+  assert.match(fn, /var det=ta\.closest\('details'\); if\(det\) det\.open=true;/, 'the fold opens');
+  assert.match(fn, /var inp=\$\('#dvShiftCode'\); if\(inp\)\{ try\{ inp\.focus\(\); \}catch\(e\)\{\} \}/, 'the cursor lands in the field');
+  assert.match(fn, /toast\(\(reason\?reason\+' — ':''\)\+/, 'the server\'s reason (DEVICE_SHIFT_SECRET not set) is said first');
+  assert.match(src, /byCode\(String\(safeErr\(e\)\|\|''\)\.replace\(\/\^need-batch:\\s\*\/i,''\)\)/, 'and the need-batch fallback passes that reason in');
+});
+
+/* The dashboard's lock tile and the stock panes' fence line -- the owner's asks of 2026-09-17. */
+test('the dashboard shows every lock inside the window with the week beside it, and the stock panes say whose stock they show', () => {
+  const src = read('portal.html');
+  assert.ok(!src.includes("tile('Reached — yesterday'"), 'the reached-yesterday tile is gone');
+  assert.match(src, /tile\('Locked · ndani ya siku 45',n\(la\),'7\+: '/, 'every lock in the window, with the 7+ share under it');
+  assert.match(src, /' → leo '\+money\(la\.num\)\+' \('/, 'the week\'s first upload against today');
+  assert.match(src, /function fenceNote_\(d\)\{/, 'the fence line exists');
+  assert.match(src, /var head=fenceNote_\(d\)\+staffSyncNote_\(d\)/, 'NEW STOCK says whose stock it is');
+  assert.match(src, /var tiles=fenceNote_\(d\)\+staffSyncNote_\(d\)/, 'so does OLD STOCK');
+  assert.match(src, /<option value="">Matawi yote \/ all branches<\/option>/, 'Ripoti filters by branch, not the app\'s team');
+});
+
 /* "chip this list since its too long (Access codes — mfumo (portal) · 347)": the pane opens on
    ONE chip, never on the whole list; Zote / All is a chip of its own; a search looks across every
    role whatever chip is on, and choosing a chip clears the search. */

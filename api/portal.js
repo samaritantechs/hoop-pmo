@@ -2006,12 +2006,17 @@ async function stockAllow(db, user) {
     const idx = managerIndex(agents);
     for (const ag of agents) if (ag.name && nameKey(idx.of(ag.name)) === me) mine.add(nameKey(ag.name));
   }
-  return (holder, agent, rsm) => {
+  const fn = (holder, agent, rsm) => {
     const h = nameKey(holder), g = nameKey(agent);
     if (h && mine.has(h)) return true;
     if (g && mine.has(g)) return true;
     return role === 'RSM' && !!me && nameKey(rsm) === me;
   };
+  /* WHOSE STOCK THE PANE IS SHOWING, for the pane to say so: "each should only see their
+     stock, not the whole company's". An RSM with no agent on the register reporting to
+     them sees their own hands and the rows naming them -- and is told that is why. */
+  fn.info = { role, name: String(user.name || ''), agents: Math.max(0, mine.size - (me ? 1 : 0)) };
+  return fn;
 }
 /** The store desk sees every document and every handset. ADMIN is full access. */
 const isStoreDesk = user => isAdminRole(user) || isStoreRole(roleWord(user));
@@ -3070,23 +3075,63 @@ const FNS = {
      call.html's own leader report already does this correctly -- teamChoices, built from the
      real teams table, the same shape as here -- so this borrows that field name and that
      function (teamList) rather than inventing a second way to ask the same question. */
+  /* RIPOTI IS CUT BY THE BRANCHES THE STAFF PANE SHOWS, AND SAYS WHO SOMEBODY IS TODAY.
+     =====================================================================================
+       "Sorting team at ripoti should use the branches I always say such as of navtab STAFF,
+        not default KINONDONI"
+       "Signed in roles even at ripoti should read the real ones as current in access code
+        settings, not just stamp from ancient login"
+
+     The Timu box used to offer the call app's teams -- a stamp the handset took at
+     registration, which is how KINONDONI ended up the only choice -- and the line under an
+     officer's name was the role that same registration wrote down, months ago. Both now come
+     off the registers the office actually keeps: the box offers the STAFF register's branches,
+     an officer is labelled with THEIR branch off that register (by phone, else by name), and
+     the word under the name is the role on their ACCESS CODE today, then the register's, and
+     only then the app's old stamp. Picking a branch narrows to the officers in it; the portal
+     code's own team restriction still scopes the read at the database, as it always did. */
   async report(db, user, args) {
     requireNav(user, 'reports');
     const a = args || {};
-    const allTeams = await teamList(db);
-    const choices = (user.teams && user.teams.length ? user.teams : allTeams)
-      .map(t => String(t || '').trim()).filter(Boolean)
+    let staff = [], codes = [];
+    try { staff = await fetchAll(() => db.from('hoop_agents').select('phone, name, branch, role')); }
+    catch (e) { if (!tableMissing(e)) throw e; }
+    try { codes = await fetchAll(() => db.from('access_codes').select('name, role')); }
+    catch (e) { if (!tableMissing(e)) throw e; }
+    const branches = [...new Set(staff.map(s => String(s.branch || '').trim()).filter(Boolean))]
       .filter((t, i, arr) => arr.findIndex(x => K(x) === K(t)) === i).sort();
     const want = String(a.team || '').trim();
     // Only a name the box actually offered can ever narrow the report -- typing or forging
-    // an arbitrary string here must not silently pass through to reportCore as a scope.
-    const picked = want && choices.find(t => K(t) === K(want)) || '';
-    let scope = user.teams;
-    if (picked && (!scope || scope.some(t => K(t) === K(picked)))) scope = [picked];
-    const out = await reportCore(db, scope, a.from, a.to, null, Date.now());
-    out.scope = scope || 'ALL';
-    out.teamChoices = choices;
+    // an arbitrary string here must not silently pass through as a scope.
+    const picked = want && branches.find(t => K(t) === K(want)) || '';
+    const out = await reportCore(db, user.teams, a.from, a.to, null, Date.now());
+    const byPhone = new Map(), byName = new Map(), codeRole = new Map();
+    for (const s of staff) {
+      const ph = pnorm(s.phone || ''); if (ph && !byPhone.has(ph)) byPhone.set(ph, s);
+      const nk = nameKey(s.name); if (nk && !byName.has(nk)) byName.set(nk, s);
+    }
+    for (const c of codes) { const nk = nameKey(c.name); if (nk && !codeRole.has(nk)) codeRole.set(nk, String(c.role || '').trim()); }
+    const staffOf = u => byPhone.get(pnorm(u.phone || '')) || byName.get(nameKey(u.name)) || null;
+    const roleWordOf = r => { const s = String(r || '').replace(/_/g, ' ').trim(); return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : ''; };
+    out.users = out.users.map(u => {
+      const s = staffOf(u);
+      const cr = codeRole.get(nameKey(u.name)) || '';
+      return { ...u,
+        team: (s && s.branch) ? String(s.branch).trim() : String(u.team || ''),
+        position: cr || (s && s.role ? roleWordOf(s.role) : u.position),
+        onRegister: !!s };
+    });
+    if (picked) {
+      out.users = out.users.filter(u => K(u.team) === K(picked));
+      const t = { calls: 0, duration: 0, portfolio: 0, nonPortfolio: 0 };
+      for (const u of out.users) { t.calls += u.calls; t.duration += u.duration; t.portfolio += u.portfolio; t.nonPortfolio += u.nonPortfolio; }
+      t.ratio = t.calls ? t.portfolio / t.calls : 0;
+      out.totals = t;
+    }
+    out.scope = user.teams || 'ALL';
+    out.teamChoices = branches;
     out.team = picked;
+    out.byBranch = true;
     return out;
   },
 
@@ -6944,6 +6989,7 @@ const FNS = {
       notReadyNote: idx.notReady ? OLDSTOCK_NOT_READY : '',
       asOf: Date.now(), q, agent: String(a.agent || ''), rsm: String(a.rsm || ''),
       location: String(a.location || ''), hasLoc: idx.hasLoc, placed, placeNote, staffSync,
+      fence: allow ? allow.info : null,
       rows: shown.slice(0, 2000), shown: shown.length,
       agents: [...new Set(open.map(r => r.agent).filter(Boolean))].sort(),
       rsms: [...new Set(open.map(r => r.rsm).filter(Boolean))].sort(),
@@ -7374,6 +7420,7 @@ const FNS = {
 
     const count = st => rows.filter(r => r.status === st).length;
     return { ok: true, notReady, noDevices, hasLoc, staffSync,
+      fence: allow ? allow.info : null,
       /* `wk` slides the top-and-bottom board only -- never the table, the tiles or the two
          progress cards, which is why it is read here and nowhere else in this function. */
       newSales: newStockSales(rows, now, agents, a.wk),

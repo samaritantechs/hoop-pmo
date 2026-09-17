@@ -2103,35 +2103,74 @@ test('stockAccount pivots managers by the register\'s own role labels, the store
    found by an audit ahead of a staff training, not by a complaint, because it asks nothing
    and shows nothing wrong: a report that quietly returns 0/0 for a legitimate-looking choice.
    ========================================================================================= */
-test('report() offers real teams to filter by, and a branch name never silently zeroes it', async () => {
+/* ...and since 2026-09-17 the vocabulary is the STAFF register's branches, not the call app's
+   teams: "Sorting team at ripoti should use the branches I always say such as of navtab STAFF
+   not default KINONDONI". The officer is labelled with THEIR branch, and the word under the name
+   is the role on their access code TODAY, not the stamp the app took at registration. */
+test('report() offers the staff register\'s branches, labels officers by branch and current code role, and a stray name never zeroes it', async () => {
   const d = fakeDb({
-    call_users: [{ user_id: 'u1', name: 'Asha', team: 'TEAM A', role: 'AGENT', phone: '0700000001', active: true }],
-    call_logs: [{ user_id: 'u1', team: 'TEAM A', call_date: '2026-08-14', ref: '351929937378664',
-      phone: '0700000001', portfolio: true, duration: 60, outcome: 'CONNECTED' }],
-    teams: [{ team: 'TEAM A', rsm: 'RSM One' }],
-    // The branch grouping reportCore ALSO returns, kept deliberately different from the real
-    // team above -- if the dropdown offered this by mistake, filtering by it would prove the bug.
+    call_users: [
+      { user_id: 'u1', name: 'Asha', team: 'KINONDONI', role: 'AGENT', phone: '0700000001', active: true },
+      { user_id: 'u2', name: 'Baraka', team: 'KINONDONI', role: 'CREDIT', phone: '0700000002', active: true },
+      // Not on the staff register at all: keeps the app's own team and role, and is still listed.
+      { user_id: 'u3', name: 'Chiku', team: 'KINONDONI', role: 'CREDIT', phone: '0700000003', active: true },
+    ],
+    call_logs: [
+      { user_id: 'u1', team: 'KINONDONI', call_date: '2026-08-14', ref: '351929937378664', phone: '0700000001', portfolio: true, duration: 60, outcome: 'CONNECTED' },
+      { user_id: 'u2', team: 'KINONDONI', call_date: '2026-08-14', ref: '351929937378665', phone: '0700000009', portfolio: false, duration: 30, outcome: 'CONNECTED' },
+    ],
+    teams: [{ team: 'KINONDONI', rsm: 'RSM One' }],
+    hoop_agents: [
+      { phone: '+255 700 000 001', name: 'ASHA X', role: 'Field_Officer', branch: 'Dar es salaam' },   // by phone, spelled differently
+      { phone: '0799999999', name: 'baraka', role: 'Team_Leader', branch: 'Mwanza' },                  // by name only
+    ],
+    access_codes: [{ code: 'B1', name: 'Baraka', role: 'CREDIT' }, { code: 'A1', name: 'asha', role: 'RSM' }],
     watu_loans: [{ imei: '351929937378664', agent: 'Asha', branch: 'Dar es salaam' }],
     settings: [],
   });
   const all = await _FNS.report(d, ADMIN, { from: '2026-08-14', to: '2026-08-14' });
-  assert.equal(all.totals.calls, 1, 'the unfiltered report sees the call');
-  // teamChoices is the real vocabulary the Timu box must be built from; `teams` stays the
-  // (unrelated) branch breakdown reportCore has always returned for its own section.
-  assert.deepEqual(all.teamChoices, ['TEAM A']);
-  assert.ok(all.teams.some(t => t.team === 'Dar es salaam'), 'the branch breakdown is untouched');
+  assert.equal(all.totals.calls, 2, 'the unfiltered report sees every call');
+  assert.deepEqual(all.teamChoices, ['Dar es salaam', 'Mwanza'], 'the box offers branches off the STAFF register -- never KINONDONI');
+  const by = Object.fromEntries(all.users.map(u => [u.name, u]));
+  assert.equal(by.Asha.team, 'Dar es salaam', 'labelled with her branch, matched by phone however it is written');
+  assert.equal(by.Asha.position, 'RSM', 'the role on her access code today, not the AGENT the app stamped');
+  assert.equal(by.Baraka.team, 'Mwanza', 'matched by name when the phone differs');
+  assert.equal(by.Baraka.position, 'CREDIT');
+  assert.equal(by.Chiku.team, 'KINONDONI', 'not on the register: the app\'s own team stands');
+  assert.equal(by.Chiku.position, 'Credit', 'and the app\'s own role, as before');
+  assert.equal(by.Chiku.onRegister, false);
 
-  // Picking exactly what the dropdown offers must actually filter, and must keep the call
-  // rather than losing it the way filtering by a branch name used to.
-  const picked = await _FNS.report(d, ADMIN, { from: '2026-08-14', to: '2026-08-14', team: 'TEAM A' });
-  assert.equal(picked.totals.calls, 1, 'picking the officer\'s real team keeps the call');
-  assert.equal(picked.team, 'TEAM A');
+  const picked = await _FNS.report(d, ADMIN, { from: '2026-08-14', to: '2026-08-14', team: 'Dar es salaam' });
+  assert.deepEqual(picked.users.map(u => u.name), ['Asha'], 'a branch narrows to the officers in it');
+  assert.equal(picked.totals.calls, 1, 'and the totals follow the officers shown');
+  assert.equal(picked.totals.portfolio, 1);
+  assert.equal(picked.team, 'Dar es salaam');
 
-  // A name that only ever appears in the branch grouping -- never a real team -- must not
-  // silently pass through as a scope. This is the exact case that used to return 0/0.
-  const bogus = await _FNS.report(d, ADMIN, { from: '2026-08-14', to: '2026-08-14', team: 'Dar es salaam' });
-  assert.equal(bogus.totals.calls, 1, 'a name that was never a real team choice narrows nothing');
-  assert.equal(bogus.team, '', 'and is not echoed back as though it had been picked');
+  // A name the box never offered (the old call team, a typo) narrows nothing and is not echoed.
+  const bogus = await _FNS.report(d, ADMIN, { from: '2026-08-14', to: '2026-08-14', team: 'KINONDONI' });
+  assert.equal(bogus.totals.calls, 2);
+  assert.equal(bogus.team, '');
+});
+
+test('OLD STOCK and NEW STOCK say whose stock they are showing', async () => {
+  const d = fakeDb({
+    hoop_agents: [
+      { name: 'RSM DAR', role: 'Regional_Manager', branch: 'Dar es salaam', phone: '0700000001' },
+      { name: 'AGENT ONE', role: 'Field_Officer', branch: 'Dar es salaam', phone: '0700000011' },
+      { name: 'RSM LONELY', role: 'Regional_Manager', branch: 'Tabora', phone: '0700000005' },
+    ],
+    access_codes: [], devices: [], old_stock: [], stock_audit: [], device_events: [], settings: [],
+  });
+  const STORE = { code: 'S1', name: 'SIPHO K', role: 'STORE', teams: null, tabs: ['oldstock', 'newstock'], readOnly: false };
+  const RSM = { code: 'R1', name: 'rsm dar', role: 'RSM', teams: null, tabs: ['oldstock', 'newstock'], readOnly: false };
+  const LONELY = { code: 'R5', name: 'RSM LONELY', role: 'RSM', teams: null, tabs: ['oldstock', 'newstock'], readOnly: false };
+  const AG = { code: 'A1', name: 'AGENT ONE', role: 'AGENT', teams: null, tabs: ['oldstock', 'newstock'], readOnly: false };
+  assert.equal((await _FNS.oldStock(d, STORE, {})).fence, null, 'the desk: everything, and the pane says so');
+  assert.deepEqual((await _FNS.oldStock(d, RSM, {})).fence, { role: 'RSM', name: 'rsm dar', agents: 1 });
+  assert.deepEqual((await _FNS.newStock(d, RSM, {})).fence, { role: 'RSM', name: 'rsm dar', agents: 1 });
+  assert.deepEqual((await _FNS.oldStock(d, LONELY, {})).fence, { role: 'RSM', name: 'RSM LONELY', agents: 0 },
+    'an RSM nobody reports to is told so, rather than left wondering why the pane is nearly empty');
+  assert.deepEqual((await _FNS.newStock(d, AG, {})).fence, { role: 'AGENT', name: 'AGENT ONE', agents: 0 });
 });
 
 /* =========================================================================================

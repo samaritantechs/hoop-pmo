@@ -1565,11 +1565,23 @@ server and a batch, exactly like a lock order — and moves itself.
 
 ### Sending a handset away
 
-**Locking** pane → **↔️ Hamisha / Shift**. Paste the IMEIs, the **receiving office's own
-address**, and a **batch that office already minted** for these same IMEIs from their own
-Sajili simu / Enrol drawer. There is no login shared between the two companies and none is
-created for this — the only thing that crosses is what a bench enrolment already sends: the
-handset proving its own IMEI against a batch.
+**Locking** pane → tick the phones → **↔️ Hamisha / Shift** → press **Hamisha**. Nothing is
+typed. The server asks HOPE's server for the batch itself, over `/api/shift-batch`, and the two
+servers recognise each other by **`DEVICE_SHIFT_SECRET`** — the same value set as an environment
+variable on *both* Vercel projects (hoop-pmo and hope-pmo-v2), then both redeployed. Any long
+random string; it never appears in a browser or a database row.
+
+> *"Transferring at locking says weka msimbo wako wa ofisi nyingine without even where to
+> write it, yet I said it needs no prompting anything."* That toast is the server saying
+> `DEVICE_SHIFT_SECRET` is **not set** on this deployment, so it fell back to the older path:
+> the operator's own HOPE access code, typed once and kept on that device only. The box for it
+> lives under *Change something* and used to stay folded while the toast asked for it — the
+> fold now opens, the field is shown with the cursor in it, and the toast says why. Set the
+> secret on both deployments and the fallback is never reached.
+
+There is no login shared between the two companies beyond that secret — the only thing that
+crosses to the handset is what a bench enrolment already sends: the phone proving its own IMEI
+against a batch. A batch copied by hand from HOPE's Sajili simu still works, under the same fold.
 
 Nothing moves yet. The order sits on the row until the phone's own next beat, then the row
 here reads `Imeachiwa / released`, with a reason naming the shift.

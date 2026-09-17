@@ -643,3 +643,38 @@ test('the round-robin\'s starting officer rotates too -- one customer does not l
   }
   assert.ok(holders.size > 1, 'across nine decks a lone customer is chased by more than one officer');
 });
+
+/* =========================================================================================
+   THE DASHBOARD'S LOCK TILE: every lock inside the window, and the week's direction.
+     "the reached-yesterday widget at dashboard should be summary of total locked <=45 since the
+      list of officers doesn't have that, put it there so that we see overall weekly progress"
+   ========================================================================================= */
+test('summaryFor counts every Watu lock inside the 45-day window, and the week\'s first upload beside it', async () => {
+  const { summaryFor } = await import('../api/_lib/call-core.js');
+  _clearSummaryCache();
+  // Friday 2026-08-14; the week's Monday is 2026-08-10.
+  const NOWF = Date.parse('2026-08-14T12:00:00Z');
+  const d = fakeDb({
+    settings: [{ key: 'DATA_VERSION', value: 'v1' }],
+    followup_status: [
+      { imei: 'A', contact: '255716000001', disbursed_date: '2026-08-01', days_offline: 9, locked4: true, locked7: true, deck_date: '2026-08-14' },
+      { imei: 'B', contact: '255716000002', disbursed_date: '2026-08-01', days_offline: 5, locked4: true, locked7: false, deck_date: '2026-08-14' },
+      { imei: 'C', contact: '255716000003', disbursed_date: '2026-08-01', days_offline: 0, locked4: false, locked7: false, deck_date: '2026-08-14' },
+      // Locked, but out of the window: not counted, exactly as the 7+ tile does not count it.
+      { imei: 'D', contact: '255716000004', disbursed_date: '2026-05-01', days_offline: 20, locked4: true, locked7: true, deck_date: '2026-08-14' },
+    ],
+    watu_snapshots: [
+      // Monday's upload: three locked in the window, so the week reads 3 -> 2.
+      { imei: 'A', client_mobile: '255716000001', snapshot_date: '2026-08-10', created_at: '2026-08-10T08:00:00Z', disbursed_date: '2026-08-01', locked4: true, locked7: true },
+      { imei: 'B', client_mobile: '255716000002', snapshot_date: '2026-08-10', created_at: '2026-08-10T08:00:00Z', disbursed_date: '2026-08-01', locked4: true, locked7: false },
+      { imei: 'C', client_mobile: '255716000003', snapshot_date: '2026-08-10', created_at: '2026-08-10T08:00:00Z', disbursed_date: '2026-08-01', locked4: true, locked7: false },
+      { imei: 'D', client_mobile: '255716000004', snapshot_date: '2026-08-10', created_at: '2026-08-10T08:00:00Z', disbursed_date: '2026-05-01', locked4: true, locked7: true },
+    ],
+    call_logs: [], call_users: [], teams: [],
+  });
+  const s = await summaryFor(d, { teams: null }, NOWF);
+  assert.equal(s.locked7.num, 1, 'the 7+ tile is unchanged');
+  assert.equal(s.lockedAll.num, 2, '4+ and 7+ inside the window, D outside it');
+  assert.deepEqual(s.lockedAll.weekStart, { date: '2026-08-10', num: 3 }, 'Monday\'s upload, counted as it stood on Monday');
+  _clearSummaryCache();
+});
