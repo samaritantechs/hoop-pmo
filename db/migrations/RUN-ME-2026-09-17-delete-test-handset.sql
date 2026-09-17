@@ -28,10 +28,15 @@
 --                                 documents ABOUT a handset, not the handset. Deleting one from
 --                                 under the pane that owns it leaves somebody waiting on a
 --                                 ticket that no longer exists; they are closed on their own
---                                 screen.
+--                                 screen. An issue names its serial in `subject`, never in an
+--                                 `imei` column -- `subject_type` says how to read it.
 --
--- Every table is looked up before it is touched, so this runs on a database that has not had all
--- the migrations yet and SAYS which ones it skipped rather than dying on the first one missing.
+-- THE TABLE AND THE COLUMN ARE BOTH LOOKED UP before either is touched, and that is not belt and
+-- braces -- it is the whole file's safety. The SQL editor runs this script as ONE transaction, so
+-- a single "column does not exist" thrown on the LAST name in the list rolls back every delete
+-- above it and leaves nothing behind but the error. A pair this database cannot answer is skipped
+-- and NAMED instead, so the rest of the work still lands and the notice says what was not done.
+--
 -- Safe to run more than once: the second run deletes nothing and reports zero.
 -- =============================================================================================
 
@@ -46,7 +51,7 @@ declare
     'devices:imei', 'device_tokens:imei', 'device_events:imei', 'stock_audit:imei',
     'old_stock:imei', 'hoop_aged_stock:serial', 'transfer_items:imei'];
   theirs text[] := array[
-    'hoop_sales:imei', 'watu_loans:imei', 'issues:imei', 'loss_cases:imei',
+    'hoop_sales:imei', 'watu_loans:imei', 'issues:subject', 'loss_cases:imei',
     'topups:imei', 'stock_handover_items:imei'];
   spec   text;
   t      text;
@@ -58,9 +63,13 @@ begin
   foreach spec in array mine loop
     t := split_part(spec, ':', 1);
     c := split_part(spec, ':', 2);
-    if to_regclass('public.' || t) is null then
+    /* to_regclass is null for a table this database has never had, and the lookup then finds no
+       column either -- so one test covers both, and neither can throw. */
+    if not exists (select 1 from pg_attribute
+                    where attrelid = to_regclass('public.' || t)
+                      and attname = c and attnum > 0 and not attisdropped) then
       gone := gone + 1;
-      raise notice '%  --  haipo kwenye database hii / no such table here, skipped', t;
+      raise notice '%.%  --  haipo kwenye database hii / not here, skipped', t, c;
       continue;
     end if;
     execute format('delete from public.%I where %I = $1', t, c) using target;
@@ -71,12 +80,17 @@ begin
 
   raise notice '-----------------------------------------------------------------';
   raise notice 'IMEI %  --  % row(s) removed altogether%', target, total,
-               case when gone > 0 then ', ' || gone || ' table(s) skipped as missing' else '' end;
+               case when gone > 0 then ', ' || gone || ' skipped as not present here' else '' end;
 
   foreach spec in array theirs loop
     t := split_part(spec, ':', 1);
     c := split_part(spec, ':', 2);
-    if to_regclass('public.' || t) is null then continue; end if;
+    if not exists (select 1 from pg_attribute
+                    where attrelid = to_regclass('public.' || t)
+                      and attname = c and attnum > 0 and not attisdropped) then
+      raise notice '%.%  --  haipo, sikuhesabu / not here, so nothing counted', t, c;
+      continue;
+    end if;
     execute format('select count(*) from public.%I where %I = $1', t, c) into n using target;
     if n > 0 then
       raise notice 'LEFT ALONE: %  --  % row(s) still name this serial; read the header first.', t, n;
