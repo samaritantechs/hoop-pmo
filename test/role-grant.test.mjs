@@ -127,6 +127,11 @@ test('the editor is told which panes exist, and a role saves exactly what was ti
   const out = await _FNS.accessCodes(db, ADMIN, {});
   assert.ok(out.navTabs.includes('stockreq') && out.navTabs.includes('devlock'));
   assert.ok(!out.navTabs.includes('devices'), 'the old single device grant is no longer offered');
+  /* TEAM LEADER (2026-09-18): the credit and stock fences both recognise the role now, so an
+     admin has to be able to MINT a code for it -- the Access codes screen offers only roles
+     already in the roles table, on a code, or in this suggested set; nothing auto-mints a
+     TEAM LEADER code the way RSM/AGENT are minted from stock, so this is its only door in. */
+  assert.ok(out.roles.some(r => r.role === 'TEAM LEADER'), 'offered even on an empty database, like RSM');
 
   await _FNS.saveRole(db, ADMIN, { role: 'STORE', tabs: ['stockappr', 'devlock', 'nonsense'] });
   const row = db._dump('roles').find(x => x.role === 'STORE');

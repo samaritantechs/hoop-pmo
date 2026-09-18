@@ -454,6 +454,73 @@ test('the agent strip counts THEIR book, never the company', async () => {
   _clearSummaryCache();
 });
 
+/* TEAM LEADER AND RSM, THE SAME FENCE WIDER.
+   =========================================================================================
+     "for team leader, agent and RSM roles, they only should ever see their data (pivoted
+      of imeis they are assigned too -- as hope pmo does to its users) from the calls app
+      to all system nav tabs"
+
+   Both sign in on their OWN access code (leader = true), never a shared team code, so their
+   name is already the identity -- no phone lookup. Their fence is the SAME salesTree walk
+   NEW STOCK's RSM column and the targets roll-up already use: their own name, plus everyone
+   beneath them in the register at any depth. */
+const hierarchyStageDb = () => fakeDb({
+  settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+  teams: [],
+  followup_status: [
+    { imei: 'A', client_name: 'Sold By Agent', contact: '255716000001', deck_date: '2026-08-14', disbursed_date: '2026-08-01', locked7: true },
+    { imei: 'B', client_name: 'Sold By Other RSM', contact: '255716000002', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+  ],
+  watu_loans: [
+    { imei: 'A', agent: 'Anord Sawe' },
+    { imei: 'B', agent: 'Somebody Else' },
+  ],
+  hoop_agents: [
+    { name: 'Anord Sawe', phone: '0658918324', role: 'Field_Officer', manager: 'Juma Leader' },
+    { name: 'Juma Leader', phone: '0700000001', role: 'Team_Leader', manager: 'Rehema RSM' },
+    { name: 'Rehema RSM', phone: '0700000002', role: 'Regional_Manager' },
+    { name: 'Somebody Else', phone: '0700000003', role: 'Field_Officer', manager: 'Other RSM' },
+    { name: 'Other RSM', phone: '0700000004', role: 'Regional_Manager' },
+  ],
+  call_users: [
+    // Access-code sign-ins: is_leader true, identity is the name, not the phone.
+    { user_id: 'U-TL', device_id: 'dev-tl', name: 'Juma Leader', role: 'TEAM LEADER', is_leader: true, active: true },
+    { user_id: 'U-RSM', device_id: 'dev-rsm', name: 'Rehema RSM', role: 'RSM', is_leader: true, active: true },
+    { user_id: 'U-NEW', device_id: 'dev-new', name: 'Nobody Yet', role: 'TEAM LEADER', is_leader: true, active: true },
+  ],
+  call_logs: [],
+});
+
+test('TEAM LEADER and RSM see their whole subtree, at any depth -- not just their own name', async () => {
+  const d = hierarchyStageDb();
+  const tl = await callApi(d, 'api_callList', ['dev-tl', 'today'], NOW);
+  assert.equal(tl.rows.length, 1, 'the team leader\'s one agent, two rungs down');
+  assert.equal(tl.rows[0].ref, 'A');
+  const rsm = await callApi(d, 'api_callList', ['dev-rsm', 'today'], NOW);
+  assert.equal(rsm.rows.length, 1, 'the RSM sees the SAME agent through the team leader between them');
+  assert.equal(rsm.rows[0].ref, 'A');
+  /* An access-code sign-in always knows its OWN name (there is no phone lookup to fail the
+     way a shared AGENT code can) -- so a TEAM LEADER the register has never heard of still
+     resolves to a one-person set (themselves) rather than "unidentified". With nobody
+     reporting to them and nothing sold under their own name, that is still an empty,
+     fenced-closed book -- just reported as "nothing today" rather than "who are you". */
+  const nobody = await callApi(d, 'api_callList', ['dev-new', 'today'], NOW);
+  assert.equal(nobody.rows.length, 0, 'nobody reports to a name the register has never heard of');
+  assert.match(String(nobody.note), /Hakuna mteja/);
+});
+
+test('the team leader/RSM strip counts the whole subtree, never the company', async () => {
+  _clearSummaryCache();
+  const d = hierarchyStageDb();
+  const tl = await callApi(d, 'api_callDailySummary', ['dev-tl'], NOW);
+  assert.equal(tl.list.num, 1);
+  assert.equal(tl.onRegister, true);
+  _clearSummaryCache();
+  const rsm = await callApi(d, 'api_callDailySummary', ['dev-rsm'], NOW);
+  assert.equal(rsm.list.num, 1, 'the RSM\'s strip is the same subtree, not the company\'s two customers');
+  _clearSummaryCache();
+});
+
 test('a blank-role trial account is NOT dealt -- it opens the whole book', async () => {
   const d = fakeDb({
     settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],

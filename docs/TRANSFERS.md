@@ -189,11 +189,12 @@ closed, and the pane says whose name it looked for.
 | role on the code | OLD STOCK / NEW STOCK panes | Transfers → Stock (what you can *send*) |
 |---|---|---|
 | **AGENT** | own hands only | own hands only |
-| **RSM** | their region: their own hands **and** the agents who report to them (by the register's `manager`, else the branch) — and, on NEW STOCK, handsets their region sold | own hands only — an agent's stock comes back up as a return first |
+| **RSM**, **TEAM LEADER** | their region: their own hands **and** everyone beneath them in the register **at any depth** (`salesTree.descendants` — a team leader's agents included, not just direct reports) — and, on NEW STOCK, handsets their region sold | own hands only — an agent's stock comes back up as a return first |
 | **STORE** (the desk — *"sipho/store role/super agent sees all of stock"*), **ADMIN**, everyone else | everything | everything |
 
 The drawer, the round export and the pivots on those panes are cut by the same fence, so a
-count never opens a longer list.
+count never opens a longer list. The same three roles, the same walk, now also fence the
+credit/customer panes and the calls app — see `docs/CREDIT-FENCE.md`.
 
 ## Not here, on purpose
 

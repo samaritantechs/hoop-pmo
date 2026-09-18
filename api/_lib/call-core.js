@@ -378,14 +378,146 @@ export const CREDIT_ROLES = new Set(['CREDIT', 'OFFICER', 'CREDIT OFFICER', 'CRE
    be dealt a share by default (that bug put the admin's own phone into the deal). A
    person registered with a personal CREDIT access code counts, leader flag or not. */
 const isCredit = cu => CREDIT_ROLES.has(K(cu && cu.role));
-/* AGENTS -- the owner's coming stage, arrived (2026-08-17): "agents should see only
-   their data". One shared AGENT sign-in code (rotated in the WhatsApp group exactly like
-   the staff code); the agent's own PHONE is the identity -- it must match Sipho's
-   register (hoop_agents), which maps their name onto every IMEI they sold in the Watu
-   register. No per-agent codes to mint or track. Agents are never dealt shares and never
-   join the credit roster; if the index fails or the phone is unknown the agent sees an
-   EMPTY book, never somebody else's -- this fence fails closed. */
-const isAgent = cu => K(cu && cu.role) === 'AGENT';
+
+/* THE REGISTER'S OWN LADDER, top first -- moved here (2026-09-18) from portal.js so the
+   calls app can walk it exactly the same way the desk's stock panes and the targets
+   roll-up already do. Anything else sits below the bottom rung and is a leaf: an unknown
+   role must never accidentally become somebody's manager. */
+export const TARGET_TIERS = ['COUNTRY_SALES_MANAGER', 'REGIONAL_MANAGER', 'TEAM_LEADER', 'FIELD_OFFICER'];
+export const roleKey = r => K(r || '').replace(/[\s-]+/g, '_');
+export function tierOf(role) {
+  const i = TARGET_TIERS.indexOf(roleKey(role));
+  return i < 0 ? TARGET_TIERS.length : i;
+}
+/** WHO IS DIRECTLY ABOVE ONE PERSON -- the register's `manager` column where it is filled,
+    else the nearest holder of the rung above in the same branch, else anywhere. One rung,
+    keyed by name; see salesTree below for "everyone beneath somebody at any depth". */
+export function managerIndex(agents) {
+  const rsmOfBranch = new Map();
+  for (const a of agents) {
+    const role = K(a.role || '').replace(/\s+/g, '_');
+    if (!/REGIONAL|COUNTRY_SALES/.test(role)) continue;
+    const b = K(a.branch || '');
+    if (!b || rsmOfBranch.has(b)) continue;
+    rsmOfBranch.set(b, a.name || '');
+  }
+  const byAgent = new Map();
+  for (const a of agents) {
+    const own = String(a.manager || '').trim();
+    byAgent.set(nameKey(a.name), own || rsmOfBranch.get(K(a.branch || '')) || '');
+  }
+  return {
+    of: name => byAgent.get(nameKey(name)) || '',
+    branchOf: (() => {
+      const m = new Map(agents.map(a => [nameKey(a.name), a.branch || '']));
+      return name => m.get(nameKey(name)) || '';
+    })(),
+  };
+}
+/** The whole staff tree, parent and children, cycle-safe, with `descendants(k)` -- everyone
+    beneath one person at any depth. Used by the targets roll-up, NEW STOCK's RSM column,
+    stockAllow, and now the credit fence below: the one walk every "who reports to me"
+    question in this system asks. */
+export function salesTree(agents) {
+  const live = agents.filter(a => a && a.name && a.active !== false);
+  const byKey = new Map(live.map(a => [nameKey(a.name), a]));
+  /* The nearest holder of each tier per branch, so a blank `manager` still finds one. First
+     seen wins, which is stable across reads because the register comes back in a fixed order. */
+  const upOf = new Map();                       // branch|tier -> nameKey
+  for (const a of live) {
+    const k = K(a.branch || '') + '|' + tierOf(a.role);
+    if (!upOf.has(k)) upOf.set(k, nameKey(a.name));
+  }
+  const parent = new Map();
+  for (const a of live) {
+    const me = nameKey(a.name);
+    const myTier = tierOf(a.role);
+    if (myTier === 0) continue;                 // the top of the ladder answers to nobody here
+    let p = '';
+    const named = nameKey(a.manager || '');
+    if (named && byKey.has(named) && tierOf(byKey.get(named).role) < myTier) p = named;
+    if (!p) {
+      // The nearest rung above, in this branch, then anywhere -- a region with no RSM of its
+      // own still rolls up to the country manager rather than falling out of the tree.
+      for (let t = myTier - 1; t >= 0 && !p; t--) {
+        p = upOf.get(K(a.branch || '') + '|' + t) || '';
+      }
+      for (let t = myTier - 1; t >= 0 && !p; t--) {
+        p = [...upOf.entries()].filter(([kk]) => kk.endsWith('|' + t)).map(e => e[1])[0] || '';
+      }
+    }
+    if (p && p !== me) parent.set(me, p);
+  }
+  const children = new Map();
+  for (const [me, p] of parent) {
+    if (!children.has(p)) children.set(p, []);
+    children.get(p).push(me);
+  }
+  return {
+    byKey, parent, children,
+    of: k => byKey.get(k) || null,
+    childrenOf: k => children.get(k) || [],
+    parentOf: k => parent.get(k) || '',
+    /* Everybody beneath somebody, at any depth. Used for the roll-up, and cycle-safe by the
+       same visited set the share walk uses. */
+    descendants(k) {
+      const out = [];
+      const seen = new Set([k]);
+      const stack = [k];
+      while (stack.length) {
+        for (const c of this.childrenOf(stack.pop())) {
+          if (seen.has(c)) continue;
+          seen.add(c); out.push(c); stack.push(c);
+        }
+      }
+      return out;
+    },
+  };
+}
+/** No manager below anybody -- the fallback tree when the register cannot be read at all,
+    so a fence built on top of it fails closed (nobody's descendants) rather than throwing. */
+const EMPTY_TREE = { descendants: () => [] };
+
+/* THE FENCED ROLES -- the owner, 2026-09-18: "for team leader, agent and RSM roles, they
+   only should ever see their data (pivoted of imeis they are assigned too -- as hope pmo
+   does to its users) from the calls app to all system nav tabs."
+
+   AGENTS arrived first (2026-08-17: "agents should see only their data") -- one shared
+   AGENT sign-in code (rotated in the WhatsApp group exactly like the staff code); the
+   agent's own PHONE is the identity -- it must match Sipho's register (hoop_agents), which
+   maps their name onto every IMEI they sold in the Watu register. No per-agent codes to
+   mint or track.
+
+   RSM and TEAM LEADER sign in on their OWN access code instead (there is no shared team
+   code for either), so their name is already known -- no phone lookup needed -- and their
+   fence is wider: their own name PLUS everyone beneath them in the staff register at any
+   depth (salesTree.descendants, the same walk NEW STOCK's RSM column and the targets
+   roll-up use). A shared AGENT has nobody beneath them (FIELD_OFFICER is the floor tier),
+   so the identical walk costs nothing extra and the three roles share one mechanism.
+
+   Fails closed exactly like the AGENT-only fence did: an unmatched name or an unreadable
+   register gives an EMPTY book, never somebody else's. */
+const FENCED_ROLES = new Set(['AGENT', 'RSM', 'TEAM LEADER']);
+const roleWord = r => K(r || '').replace(/[\s_-]+/g, ' ');
+const isFenced = cu => FENCED_ROLES.has(roleWord(cu && cu.role));
+/** The nameKey a fenced sign-in answers to. A shared-code AGENT never typed a name of their
+    own -- their registered PHONE is the only identity, matched on Sipho's register
+    (agentIndex.byPhone). An RSM or TEAM LEADER signs in on their OWN access code, which
+    already carries their name; that name IS the identity. */
+function fenceKeyOf(cu, agents) {
+  if (roleWord(cu && cu.role) === 'AGENT' && !cu.is_leader) {
+    const me = agents.byPhone[pnorm(cu.phone)] || null;
+    return me ? me.key : '';
+  }
+  return nameKey((cu && cu.name) || '');
+}
+/** "Mine": my own name, and -- for RSM and TEAM LEADER -- everyone beneath me in the staff
+    register, at any depth. Empty for a name the register cannot place at all, which is the
+    fence failing closed rather than falling back to "everyone". */
+function fenceSetOf(cu, agents) {
+  const me = fenceKeyOf(cu, agents);
+  return me ? new Set([me, ...(agents.tree || EMPTY_TREE).descendants(me)]) : new Set();
+}
 /** The deal's roster WITH NAMES -- same single read; names ride along so every list row
     can say which credit person is chasing that customer (the third chip on the card).
     Exported: the portal's Wateja shows the same dealt names -- one deal, two screens. */
@@ -585,8 +717,11 @@ function shareOf(rows, roster, uid, day) {
    Watu's reports carry real guarantors (PENDING #1). The register knows the agent per
    IMEI; Sipho's register knows the agent's own phone by name. Cached against
    DATA_VERSION like the phone index; a failed build must NEVER break the list -- the
-   card just shows a dash. Budget: warm = 1 keyed DATA_VERSION read; a version change
-   or 15-minute lapse costs 2 bounded reads (register imei+agent, agents name+phone). */
+   card just shows a dash. Also carries the credit fence's own tree (salesTree, off the
+   SAME register read) -- one build serves the card, the AGENT/RSM/TEAM LEADER fence and
+   the targets-style roll-up alike. Budget: warm = 1 keyed DATA_VERSION read; a version
+   change or 15-minute lapse costs 2 bounded reads (register imei+agent, agents
+   name+phone+branch+manager+role), same as before -- wider columns, not a new trip. */
 /* Names arrive in any order and any casing -- Watu writes "Anord Sawe", SyscoPos may
    hold "SAWE Anord". A token-sorted key lets every spelling of the same person meet:
    the tokens, uppercased, sorted, rejoined. */
@@ -597,6 +732,7 @@ export async function agentIndex(db, nowMs) {
   const hit = agentIdxCache.get(db);
   if (hit && hit.version === version && (nowMs - hit.at) < 15 * 60000) return hit;
   const byImei = {}, phoneByName = {}, byPhone = {};
+  let tree = EMPTY_TREE;
   try {
     // Guarantors landed with the offline queue (2026-08-17). Until the migration has
     // run, PostgREST refuses the WHOLE select for the unknown columns -- so fall back
@@ -604,7 +740,13 @@ export async function agentIndex(db, nowMs) {
     const [reg, agents, sales] = await Promise.all([
       fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id, branch, guarantor_name, guarantor_phone'))
         .catch(() => fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id'))),
-      fetchAll(() => db.from('hoop_agents').select('name, phone, branch')),
+      // `manager` rode in with the targets migration; a database that has not run it
+      // refuses the whole select for the unknown column, so a tree built without it is
+      // still built -- salesTree falls back to "nearest holder of the rung above, by
+      // branch" exactly as the targets roll-up and stockAllow already do.
+      fetchAll(() => db.from('hoop_agents').select('name, phone, branch, manager, role'))
+        .catch(e => { if (!/manager/i.test(String((e && e.message) || ''))) throw e;
+          return fetchAll(() => db.from('hoop_agents').select('name, phone, branch, role')); }),
       // The sales report carries the agent's payout number per sale (the owner: "sales
       // report of store keeper sipho has the agents numbers") -- a SECOND source of
       // agent phones, so a card need not wait for the agent's register page to land.
@@ -627,8 +769,12 @@ export async function agentIndex(db, nowMs) {
       const k = nameKey(s.commission_agent);
       if (!phoneByName[k]) phoneByName[k] = s.commission_phone;
     }
+    // THE RSM/TEAM LEADER FENCE'S OWN WALK -- see fenceSetOf. Built once here, alongside
+    // everything else this index already reads the register for, so extending the fence
+    // to a third role cost no new round trip.
+    tree = salesTree(agents);
   } catch (e) { /* decoration for the card; the agent fence fails CLOSED on empty maps */ }
-  const value = { version, at: nowMs, byImei, phoneByName, byPhone };
+  const value = { version, at: nowMs, byImei, phoneByName, byPhone, tree };
   agentIdxCache.set(db, value);
   return value;
 }
@@ -660,13 +806,16 @@ async function list(db, [dev], nowMs) {
   const fu = await fetchAll(() => db.from('followup_status').select(DECK_COLS).eq('deck_date', deckDate));
   const today = todayKey(nowMs);
   let mine, note = null;
-  if (isAgent(cu)) {
-    // The agent fence: their registered phone names them on Sipho's register; the Watu
-    // register names them on each IMEI. No match -> EMPTY book (fails closed) + why.
-    const me = agents.byPhone[pnorm(cu.phone)] || null, myKey = me ? me.key : '';
-    mine = myKey ? fu.filter(r => { const ag = agents.byImei[String(r.imei)]; return ag && nameKey(ag.name) === myKey; }) : [];
-    if (!myKey) note = 'Your phone number is not on the agents register yet — ask the office to add it, then reopen the app.';
-    else if (!mine.length) note = 'Safi! Hakuna mteja wako kwenye orodha ya leo. / None of the customers you sold are on today’s locked list.';
+  if (isFenced(cu)) {
+    // The fence: AGENT/RSM/TEAM LEADER, keyed by fenceSetOf -- their own name, and for
+    // RSM/TEAM LEADER everyone beneath them in the register too. No match -> EMPTY book
+    // (fails closed) + why.
+    const mineSet = fenceSetOf(cu, agents);
+    mine = mineSet.size ? fu.filter(r => { const ag = agents.byImei[String(r.imei)]; return ag && mineSet.has(nameKey(ag.name)); }) : [];
+    if (!mineSet.size) note = roleWord(cu.role) === 'AGENT'
+      ? 'Your phone number is not on the agents register yet — ask the office to add it, then reopen the app.'
+      : 'Your name is not on the staff register yet — ask the office to add it, then reopen the app.';
+    else if (!mine.length) note = 'Safi! Hakuna mteja wako kwenye orodha ya leo. / None of your team’s customers are on today’s locked list.';
   } else {
     mine = shareOf(fu, roster, cu.user_id, today);
   }
@@ -967,7 +1116,16 @@ function weekAvgFor(hist, uid, roster, poolFn) {
   return days.length ? { pct: days.reduce((a, b) => a + b, 0) / days.length, days: days.length } : { pct: null, days: 0 };
 }
 export async function summaryFor(db, user, nowMs) {
-  const key = user.teams ? user.teams.map(K).slice().sort().join(',') : 'ALL';
+  /* creditAllow's own reach, brought to the dashboard tile: an AGENT/RSM/TEAM LEADER
+     access code opening the portal's dashboard (boot()) gets this SAME function -- there
+     is no separate role dispatch here the way dailySummary has one for the calls app --
+     so the fence has to live here too, or "all system nav tabs" would stop at the door of
+     the one tile every nav opens onto. The fenced identity rides in the cache key for the
+     same reason it does everywhere else: two fenced codes sharing a blank team scope must
+     never share a cache entry. */
+  const fenced = isFenced(user);
+  const key = (fenced ? 'ROLE:' + roleWord(user.role) + ':' + nameKey(user.name) + ':' : '')
+    + (user.teams ? user.teams.map(K).slice().sort().join(',') : 'ALL');
   const hit = summaryCache.get(key);
   if (hit && (nowMs - hit.at) < SUMMARY_TTL_MS && hit.at <= nowMs) return { ...hit.value, cached: true };
   const value = await summaryCompute(db, user, nowMs);
@@ -978,12 +1136,27 @@ async function summaryCompute(db, user, nowMs) {
   const today = todayKey(nowMs);
   const deckDate = await latestDeckDate(db);
   const scope = q => (user.teams && user.teams.length) ? q.in('team', user.teams.map(K)) : q;
-  const [deck, logs, dataVersion] = await Promise.all([
+  const fenced = isFenced(user);
+  const [deckRaw, logsRaw, dataVersion, agents] = await Promise.all([
     deckDate ? fetchAll(() => scope(db.from('followup_status')
       .select('imei, contact, disbursed_date, locked4, locked7, days_offline').eq('deck_date', deckDate))) : [],
     fetchAll(() => scope(db.from('call_logs').select('phone, ref, duration, portfolio').eq('call_date', today))),
     settingGet(db, 'DATA_VERSION'),
+    fenced ? agentIndex(db, nowMs) : null,
   ]);
+  /* THE FENCE, ON TOP OF THE TEAM SCOPE -- an access-code sign-in is always the "leader"
+     identity (their name IS who they are; there is no shared-code phone lookup on the
+     portal side), so fenceSetOf is asked with is_leader forced true. mineFn feeds BOTH
+     halves of this tile: the deck/logs it counts directly, and (via poolFn below) the
+     reached-yesterday and week-average figures that otherwise read hist's own untouched,
+     company-wide rows. */
+  let deck = deckRaw, logs = logsRaw, mineFn = null;
+  if (agents) {
+    const mineSet = fenceSetOf({ role: user.role, name: user.name, is_leader: true }, agents);
+    mineFn = r => { const ag = agents.byImei[String(r.imei || r.ref)]; return !!(ag && mineSet.has(nameKey(ag.name))); };
+    deck = mineSet.size ? deck.filter(mineFn) : [];
+    logs = mineSet.size ? logs.filter(mineFn) : [];
+  }
   const inWinOf = r => inWindowOf(r, today);
   const inWin = deck.filter(inWinOf).length;
   /* Watu's flag, inside our window -- see the note above isLocked7. Both halves, or this
@@ -997,7 +1170,8 @@ async function summaryCompute(db, user, nowMs) {
   const lockedAll = deck.filter(r => lockedAny(r, today)).length;
   // The performance bar is always YESTERDAY (a finished day), never today's half-story,
   // plus last week's average -- company-wide here ("other roles get average of all
-  // company"; the per-person cut lives in dailySummary and in Ripoti).
+  // company"; the per-person cut lives in dailySummary and in Ripoti), UNLESS this code
+  // is fenced, in which case mineFn narrows it to the same pivot as everything else here.
   const hist = await histFor(db, nowMs);
   let lockedWeekStart = null;
   const thisMon = weekMondayKey(nowMs);
@@ -1005,7 +1179,11 @@ async function summaryCompute(db, user, nowMs) {
     const d = addDaysKey(thisMon, i);
     if (d >= today) break;
     const m = hist.deckByDate.get(d);
-    if (m && m.size) { lockedWeekStart = { date: d, num: [...m.values()].filter(r => lockedAny(r, d)).length }; break; }
+    if (m && m.size) {
+      const rows = [...m.values()].filter(r => lockedAny(r, d));
+      lockedWeekStart = { date: d, num: (mineFn ? rows.filter(mineFn) : rows).length };
+      break;
+    }
   }
   const den = deck.length;
   return {
@@ -1016,8 +1194,8 @@ async function summaryCompute(db, user, nowMs) {
     lockedAll: { num: lockedAll, weekStart: lockedWeekStart },
     inWindow: { num: inWin },
     calls: { num: logs.length },
-    reached: reachedOn(hist.yDate, hist, null, []) || { pct: null, num: 0, den: 0 },
-    weekAvg: weekAvgFor(hist, null, []),
+    reached: reachedOn(hist.yDate, hist, null, [], mineFn) || { pct: null, num: 0, den: 0 },
+    weekAvg: weekAvgFor(hist, null, [], mineFn),
     asOfReached: hist.yDate,
     dataVersion: dataVersion || '',
   };
@@ -1060,11 +1238,13 @@ async function summaryForOfficer(db, cu, nowMs) {
   summaryCache.set(key, { at: nowMs, value });
   return { ...value, cached: false };
 }
-/** The AGENT's strip: only the customers THEY sold -- counted with the same yesterday
-    and last-week rules as everyone else. Cached per user like the officer strip.
+/** THE FENCED STRIP -- shared by AGENT, RSM and TEAM LEADER (see isFenced/fenceSetOf
+    above): only the customers their own name or somebody beneath them in the register
+    sold -- counted with the same yesterday and last-week rules as everyone else. Cached
+    per user like the officer strip.
     Budget on a cache miss: 1 deck read + 1 own-logs-today read (indexed user_id+date)
     + the day's shared history + the agent index (both memory after the first ask). */
-async function summaryForAgent(db, cu, nowMs) {
+async function summaryForRole(db, cu, nowMs) {
   const key = 'U:' + String(cu.user_id);
   const hit = summaryCache.get(key);
   if (hit && (nowMs - hit.at) < SUMMARY_TTL_MS && hit.at <= nowMs) return { ...hit.value, cached: true };
@@ -1078,9 +1258,9 @@ async function summaryForAgent(db, cu, nowMs) {
     histFor(db, nowMs),
     agentIndex(db, nowMs),
   ]);
-  const me = agents.byPhone[pnorm(cu.phone)] || null, myKey = me ? me.key : '';
-  const mineFn = r => { const ag = agents.byImei[String(r.imei)]; return !!(myKey && ag && nameKey(ag.name) === myKey); };
-  const mine = deck.filter(mineFn);
+  const mineSet = fenceSetOf(cu, agents);
+  const mineFn = r => { const ag = agents.byImei[String(r.imei)]; return !!(ag && mineSet.has(nameKey(ag.name))); };
+  const mine = mineSet.size ? deck.filter(mineFn) : [];
   const inWinOf = r => inWindowOf(r, today);
   const value = {
     ok: true,
@@ -1092,7 +1272,7 @@ async function summaryForAgent(db, cu, nowMs) {
     reached: reachedOn(hist.yDate, hist, cu.user_id, [], mineFn) || { pct: null, num: 0, den: 0 },
     weekAvg: weekAvgFor(hist, cu.user_id, [], mineFn),
     asOfReached: hist.yDate,
-    onRegister: !!myKey,
+    onRegister: mineSet.size > 0,
     dataVersion: (await settingGet(db, 'DATA_VERSION')) || '',
   };
   summaryCache.set(key, { at: nowMs, value });
@@ -1102,10 +1282,10 @@ async function dailySummary(db, [dev], nowMs) {
   const cu = await userByDeviceSoft(db, dev);
   if (!cu) return { ok: false, error: 'DEVICE_NOT_REGISTERED' };
   // A CREDIT-role user sees THEIR share and THEIR numbers -- whether they registered
-  // with the company code or their own CREDIT access code. An AGENT sees only the
-  // customers they sold. Every other role (ADMIN, leads, general duty, blank trial
-  // accounts) sees the whole company's average.
-  if (isAgent(cu)) return summaryForAgent(db, cu, nowMs);
+  // with the company code or their own CREDIT access code. AGENT, RSM and TEAM LEADER
+  // see only their own pivot of the register (isFenced). Every other role (ADMIN, leads,
+  // general duty, blank trial accounts) sees the whole company's average.
+  if (isFenced(cu)) return summaryForRole(db, cu, nowMs);
   if (isCredit(cu)) return summaryForOfficer(db, cu, nowMs);
   return summaryFor(db, { name: cu.name, role: cu.role, teams: null }, nowMs);
 }
