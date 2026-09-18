@@ -2139,6 +2139,65 @@ async function locateStock(db, imeis) {
   return out;
 }
 
+/** THE WRITE THAT MOVES STOCK -- shared by transferAccept (the ordinary case: the receiver's
+    signature is always the last one needed) and transferSign (a three-way document, where the
+    SOURCE RSM's own approval can be the signature that completes it, if the receiver already
+    accepted first). Extracted so there is exactly one place this ever happens, whichever of
+    the two calls turns out to be the last signature in.
+
+    `toRoleFallback` exists only for a pre-flow-migration document with no to_role column at
+    all -- transferAccept passes the accepting user's own role, exactly as it always guessed;
+    transferSign's three-way completion can never hit this case (a three-way document cannot
+    exist before the flow migration that gives it a to_role), so it passes ''. */
+async function trMoveStock(db, t, actorName, toRoleFallback) {
+  /* WHOSE HANDS IT GOES INTO. The receiver's name -- unless the receiver is the store desk,
+     whose stock the register has always written under SUPER AGENT ("role store =
+     superagent"): one name for the warehouse, whichever clerk signed for it. */
+  const toRole = K(t.to_role || '').replace(/[\s_-]+/g, ' ') || toRoleFallback;
+  const holder = isStoreRole(toRole) ? STORE_NODE : String(t.to_name);
+
+  const items = await fetchAll(() => db.from('transfer_items').select('imei').eq('transfer_id', t.id));
+  const imeis = [...new Set(items.map(i => String(i.imei)))];
+  const at = new Date().toISOString();
+  const where = await locateStock(db, imeis);
+  const devIm = imeis.filter(i => where.get(i).source === 'devices');
+  const oldIm = imeis.filter(i => where.get(i).source === 'old_stock');
+
+  for (let i = 0; i < devIm.length; i += 200) {
+    const slice = devIm.slice(i, i + 200);
+    const { error } = await db.from('devices').update({ holder, updated_at: at }).in('imei', slice);
+    if (error) throw new Error(error.message);
+  }
+  if (devIm.length) {
+    // History gets the hand-over, one line per handset, the same trail a lock or a shift leaves.
+    await db.from('device_events').insert(devIm.map(imei => ({
+      imei, event: 'transfer', from_state: null, to_state: null,
+      reason: 'kutoka ' + t.from_name + ' kwenda ' + holder + ' / from ' + t.from_name
+        + ' to ' + holder + ' (' + t.ref + ')',
+      actor: actorName, at })));
+  }
+  if (oldIm.length) {
+    /* The old list carries the RSM beside the holder. It follows the receiver: an RSM is
+       their own, an agent's is whoever the register says they report to, and stock back at
+       the desk answers to nobody in the field. Left alone where nothing can be said. */
+    const patch = { agent: holder, updated_at: at };
+    if (toRole === 'RSM') patch.rsm = t.to_name;
+    else if (isStoreRole(toRole) || toRole === 'ADMIN') patch.rsm = null;
+    else if (toRole === 'AGENT') {
+      let agents = [];
+      try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); } catch (ignored) { agents = []; }
+      const boss = managerIndex(agents).of(t.to_name);
+      if (boss) patch.rsm = boss;
+    }
+    for (let i = 0; i < oldIm.length; i += 200) {
+      const slice = oldIm.slice(i, i + 200);
+      const { error } = await db.from('old_stock').update(patch).in('imei', slice);
+      if (error) throw new Error(error.message);
+    }
+  }
+  return { at, holder, moved: devIm.length + oldIm.length, devices: devIm.length, oldStock: oldIm.length, unknown: imeis.length - devIm.length - oldIm.length };
+}
+
 /* =============================================================================================
    THE STAFF TABLE AND THE ACCESS CODES, FILLED FROM STOCK.
    =============================================================================================
@@ -2332,17 +2391,28 @@ const TR_COLS_BASE = 'id, ref, created_at, created_by, from_name, from_phone, to
   + 'note, item_count, total_qty, total_amount, sender_signed_by, sender_signed_at, '
   + 'receiver_signed_by, receiver_signed_at';
 const TR_COLS_FLOW = ', status, from_role, to_role, accepted_at, accepted_by, declined_at, declined_by, decline_reason, moved';
+const TR_COLS_3WAY = ', three_way, desk_signed_by, desk_signed_at';
 const TR_FLOW_RX = /\bstatus\b|from_role|to_role|accepted_at|accepted_by|declined_at|declined_by|decline_reason|\bmoved\b/;
+const TR_3WAY_RX = /three_way|desk_signature|desk_signed_by|desk_signed_at/;
 const TR_FILE = 'db/migrations/RUN-ME-2026-09-16-transfers.sql';
 const TR_FLOW_FILE = 'db/migrations/RUN-ME-2026-09-17-transfers-flow.sql';
-/** Every document, newest first. Tolerant of a database that has run neither migration or only
-    the first: needsFlow means the list reads but Send/Receive need the second file. */
+const TR_3WAY_FILE = 'db/migrations/RUN-ME-2026-09-18-transfers-three-way.sql';
+/** Every document, newest first. Tolerant of a database that has run none, some or all three
+    transfer migrations: needsFlow means the list reads but Send/Receive need the second file.
+    The third (three-way) file is never required to open the list or read/accept/decline an
+    ordinary document -- only to FILE one between two named RSMs (transferCreate refuses that
+    outright if it is missing; see there). */
 async function trReadAll(db) {
   try {
-    const rows = await fetchAll(() => db.from('transfers').select(TR_COLS_BASE + TR_COLS_FLOW)
+    const rows = await fetchAll(() => db.from('transfers').select(TR_COLS_BASE + TR_COLS_FLOW + TR_COLS_3WAY)
       .order('created_at', { ascending: false }));
     return { rows, notReady: false, needsFlow: false };
   } catch (e) {
+    if (TR_3WAY_RX.test(String(e && e.message || ''))) {
+      const rows = await fetchAll(() => db.from('transfers').select(TR_COLS_BASE + TR_COLS_FLOW)
+        .order('created_at', { ascending: false }));
+      return { rows, notReady: false, needsFlow: false };
+    }
     if (TR_FLOW_RX.test(String(e && e.message || ''))) {
       const rows = await fetchAll(() => db.from('transfers').select(TR_COLS_BASE)
         .order('created_at', { ascending: false }));
@@ -2368,7 +2438,14 @@ function trRow(r) {
     declinedAt: r.declined_at ? Date.parse(r.declined_at) : null, declinedBy: r.declined_by || '',
     declineReason: r.decline_reason || '',
     moved: r.moved == null ? null : Number(r.moved),
-    signed: (r.sender_signed_by ? 1 : 0) + (r.receiver_signed_by ? 1 : 0),
+    /* THREE SIGNATORIES, ON A THREE-WAY DOCUMENT: the desk signs at filing (mandatory, see
+       transferCreate), then the source RSM (sender) and the destination RSM (receiver) each
+       sign in whichever order they get to it. An ordinary document never has a desk
+       signature, so this is a no-op addition for every one of them. */
+    threeWay: !!r.three_way,
+    deskSignedBy: r.desk_signed_by || '', deskSignedAt: r.desk_signed_at ? Date.parse(r.desk_signed_at) : null,
+    signed: (r.three_way ? (r.desk_signed_by ? 1 : 0) : 0) + (r.sender_signed_by ? 1 : 0) + (r.receiver_signed_by ? 1 : 0),
+    signaturesNeeded: r.three_way ? 3 : 2,
   };
 }
 async function trOne(db, id) {
@@ -10400,6 +10477,9 @@ const FNS = {
         subtotal: i.qty * (Number(i.price) || 0), source: i.source || '', prevHolder: i.prev_holder || '' })),
       senderSignature: t.sender_signature || null,
       receiverSignature: t.receiver_signature || null,
+      // The desk's own signature -- only ever present on a three-way document (see
+      // transferCreate); named ONLY here, same as the other two, never on the list read.
+      deskSignature: t.desk_signature || null,
       mine: { sender: sameName(t.from_name, user.name), receiver: sameName(t.to_name, user.name), desk: isStoreDesk(user) },
     }) };
   },
@@ -10415,14 +10495,34 @@ const FNS = {
     const parties = await transferParties(db);
 
     /* WHO IS HANDING OVER: you. "sender must be current account settings" -- a typed sender
-       is refused even from the desk, because a document that says RSM A handed over must have
-       been opened by RSM A's own login. */
-    const fromName = String(user.name || '').trim();
-    const fromRole = roleWord(user);
+       is refused, with ONE exception: the desk naming a different SENDER *and* that sender is
+       an RSM *and* the receiver is also an RSM ("sipho wants to transfer stock from RSM to
+       RSM"). That is Sipho filing the document on their own login for two RSMs who are
+       neither of them the one signed in -- so instead of requiring the source RSM to have
+       been the one to open it, THREE_WAY makes the source RSM's own signature (transferSign,
+       see there) a mandatory gate on the stock actually moving, on top of the desk's own
+       signature below and the destination RSM's acceptance. Anything else typed here is still
+       refused exactly as before. */
+    const signedInName = String(user.name || '').trim();
+    const signedInRole = roleWord(user);
     const fromTyped = String(a.fromName || '').trim();
-    if (fromTyped && !sameName(fromTyped, fromName)) {
-      bad('Anayetoa ni wewe uliyeingia (' + fromName + '); uhamisho hufunguliwa na mtoaji mwenyewe. '
-        + '/ The sender is the signed-in account (' + fromName + '); a transfer is opened by the sender themselves.');
+    const threeWayAsked = desk && fromTyped && !sameName(fromTyped, signedInName);
+    let fromName = signedInName, fromRole = signedInRole, threeWay = false;
+    if (fromTyped && !sameName(fromTyped, signedInName) && !desk) {
+      bad('Anayetoa ni wewe uliyeingia (' + signedInName + '); uhamisho hufunguliwa na mtoaji mwenyewe. '
+        + '/ The sender is the signed-in account (' + signedInName + '); a transfer is opened by the sender themselves.');
+    }
+    if (threeWayAsked) {
+      const fromParty = parties.get(nameKey(fromTyped));
+      if (!fromParty) {
+        bad('"' + fromTyped + '" si mtumiaji wa mfumo — anahitaji msimbo wa RSM ili awe upande wa uhamisho huu. '
+          + '/ "' + fromTyped + '" is not a system user — they need an RSM access code to be a party to this transfer.');
+      }
+      if (K(fromParty.role) !== 'RSM') {
+        bad('Kutuma kwa niaba ni kati ya RSM wawili tu -- "' + fromParty.name + '" si RSM. '
+          + '/ Filing on somebody else\'s behalf is RSM to RSM only -- "' + fromParty.name + '" is not an RSM.');
+      }
+      fromName = fromParty.name; fromRole = fromParty.role; threeWay = true;
     }
     const toTyped = String(a.toName || '').trim();
     if (!toTyped) bad('Chagua anayepokea. / Choose who receives.');
@@ -10432,7 +10532,15 @@ const FNS = {
         + 'aweze kupokea. / "' + toTyped + '" is not a system user — they need an access code (RSM, '
         + 'AGENT or STORE) to be able to accept.');
     }
+    if (threeWay && K(to.role) !== 'RSM') {
+      bad('Kutuma kwa niaba ni kati ya RSM wawili tu -- "' + to.name + '" si RSM. '
+        + '/ Filing on somebody else\'s behalf is RSM to RSM only -- "' + to.name + '" is not an RSM.');
+    }
     if (sameName(fromName, to.name)) bad('Anayetoa na anayepokea ni mtu mmoja. / Sender and receiver are the same person.');
+    if (threeWay && !String(a.signature || '').trim()) {
+      bad('Sahihi yako inahitajika ukitengeneza uhamisho kwa niaba ya RSM wengine. '
+        + '/ Your own signature is required when filing a transfer on behalf of two other RSMs.');
+    }
 
     const rawImeis = Array.isArray(a.imeis) ? a.imeis
       : String(a.imeis || '').split(/[\s,;]+/);
@@ -10553,13 +10661,34 @@ const FNS = {
       item_count: imeis.length, total_qty: imeis.length, total_amount: total,
       created_by: user.name, created_at: at, updated_at: at,
       status: 'sent', from_role: fromRole, to_role: to.role,
+      three_way: threeWay,
     };
-    if (sig) { row.sender_signature = sig; row.sender_signed_by = user.name; row.sender_signed_at = at; }
+    if (sig) {
+      // Sipho's own signature, on a three-way document, is a NEW third column set --
+      // sender_signature stays for the source RSM's own later approval (transferSign).
+      // Every ordinary document is unaffected: threeWay is false and this is exactly the
+      // write it always was.
+      if (threeWay) { row.desk_signature = sig; row.desk_signed_by = user.name; row.desk_signed_at = at; }
+      else { row.sender_signature = sig; row.sender_signed_by = user.name; row.sender_signed_at = at; }
+    }
     let ins = await db.from('transfers').insert([row]).select('id, ref');
+    if (ins.error && TR_3WAY_RX.test(String(ins.error.message || ''))) {
+      /* A three-way document CANNOT degrade gracefully the way an ordinary one can: without
+         these columns there is no record that a third signature is even required, and the
+         receiver's acceptance alone would move the stock before the source RSM ever approved
+         -- exactly the gap this feature exists to close. Refuse outright rather than silently
+         filing it as a two-party document. */
+      if (threeWay) {
+        bad('Endesha <b>' + TR_3WAY_FILE + '</b> kwanza kabla ya kutuma kwa niaba ya RSM wengine. '
+          + '/ Run <b>' + TR_3WAY_FILE + '</b> first before filing a transfer on behalf of two other RSMs.');
+      }
+      const { three_way, desk_signature, desk_signed_by, desk_signed_at, ...base } = row;
+      ins = await db.from('transfers').insert([base]).select('id, ref');
+    }
     if (ins.error && TR_FLOW_RX.test(String(ins.error.message || ''))) {
       /* The document migration ran, the flow one has not: the document still opens, and the
          pane says which file to run before anybody can accept it. */
-      const { status, from_role, to_role, ...base } = row;
+      const { status, from_role, to_role, three_way, desk_signature, desk_signed_by, desk_signed_at, ...base } = row;
       ins = await db.from('transfers').insert([base]).select('id, ref');
     }
     if (ins.error) {
@@ -10582,7 +10711,10 @@ const FNS = {
     if (itemsRes.error) throw new Error(itemsRes.error.message);
 
     return { ok: true, id: inserted.id, ref: inserted.ref, changed: imeis.length, priced,
-      unknown: imeis.filter(i => where.get(i).source === 'unknown').length, senderSigned: !!sig };
+      unknown: imeis.filter(i => where.get(i).source === 'unknown').length, senderSigned: !!sig,
+      threeWay, fromName,
+      note: threeWay ? ('Uhamisho kwa niaba ya ' + fromName + ' na ' + to.name + '; sahihi mbili zaidi zinahitajika. '
+        + '/ Filed on behalf of ' + fromName + ' and ' + to.name + '; two more signatures are needed.') : null };
   },
 
   /** BULK: one pasted list, many receivers -- "RSM to Agents, supplying" without eight separate
@@ -10647,10 +10779,17 @@ const FNS = {
     return { ok: true, documents: created.length, serials: rows.length, created };
   },
 
-  /** ACCEPT -- the receiver's own signature, and the moment the stock changes hands. The move
-      is written BEFORE the document is marked accepted, so a write that fails halfway leaves a
-      document still waiting (and a retry that simply sets the same holders again) rather than
-      a document that says "accepted" over stock that never moved. */
+  /** ACCEPT -- the receiver's own signature. The move is written BEFORE the document is
+      marked accepted, so a write that fails halfway leaves a document still waiting (and a
+      retry that simply sets the same holders again) rather than a document that says
+      "accepted" over stock that never moved.
+
+      ON AN ORDINARY DOCUMENT this is always the last signature and always moves the stock,
+      exactly as before. ON A THREE-WAY DOCUMENT (Sipho filing between two named RSMs, see
+      transferCreate) it is the source RSM's OWN approval -- transferSign, the same "sign
+      later" a normal sender already has -- that must also be in before anything moves; if it
+      is not there yet, this call records the receiver's signature and waits, and whichever
+      of the two signs SECOND is the one that actually calls trMoveStock. */
   async transferAccept(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
@@ -10666,64 +10805,37 @@ const FNS = {
       : 'Uhamisho huu ulikataliwa. / This transfer was declined.');
     if (t.receiver_signed_by) bad('Tayari kimesainiwa na ' + t.receiver_signed_by + '. / Already signed, by ' + t.receiver_signed_by + '.');
 
-    /* WHOSE HANDS IT GOES INTO. The receiver's name -- unless the receiver is the store desk,
-       whose stock the register has always written under SUPER AGENT ("role store =
-       superagent"): one name for the warehouse, whichever clerk signed for it. */
-    let toRole = K(t.to_role || '').replace(/[\s_-]+/g, ' ') || roleWord(user);
-    const holder = isStoreRole(toRole) ? STORE_NODE : String(t.to_name);
-
-    const items = await fetchAll(() => db.from('transfer_items').select('imei').eq('transfer_id', id));
-    const imeis = [...new Set(items.map(i => String(i.imei)))];
-    const at = new Date().toISOString();
-    const where = await locateStock(db, imeis);
-    const devIm = imeis.filter(i => where.get(i).source === 'devices');
-    const oldIm = imeis.filter(i => where.get(i).source === 'old_stock');
-
-    for (let i = 0; i < devIm.length; i += 200) {
-      const slice = devIm.slice(i, i + 200);
-      const { error } = await db.from('devices').update({ holder, updated_at: at }).in('imei', slice);
+    const threeWay = !!t.three_way;
+    const stillWaitingOnSource = threeWay && !t.sender_signed_by;
+    if (stillWaitingOnSource) {
+      // Your signature is recorded; the stock does not move until the source RSM approves too.
+      const at = new Date().toISOString();
+      const { error } = await db.from('transfers')
+        .update({ receiver_signature: sig, receiver_signed_by: String(user.name), receiver_signed_at: at, updated_at: at })
+        .eq('id', id);
       if (error) throw new Error(error.message);
+      return { ok: true, id, moved: 0, pending: true, waitingOn: t.from_name,
+        note: 'Umesaini. Bado inasubiri idhini ya ' + t.from_name + ' kabla stoo haijahamishwa. '
+          + '/ Signed. Still waiting on ' + t.from_name + '\'s approval before the stock moves.' };
     }
-    if (devIm.length) {
-      // History gets the hand-over, one line per handset, the same trail a lock or a shift leaves.
-      await db.from('device_events').insert(devIm.map(imei => ({
-        imei, event: 'transfer', from_state: null, to_state: null,
-        reason: 'kutoka ' + t.from_name + ' kwenda ' + holder + ' / from ' + t.from_name
-          + ' to ' + holder + ' (' + t.ref + ')',
-        actor: user.name, at })));
-    }
-    if (oldIm.length) {
-      /* The old list carries the RSM beside the holder. It follows the receiver: an RSM is
-         their own, an agent's is whoever the register says they report to, and stock back at
-         the desk answers to nobody in the field. Left alone where nothing can be said. */
-      const patch = { agent: holder, updated_at: at };
-      if (toRole === 'RSM') patch.rsm = t.to_name;
-      else if (isStoreRole(toRole) || toRole === 'ADMIN') patch.rsm = null;
-      else if (toRole === 'AGENT') {
-        let agents = [];
-        try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); } catch (ignored) { agents = []; }
-        const boss = managerIndex(agents).of(t.to_name);
-        if (boss) patch.rsm = boss;
-      }
-      for (let i = 0; i < oldIm.length; i += 200) {
-        const slice = oldIm.slice(i, i + 200);
-        const { error } = await db.from('old_stock').update(patch).in('imei', slice);
-        if (error) throw new Error(error.message);
-      }
-    }
-    const moved = devIm.length + oldIm.length;
-    const upd = { receiver_signature: sig, receiver_signed_by: String(user.name), receiver_signed_at: at,
-      status: 'accepted', accepted_at: at, accepted_by: user.name, moved, updated_at: at };
+    const move = await trMoveStock(db, t, user.name, roleWord(user));
+    const upd = { receiver_signature: sig, receiver_signed_by: String(user.name), receiver_signed_at: move.at,
+      status: 'accepted', accepted_at: move.at, accepted_by: user.name, moved: move.moved, updated_at: move.at };
     let res = await db.from('transfers').update(upd).eq('id', id);
     if (res.error && TR_FLOW_RX.test(String(res.error.message || ''))) {
       const { status: s_, accepted_at, accepted_by, moved: m_, ...base } = upd;
       res = await db.from('transfers').update(base).eq('id', id);
     }
     if (res.error) throw new Error(res.error.message);
-    return { ok: true, id, moved, holder, devices: devIm.length, oldStock: oldIm.length, unknown: imeis.length - moved };
+    return { ok: true, id, moved: move.moved, holder: move.holder, devices: move.devices, oldStock: move.oldStock, unknown: move.unknown };
   },
 
-  /** DECLINE -- the receiver says no, in words. Nothing moves. */
+  /** DECLINE -- somebody says no, in words. Nothing moves.
+
+      ON AN ORDINARY DOCUMENT only the receiver may decline (the same rule as ever: only the
+      two parties can sign, accept or decline). ON A THREE-WAY DOCUMENT two more people are
+      real parties to it and may say no just as validly: the SOURCE RSM (asked to give up
+      stock they never offered) and the DESK that filed it. */
   async transferDecline(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
@@ -10732,7 +10844,11 @@ const FNS = {
     const reason = String(a.reason || '').trim();
     if (!reason) bad('Andika sababu ya kukataa. / A reason is required to decline.');
     const t = await trOne(db, id);
-    if (!sameName(t.to_name, user.name)) refuse403('Uhamisho huu haukutumwa kwako. / This transfer was not sent to you.');
+    const threeWay = !!t.three_way;
+    const canDecline = sameName(t.to_name, user.name)
+      || (threeWay && sameName(t.from_name, user.name))
+      || (threeWay && isStoreDesk(user));
+    if (!canDecline) refuse403('Uhamisho huu haukutumwa kwako. / This transfer was not sent to you.');
     const status = trStatusOf(t);
     if (status !== 'sent') bad(status === 'accepted'
       ? 'Uhamisho huu tayari umekubaliwa; hauwezi kukataliwa sasa. / Already accepted; it cannot be declined now.'
@@ -10750,8 +10866,19 @@ const FNS = {
   },
 
   /** The SENDER's own signature, once -- for a document sent without signing. The receiver
-      never signs here: their signature IS the acceptance (transferAccept), because that is
-      the write that moves the stock. */
+      never signs here: their signature IS the acceptance (transferAccept).
+
+      ON AN ORDINARY DOCUMENT the sender always signed at Send (transferCreate) before the
+      receiver could ever see it, so this is only ever reached on a document that was
+      deliberately sent unsigned, and it never moves anything -- accepting is still the write
+      that does that.
+
+      ON A THREE-WAY DOCUMENT (see transferCreate) the sender IS the source RSM, who was never
+      the one who filed it and so has never signed yet -- this IS how they approve. If the
+      receiver has ALREADY accepted and was left waiting only on this approval (transferAccept
+      recorded their signature but held the move), THIS signature is the one that actually
+      moves the stock -- the same trMoveStock transferAccept itself calls, so it makes no
+      difference which of the two lands second. */
   async transferSign(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
@@ -10763,13 +10890,30 @@ const FNS = {
     trCheckSig(sig);
     const t = await trOne(db, id);
     if (!sameName(t.from_name, user.name)) refuse403('Uhamisho huu si wako kusaini; mtoaji anasaini kwa msimbo wake mwenyewe. / This transfer is not yours to sign; the sender signs under their own code.');
+    const status = trStatusOf(t);
+    if (status !== 'sent') bad(status === 'accepted'
+      ? 'Uhamisho huu tayari umekubaliwa. / This transfer has already been accepted.'
+      : 'Uhamisho huu ulikataliwa. / This transfer was declined.');
     if (t.sender_signed_by) bad('Tayari kimesainiwa na ' + t.sender_signed_by + '. / Already signed, by ' + t.sender_signed_by + '.');
-    const at = new Date().toISOString();
-    const { error } = await db.from('transfers')
-      .update({ sender_signature: sig, sender_signed_by: String(user.name), sender_signed_at: at, updated_at: at })
-      .eq('id', id);
+
+    const readyToMove = !!t.three_way && !!t.receiver_signed_by;
+    if (!readyToMove) {
+      const at = new Date().toISOString();
+      const { error } = await db.from('transfers')
+        .update({ sender_signature: sig, sender_signed_by: String(user.name), sender_signed_at: at, updated_at: at })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+      return { ok: true, id, role, signedBy: String(user.name), moved: 0 };
+    }
+    const move = await trMoveStock(db, t, user.name, '');
+    /* accepted_by stays the RECEIVER's own name -- theirs was the acceptance, recorded earlier
+       by transferAccept; this signature is what FINISHES it, not what accepted it. */
+    const upd = { sender_signature: sig, sender_signed_by: String(user.name), sender_signed_at: move.at,
+      status: 'accepted', accepted_at: move.at, accepted_by: t.receiver_signed_by || String(user.name),
+      moved: move.moved, updated_at: move.at };
+    const { error } = await db.from('transfers').update(upd).eq('id', id);
     if (error) throw new Error(error.message);
-    return { ok: true, id, role, signedBy: String(user.name) };
+    return { ok: true, id, role, signedBy: String(user.name), moved: move.moved, holder: move.holder };
   },
 };
 

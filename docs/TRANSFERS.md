@@ -50,8 +50,10 @@ still at the desk keeps its blank — the warehouse is not a person.
 - **The sender is the account that is signed in.** *"sender must be current account
   settings"* — the name and role come off the login and are shown, not typed; a `fromName` that
   is somebody else is refused, for the desk too. Flow 5 ("Sipho does it on system, they log in
-  to sign") is therefore the desk sending **as the store** to the RSM, and the RSM sending on
-  their own login — never one person opening a document in another person's name.
+  to sign") used to mean the desk sending **as the store** to the RSM, or the RSM logging in
+  themselves and sending — never one person opening a document in another person's name. **One
+  exception now exists**, and only one: the desk naming an RSM as sender to send to a second
+  RSM — see *Kwa niaba / On somebody's behalf*, below.
 - **You send what is in your hands.** A sender who is not the desk can only send stock in their
   own possession — the same list their Stock window shows. Anything else is refused by IMEI.
 - **The desk sends anything.** STORE (and ADMIN) may send serials the system has never heard of
@@ -96,6 +98,43 @@ the refusal names the lines and the people that stopped it. A serial listed unde
 refused rather than guessed. The same model, price and note apply to every line; 500 phones per
 paste.
 
+### Kwa niaba / On somebody's behalf — Sipho filing RSM to RSM
+
+> *"sipho wants to transfer stock from RSM to RSM then the 2 rsm must sign approval and this is
+> to be applicable with the 3 signatories"*
+
+Flow 5 as first written meant a hand-off between two RSMs had to be opened by the **source**
+RSM logging in themselves — the sender is always the signed-in account, no exceptions. This is
+the one exception: **the desk (STORE or ADMIN) may name a different sender, but only when that
+sender and the receiver are both RSMs.** Neither RSM has to be at the keyboard; the desk picks
+both names from the Send pane's third mode, **RSM kwa RSM (kwa niaba) / RSM to RSM (on their
+behalf)**.
+
+Because the desk is not the one actually holding the stock, filing it this way needs **three
+signatures, not two**:
+
+1. **The desk's own**, at filing — mandatory, not deferrable the way a sender's can be
+   elsewhere: the desk is the one vouching for a document that names two people who never
+   opened it.
+2. **The source RSM's approval** — signed later, from their own login, the same *"sign later"*
+   a normal sender already has (`transferSign`, under Uhamisho wangu on the document).
+3. **The destination RSM's acceptance** — exactly as any receiver's, in Pokea.
+
+**Any order.** Whichever of the two RSMs signs *second* is the write that actually moves the
+stock; the one who signs first is simply recorded and the document keeps waiting. A receiver
+who accepts before the source RSM has approved is told so — their signature is in, but the
+handsets stay exactly where they were until the source RSM approves too.
+
+**Any of the three may decline it**, with a reason, and nothing moves: the source RSM (asked
+to give up stock they never offered), the desk that filed it, or the destination RSM, same as
+any other document.
+
+An ordinary transfer — the sender **is** the signed-in account, as it has always been — is
+completely unaffected: it never carries a desk signature, never waits on anything but the
+receiver's own acceptance, and only the receiver may decline it. Schema: `three_way` on the
+`transfers` row says which kind a document is; see
+`db/migrations/RUN-ME-2026-09-18-transfers-three-way.sql`.
+
 ## Paper, and the phone
 
 > *"Sending and printing copy of sent items at transfers doesn't print the whole list, instead
@@ -131,6 +170,11 @@ that could leave a signed document with stock still in the wrong hands. **Only t
 can sign, accept or decline** — the desk reads every document but signs none it is not a party
 to; the desk's own documents are signed under the desk's own code. A signature is written once;
 a mis-signed transfer is corrected with a fresh one.
+
+**Three parties, on a document filed *kwa niaba*** (see above): the desk is a party too, and
+the same rule extends to it exactly — the desk signs once, at filing, and may decline like
+either RSM; whichever of the source and destination RSM signs last is the one write that moves
+the stock, in either order.
 
 ## Who the stock names becomes a system user
 
@@ -212,10 +256,14 @@ credit/customer panes and the calls app — see `docs/CREDIT-FENCE.md`.
   found (`source`) and whose hands it was in (`prev_holder`).
 
 Schema: `db/migrations/RUN-ME-2026-09-16-transfers.sql` (the document) then
-`RUN-ME-2026-09-17-transfers-flow.sql` (status, roles, accept/decline). Until the second runs
-the pane still opens and prints; Send and Receive say which file to run. The one-off backfill of
-staff rows and codes from stock is `RUN-ME-2026-09-18-staff-from-stock.sql`; it is not a schema
-change, and the panes keep the register filled without it from then on.
+`RUN-ME-2026-09-17-transfers-flow.sql` (status, roles, accept/decline), then
+`RUN-ME-2026-09-18-transfers-three-way.sql` (`three_way`, the desk's own signature) for *kwa
+niaba*. Until the second runs the pane still opens and prints; Send and Receive say which file
+to run. Filing *kwa niaba* specifically refuses outright, naming the third file, rather than
+silently filing as an ordinary two-party document with no record that a third signature was
+ever required. The one-off backfill of staff rows and codes from stock is
+`RUN-ME-2026-09-18-staff-from-stock.sql`; it is not a schema change, and the panes keep the
+register filled without it from then on.
 
 Two one-off clean-ups sit beside them, for stock that was only ever a rehearsal:
 `RUN-ME-2026-09-17-delete-training-transfers.sql` removes four training documents, with the stock

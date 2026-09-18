@@ -2443,9 +2443,13 @@ test('Send: the sender is the login, the receiver must be a system user, you sen
   await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', imeis: ['351000000000005'] }),
     /not in your possession/, 'AGENT THREE\'s handset is not AGENT ONE\'s to send');
   await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', fromName: 'RSM DAR', imeis: ['351000000000003'] }),
-    /sender is the signed-in account/);
-  await assert.rejects(() => _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'] }),
-    /sender is the signed-in account/, 'not even the desk types a sender: RSM DAR opens RSM DAR\'s documents');
+    /sender is the signed-in account/, 'not the desk: an ordinary code still cannot type a sender');
+  // The desk MAY name a different sender now -- but ONLY RSM to RSM (see the three-way tests
+  // below); anything else is still refused exactly as before.
+  await assert.rejects(() => _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'AGENT ONE', imeis: ['351000000000004'] }),
+    /RSM to RSM/, 'filing on somebody else\'s behalf is RSM to RSM only -- not an agent');
+  await assert.rejects(() => _FNS.transferCreate(d, STORE, { toName: 'AGENT TWO', fromName: 'RSM DAR', imeis: ['351000000000003'] }),
+    /RSM to RSM/, 'nor a receiver who is not an RSM');
   const r = await _FNS.transferCreate(d, AG1, { toName: 'rsm dar', imeis: ['351000000000004'], item: 'RIMO-64GB', price: 100000 });
   assert.equal(r.ok, true);
   const row = d._dump('transfers')[0];
@@ -2656,6 +2660,123 @@ test('the sender signs at Send or later from their own login; the receiver only 
   assert.equal(sg.signedBy, 'RSM DAR');
   const huge = 'data:image/png;base64,' + 'A'.repeat(400001);
   await assert.rejects(() => _FNS.transferAccept(d, RSM_MWZ, { id: v.id, signature: huge }), /too large/i);
+});
+
+/* THE THREE-WAY DOCUMENT -- Sipho filing RSM to RSM, on their own login.
+   =========================================================================================
+     "sipho wants to transfer stock from RSM to RSM then the 2 rsm must sign approval and
+      this is to be applicable with the 3 signatories"
+
+   Neither RSM has to be the one signed in; the desk's own signature (mandatory, at filing)
+   is the third party, and the stock does not move until BOTH RSMs have signed too -- in
+   either order, whichever lands second is the write that actually moves it. */
+test('a three-way document needs the desk\'s own signature, and refuses anyone but the desk', async () => {
+  const d = trDb();
+  await assert.rejects(() => _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'] }),
+    /Your own signature is required/, 'the desk is filing this unwitnessed -- their own signature is not deferrable');
+  const r = await _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'], signature: TR_PNG });
+  assert.equal(r.ok, true); assert.equal(r.threeWay, true); assert.equal(r.fromName, 'RSM DAR');
+  const row = d._dump('transfers').find(t => t.id === r.id);
+  assert.equal(row.three_way, true);
+  assert.equal(row.from_name, 'RSM DAR'); assert.equal(row.to_name, 'RSM MWANZA'); assert.equal(row.created_by, 'SIPHO K');
+  assert.equal(row.desk_signature, TR_PNG); assert.equal(row.desk_signed_by, 'SIPHO K');
+  assert.ok(!row.sender_signed_by, 'the source RSM has not approved yet -- they never opened this');
+  assert.ok(!row.receiver_signed_by);
+
+  const got = await _FNS.transferGet(d, STORE, { id: r.id });
+  assert.equal(got.transfer.threeWay, true);
+  assert.equal(got.transfer.deskSignedBy, 'SIPHO K'); assert.equal(got.transfer.deskSignature, TR_PNG);
+  assert.equal(got.transfer.signed, 1); assert.equal(got.transfer.signaturesNeeded, 3);
+  assert.deepEqual(got.transfer.mine, { sender: false, receiver: false, desk: true });
+  assert.deepEqual((await _FNS.transferGet(d, RSM_DAR, { id: r.id })).transfer.mine, { sender: true, receiver: false, desk: false });
+  assert.deepEqual((await _FNS.transferGet(d, RSM_MWZ, { id: r.id })).transfer.mine, { sender: false, receiver: true, desk: false });
+
+  // An ordinary AGENT still cannot type a sender at all -- this feature is desk-only.
+  await assert.rejects(() => _FNS.transferCreate(d, AG1, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'] }),
+    /sender is the signed-in account/);
+});
+
+test('a three-way document waits for BOTH RSMs -- receiver first, then the source RSM completes it', async () => {
+  const d = trDb();
+  const r = await _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'], signature: TR_PNG });
+  // The destination RSM accepts first -- but the source RSM has not approved, so nothing moves yet.
+  const acc = await _FNS.transferAccept(d, RSM_MWZ, { id: r.id, signature: TR_PNG });
+  assert.equal(acc.pending, true); assert.equal(acc.moved, 0);
+  assert.match(acc.note, /RSM DAR/);
+  assert.equal(rowOf(d, 'devices', '351000000000003').holder, 'RSM DAR', 'still with the source RSM -- one signature is not enough');
+  let row = d._dump('transfers').find(t => t.id === r.id);
+  assert.equal(row.status, 'sent'); assert.equal(row.receiver_signed_by, 'RSM MWANZA');
+  await assert.rejects(() => _FNS.transferAccept(d, RSM_MWZ, { id: r.id, signature: TR_PNG }), /Already signed/);
+
+  // Now the source RSM approves -- THIS is the signature that finally moves the stock.
+  const sg = await _FNS.transferSign(d, RSM_DAR, { id: r.id, role: 'sender', signature: TR_PNG });
+  assert.equal(sg.moved, 1);
+  assert.equal(rowOf(d, 'devices', '351000000000003').holder, 'RSM MWANZA');
+  row = d._dump('transfers').find(t => t.id === r.id);
+  assert.equal(row.status, 'accepted'); assert.equal(row.moved, 1);
+  assert.equal(row.accepted_by, 'RSM MWANZA', 'the ACCEPTANCE was always the receiver\'s, even though this call finished it');
+  const ev = d._dump('device_events').find(e => e.imei === '351000000000003');
+  assert.match(ev.reason, /RSM DAR.*RSM MWANZA/);
+});
+
+test('a three-way document waits for BOTH RSMs -- the source RSM approves first, then the receiver completes it', async () => {
+  const d = trDb();
+  const r = await _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'], signature: TR_PNG });
+  const sg = await _FNS.transferSign(d, RSM_DAR, { id: r.id, role: 'sender', signature: TR_PNG });
+  assert.equal(sg.moved, 0, 'the receiver has not accepted yet -- approving alone moves nothing');
+  assert.equal(rowOf(d, 'devices', '351000000000003').holder, 'RSM DAR');
+  assert.equal(d._dump('transfers').find(t => t.id === r.id).status, 'sent');
+
+  const acc = await _FNS.transferAccept(d, RSM_MWZ, { id: r.id, signature: TR_PNG });
+  assert.equal(acc.pending, undefined); assert.equal(acc.moved, 1, 'both signatures are now in -- this one finishes it');
+  assert.equal(rowOf(d, 'devices', '351000000000003').holder, 'RSM MWANZA');
+  const row = d._dump('transfers').find(t => t.id === r.id);
+  assert.equal(row.status, 'accepted'); assert.equal(row.accepted_by, 'RSM MWANZA');
+});
+
+test('any of the three may decline a three-way document; an ordinary document keeps its old rule', async () => {
+  const d = trDb();
+  // The SOURCE RSM says no before ever approving.
+  const a = await _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'], signature: TR_PNG });
+  await assert.rejects(() => _FNS.transferDecline(d, AG1, { id: a.id, reason: 'not mine to decide' }), /not sent to you/i);
+  await _FNS.transferDecline(d, RSM_DAR, { id: a.id, reason: 'those are earmarked already' });
+  assert.equal(d._dump('transfers').find(t => t.id === a.id).status, 'declined');
+  assert.equal(rowOf(d, 'devices', '351000000000003').holder, 'RSM DAR', 'nothing moved');
+
+  // The DESK cancels one before either RSM finishes.
+  const b = await _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'], signature: TR_PNG });
+  await _FNS.transferDecline(d, STORE, { id: b.id, reason: 'filed by mistake' });
+  assert.equal(d._dump('transfers').find(t => t.id === b.id).status, 'declined');
+
+  // An ORDINARY document is unaffected: only the receiver may decline it -- not the sender,
+  // and not the desk just for holding the STORE role.
+  const c = await _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', imeis: ['351000000000004'], signature: TR_PNG });
+  await assert.rejects(() => _FNS.transferDecline(d, AG1, { id: c.id, reason: 'changed my mind' }), /not sent to you/i,
+    'the sender of an ordinary document opened it themselves -- there is nothing to decline');
+  await assert.rejects(() => _FNS.transferDecline(d, STORE, { id: c.id, reason: 'because I can' }), /not sent to you/i,
+    'the desk is not a party to an ordinary document just by being the desk');
+  await _FNS.transferDecline(d, RSM_DAR, { id: c.id, reason: 'no thanks' });
+  assert.equal(d._dump('transfers').find(t => t.id === c.id).status, 'declined');
+});
+
+test('a three-way document refuses to file before the migration, rather than quietly becoming a two-party one', async () => {
+  const d = trDb({}, { missingColumns: { transfers: ['three_way', 'desk_signature', 'desk_signed_by', 'desk_signed_at'] } });
+  await assert.rejects(() => _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'], signature: TR_PNG }),
+    /RUN-ME-2026-09-18-transfers-three-way\.sql/);
+  assert.equal(d._dump('transfers').length, 0, 'nothing was filed as a silent two-party document instead');
+
+  // An ORDINARY document is unaffected: three_way (always sent as false) is the only column
+  // the fallback needs to drop, and an unsigned/blank sender is still fine.
+  const ord = await _FNS.transferCreate(d, AG1, { toName: 'RSM DAR', imeis: ['351000000000004'] });
+  assert.equal(ord.ok, true);
+  assert.ok(!('three_way' in d._dump('transfers')[0]));
+
+  // The list still opens on the same database, cascading down past the three-way columns
+  // exactly as it already did past the flow columns.
+  const list = await _FNS.transferList(d, STORE, {});
+  assert.equal(list.notReady, false); assert.equal(list.needsFlow, false);
+  assert.equal(list.rows.length, 1);
+  assert.equal(list.rows[0].threeWay, false, 'absent columns read as the safe default, not a crash');
 });
 
 test('the register is each party\'s own; the desk sees every document', async () => {

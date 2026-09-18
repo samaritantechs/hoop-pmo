@@ -2689,3 +2689,30 @@ test('the top-up request pane refreshes after a successful submit, on its own ta
   const drawer = src.slice(src.indexOf('function topupDrawer('), src.indexOf('function drawTopupReq('));
   assert.match(drawer, /if\(TAB==='topups'\) drawTopups\(m\); else if\(TAB==='tureq'\) drawTopupReq\(m\);/);
 });
+
+/* "sipho wants to transfer stock from RSM to RSM then the 2 rsm must sign approval and this
+   is to be applicable with the 3 signatories": a third Send mode, desk-only, that files
+   between two named RSMs and carries the desk's own mandatory signature; the view drawer
+   gains a third signature block and decline paths for the source RSM and the desk. */
+test('Send offers RSM-to-RSM-on-behalf only to the desk, and the document view carries a third signature', () => {
+  const src = read('portal.html');
+  const send = src.slice(src.indexOf('function trSendWin('), src.indexOf('function trReceiveWin('));
+  assert.match(send, /d\.desk\?'<button class="btn sm'\+\(rsmrsm\?'':' ghost'\)\+'" data-trmode="rsmrsm"/,
+    'the third mode button only renders when transferUsers says this code is the desk');
+  assert.match(send, /id="trFromRsm"/); assert.match(send, /id="trToRsm"/);
+  assert.match(send, /rsms=users\.filter\(function\(u\)\{ return u\.role==='RSM'; \}\)/,
+    'both pickers are restricted to RSM system users only');
+  assert.match(send, /payload\.fromName=fromRsm; payload\.toName=toRsm;/);
+  assert.match(send, /fromRsm===toRsm.*cannot be the same person/,
+    'the source and destination RSM cannot be picked as the same person');
+
+  const view = src.slice(src.indexOf('function trView('), src.indexOf('function printDoc_('));
+  assert.match(view, /t\.threeWay\?trSigBlock_\('Sahihi ya stoo \/ Desk signature','desk',t\):''/,
+    'a three-way document shows the desk\'s own signature block alongside the other two');
+  assert.match(view, /id="trDeclineS"/, 'the source RSM can decline alongside signing, on a three-way document');
+  assert.match(view, /id="trDeclineDesk"/, 'the desk can cancel a three-way document it filed, before both RSMs finish');
+  assert.match(view, /r\.pending\?r\.note/, 'accepting first on a three-way document reports what it is waiting on, not a moved count');
+
+  const sigBlock = src.slice(src.indexOf("function trSigBlock_("), src.indexOf("function trSigBlock_(") + 900);
+  assert.match(sigBlock, /role==='desk' \? t\.deskSignedBy/, 'trSigBlock_ knows a third role, not just sender/receiver');
+});
