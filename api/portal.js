@@ -7,7 +7,8 @@ import { sendMail, noticeHtml } from './_lib/mail.js';
 import { nudge } from './_lib/push.js';
 import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signin.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
-  agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList } from './_lib/call-core.js';
+  agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList,
+  TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -1569,82 +1570,10 @@ function monthDays(period) {
    would look exactly like a number a person typed. So the tree is walked on every read and
    the row says WHERE its number came from. */
 
-/* The register's own ladder, top first. Anything else sits below the bottom rung and is a leaf:
-   an unknown role must never accidentally become somebody's manager. */
-const TARGET_TIERS = ['COUNTRY_SALES_MANAGER', 'REGIONAL_MANAGER', 'TEAM_LEADER', 'FIELD_OFFICER'];
-const roleKey = r => K(r || '').replace(/[\s-]+/g, '_');
-const tierOf = role => {
-  const i = TARGET_TIERS.indexOf(roleKey(role));
-  return i < 0 ? TARGET_TIERS.length : i;
-};
-
-/** Who reports to whom, and who is under whom. Built once per read from the register.
-
-    THE PARENT IS THE REGISTER'S OWN ANSWER FIRST. `manager` is the exception column somebody
-    fills where a person reports across a branch line; where it is blank -- which is almost
-    everybody -- the parent is the nearest person ONE RUNG UP in the same branch. That is right
-    for the ordinary case and means the cascade works on day one instead of after a thousand
-    edits.
-
-    A manager who is not ABOVE you is not your manager. Two field officers naming each other,
-    or a typo pointing at a peer, would otherwise make a loop that the share walk would fall
-    into; the tier check refuses it before it can happen. */
-function salesTree(agents) {
-  const live = agents.filter(a => a && a.name && a.active !== false);
-  const byKey = new Map(live.map(a => [nameKey(a.name), a]));
-  /* The nearest holder of each tier per branch, so a blank `manager` still finds one. First
-     seen wins, which is stable across reads because the register comes back in a fixed order. */
-  const upOf = new Map();                       // branch|tier -> nameKey
-  for (const a of live) {
-    const k = K(a.branch || '') + '|' + tierOf(a.role);
-    if (!upOf.has(k)) upOf.set(k, nameKey(a.name));
-  }
-  const parent = new Map();
-  for (const a of live) {
-    const me = nameKey(a.name);
-    const myTier = tierOf(a.role);
-    if (myTier === 0) continue;                 // the top of the ladder answers to nobody here
-    let p = '';
-    const named = nameKey(a.manager || '');
-    if (named && byKey.has(named) && tierOf(byKey.get(named).role) < myTier) p = named;
-    if (!p) {
-      // The nearest rung above, in this branch, then anywhere -- a region with no RSM of its
-      // own still rolls up to the country manager rather than falling out of the tree.
-      for (let t = myTier - 1; t >= 0 && !p; t--) {
-        p = upOf.get(K(a.branch || '') + '|' + t) || '';
-      }
-      for (let t = myTier - 1; t >= 0 && !p; t--) {
-        p = [...upOf.entries()].filter(([kk]) => kk.endsWith('|' + t)).map(e => e[1])[0] || '';
-      }
-    }
-    if (p && p !== me) parent.set(me, p);
-  }
-  const children = new Map();
-  for (const [me, p] of parent) {
-    if (!children.has(p)) children.set(p, []);
-    children.get(p).push(me);
-  }
-  return {
-    byKey, parent, children,
-    of: k => byKey.get(k) || null,
-    childrenOf: k => children.get(k) || [],
-    parentOf: k => parent.get(k) || '',
-    /* Everybody beneath somebody, at any depth. Used for the roll-up, and cycle-safe by the
-       same visited set the share walk uses. */
-    descendants(k) {
-      const out = [];
-      const seen = new Set([k]);
-      const stack = [k];
-      while (stack.length) {
-        for (const c of this.childrenOf(stack.pop())) {
-          if (seen.has(c)) continue;
-          seen.add(c); out.push(c); stack.push(c);
-        }
-      }
-      return out;
-    },
-  };
-}
+/* The register's own ladder, TARGET_TIERS/roleKey/tierOf/managerIndex/salesTree -- moved
+   (2026-09-18) to call-core.js and imported above, so the calls app can walk the SAME
+   hierarchy this file already used for the targets roll-up, NEW STOCK's RSM column and
+   stockAllow. One definition of "who reports to whom", read by both entry points. */
 
 /* ---------- NEW STOCK: what gets stamped, and which feed is asked first ----------
    The owner named the order, and it is an order of TRUSTWORTHINESS about a sale rather than
@@ -2029,7 +1958,7 @@ function resolveTarget(key, tree, tBy, seen) {
    name "SUPER AGENT" (Sipho's list, RUN-ME-2026-09-12-sipho-september-load.sql), and the owner's
    word is "role store = superagent" -- so stock accepted by a STORE code is written to that
    holder, not to the clerk's own name, and the register keeps one name for the warehouse. */
-const STOCK_SCOPED_ROLES = new Set(['RSM', 'AGENT']);
+const STOCK_SCOPED_ROLES = new Set(['RSM', 'AGENT', 'TEAM LEADER']);
 const STORE_NODE = 'SUPER AGENT';
 const roleWord = user => K(user && user.role).replace(/[\s_-]+/g, ' ');
 const isStoreRole = role => role === 'STORE' || role === 'GHALA' || role === 'SUPER AGENT' || role === 'SUPERAGENT';
@@ -2038,18 +1967,25 @@ function stockScopeRole(user) {
   const role = roleWord(user);
   return STOCK_SCOPED_ROLES.has(role) ? role : '';
 }
-/** null = everything; otherwise a test over (holder, sellingAgent, rsm) for one stock row. */
+/** null = everything; otherwise a test over (holder, sellingAgent, rsm) for one stock row.
+
+    RSM AND TEAM LEADER SEE EVERYONE BENEATH THEM, AT ANY DEPTH -- not just their direct
+    reports. This used to be a one-level managerIndex check ("does this agent's manager
+    equal me"), which was already quietly wrong the day a TEAM LEADER row existed between
+    an RSM and their agents: the agent's `manager` names the team leader, not the RSM, and
+    the one-level check would miss them. salesTree.descendants walks the whole subtree, so
+    an RSM sees their team leaders' agents too -- a superset of what the one-level check
+    ever found, never a narrower one. */
 async function stockAllow(db, user) {
   const role = stockScopeRole(user);
   if (!role) return null;
   const me = nameKey(user.name);
   const mine = new Set(me ? [me] : []);
-  if (role === 'RSM' && me) {
+  if ((role === 'RSM' || role === 'TEAM LEADER') && me) {
     let agents = [];
     try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
     catch (ignored) { agents = []; }
-    const idx = managerIndex(agents);
-    for (const ag of agents) if (ag.name && nameKey(idx.of(ag.name)) === me) mine.add(nameKey(ag.name));
+    for (const k of salesTree(agents).descendants(me)) mine.add(k);
   }
   const fn = (holder, agent, rsm) => {
     const h = nameKey(holder), g = nameKey(agent);
@@ -2058,8 +1994,9 @@ async function stockAllow(db, user) {
     return role === 'RSM' && !!me && nameKey(rsm) === me;
   };
   /* WHOSE STOCK THE PANE IS SHOWING, for the pane to say so: "each should only see their
-     stock, not the whole company's". An RSM with no agent on the register reporting to
-     them sees their own hands and the rows naming them -- and is told that is why. */
+     stock, not the whole company's". An RSM/TEAM LEADER with nobody on the register
+     reporting to them sees their own hands and the rows naming them -- and is told that
+     is why. */
   fn.info = { role, name: String(user.name || ''), agents: Math.max(0, mine.size - (me ? 1 : 0)) };
   return fn;
 }
@@ -2067,6 +2004,48 @@ async function stockAllow(db, user) {
 const isStoreDesk = user => isAdminRole(user) || isStoreRole(roleWord(user));
 const sameName = (a, b) => !!nameKey(a) && nameKey(a) === nameKey(b);
 const refuse403 = msg => { const e = new Error(msg); e.status = 403; throw e; };
+
+/* =====================================================================================
+   THE CREDIT FENCE -- the calls app's AGENT-only-their-data rule, widened and brought to
+   the portal's own customer/credit panes.
+   =====================================================================================
+     "for team leader, agent and RSM roles, they only should ever see their data (pivoted
+      of imeis they are assigned too -- as hope pmo does to its users) from the calls app
+      to all system nav tabs."
+
+   Exactly the same shape as stockAllow, and for the same reason -- one fence, everywhere
+   a row can be attributed to a person: AGENT reads their own name; RSM and TEAM LEADER
+   read their own name PLUS everyone beneath them in the staff register, at any depth
+   (salesTree.descendants -- the SAME walk stockAllow, NEW STOCK's RSM column and the
+   targets roll-up all use). Every other role -- STORE, ADMIN, HR, the credit desk's own
+   OFFICER/CREDIT accounts -- reads null here, meaning "unchanged": the team scope (scopeQ)
+   these panes have always had is the only fence they have ever needed.
+
+   TWO PREDICATES OFF THE SAME 'mine' SET, because the rows this fence is applied to name
+   the seller two different ways. watu_snapshots, followup_status and followup_comments
+   carry only the IMEI -- `.imei()` resolves the seller off agentIndex.byImei, the shared
+   index the calls app already builds and caches against DATA_VERSION, so this costs no
+   extra read anywhere it is already warm. watu_loans and hoop_sales already carry the
+   seller's own name on the row (`agent` / `commission_agent`) -- `.byName()` skips the
+   lookup and reads that column directly.
+
+   FAILS CLOSED, like every fence in this file: a name the register cannot place, or a
+   register that cannot be read, gives an EMPTY 'mine' set and therefore an empty book --
+   never somebody else's customers. */
+const CREDIT_FENCE_ROLES = new Set(['AGENT', 'RSM', 'TEAM LEADER']);
+async function creditAllow(db, user) {
+  const role = roleWord(user);
+  if (!CREDIT_FENCE_ROLES.has(role)) return null;
+  const me = nameKey(user.name);
+  const idx = await agentIndex(db, Date.now());
+  const mine = me ? new Set([me, ...idx.tree.descendants(me)]) : new Set();
+  const byName = name => mine.has(nameKey(name));
+  const fn = imei => { const ag = idx.byImei[String(imei)]; return !!(ag && byName(ag.name)); };
+  fn.byName = byName;
+  /* WHOSE CUSTOMERS THE PANE IS SHOWING, same convention as stockAllow.info. */
+  fn.info = { role, name: String(user.name || ''), reports: Math.max(0, mine.size - (me ? 1 : 0)) };
+  return fn;
+}
 
 /* THE PEOPLE A HAND-OFF CAN NAME: everybody whose ACCESS CODE carries one of these roles. It is
    the login that accepts, so a name without a code cannot be a receiver -- which is why the
@@ -2427,31 +2406,8 @@ function trCheckSig(sig) {
   if (sig.length > 400000) bad('Sahihi ni kubwa mno. Jaribu tena. / That signature is too large. Please try again.');
 }
 
-/* WHICH RSM AN AGENT BELONGS TO. The register's own `manager` if somebody set one, else the
-   Regional_Manager standing in the same branch -- which is right for almost everybody and
-   means the roll-up works on day one instead of after a thousand edits. */
-function managerIndex(agents) {
-  const rsmOfBranch = new Map();
-  for (const a of agents) {
-    const role = K(a.role || '').replace(/\s+/g, '_');
-    if (!/REGIONAL|COUNTRY_SALES/.test(role)) continue;
-    const b = K(a.branch || '');
-    if (!b || rsmOfBranch.has(b)) continue;
-    rsmOfBranch.set(b, a.name || '');
-  }
-  const byAgent = new Map();
-  for (const a of agents) {
-    const own = String(a.manager || '').trim();
-    byAgent.set(nameKey(a.name), own || rsmOfBranch.get(K(a.branch || '')) || '');
-  }
-  return {
-    of: name => byAgent.get(nameKey(name)) || '',
-    branchOf: (() => {
-      const m = new Map(agents.map(a => [nameKey(a.name), a.branch || '']));
-      return name => m.get(nameKey(name)) || '';
-    })(),
-  };
-}
+/* managerIndex moved to call-core.js (imported above) -- one definition of "which RSM an
+   agent belongs to", read by both entry points. */
 
 /** The report both the pane and the email are built from, so the screen and the GM's copy can
     never disagree. Defaults to TODAY alone: this is a daily report. */
@@ -2468,7 +2424,10 @@ async function fuOutcomesCore(db, user, args, nowMs) {
   const want = K(a.team);
   const inTeam = r => !want || K(r.team) === want;
 
-  const [notes, logs] = await Promise.all([
+  // creditAllow, ON TOP OF the team scope: AGENT/RSM/TEAM LEADER read only their own
+  // pivot of the follow-up report -- notes, calls and the book behind the denominator.
+  const allow = await creditAllow(db, user);
+  let [notes, logs] = await Promise.all([
     fetchAll(() => scopeQ(user, db.from('followup_comments')
       .select('imei, team, client_name, fu_status, comment, created_at, created_by')
       .gte('created_at', fromTs).lt('created_at', toTs))),
@@ -2476,6 +2435,7 @@ async function fuOutcomesCore(db, user, args, nowMs) {
       .select('ref, outcome, portfolio, call_date, officer, team')
       .gte('call_date', from).lte('call_date', to))),
   ]);
+  if (allow) { notes = notes.filter(n => allow(n.imei)); logs = logs.filter(r => allow(r.ref)); }
 
   /* THE BOOK, for the one number that needs a denominator. Quietly optional: a report that
      refuses to open because the deck has not been uploaded is not a better report. */
@@ -2487,6 +2447,7 @@ async function fuOutcomesCore(db, user, args, nowMs) {
     if (deckDate) {
       deck = await fetchAll(() => scopeQ(user, db.from('followup_status')
         .select('imei, client_name, team, contact, days_offline').eq('deck_date', deckDate)));
+      if (allow) deck = deck.filter(d => allow(d.imei));
     }
   } catch (e) { deck = []; deckDate = null; }
 
@@ -2571,6 +2532,7 @@ async function fuOutcomesCore(db, user, args, nowMs) {
   return { ok: true, from, to, team: want || '', deckDate,
     kinds: FU_REPORT_KINDS, labels: FU_BUCKET_LABEL,
     totals,
+    fence: allow ? allow.info : null,
     byOfficer: [...byOfficer.values()].sort((x, y) => y.logged - x.logged || (x.officer < y.officer ? -1 : 1)),
     notListed: Math.max(0, rows.length - CAP),
     rows: rows.slice(0, CAP) };
@@ -2656,7 +2618,7 @@ function requireNav(user, k) {
    table -- and the CEO's rename ("GENERAL DUTY into SALES COORDINATOR, CREDIT into PORTFOLIO
    AND COMPLIANCE OFFICER") is exactly the kind of edit that lands in one copy and not the
    other. A second list is a list that will eventually disagree with the first. */
-const SUGGESTED_ROLES = ['ADMIN', 'MANAGER', 'FINANCE', 'RSM',
+const SUGGESTED_ROLES = ['ADMIN', 'MANAGER', 'FINANCE', 'RSM', 'TEAM LEADER',
   'PORTFOLIO AND COMPLIANCE OFFICER', 'SALES COORDINATOR', 'STORE', 'IT', 'AUDITOR'];
 
 /** EVERY ROLE THAT EXISTS ANYWHERE, as plain names, derived exactly as the Access codes pane
@@ -2804,9 +2766,13 @@ const FNS = {
      needs no new table, and cannot drift out of step with the rows themselves.
      Budget: one bounded read of the newest comments plus one keyed settings read. */
   async notifications(db, user) {
-    const rows = await fetchAll(() => scopeQ(user, db.from('followup_comments')
+    // creditAllow, ON TOP OF the team scope: AGENT/RSM/TEAM LEADER see only the bell for
+    // their own pivot of customers, never the whole team's.
+    const allow = await creditAllow(db, user);
+    let rows = await fetchAll(() => scopeQ(user, db.from('followup_comments')
       .select('imei, team, client_name, comment, fu_status, created_by, created_at')
       .order('created_at', { ascending: false }).limit(40)));
+    if (allow) rows = rows.filter(r => allow(r.imei));
     const seenKey = 'NOTIF_SEEN_' + String(user.code || user.name || '').toUpperCase();
     const { data } = await db.from('settings').select('value').eq('key', seenKey).maybeSingle();
     const since = data && data.value ? Date.parse(String(data.value)) : 0;
@@ -2866,12 +2832,18 @@ const FNS = {
        back null and the chart draws them as gaps. */
     const wk = await weekOf(db, user, args, 'watu_snapshots', 'snapshot_date');
     const from = wk.from, to = wk.to, days = 7;
-    const ck = 'trend:' + from + ':' + to + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    // creditAllow, ON TOP OF the team scope: AGENT/RSM/TEAM LEADER see only their own
+    // pivot of the trend. The cache key carries the fenced identity too -- two AGENTs
+    // sharing the same (often blank) team scope must never share one cache entry.
+    const allow = await creditAllow(db, user);
+    const ck = 'trend:' + from + ':' + to + ':'
+      + (allow ? 'ROLE:' + allow.info.role + ':' + nameKey(user.name) : (user.teams ? user.teams.join(',') : 'ALL'));
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
-    const rows = await fetchAll(() => scopeQ(user, db.from('watu_snapshots')
+    let rows = await fetchAll(() => scopeQ(user, db.from('watu_snapshots')
       .select('imei, snapshot_date, disbursed_date')
       .eq('locked7', true).gte('snapshot_date', from).lte('snapshot_date', to)));
+    if (allow) rows = rows.filter(r => allow(r.imei));
     /* BOTH HALVES, exactly as the tile above -- Watu's locked7 column (asked of the database
        directly) AND our 45-day window. The window is measured against EACH BAR'S OWN DAY, not
        against today, so Monday's bar is the book as it stood on Monday; re-reading a past week
@@ -2958,16 +2930,22 @@ const FNS = {
 
        Cost: the same single indexed read over a wider date bound. */
     const readTo = dayShift(from, 14);
-    const ck = 'recweek2:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    // creditAllow, ON TOP OF the team scope: an AGENT/RSM/TEAM LEADER's week is only
+    // their own pivot's -- see lockedTrend for why the fenced identity has to ride in
+    // the cache key too.
+    const allow = await creditAllow(db, user);
+    const ck = 'recweek2:' + from + ':'
+      + (allow ? 'ROLE:' + allow.info.role + ':' + nameKey(user.name) : (user.teams ? user.teams.join(',') : 'ALL'));
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
 
     const COLS = 'imei, snapshot_date, days_offline, created_at, disbursed_date, locked7, locked4';
-    const [rows, roster] = await Promise.all([
+    let [rows, roster] = await Promise.all([
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS)
         .gte('snapshot_date', from).lte('snapshot_date', readTo))),
       rosterFull(db),
     ]);
+    if (allow) rows = rows.filter(r => allow(r.imei));
 
     // A same-date re-upload appends; the newest row per IMEI within the day wins -- the same
     // rule recovery() applies, so the two screens cannot disagree about a re-uploaded day.
@@ -3068,13 +3046,17 @@ const FNS = {
     const next = (two.data && two.data[0] && String(two.data[0].snapshot_date).slice(0, 10)) || null;
 
     const COLS = 'imei, client_name, team, days_offline, created_at, disbursed_date, locked7, locked4';
-    const [old, cur, roster, idx] = await Promise.all([
+    let [old, cur, roster, idx, allow] = await Promise.all([
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', day))),
       next ? fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', next)))
            : Promise.resolve([]),
       rosterFull(db),
       agentIndex(db, Date.now()).catch(() => null),
+      creditAllow(db, user),
     ]);
+    // creditAllow, ON TOP OF the team scope: the eye on a day shows only the AGENT's
+    // (or RSM's / TEAM LEADER's) own pivot of that day's pool.
+    if (allow) { old = old.filter(r => allow(r.imei)); cur = cur.filter(r => allow(r.imei)); }
     // A same-date re-upload appends; newest row per IMEI wins -- the same rule everywhere else.
     const newest = list => {
       const m = new Map();
@@ -3298,7 +3280,11 @@ const FNS = {
     // every Monday morning until somebody uploads is one people stop opening.
     const wk = await weekOf(db, user, args, 'watu_loans', 'disbursed_date');
     const from = wk.from, to = wk.to;
-    const ck = 'salesweek:watu:' + from + ':' + (user.teams ? user.teams.join(',') : 'ALL');
+    // creditAllow, ON TOP OF the team scope: an AGENT/RSM/TEAM LEADER's scorecard is only
+    // their own pivot's. The cache key carries the fenced identity too -- see lockedTrend.
+    const allow = await creditAllow(db, user);
+    const ck = 'salesweek:watu:' + from + ':'
+      + (allow ? 'ROLE:' + allow.info.role + ':' + nameKey(user.name) : (user.teams ? user.teams.join(',') : 'ALL'));
     const hit = trendCache.get(ck);
     if (hit && (Date.now() - hit.at) < 5 * 60000) return { ...hit.value, cached: true };
 
@@ -3317,8 +3303,10 @@ const FNS = {
     }
     /* Named sale_date downstream so every pivot, the day map and the screen keep working off
        one shape -- the source moved, the vocabulary did not. */
-    const rows = raw.filter(r => r.disbursed_date)
+    let rows = raw.filter(r => r.disbursed_date)
       .map(r => ({ ...r, sale_date: String(r.disbursed_date).slice(0, 10) }));
+    // creditAllow reads the AGENT column straight off this same row -- no lookup needed.
+    if (allow) rows = rows.filter(r => allow.byName(r.agent));
 
     const { data: sRows } = await db.from('settings').select('value').eq('key', 'SALES_DAILY_TARGET').maybeSingle();
     const dailyTarget = num((sRows && sRows.value) || 0) || null;
@@ -3414,9 +3402,15 @@ const FNS = {
       } catch (e) { target = 5; }
       return { book, locked: bad, pct: book ? (bad / book) * 100 : null, target, asOf: latest };
     };
+    // creditAllow, ON TOP OF the team scope: AGENT/RSM/TEAM LEADER read only their own
+    // pivot of the recovery board -- the KPI included, so a fenced code cannot infer the
+    // company default rate from a number meant to be theirs alone.
+    const allow = await creditAllow(db, user);
     if (!prev) {
-      const cur1 = await fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', latest)));
+      let cur1 = await fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', latest)));
+      if (allow) cur1 = cur1.filter(r => allow(r.imei));
       return { ok: true, latest, prev: null, rows: [], counts: null, kpi: await kpiOf(cur1),
+        fence: allow ? allow.info : null,
         note: 'Upload mbili zinahitajika kupima recovery — hii ni ya kwanza. / Recovery needs two uploads; this is the first.' };
     }
     /* THE BRANCH IS THE LOCATION, HERE TOO. watu_snapshots carries only the shop-derived
@@ -3426,11 +3420,12 @@ const FNS = {
        agentIndex already holds it keyed that way, cached against DATA_VERSION -- so this is
        the same overlay Wateja and the phone list already do, not a new read shape. Allowed
        to fail quietly: a missing index must cost the branch column, never the board. */
-    const [cur, old, idx] = await Promise.all([
+    let [cur, old, idx] = await Promise.all([
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', latest))),
       fetchAll(() => scopeQ(user, db.from('watu_snapshots').select(COLS).eq('snapshot_date', prev))),
       agentIndex(db, Date.now()).catch(() => null),
     ]);
+    if (allow) { cur = cur.filter(r => allow(r.imei)); old = old.filter(r => allow(r.imei)); }
     const branchOf = imei => {
       const a = idx && idx.byImei && idx.byImei[String(imei)];
       return (a && a.branch) || '';
@@ -3492,6 +3487,7 @@ const FNS = {
       counts: { compared: [...curM.keys()].filter(k => oldM.has(k)).length,
         paidNew, reconnected, deeper, leftList: off },
       kpi: await kpiOf(cur),
+      fence: allow ? allow.info : null,
       notListed: Math.max(0, rows.length - CAP),
       rows: rows.slice(0, CAP) };
   },
@@ -3516,7 +3512,7 @@ const FNS = {
         .order('snapshot_date', { ascending: false }).limit(1);
       prevDate = d2.data && d2.data[0] ? String(d2.data[0].snapshot_date).slice(0, 10) : null;
     }
-    const [deck, prev, agents, hoopAgents, fu] = await Promise.all([
+    let [deck, prev, agents, hoopAgents, fu, allow] = await Promise.all([
       // deck_date rides along so the deal's per-deck shuffle keys on the DECK's date --
       // Wateja must name the same holders the handsets show, stale deck included.
       deckDate ? fetchAll(() => scopeQ(user, db.from('followup_status')
@@ -3534,7 +3530,12 @@ const FNS = {
       // numbers, token-sorted names -- the same phones the app's card resolves.
       agentIndex(db, Date.now()),
       fuStatusConfig(db),
+      creditAllow(db, user),
     ]);
+    // creditAllow, ON TOP OF the team scope: AGENT/RSM/TEAM LEADER see leo45/leo45plus/jana
+    // narrowed to their own pivot -- "each should only see their data", extended from stock
+    // to the customer book this pane is built from.
+    if (allow) { deck = deck.filter(r => allow(r.imei)); prev = prev.filter(r => allow(r.imei)); }
     const regOf = {};
     agents.forEach(r => { regOf[r.imei] = r; });
     const agPhone = hoopAgents.phoneByName || {};
@@ -3576,7 +3577,8 @@ const FNS = {
     const beyond = leo.filter(r => !r.inWindow);
     const bySunk = (a, b) => num(b.daysOff) - num(a.daysOff);
     inWindow.sort(bySunk); beyond.sort(bySunk); jana.sort(bySunk);
-    return { ok: true, deckDate, prevDate, leo45: inWindow, leo45plus: beyond, jana, ...fu };
+    return { ok: true, deckDate, prevDate, leo45: inWindow, leo45plus: beyond, jana,
+      fence: allow ? allow.info : null, ...fu };
   },
 
   /** EVERYONE COMMENTS. Any signed-in portal user except a view-only code can log a
@@ -3641,13 +3643,16 @@ const FNS = {
     const today = todayKey();
     const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? a.to : today;
     const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? a.from : dayShift(today, -30);
-    const [sales, reg, agents] = await Promise.all([
+    let [sales, reg, agents, allow] = await Promise.all([
       fetchAll(() => db.from('hoop_sales')
         .select('sale_key, sale_date, receipt_number, client_name, client_phone, imei, model, price, agent, commission_agent, commission_phone')
         .gte('sale_date', from).lte('sale_date', to)),
       fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id')),
       fetchAll(() => db.from('hoop_agents').select('phone, name, national_id, kin_name, kin_phone, role, branch')),
+      creditAllow(db, user),
     ]);
+    // creditAllow: an AGENT/RSM/TEAM LEADER holding this desk audits their own pivot only.
+    if (allow) sales = sales.filter(s => allow.byName(s.commission_agent || s.agent));
     const regBy = new Map(reg.map(r => [String(r.imei), r]));
     const agBy = new Map(agents.map(r => [pnorm(r.phone), r]));
     const freshLine = dayShift(today, -2);          // sale younger than this: too fresh to accuse
@@ -3678,6 +3683,7 @@ const FNS = {
     return { ok: true, from, to,
       counts: { total: rows.length, ok: count('OK'), drift: count('DRIFT'),
         pending: count('PENDING'), bulk: count('BULK'), candidates: count('HAKUNA_WATU') },
+      fence: allow ? allow.info : null,
       rows: rows.slice(0, 500) };
   },
 
@@ -3693,7 +3699,7 @@ const FNS = {
     const today = todayKey();
     const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? a.to : today;
     const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? a.from : dayShift(today, -90);
-    const [reg, sales, agents] = await Promise.all([
+    let [reg, sales, agents, allow] = await Promise.all([
       // BRANCH, not the deck's shop-derived team: "Kinondoni" is a company location, and
       // the real branch rides the offline queue. Pre-migration databases fall back.
       /* `price` rides along because the deck is now what the SALES half counts too (see
@@ -3707,7 +3713,11 @@ const FNS = {
         .select('commission_agent, commission_phone, sale_date, price')
         .gte('sale_date', from).lte('sale_date', to)),
       fetchAll(() => db.from('hoop_agents').select('phone, name, role, branch, kin_name, kin_phone')),
+      creditAllow(db, user),
     ]);
+    // creditAllow, ON TOP OF the team scope: an AGENT/RSM/TEAM LEADER's scorecard is
+    // their own pivot's, on both the Watu side and the shop-sales side.
+    if (allow) { reg = reg.filter(r => allow.byName(r.agent)); sales = sales.filter(s => allow.byName(s.commission_agent)); }
     // The agent's OWN location is what Sipho's register says (token-sorted match, so a
     // name written in either order still finds them); their customers' branches are the
     // fallback and the second line of the story.
@@ -3816,6 +3826,7 @@ const FNS = {
       /* Said out loud on the pane, because a column headed "sales" that quietly changed
          meaning is worse than one that says which book it came from. */
       salesSource: 'watu_loans',
+      fence: allow ? allow.info : null,
       totals: {
         deckSales: sellers.reduce((n, r) => n + r.sales, 0),
         shopSales: sellers.reduce((n, r) => n + r.shopSales, 0),

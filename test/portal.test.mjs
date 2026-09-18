@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fakeDb } from './fake-db.mjs';
 import { _FNS } from '../api/portal.js';
+import { _clearSummaryCache } from '../api/_lib/call-core.js';
 
 const ADMIN = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['upload', 'settings'], readOnly: false };
 const VIEWER = { code: 'V', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['settings'], readOnly: true };
@@ -225,6 +226,117 @@ test('customers scopes a team-bound code at the database', async () => {
   const r = await _FNS.customers(d, scoped, {});
   assert.equal(r.leo45.length + r.leo45plus.length, 1);
   assert.equal(r.leo45[0].imei, 'A1');
+});
+
+/* THE CREDIT FENCE, ON TOP OF THE TEAM SCOPE.
+   =========================================================================================
+     "for team leader, agent and RSM roles, they only should ever see their data (pivoted
+      of imeis they are assigned too -- as hope pmo does to its users) from the calls app
+      to all system nav tabs"
+
+   Same register, same salesTree walk stockAllow now uses too: AGENT their own name; TEAM
+   LEADER and RSM their own name plus everyone beneath them, at any depth. */
+function creditFenceDb() {
+  return fakeDb({
+    followup_status: [
+      { imei: 'A1', client_name: 'Sold By Agent', team: 'KINONDONI', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+      { imei: 'B2', client_name: 'Sold By Other', team: 'KINONDONI', deck_date: '2026-08-14', disbursed_date: '2026-08-01' },
+    ],
+    watu_snapshots: [],
+    watu_loans: [{ imei: 'A1', agent: 'Anord Sawe', team: 'KINONDONI' }, { imei: 'B2', agent: 'Somebody Else', team: 'KINONDONI' }],
+    hoop_agents: [
+      { name: 'Anord Sawe', phone: '0658918324', role: 'Field_Officer', manager: 'Juma Leader' },
+      { name: 'Juma Leader', phone: '0700000001', role: 'Team_Leader', manager: 'Rehema RSM' },
+      { name: 'Rehema RSM', phone: '0700000002', role: 'Regional_Manager' },
+      // A separate, unrelated chain -- named so the branch-fallback ("no manager of your
+      // own rolls up to the nearest rung") cannot accidentally land them under Juma/Rehema.
+      { name: 'Somebody Else', phone: '0700000003', role: 'Field_Officer', manager: 'Other RSM' },
+      { name: 'Other RSM', phone: '0700000004', role: 'Regional_Manager' },
+    ],
+    settings: [],
+  });
+}
+const TR_TABS_CUST = ['customers', 'recovery'];
+const AGENT_SAWE = { code: 'A1', name: 'Anord Sawe', role: 'AGENT', teams: null, tabs: TR_TABS_CUST, readOnly: false };
+const TL_JUMA = { code: 'T1', name: 'Juma Leader', role: 'TEAM LEADER', teams: null, tabs: TR_TABS_CUST, readOnly: false };
+const RSM_REHEMA = { code: 'R1', name: 'Rehema RSM', role: 'RSM', teams: null, tabs: TR_TABS_CUST, readOnly: false };
+
+test('Wateja: AGENT/TEAM LEADER/RSM each see only their own pivot of the customer book', async () => {
+  const d = creditFenceDb();
+  // Both windows together -- this fixture's dates are not the point of the test, the fence is.
+  const both = r => [...r.leo45, ...r.leo45plus].map(x => x.imei);
+  const ag = await _FNS.customers(d, AGENT_SAWE, {});
+  assert.deepEqual(both(ag), ['A1'], 'the agent sees only the phone they sold');
+  assert.equal(ag.fence.role, 'AGENT');
+  const tl = await _FNS.customers(d, TL_JUMA, {});
+  assert.deepEqual(both(tl), ['A1'], 'the team leader sees the agent reporting to them');
+  assert.equal(tl.fence.reports, 1);
+  const rsm = await _FNS.customers(d, RSM_REHEMA, {});
+  assert.deepEqual(both(rsm), ['A1'],
+    'the RSM sees the SAME agent through the team leader between them -- salesTree, not one level');
+  assert.equal(rsm.fence.reports, 2, 'the team leader and the agent beneath them');
+  // Unfenced roles are unchanged: both phones, whatever the team scope allows.
+  const admin = await _FNS.customers(d, ADMIN, {});
+  assert.equal(both(admin).length, 2);
+  assert.equal(admin.fence, null);
+});
+
+test('recovery, notifications and the fraud/scorecard panes carry the same fence', async () => {
+  const d = fakeDb({
+    watu_snapshots: [
+      { imei: 'A1', client_name: 'Mine', team: 'KINONDONI', days_offline: 20, has_ever_paid: false, disbursed_date: dayShift(todayKey(), -10), snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
+      { imei: 'B2', client_name: 'Not Mine', team: 'KINONDONI', days_offline: 20, has_ever_paid: false, disbursed_date: dayShift(todayKey(), -10), snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
+      { imei: 'A1', client_name: 'Mine', team: 'KINONDONI', days_offline: 5, has_ever_paid: true, disbursed_date: dayShift(todayKey(), -10), snapshot_date: '2026-08-14', created_at: '2026-08-14T08:00:00Z' },
+      { imei: 'B2', client_name: 'Not Mine', team: 'KINONDONI', days_offline: 25, has_ever_paid: false, disbursed_date: dayShift(todayKey(), -10), snapshot_date: '2026-08-14', created_at: '2026-08-14T08:00:00Z' },
+    ],
+    watu_loans: [{ imei: 'A1', agent: 'Anord Sawe' }, { imei: 'B2', agent: 'Somebody Else' }],
+    hoop_agents: [{ name: 'Anord Sawe', phone: '0658918324', role: 'Field_Officer' }],
+    followup_comments: [
+      { imei: 'A1', team: 'KINONDONI', client_name: 'Mine', comment: 'ok', created_by: 'X', created_at: '2026-08-14T08:00:00Z' },
+      { imei: 'B2', team: 'KINONDONI', client_name: 'Not Mine', comment: 'ok', created_by: 'X', created_at: '2026-08-14T08:00:00Z' },
+    ],
+    hoop_sales: [
+      { sale_key: 'S1', sale_date: dayShift(todayKey(), -5), imei: 'A1', commission_agent: 'Anord Sawe' },
+      { sale_key: 'S2', sale_date: dayShift(todayKey(), -5), imei: 'B2', commission_agent: 'Somebody Else' },
+    ],
+    settings: [],
+  });
+  const AGENT_TABS = { ...AGENT_SAWE, tabs: ['customers', 'recovery', 'fraud', 'scorecards'] };
+  const rec = await _FNS.recovery(d, AGENT_TABS, {});
+  assert.deepEqual(rec.rows.map(r => r.imei), ['A1'], 'recovery: only the agent\'s own paid/reconnected/etc rows');
+  assert.equal(rec.kpi.book, 1, 'the KPI denominator is fenced too -- the company rate must not leak through it');
+
+  const notif = await _FNS.notifications(d, AGENT_TABS);
+  assert.deepEqual(notif.items.map(i => i.imei), ['A1']);
+
+  const fraud = await _FNS.salesAudit(d, AGENT_TABS, {});
+  assert.deepEqual(fraud.rows.map(r => r.imei), ['A1']);
+
+  const score = await _FNS.agentScore(d, AGENT_TABS, {});
+  assert.deepEqual(score.watuAgents.map(r => r.agent), ['Anord Sawe']);
+});
+
+test('the dashboard tile (boot) is fenced too -- there is no separate role dispatch on the portal side', async () => {
+  // followup_status, not watu_snapshots: boot()'s summaryFor reads the DECK, same as the
+  // calls app's own dashboard strip.
+  const d = fakeDb({
+    followup_status: [
+      { imei: 'A1', client_name: 'Mine', disbursed_date: dayShift(todayKey(), -10), locked7: true, deck_date: todayKey() },
+      { imei: 'B2', client_name: 'Not Mine', disbursed_date: dayShift(todayKey(), -10), locked7: true, deck_date: todayKey() },
+    ],
+    watu_loans: [{ imei: 'A1', agent: 'Anord Sawe' }, { imei: 'B2', agent: 'Somebody Else' }],
+    hoop_agents: [{ name: 'Anord Sawe', phone: '0658918324', role: 'Field_Officer' }],
+    call_logs: [], teams: [], settings: [],
+  });
+  _clearSummaryCache();
+  const AGENT_DASH = { ...AGENT_SAWE, tabs: ['dashboard'] };
+  const boot = await _FNS.boot(d, AGENT_DASH);
+  assert.equal(boot.summary.list.num, 1, 'the tile counts only the phone this AGENT sold, not the company\'s two');
+  assert.equal(boot.summary.locked7.num, 1);
+  _clearSummaryCache();
+  const bootAdmin = await _FNS.boot(d, ADMIN);
+  assert.equal(bootAdmin.summary.list.num, 2, 'unfenced roles keep the whole (team-scoped) book');
+  _clearSummaryCache();
 });
 
 test('portalAddComment writes the three follow-up tables as the signed-in name', async () => {
@@ -2279,6 +2391,36 @@ test('the Stock window is what you hold: an agent their own, an RSM their own, t
   assert.deepEqual(imeisOf(desk), ['351000000000001', '351000000000002', '351000000000003', '351000000000004',
     '351000000000005', '861000000000001', '861000000000002'], 'everything unsold, and never the sold one');
   assert.deepEqual(imeisOf(await _FNS.transferStock(d, STORE, { q: 'ITEL' })), ['861000000000001', '861000000000002']);
+});
+
+/* stockAllow's RSM branch used to be a ONE-LEVEL managerIndex check ("is this agent's
+   manager literally me"), which was already quietly wrong the day a TEAM LEADER stood
+   between an RSM and their agents -- the agent's `manager` names the team leader, not the
+   RSM, so the RSM's fence would miss them. TEAM LEADER arriving as a real role (2026-09-18,
+   alongside the credit fence) made this the day that gap would start mattering, so
+   stockAllow now walks salesTree.descendants -- every depth, not one rung. */
+test('stockAllow: RSM and TEAM LEADER see everyone beneath them at ANY depth, not just direct reports', async () => {
+  const d = trDb({
+    hoop_agents: [
+      { name: 'RSM DAR', role: 'Regional_Manager', branch: 'Dar es salaam', phone: '0700000001' },
+      { name: 'TEAM LEAD DAR', role: 'Team_Leader', branch: 'Dar es salaam', manager: 'RSM DAR', phone: '0700000020' },
+      { name: 'AGENT FIVE', role: 'Field_Officer', branch: 'Dar es salaam', manager: 'TEAM LEAD DAR', phone: '0700000015' },
+    ],
+    old_stock: [
+      { imei: '861000000000009', item: 'ITEL A100', agent: 'AGENT FIVE', rsm: 'RSM DAR', age_days: 10, as_of: '2026-09-10' },
+    ],
+    access_codes: [
+      { code: 'R1', name: 'RSM DAR', role: 'RSM' },
+      { code: 'T1', name: 'TEAM LEAD DAR', role: 'TEAM LEADER' },
+    ],
+  });
+  const TL_DAR = { code: 'T1', name: 'TEAM LEAD DAR', role: 'TEAM LEADER', teams: null, tabs: TR_TABS, readOnly: false };
+  const rsm = await _FNS.oldStock(d, RSM_DAR, {});
+  assert.ok(rsm.rows.some(r => r.imei === '861000000000009'),
+    'AGENT FIVE reports to the team leader who reports to the RSM -- salesTree walks both rungs');
+  const tl = await _FNS.oldStock(d, TL_DAR, {});
+  assert.ok(tl.rows.some(r => r.imei === '861000000000009'), 'and TEAM LEADER, the new role, sees its own agent directly');
+  assert.equal(tl.fence.role, 'TEAM LEADER');
 });
 
 test('the Send form\'s vocabulary: users grouped by role, every model the stock names, and the sender is you', async () => {
