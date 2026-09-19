@@ -9674,8 +9674,10 @@ function trPdfDoc_(t, sigs){
   var W=595,H=842,M=36,AVAIL=W-2*M;          // A4 portrait, in points
   var RH=13, FS=8, HFS=7.6, BOT=M+18;
   var imgs=(sigs||[]).filter(Boolean);
+  /* "remove bei na jumla on sending summary columns since idadi is enough": the price
+     columns still ride on each item (NEW STOCK, commission) but are no longer printed. */
   var cols=[['S/N','r',26],['IMEI','l',0],['MODELI','l',0],['ILIKUWA KWA','l',0],['WAPI','l',0],
-            ['IDADI','r',32],['BEI','r',56],['JUMLA','r',62]];
+            ['IDADI','r',32]];
   var fixed=0; cols.forEach(function(c){ fixed+=c[2]; });
   var free=Math.max(120, AVAIL-fixed), share=[0.30,0.25,0.26,0.19], si=0;
   var cw=cols.map(function(c){ return c[2] || free*share[si++]; });
@@ -9683,7 +9685,7 @@ function trPdfDoc_(t, sigs){
   var align=cols.map(function(c){ return c[1]; });
   var rows=(t.items||[]).map(function(it,i){
     return [String(i+1), String(it.imei||''), String(it.item||'-'), String(it.prevHolder||'-'),
-      trSrcWord_(it.source), money(it.qty), money(it.price), money(it.subtotal)];
+      trSrcWord_(it.source), money(it.qty)];
   });
 
   var streams=[], o=null, y=0, pageNo=0;
@@ -9713,7 +9715,7 @@ function trPdfDoc_(t, sigs){
              ['Hali / Status',t.status==='accepted'?'Imekubaliwa / Accepted':t.status==='declined'?'Imekataliwa / Declined':'Inasubiri / Waiting']];
       var R=[['Kutoka / From',(t.fromName||'')+(t.fromRole?' ('+t.fromRole+')':'')+(t.fromPhone?' - '+t.fromPhone:'')],
              ['Kwenda / To',(t.toName||'')+(t.toRole?' ('+t.toRole+')':'')+(t.toPhone?' - '+t.toPhone:'')],
-             ['Simu / Handsets',money((t.items||[]).length)+' - jumla '+money(t.totalAmount)]];
+             ['Simu / Handsets',money((t.items||[]).length)]];
       if(t.status==='accepted') R.push(['Imekubaliwa / Accepted',clock(t.acceptedAt)+(t.moved!=null?' - '+money(t.moved)+' zimehama':'')]);
       if(t.status==='declined') R.push(['Imekataliwa / Declined',(clock(t.declinedAt)||'')+' - '+(t.declineReason||'')]);
       var half=AVAIL/2-6, fy=y;
@@ -9751,7 +9753,6 @@ function trPdfDoc_(t, sigs){
      width and prints as "Ju.." -- the one line on the sheet that is read before any other. */
   o.push(text('Jumla / Total - simu '+money(rows.length),M+3,y+0.5,FS,true));
   o.push(cell(money(t.totalQty),5,y+0.5,FS,true));
-  o.push(cell(money(t.totalAmount),7,y+0.5,FS,true));
   y-=RH+10;
 
   /* THE SIGNATURES, kept whole: rather than let a box break across sheets, the block moves to
@@ -9850,15 +9851,18 @@ function trView(m, id){
       +(t.note?'<div class="mut" style="margin-bottom:10px">'+esc(t.note)+'</div>':'')
       /* S/N ON THE LEFT -- "add S/N column on left": a printed list of forty serials is counted
          and ticked off against the box by that number, so it is the first thing on the row. */
+      /* "remove bei na jumla on sending summary columns since idadi is enough": Sipho's
+         summary is a count of handsets moving, not their value -- the price columns stay
+         stamped on the item (NEW STOCK, commission) but are no longer printed here. */
       +'<div class="scroll"><table><thead><tr><th class="r">S/N</th><th>IMEI</th><th>MODELI</th><th>ILIKUWA KWA</th><th>WAPI</th>'
-      +'<th class="r">IDADI</th><th class="r">BEI</th><th class="r">JUMLA</th></tr></thead><tbody>'
+      +'<th class="r">IDADI</th></tr></thead><tbody>'
       +t.items.map(function(x,i){
         return '<tr><td class="r mut">'+(i+1)+'</td><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(x.imei)+'</td>'
           +'<td>'+esc(x.item||'—')+'</td><td>'+esc(x.prevHolder||'—')+'</td><td>'+trSrc(x.source)+'</td>'
-          +'<td class="r">'+money(x.qty)+'</td><td class="r">'+money(x.price)+'</td><td class="r">'+money(x.subtotal)+'</td></tr>';
+          +'<td class="r">'+money(x.qty)+'</td></tr>';
       }).join('')
       +'</tbody><tfoot><tr class="totrow"><td colspan="5"><b>Jumla / Total</b> · simu '+money(t.items.length)+'</td>'
-      +'<td class="r"><b>'+money(t.totalQty)+'</b></td><td></td><td class="r"><b>'+money(t.totalAmount)+'</b></td></tr></tfoot></table></div>'
+      +'<td class="r"><b>'+money(t.totalQty)+'</b></td></tr></tfoot></table></div>'
       +'<div class="row" style="gap:20px;flex-wrap:wrap;margin-top:16px;align-items:flex-start">'
       +(t.threeWay?trSigBlock_('Sahihi ya stoo / Desk signature','desk',t):'')
       +trSigBlock_('Sahihi ya anayetoa / Sender signature','sender',t)
