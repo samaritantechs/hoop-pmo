@@ -9255,68 +9255,87 @@ function drawAgents(m){
 }
 
 /* ---------- stock movement: what got away after every upload ---------- */
-var MV={hoopA:'',hoopB:'',watuA:'',watuB:''};
+/* FETCH/RENDER SPLIT -- the server has no cache of its own here (see the fix's own note:
+   "no server cache"), so the .mvT checkboxes re-fetching on every tick was the whole cost
+   [measured 7 trips / 6,023 rows per tick], for a control that only chooses which of the
+   FOUR reports already in `data` to lay out -- nothing that changes which rows exist. MV
+   now holds that payload; the checkboxes call moveRender(m) directly, and only #mvGo
+   (a real date change, or an explicit re-check of the same ones) fetches again. */
+var MV={hoopA:'',hoopB:'',watuA:'',watuB:'',data:null,at:0};
 /* Which of the four movement reports are on screen. The pane holds a LOT of rows, so
    the reports are chosen with chips and laid side by side (left to right) instead of
    stacked -- "finding the next report requires a lot of scrolling" (the owner). The
    tiles are the same chooser: click one to show just that report. */
 var MVSHOW={leftHoop:true,newInHoop:true,newWatu:true,leftWatu:true};
 function drawMove(m){
+  // Held for five minutes so simply reopening this tab does not cost a trip the checkboxes
+  // themselves no longer need -- #mvGo always forces a fresh one, below.
+  var fresh=MV.data&&(Date.now()-MV.at)<5*60000;
+  if(fresh) return moveRender(m);
   m.innerHTML='<div class="card"><h2>Stock movement</h2><div class="sk"></div></div>';
   srv('stockMovement',{hoopA:MV.hoopA,hoopB:MV.hoopB,watuA:MV.watuA,watuB:MV.watuB}).then(function(d){
-    var c=d.counts||{};
-    /* HONEST NAMES: the Watu side diffs two DAILY LOCKED LISTS, not Watu's whole loan
-       book -- "new" means newly locked, "left" means no longer on the locked list
-       (paid / back online / loan closed). The HOOP side diffs two Aged Stock reports. */
-    var DEFS=[
-      {k:'leftHoop', t:'Left the Hoop store', s:'in '+(d.hoopA||'—')+', gone by '+(d.hoopB||'—'),
-        rows:d.leftHoop||[], cols:[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']], color:'var(--bad)'},
-      {k:'newInHoop', t:'New in the Hoop store', s:'appeared by '+(d.hoopB||'—'),
-        rows:d.newInHoop||[], cols:[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']], color:''},
-      {k:'newWatu', t:'New on the locked list', s:'locked by '+(d.watuB||'—')+' — just got locked, call first',
-        rows:d.newWatu||[], cols:[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']], color:'var(--bad)'},
-      {k:'leftWatu', t:'Left the locked list', s:'on '+(d.watuA||'—')+', off by '+(d.watuB||'—')+' — paid or back online',
-        rows:d.leftWatu||[], cols:[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']], color:'var(--ok)'},
-    ];
-    var shown=DEFS.filter(function(x){return MVSHOW[x.k];});
-    function tbl(x){
-      return '<div class="card" style="flex:1 1 '+(shown.length>1?'340px':'100%')+';min-width:300px;margin:0">'
-        +'<h2>'+esc(x.t)+' — '+money(x.rows.length)+'</h2><div class="mut" style="margin-bottom:6px">'+esc(x.s)+'</div>'
-        +'<div style="overflow-x:auto;max-height:420px;overflow-y:auto"><table><thead><tr>'
-        +x.cols.map(function(cc){return '<th>'+cc[0]+'</th>';}).join('')+'</tr></thead><tbody>'
-        +(x.rows.length?x.rows.map(function(r){
-          return '<tr>'+x.cols.map(function(cc){return '<td>'+esc(r[cc[1]]||'—')+'</td>';}).join('')+'</tr>';
-        }).join(''):'<tr><td colspan="'+x.cols.length+'" class="mut">Nothing moved between these dates.</td></tr>')
-        +'</tbody></table></div></div>';
-    }
-    m.innerHTML=
-      '<div class="card"><h2>Stock movement — the difference after every upload</h2>'
-      +'<div class="mut" style="margin-bottom:8px">HOOP store compares two Aged Stock uploads; the Watu side compares two daily LOCKED lists. Defaults are the newest two of each — change any date to check a different gap. Tick which reports to see; they sit side by side.</div>'
-      +'<div class="row">'
-      +'<span class="mut">Hoop store:</span><input class="inp" type="date" id="mvHA" value="'+esc(d.hoopA||'')+'" style="flex:0 1 140px"><span class="mut">→</span><input class="inp" type="date" id="mvHB" value="'+esc(d.hoopB||'')+'" style="flex:0 1 140px">'
-      +'<span class="mut" style="margin-left:10px">Locked lists:</span><input class="inp" type="date" id="mvWA" value="'+esc(d.watuA||'')+'" style="flex:0 1 140px"><span class="mut">→</span><input class="inp" type="date" id="mvWB" value="'+esc(d.watuB||'')+'" style="flex:0 1 140px">'
-      +'<button class="btn sm ghost" id="mvGo">Show</button></div>'
-      +'<div class="row" style="gap:6px 14px;flex-wrap:wrap">'
-      +DEFS.map(function(x){
-        return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0;cursor:pointer">'
-          +'<input type="checkbox" class="mvT" value="'+x.k+'"'+(MVSHOW[x.k]?' checked':'')+'> '
-          +x.t+' <b'+(x.color?' style="color:'+x.color+'"':'')+'>'+money(c[x.k])+'</b></label>';
-      }).join('')+'</div>'
-      +((d.hoopA||d.hoopB)?'':'<div class="mut" style="margin-top:8px">No Aged Stock uploads yet — the Hoop-store side fills the day Sipho uploads two reports.</div>')
-      +'</div>'
-      +'<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">'
-      +shown.map(tbl).join('')
-      +(shown.length?'':'<div class="card" style="flex:1;margin:0"><div class="mut">Tick at least one report above.</div></div>')
-      +'</div>';
-    $('#mvGo').onclick=function(){
-      MV.hoopA=$('#mvHA').value; MV.hoopB=$('#mvHB').value;
-      MV.watuA=$('#mvWA').value; MV.watuB=$('#mvWB').value;
-      drawMove(m);
-    };
-    $all('.mvT',m).forEach(function(cb){
-      cb.onchange=function(){ MVSHOW[cb.value]=cb.checked; drawMove(m); };
-    });
+    MV.data=d; MV.at=Date.now();
+    moveRender(m);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function moveRender(m){
+  var d=MV.data; if(!d) return;
+  var c=d.counts||{};
+  /* HONEST NAMES: the Watu side diffs two DAILY LOCKED LISTS, not Watu's whole loan
+     book -- "new" means newly locked, "left" means no longer on the locked list
+     (paid / back online / loan closed). The HOOP side diffs two Aged Stock reports. */
+  var DEFS=[
+    {k:'leftHoop', t:'Left the Hoop store', s:'in '+(d.hoopA||'—')+', gone by '+(d.hoopB||'—'),
+      rows:d.leftHoop||[], cols:[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']], color:'var(--bad)'},
+    {k:'newInHoop', t:'New in the Hoop store', s:'appeared by '+(d.hoopB||'—'),
+      rows:d.newInHoop||[], cols:[['Serial / IMEI','serial'],['Item','item'],['Holder','holder']], color:''},
+    {k:'newWatu', t:'New on the locked list', s:'locked by '+(d.watuB||'—')+' — just got locked, call first',
+      rows:d.newWatu||[], cols:[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']], color:'var(--bad)'},
+    {k:'leftWatu', t:'Left the locked list', s:'on '+(d.watuA||'—')+', off by '+(d.watuB||'—')+' — paid or back online',
+      rows:d.leftWatu||[], cols:[['IMEI','imei'],['Customer','name'],['Agent','agent'],['Model','model']], color:'var(--ok)'},
+  ];
+  var shown=DEFS.filter(function(x){return MVSHOW[x.k];});
+  function tbl(x){
+    return '<div class="card" style="flex:1 1 '+(shown.length>1?'340px':'100%')+';min-width:300px;margin:0">'
+      +'<h2>'+esc(x.t)+' — '+money(x.rows.length)+'</h2><div class="mut" style="margin-bottom:6px">'+esc(x.s)+'</div>'
+      +'<div style="overflow-x:auto;max-height:420px;overflow-y:auto"><table><thead><tr>'
+      +x.cols.map(function(cc){return '<th>'+cc[0]+'</th>';}).join('')+'</tr></thead><tbody>'
+      +(x.rows.length?x.rows.map(function(r){
+        return '<tr>'+x.cols.map(function(cc){return '<td>'+esc(r[cc[1]]||'—')+'</td>';}).join('')+'</tr>';
+      }).join(''):'<tr><td colspan="'+x.cols.length+'" class="mut">Nothing moved between these dates.</td></tr>')
+      +'</tbody></table></div></div>';
+  }
+  m.innerHTML=
+    '<div class="card"><h2>Stock movement — the difference after every upload</h2>'
+    +'<div class="mut" style="margin-bottom:8px">HOOP store compares two Aged Stock uploads; the Watu side compares two daily LOCKED lists. Defaults are the newest two of each — change any date to check a different gap. Tick which reports to see; they sit side by side.</div>'
+    +'<div class="row">'
+    +'<span class="mut">Hoop store:</span><input class="inp" type="date" id="mvHA" value="'+esc(d.hoopA||'')+'" style="flex:0 1 140px"><span class="mut">→</span><input class="inp" type="date" id="mvHB" value="'+esc(d.hoopB||'')+'" style="flex:0 1 140px">'
+    +'<span class="mut" style="margin-left:10px">Locked lists:</span><input class="inp" type="date" id="mvWA" value="'+esc(d.watuA||'')+'" style="flex:0 1 140px"><span class="mut">→</span><input class="inp" type="date" id="mvWB" value="'+esc(d.watuB||'')+'" style="flex:0 1 140px">'
+    +'<button class="btn sm ghost" id="mvGo">Show</button></div>'
+    +'<div class="row" style="gap:6px 14px;flex-wrap:wrap">'
+    +DEFS.map(function(x){
+      return '<label style="display:flex;align-items:center;gap:5px;font-size:12.5px;margin:0;cursor:pointer">'
+        +'<input type="checkbox" class="mvT" value="'+x.k+'"'+(MVSHOW[x.k]?' checked':'')+'> '
+        +x.t+' <b'+(x.color?' style="color:'+x.color+'"':'')+'>'+money(c[x.k])+'</b></label>';
+    }).join('')+'</div>'
+    +((d.hoopA||d.hoopB)?'':'<div class="mut" style="margin-top:8px">No Aged Stock uploads yet — the Hoop-store side fills the day Sipho uploads two reports.</div>')
+    +'</div>'
+    +'<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">'
+    +shown.map(tbl).join('')
+    +(shown.length?'':'<div class="card" style="flex:1;margin:0"><div class="mut">Tick at least one report above.</div></div>')
+    +'</div>';
+  // A real date change, or a deliberate re-check of the same ones -- either way #mvGo
+  // means "ask again", so it drops the held payload rather than trusting its freshness.
+  $('#mvGo').onclick=function(){
+    MV.hoopA=$('#mvHA').value; MV.hoopB=$('#mvHB').value;
+    MV.watuA=$('#mvWA').value; MV.watuB=$('#mvWB').value;
+    MV.data=null;
+    drawMove(m);
+  };
+  // NO FETCH HERE. Which reports to lay out is a choice about rows already in MV.data.
+  $all('.mvT',m).forEach(function(cb){
+    cb.onchange=function(){ MVSHOW[cb.value]=cb.checked; moveRender(m); };
+  });
 }
 
 /* =========================================================================================
