@@ -9,6 +9,7 @@ import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signi
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList,
   TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree } from './_lib/call-core.js';
+import { getOldStockAux, getAgingAux, memoStock, clearStockIndex } from './_lib/stock-index.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -939,8 +940,15 @@ const ageToday = (r, todayK) => (r.age_days == null ? null
   : num(r.age_days) + Math.max(0, daysApart(String(r.as_of || '').slice(0, 10), todayK)));
 
 /** Every un-enrolled handset, aged to today. One reader, so the pane, the stock report and any
-    later caller cannot each hold a different idea of what is still outstanding. */
-async function oldStockIndex(db) {
+    later caller cannot each hold a different idea of what is still outstanding.
+    Budget: 1 fresh old_stock read (never memoised -- see stock-index.js's header) + the
+    shared aux memo (devices/watu_loans/hoop_agents/hoop_sales/stock_audit -- 5 trips on a
+    miss, 0 on a hit within the 20-30s TTL). `opts.agents`, when a caller has already read
+    hoop_agents this request with a wider column set (oldStock/newStock, FIX 2 of the
+    postgres-war audit), is used instead of the memo's own narrower fetch; `opts.fresh`
+    forces the whole aux memo to re-read (stockAgingIndex passes this through for
+    stockDecide's live SOP-E gate). */
+async function oldStockIndex(db, opts) {
   const todayK = todayKey();
   let rows = [];
   let notReady = false;
@@ -966,17 +974,20 @@ async function oldStockIndex(db) {
     } else if (tableMissing(e)) notReady = true;
     else throw e;
   }
-  /* WHAT HAS SINCE BEEN FOUND. Every read is best-effort: a missing devices table means we have
-     locked nothing, which is the honest reading, not a reason to refuse the list. */
-  const locked = new Set();
+  /* WHAT HAS SINCE BEEN FOUND -- devices (locked), watu_loans, hoop_agents, hoop_sales and
+     stock_audit, all read through the shared per-db memo (api/_lib/stock-index.js) instead
+     of fetched fresh here: this used to be five trips at every one of nine call sites, and
+     one "submit a stock request" click built it twice. Every read inside the memo is still
+     best-effort -- a missing devices table means we have locked nothing, which is the honest
+     reading, not a reason to refuse the list -- see the memo's own header for why. */
+  const aux = await getOldStockAux(db, opts);
+  const locked = aux.locked;
   const sold = new Set();
-  try {
-    for (const d of await fetchAll(() => db.from('devices').select('imei'))) locked.add(String(d.imei));
-  } catch (ignored) { /* nothing enrolled yet */ }
 
   /* SOLD MEANS SOLD, WHICHEVER BOOK SAYS SO -- and it stays sold after the book forgets.
      -------------------------------------------------------------------------------------
-     Three reads, and the third is the one that makes the hand-off permanent:
+     Three reads (now three memoised feeds), and the third is the one that makes the
+     hand-off permanent:
 
        watu_loans   the Watu deck
        hoop_sales   our own shop's export -- a different upload, the same event. A handset
@@ -989,9 +1000,6 @@ async function oldStockIndex(db) {
 
      Membership in stock_audit is not itself evidence -- that table also holds handsets merged
      off the stock report alone -- so it counts only where a sale was actually captured. */
-  const feedImeis = async (table, cols) => {
-    try { return await fetchAll(() => db.from(table).select(cols)); } catch (ignored) { return []; }
-  };
   /* WHERE A HOLDER WORKS, built from the same read that answers "has it sold".
      -------------------------------------------------------------------------------------
        "the location we used as in PCOs calling not the kinondoni default"
@@ -1013,16 +1021,15 @@ async function oldStockIndex(db) {
     if (!t) { t = new Map(); branchTally.set(k, t); }
     t.set(b, (t.get(b) || 0) + 1);
   };
-  /* Widened to carry the agent and the branch, and narrowed again on a database that predates
-     the offline-queue migration -- the sold-or-not answer must not depend on a column that
-     arrived later. */
-  let loans = await feedImeis('watu_loans', 'imei, agent, branch');
-  if (!loans.length) loans = await feedImeis('watu_loans', 'imei');
-  for (const l of loans) { sold.add(String(l.imei)); noteBranch(l.agent, l.branch); }
+  /* The widen-then-narrow fallback (a database that predates the offline-queue migration)
+     now lives inside getOldStockAux -- see stock-index.js. */
+  for (const l of aux.loans) { sold.add(String(l.imei)); noteBranch(l.agent, l.branch); }
   /* The staff register answers first where it has been filled in: somebody typed that on
-     purpose, and a deck is a pile of receipts. */
+     purpose, and a deck is a pile of receipts. A caller that already read hoop_agents this
+     request with the wider column set every stock fn needs (oldStock/newStock, FIX 2) hands
+     it here instead of a second fetch; anybody else gets the memoised standalone read. */
   const staffBranch = new Map();
-  for (const a of await feedImeis('hoop_agents', 'name, branch')) {
+  for (const a of (opts && opts.agents) || aux.agents) {
     const k = nameKey(a.name || '');
     const b = String(a.branch == null ? '' : a.branch).trim();
     if (k && b && !staffBranch.has(k)) staffBranch.set(k, b);
@@ -1062,8 +1069,8 @@ async function oldStockIndex(db) {
     const b = t ? commonest(t) : null;
     return b ? { location: b, locFrom: 'sales', locNew: true } : { location: '', locFrom: '', locNew: false };
   };
-  for (const s of await feedImeis('hoop_sales', 'imei')) sold.add(String(s.imei));
-  for (const r of await feedImeis('stock_audit', 'imei, sale_date, customer, price')) {
+  for (const s of aux.sales) sold.add(String(s.imei));
+  for (const r of aux.audit) {
     if (stampedSale(r)) sold.add(String(r.imei));
   }
 
@@ -1088,9 +1095,12 @@ async function oldStockIndex(db) {
 /* THE AGING STOCK TRACKER (SOP E.3), read off the shop's OWN daily upload.
    hoop_aged_stock already carries age_days per serial per agent, so the gate and the tracker
    are the same file -- never a second private idea of what "old" means. The newest as_of is
-   the tracker: an aging report from last week is not evidence about this morning. */
-async function stockAgingIndex(db) {
-  const policy = await stockPolicy(db);
+   the tracker: an aging report from last week is not evidence about this morning.
+   Budget: the shared aux memo's hoop_aged_stock + policy reads (0 trips on a hit) plus
+   oldStockIndex's own cost (see there). `opts.fresh` bypasses BOTH -- stockDecide passes it
+   so the SOP-E release decision is never made against a memo a deviceEnrol just outran. */
+async function stockAgingIndex(db, opts) {
+  const fresh = !!(opts && opts.fresh);
   /* THE AGEING NOW COMES FROM THE TWO STOCK PANES, not from a daily upload.
      -------------------------------------------------------------------------------------
        "So use these two navs to update data of aging stock in stock reports -- not uploading
@@ -1104,11 +1114,8 @@ async function stockAgingIndex(db) {
      somebody does paste is more current than a list from last month. Dropping it outright
      would throw away the one feed that can still correct this, and neither list is a superset
      of the other. Where both name a serial, the newer as_of wins. */
+  const { aged: uploaded, policy } = await getAgingAux(db, { fresh }, stockPolicy);
   const todayK = todayKey();
-  let uploaded = [];
-  try {
-    uploaded = await fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, item, age_days, as_of'));
-  } catch (e) { uploaded = []; }
   let asOf = null;
   for (const r of uploaded) if (r.as_of && (!asOf || String(r.as_of) > String(asOf))) asOf = String(r.as_of).slice(0, 10);
   const fromUpload = uploaded.filter(r => String(r.as_of).slice(0, 10) === asOf);
@@ -1117,7 +1124,7 @@ async function stockAgingIndex(db) {
      whole reason it can stand in for a daily file. */
   let fromOld = [];
   try {
-    const idx = await oldStockIndex(db);
+    const idx = await oldStockIndex(db, { fresh });
     fromOld = idx.open.map(r => ({ serial: r.imei, agent: r.agent, item: r.item,
       age_days: r.age, as_of: todayK }));
   } catch (ignored) { fromOld = []; }
@@ -1976,15 +1983,22 @@ function stockScopeRole(user) {
     the one-level check would miss them. salesTree.descendants walks the whole subtree, so
     an RSM sees their team leaders' agents too -- a superset of what the one-level check
     ever found, never a narrower one. */
-async function stockAllow(db, user) {
+/* Budget: 0 trips for STORE/ADMIN (returns null before any read); for RSM/TEAM LEADER, 1
+   hoop_agents read -- or 0 when `opts.agents` (a caller that already read it this request
+   with the wider column set, FIX 2 of the postgres-war audit) is handed in instead. */
+async function stockAllow(db, user, opts) {
   const role = stockScopeRole(user);
   if (!role) return null;
   const me = nameKey(user.name);
   const mine = new Set(me ? [me] : []);
   if ((role === 'RSM' || role === 'TEAM LEADER') && me) {
-    let agents = [];
-    try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
-    catch (ignored) { agents = []; }
+    // A pre-fetched register (oldStock/newStock) skips this fetch entirely; anybody calling
+    // without one (oldStockHolder, oldStockRound) keeps the standalone read, unchanged.
+    let agents = opts && opts.agents;
+    if (!agents) {
+      try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
+      catch (ignored) { agents = []; }
+    }
     for (const k of salesTree(agents).descendants(me)) mine.add(k);
   }
   const fn = (holder, agent, rsm) => {
@@ -2148,7 +2162,14 @@ async function locateStock(db, imeis) {
     `toRoleFallback` exists only for a pre-flow-migration document with no to_role column at
     all -- transferAccept passes the accepting user's own role, exactly as it always guessed;
     transferSign's three-way completion can never hit this case (a three-way document cannot
-    exist before the flow migration that gives it a to_role), so it passes ''. */
+    exist before the flow migration that gives it a to_role), so it passes ''.
+
+    NOT a clearStockIndex(db) buster (checked against every table this writes, postgres-war
+    FIX 1): it moves devices.holder and old_stock.agent/rsm, never inserting or deleting a
+    row in either -- the memo's `devices` entry is a Set of which IMEIs EXIST, unaffected by
+    a holder changing, and old_stock is never memoised at all (read fresh every time, see
+    stock-index.js's header). Its own hoop_agents read (managerIndex, below) is a plain,
+    unmemoised fetch, same as before. */
 async function trMoveStock(db, t, actorName, toRoleFallback) {
   /* WHOSE HANDS IT GOES INTO. The receiver's name -- unless the receiver is the store desk,
      whose stock the register has always written under SUPER AGENT ("role store =
@@ -2237,7 +2258,11 @@ function mintStamp() {
   mintTick = (mintTick + 1) % 1000;
   return new Date().toISOString().replace('Z', String(mintTick).padStart(3, '0') + 'Z');
 }
-async function syncStaffFromStock(db, user, pairs) {
+/* opts.agents / opts.codes: a caller that has already read hoop_agents / access_codes this
+   request (oldStock/newStock, FIX 2 of the postgres-war audit) hands them here instead of
+   the two standalone reads below -- each still falls back to its own fetch when called
+   without one. */
+async function syncStaffFromStock(db, user, pairs, opts) {
   const out = { staffAdded: 0, codesAdded: 0, noPhone: 0, note: '', rolesCreated: [], rolesUnconfigured: [] };
   if (!user || isReadOnly(user)) return out;
   try {
@@ -2259,11 +2284,15 @@ async function syncStaffFromStock(db, user, pairs) {
     if (!people.size) return out;
 
     // 2. What the register and the codes already know.
-    let staff = [], codes = [];
-    try { staff = await fetchAll(() => db.from('hoop_agents').select('phone, name, role')); }
-    catch (e) { if (!tableMissing(e)) throw e; staff = null; }
-    try { codes = await fetchAll(() => db.from('access_codes').select('code, name, role')); }
-    catch (e) { if (!tableMissing(e)) throw e; codes = null; }
+    let staff = opts && opts.agents, codes = opts && opts.codes;
+    if (!staff) {
+      try { staff = await fetchAll(() => db.from('hoop_agents').select('phone, name, role')); }
+      catch (e) { if (!tableMissing(e)) throw e; staff = null; }
+    }
+    if (!codes) {
+      try { codes = await fetchAll(() => db.from('access_codes').select('code, name, role')); }
+      catch (e) { if (!tableMissing(e)) throw e; codes = null; }
+    }
 
     // 3. Staff rows: only for a person with a phone (the register's key) the register lacks.
     //    Stored the way the enrolment desk stores it (phone0: 0 + nine digits), matched the way
@@ -2797,6 +2826,273 @@ async function weekOf(db, user, args, table, col) {
   // forward into a week that has not happened.
   const from = (latest && mondayOf(latest) < thisMon) ? mondayOf(latest) : thisMon;
   return { from, to: dayShift(from, 6), thisWeek: from === thisMon, fellBack: from !== thisMon };
+}
+
+/** THE FEEDS BEHIND newStock's join, memoised 5 minutes (postgres-war FIX 3; trendCache-style,
+    see stockAccount ~4046): watu_loans, hoop_sales, hoop_agents, hoop_aged_stock and old_stock
+    are Sipho's and Watu's own books, and none of them holds a LIVE fact -- they change on an
+    upload or an enrolment, not between one click and the next, so five reads become one per
+    TTL window shared by every caller (no fence to key on: they are unscoped feeds, read whole,
+    the same for everyone). Busted by clearStockIndex(db) -- deviceEnrol, deviceDelete, an
+    upload's agents/aged-stock/sales imports.
+
+    DEVICES AND stock_audit ARE DELIBERATELY NOT IN HERE. newStock's own header is explicit --
+    "THE STATE CHANGES, SO IT IS NEVER STAMPED... read live from `devices` on every open" -- and
+    it is also the table this very function WRITES to, so it has to see its own writes back on
+    the very next call (the idempotent-stamp test) with nothing else in between. Caching either
+    would mean an achia five minutes ago still reading as locked, or a stamp that keeps writing
+    the same row every open because it never saw itself land. Both stay a fresh, per-call read;
+    see newStockBuild. */
+async function newStockFeeds(db, opts) {
+  const feed = async (table, cols) => {
+    try { return await fetchAll(() => db.from(table).select(cols)); } catch (ignored) { return []; }
+  };
+  const { value } = await memoStock(db, 'newstockFeeds', 5 * 60000, opts, async () => {
+    const [watu, sales, agents, aged, olds] = await Promise.all([
+      feed('watu_loans', 'imei, client_name, client_mobile, agent, team, shop, model, '
+        + 'model_details, disbursed_date, price, guarantor_name, guarantor_phone, branch'),
+      feed('hoop_sales', 'imei, sale_date, branch, agent, client_name, client_phone, model, '
+        + 'commission_agent, commission_phone, price'),
+      feed('hoop_agents', 'phone, name, role, branch, manager, active'),
+      feed('hoop_aged_stock', 'serial, agent, item'),
+      feed('old_stock', 'imei, item, agent, agent_phone, rsm, rsm_phone'),
+    ]);
+    return { watu, sales, agents, aged, olds };
+  });
+  return value;
+}
+
+/** newStock's own join. devices and stock_audit are read FRESH on every call (see
+    newStockFeeds's header for why); the other five tables come from the shared 5-minute memo.
+    Everything past that point is exactly what newStock used to do inline, in the same order,
+    with the same fallbacks. */
+async function newStockBuild(db, user) {
+  const at = new Date().toISOString();
+  const now = Date.now();
+
+  let cur = [];
+  let notReady = false;
+  try {
+    cur = await fetchAll(() => db.from('stock_audit').select(NEWSTOCK_COLS));
+  } catch (e) {
+    if (!tableMissing(e)) throw e;
+    /* NOT AN EMPTY AUDIT -- an audit that cannot be saved yet. The pane still computes and
+       still shows every row, because the joins underneath work perfectly well; what it
+       cannot do is REMEMBER, which is the one thing worth saying out loud. */
+    notReady = true;
+  }
+  const stampedBy = new Map(cur.map(r => [String(r.imei), r]));
+
+  /* THE POPULATION IS THE REGISTER, not the sales books: "our existing imeis since we
+     started locking on our own". A phone nobody locked is somebody else's audit. */
+  /* WHERE IT WAS WHEN IT LAST SPOKE, on the same row as what it is doing.
+     -----------------------------------------------------------------------------------
+       "At hali/status column, below status, add the second in one [location coordinate
+        link] so that we can click to view where the phone is, and always stamp the latest
+        read coordinates whenever the phone pings the system. So even if achia we'll always
+        find the latest ping coordinate location."
+
+     NOTHING NEW IS STAMPED HERE, because the handset has been doing it since the location
+     migration: every beat writes last_lat/last_lng and, separately, WHEN that fix was taken.
+     The two timestamps are never collapsed -- a phone that beat a minute ago can be carrying
+     a fix from Tuesday -- so the pane shows the fix's own age rather than the beat's.
+
+     AND ACHIA DOES NOT ERASE IT. deviceSetState writes state, reason, who and when; it has
+     never touched the position columns, so the last place a released handset was seen
+     survives the release. That is the case the owner asked about and the one that matters
+     most: a phone let go is a phone nobody is tracking any more, and its last fix is all
+     that is left of it. */
+  const DEV_CORE = 'imei, item, holder, state, state_by, state_at, last_seen, customer';
+  const DEV_LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
+  let devs = [];
+  let noDevices = false;
+  let hasLoc = true;
+  try {
+    devs = await fetchAll(() => db.from('devices').select(DEV_CORE + DEV_LOC));
+  } catch (e) {
+    /* THE COLUMN CHECK COMES FIRST, and the order is the whole of it. tableMissing() matches
+       a missing COLUMN as well as a missing table -- deliberately, because for most callers
+       both mean "run the migration" -- so asking it first would answer a missing `last_lat`
+       with "the devices register does not exist". That is a false alarm about the wrong
+       thing, on the pane somebody opens when stock has gone missing. */
+    if (/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) {
+      /* The audit without a map is still the audit; the audit without itself is an outage.
+         PostgREST refuses a whole select over one unknown column, so a deployment that has
+         not run the location migration drops back rather than going dark. */
+      hasLoc = false;
+      devs = await fetchAll(() => db.from('devices').select(DEV_CORE));
+    } else if (tableMissing(e)) noDevices = true;
+    else throw e;
+  }
+
+  const { watu, sales, agents, aged, olds } = await newStockFeeds(db);
+
+  /* THE EARLIEST RECEIPT WINS where the shop wrote more than one for an IMEI. A later
+     receipt against the same handset is a top-up or a correction; the ORIGINAL sale is the
+     one this audit is about, and "first catch" has to mean the first sale, not the first row
+     the database happened to return. */
+  const salesBy = new Map();
+  for (const s of sales) {
+    const k = String(s.imei || '');
+    if (!k) continue;
+    const had = salesBy.get(k);
+    if (!had || String(s.sale_date || '9999') < String(had.sale_date || '9999')) salesBy.set(k, s);
+  }
+  const ctx = {
+    watu: new Map(watu.filter(r => r.imei).map(r => [String(r.imei), r])),
+    sales: salesBy,
+    aged: new Map(aged.filter(r => r.serial).map(r => [String(r.serial), r])),
+    byName: new Map(agents.filter(r => r.name).map(r => [nameKey(r.name), r])),
+    byPhone: new Map(agents.filter(r => r.phone).map(r => [pnorm(r.phone), r])),
+    tree: salesTree(agents),
+  };
+
+  /* AND THE ONES THAT SOLD WITHOUT EVER BEING LOCKED.
+     -----------------------------------------------------------------------------------
+       "If a phone imei once reads in sales [in watu deck] and it was in old stock not in
+        new stock, move its column data needed into NEW STOCK, so that we can always get the
+        update of current activities no matter the stock age."
+
+     The register was the whole population: we locked it, so it is ours to watch. But a
+     handset off the old list that turns up SOLD is current activity by any reading -- the
+     very thing this pane is opened for -- and leaving it in OLD STOCK would file a live sale
+     under "never enrolled, gathering dust".
+
+     So a sold handset joins on the strength of the sale, with no device row behind it. Its
+     status reads `haijafungwa` rather than being dressed as one of the four states the
+     register can hold: we do not control this phone, and the pane must not imply we do.
+
+     ANY SALE BOOK MOVES IT, AND THE MOVE IS PERMANENT.
+     -----------------------------------------------------------------------------------
+     Both sale feeds are asked -- the Watu deck and our own shop's export are two uploads of
+     the same event, and a handset written in one and not the other is still sold -- and so
+     is the stamp we made last time. That third test is what makes this one-way: the decks
+     are re-uploaded over themselves with rows deleted, and without it a phone that moved in
+     September would reappear in OLD STOCK in October because Watu trimmed its export.
+
+     oldStockIndex() asks the identical question, deliberately. The two lists are defined
+     against each other, so the day they disagreed a handset would be on both or on neither
+     -- and the whole point of having no `moved` column is that there is only one answer.
+     `olds` comes off the memoised feed above; the FILTER against `have` still runs fresh
+     every call, off the live devices list, so a handset locked seconds ago is excluded
+     immediately rather than after the memo's own TTL. */
+  const have = new Set(devs.map(d => String(d.imei)));
+  const joined = olds.filter(o => {
+    const k = String(o.imei);
+    if (have.has(k)) return false;   // locked on a visit: it is in the register on its own
+    return ctx.watu.has(k) || ctx.sales.has(k) || stampedSale(stampedBy.get(k));
+  });
+
+  let rows = [];
+  const changed = [];
+  for (const o of joined) {
+      /* Stamped exactly like a locked one -- a sale is a sale -- then given the shape of a row
+         with no device behind it. */
+      const imei = String(o.imei);
+      const was = stampedBy.get(imei) || null;
+      const f = newStockFill(imei, was, ctx);
+      if (f.hits) changed.push(newStockRow(imei, f, was, at));
+      const R = newStockRsm(f, o.agent, ctx, o.rsm, o.rsm_phone);
+      rows.push({
+        imei,
+        rsm: R.rsm, rsmPhone: R.phone,
+        agent: f.row.agent || o.agent || '', agentPhone: f.row.agent_phone || o.agent_phone || '',
+        holder: o.agent || '',
+        customer: f.row.customer || '', customerPhone: f.row.customer_phone || '',
+        price: f.row.price == null ? null : num(f.row.price),
+        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
+        branch: f.row.branch || '', model: f.row.model || o.item || '',
+        saleDate: f.row.sale_date || null,
+        status: 'unlocked', neverLocked: true,
+        by: '', atMs: null,
+        seenAt: null, neverSeen: true, silentDays: null,
+        lat: null, lng: null, locAcc: null, locAt: null,
+        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
+        src: R.src,
+      });
+    }
+    for (const d of devs) {
+      const imei = String(d.imei);
+      const was = stampedBy.get(imei) || null;
+      const f = newStockFill(imei, was, ctx);
+      if (f.hits) changed.push(newStockRow(imei, f, was, at));
+      /* THE BLANK RSM, ANSWERED FROM THE HOLDER -- see rsmOfHolder. Shown, searched and fenced
+         on exactly like a stamped one; written into stock_audit never. */
+      const R = newStockRsm(f, d.holder, ctx);
+      const seen = d.last_seen ? Date.parse(d.last_seen) : null;
+      rows.push({
+        imei,
+        rsm: R.rsm, rsmPhone: R.phone,
+        agent: f.row.agent || '', agentPhone: f.row.agent_phone || '',
+        holder: d.holder || '',                 // whose hands it is in -- what a transfer moves
+        /* devices.customer is stamped at the till by whoever sold it, so it stands in where
+           no sales feed has ever mentioned this handset. */
+        customer: f.row.customer || d.customer || '', customerPhone: f.row.customer_phone || '',
+        price: f.row.price == null ? null : num(f.row.price),
+        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
+        branch: f.row.branch || '', model: f.row.model || d.item || '',
+        saleDate: f.row.sale_date || null,
+        /* THE THREE WORDS THE OWNER USES, and the fourth this register also has. `lost` is not
+           in their list because it is rare -- but calling it "locked" because that is what the
+           handset does would hide a written-off phone inside the locked count, which is the
+           one number this audit is read for. */
+        status: NEWSTOCK_STATE[String(d.state || '')] || String(d.state || ''),
+        neverLocked: false,
+        by: d.state_by || '', atMs: d.state_at ? Date.parse(d.state_at) : null,
+        /* The position rides under the status because they answer one question together --
+           what is this handset doing, and where. `locAt` is the fix's OWN age, not the beat's:
+           collapsing them would let the register claim a phone is somewhere it left days ago.
+           `locAcc` travels too, because a 2,000m fix is a suburb and drawing it as a pin sends
+           somebody to the wrong building. */
+        lat: d.last_lat == null ? null : Number(d.last_lat),
+        lng: d.last_lng == null ? null : Number(d.last_lng),
+        locAcc: d.last_loc_acc == null ? null : Number(d.last_loc_acc),
+        locAt: d.last_loc_at ? Date.parse(d.last_loc_at) : null,
+        seenAt: seen, neverSeen: !seen,
+        silentDays: seen ? Math.max(0, Math.floor((now - seen) / 86400000)) : null,
+        /* THE GAP COUNT IS ABOUT THE STAMP, not the screen. A derived RSM does not close it:
+           `gappy` asks how much of the SALE the feeds have never answered, and whose hands the
+           handset is in today is not an answer to that question. */
+        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
+        src: R.src,
+      });
+    }
+
+  /* THE STAMP. Only rows that actually GAINED something are written -- on a steady morning
+     that is none of them -- and each one carries the whole merged row, so a column filled
+     last month survives a feed that has since gone blank. */
+  let stamped = 0;
+  if (!notReady && !isReadOnly(user) && changed.length) {
+    for (let i = 0; i < changed.length; i += 200) {
+      const slice = changed.slice(i, i + 200);
+      const { error } = await db.from('stock_audit').upsert(slice, { onConflict: 'imei' });
+      /* POSTGREST REFUSES BY RESOLVING, NOT BY THROWING. A stamp that reported success on a
+         write the database rejected is the exact failure this table exists to prevent: the
+         deck moves on, and the office believes the sale was captured. */
+      if (error) {
+        if (!tableMissing(error)) throw new Error(error.message);
+        notReady = true; stamped = 0; break;
+      }
+      stamped += slice.length;
+    }
+  }
+
+  /* WHO THE STOCK NAMES BECOMES A SYSTEM USER -- see syncStaffFromStock. Off the fenced rows
+     would be wrong (an RSM's open must not be the only thing that minted their agents' codes
+     -- it is the DESK's open that should), so it reads the whole register's rsm/agent columns
+     before the fence; it writes only what is missing, and only for a code that can write.
+     `agents` is the SAME hoop_agents feed the join above already paid for -- 0 further reads. */
+  const staffSync = await syncStaffFromStock(db, user,
+    rows.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })),
+    { agents });
+
+  /* WORST FIRST: a handset that has never once spoken, then the longest silence. That is the
+     order somebody chasing stock wants, and every column still sorts on its own click. */
+  rows.sort((x, y) => (y.neverSeen ? 1 : 0) - (x.neverSeen ? 1 : 0)
+    || (y.silentDays || 0) - (x.silentDays || 0)
+    || String(x.imei).localeCompare(String(y.imei)));
+
+  return { rows, agents, notReady, noDevices, hasLoc, stamped, staffSync };
 }
 
 const FNS = {
@@ -4663,6 +4959,12 @@ const FNS = {
       if (eErr) throw new Error(eErr.message);
     }
 
+    /* THE STOCK-INDEX MEMO'S `devices` READ IS A SET OF WHICH IMEIS EXIST -- and this is the
+       one place that changes it (a `revive` is a state flip on a row already there, which the
+       memo never cared about). Busted only when something was actually inserted: a rejoin- or
+       revive-only call touches no imei the memo did not already know about. */
+    if (fresh.length) clearStockIndex(db);
+
     return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length,
       unknownToStock: fresh.filter(i => !stockBy.has(i)).length,
       /* Said out loud on the screen, because it is a state change the operator did not
@@ -5173,6 +5475,9 @@ const FNS = {
     await db.from('device_events').delete().eq('imei', imei);
     const { error } = await db.from('devices').delete().eq('imei', imei);
     if (error) throw new Error(error.message);
+    // The memo's `devices` read is a Set of which IMEIs exist; this just removed one, so a
+    // handset just futa'd must read as un-enrolled again immediately, not for up to 30s.
+    clearStockIndex(db);
     return { ok: true, imei };
   },
 
@@ -6953,10 +7258,33 @@ const FNS = {
      been locked or sold -- because a list that only shrinks tells you nothing about whether it
      is shrinking for the right reason.
      ===================================================================================== */
+  /* Budget: 1 hoop_agents read (union columns, shared with stockAllow and syncStaffFromStock
+     below -- FIX 2 of the postgres-war audit, was 3) + the shared aux memo behind
+     oldStockIndex (0 trips warm) + 1 fresh old_stock read + up to ~15 grouped location-stamp
+     writes (self-heals once per place, not per handset) + syncStaffFromStock's own writes.
+     Measured on the fixture: 56 trips -> see test/pgwar-stock.test.mjs for the new count. */
   async oldStock(db, user, args) {
     requireNav(user, 'oldstock');
     const a = args || {};
-    const idx = await oldStockIndex(db);
+    /* ONE hoop_agents READ FOR THE WHOLE CLICK.
+       -----------------------------------------------------------------------------------
+       oldStockIndex's branch fallback, stockAllow's RSM/TEAM LEADER descendants walk and
+       syncStaffFromStock's own-register check each used to fetch this register separately
+       -- three trips for one open. The union of every column any of the three reads is
+       asked for once, here, and handed to all three; each still falls back to its own
+       standalone read when called without it (oldStockHolder, oldStockRound). */
+    let agents = [];
+    try { agents = await fetchAll(() => db.from('hoop_agents').select('phone, name, role, branch, manager')); }
+    catch (e) {
+      // Pre-targets-migration: no `manager` column. The other four are foundational and
+      // always there, so narrow rather than losing the branch/role data every reader here
+      // still needs -- a missing MANAGER must not read as a missing REGISTER.
+      if (/manager/i.test(String((e && e.message) || ''))) {
+        try { agents = await fetchAll(() => db.from('hoop_agents').select('phone, name, role, branch')); }
+        catch (ignored) { agents = []; }
+      } else { agents = []; }
+    }
+    const idx = await oldStockIndex(db, { agents });
     /* THE PLACE IS WRITTEN DOWN THE FIRST TIME IT IS WORKED OUT.
        -----------------------------------------------------------------------------------
          "we always fall to another alternative if that data is not somewhere, and if such
@@ -7022,10 +7350,10 @@ const FNS = {
     }
     /* THE FENCE: an RSM sees their region, an agent their own hands, the desk and ADMIN all
        -- see stockAllow. Applied before every count, so a fenced code's numbers are theirs. */
-    const allow = await stockAllow(db, user);
+    const allow = await stockAllow(db, user, { agents });
     const open = allow ? idx.open.filter(r => allow(r.agent, r.agent, r.rsm)) : idx.open.slice();
     // Who the stock names becomes a system user -- off the WHOLE list, before the fence (see newStock).
-    const staffSync = await syncStaffFromStock(db, user, idx.open.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })));
+    const staffSync = await syncStaffFromStock(db, user, idx.open.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })), { agents });
     const q = String(a.q == null ? '' : a.q).replace(/\D/g, '');
     const who = K(a.agent || '');
     const boss = K(a.rsm || '');
@@ -7304,249 +7632,25 @@ const FNS = {
      is deleted. So the provenance travels with it -- `src` says which feed answered each
      column -- and nothing is ever overwritten, which is what makes the capture worth having.
      ===================================================================================== */
+  /* Budget: devices + stock_audit are read fresh every call (see newStockFeeds's header for
+     why -- live state and read-your-own-write on the table this fn stamps). The other five
+     (watu_loans, hoop_sales, hoop_agents, hoop_aged_stock, old_stock) come off a shared
+     5-minute memo: ~5 trips on a miss, 0 on a hit. The page re-runs this whole audit for
+     every status tile, week arrow and search; the status/q filter, the 2,000-row slice and
+     newStockSales() below are cheap enough to redo every call regardless. */
   async newStock(db, user, args) {
     requireNav(user, 'newstock');
     const a = args || {};
-    const at = new Date().toISOString();
     const now = Date.now();
 
-    let cur = [];
-    let notReady = false;
-    try {
-      cur = await fetchAll(() => db.from('stock_audit').select(NEWSTOCK_COLS));
-    } catch (e) {
-      if (!tableMissing(e)) throw e;
-      /* NOT AN EMPTY AUDIT -- an audit that cannot be saved yet. The pane still computes and
-         still shows every row, because the joins underneath work perfectly well; what it
-         cannot do is REMEMBER, which is the one thing worth saying out loud. */
-      notReady = true;
-    }
-    const stampedBy = new Map(cur.map(r => [String(r.imei), r]));
-
-    /* THE POPULATION IS THE REGISTER, not the sales books: "our existing imeis since we
-       started locking on our own". A phone nobody locked is somebody else's audit. */
-    /* WHERE IT WAS WHEN IT LAST SPOKE, on the same row as what it is doing.
-       -----------------------------------------------------------------------------------
-         "At hali/status column, below status, add the second in one [location coordinate
-          link] so that we can click to view where the phone is, and always stamp the latest
-          read coordinates whenever the phone pings the system. So even if achia we'll always
-          find the latest ping coordinate location."
-
-       NOTHING NEW IS STAMPED HERE, because the handset has been doing it since the location
-       migration: every beat writes last_lat/last_lng and, separately, WHEN that fix was taken.
-       The two timestamps are never collapsed -- a phone that beat a minute ago can be carrying
-       a fix from Tuesday -- so the pane shows the fix's own age rather than the beat's.
-
-       AND ACHIA DOES NOT ERASE IT. deviceSetState writes state, reason, who and when; it has
-       never touched the position columns, so the last place a released handset was seen
-       survives the release. That is the case the owner asked about and the one that matters
-       most: a phone let go is a phone nobody is tracking any more, and its last fix is all
-       that is left of it. */
-    const DEV_CORE = 'imei, item, holder, state, state_by, state_at, last_seen, customer';
-    const DEV_LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
-    let devs = [];
-    let noDevices = false;
-    let hasLoc = true;
-    try {
-      devs = await fetchAll(() => db.from('devices').select(DEV_CORE + DEV_LOC));
-    } catch (e) {
-      /* THE COLUMN CHECK COMES FIRST, and the order is the whole of it. tableMissing() matches
-         a missing COLUMN as well as a missing table -- deliberately, because for most callers
-         both mean "run the migration" -- so asking it first would answer a missing `last_lat`
-         with "the devices register does not exist". That is a false alarm about the wrong
-         thing, on the pane somebody opens when stock has gone missing. */
-      if (/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) {
-        /* The audit without a map is still the audit; the audit without itself is an outage.
-           PostgREST refuses a whole select over one unknown column, so a deployment that has
-           not run the location migration drops back rather than going dark. */
-        hasLoc = false;
-        devs = await fetchAll(() => db.from('devices').select(DEV_CORE));
-      } else if (tableMissing(e)) noDevices = true;
-      else throw e;
-    }
-
-    /* THE FEEDS, ALL BEST-EFFORT. A missing one costs its columns and nothing else -- an audit
-       that refuses to open because one upload has never happened is an audit nobody uses. */
-    const feed = async (table, cols) => {
-      try { return await fetchAll(() => db.from(table).select(cols)); } catch (ignored) { return []; }
-    };
-    const [watu, sales, agents, aged] = await Promise.all([
-      feed('watu_loans', 'imei, client_name, client_mobile, agent, team, shop, model, '
-        + 'model_details, disbursed_date, price, guarantor_name, guarantor_phone, branch'),
-      feed('hoop_sales', 'imei, sale_date, branch, agent, client_name, client_phone, model, '
-        + 'commission_agent, commission_phone, price'),
-      feed('hoop_agents', 'phone, name, role, branch, manager, active'),
-      feed('hoop_aged_stock', 'serial, agent, item'),
-    ]);
-
-    /* THE EARLIEST RECEIPT WINS where the shop wrote more than one for an IMEI. A later
-       receipt against the same handset is a top-up or a correction; the ORIGINAL sale is the
-       one this audit is about, and "first catch" has to mean the first sale, not the first row
-       the database happened to return. */
-    const salesBy = new Map();
-    for (const s of sales) {
-      const k = String(s.imei || '');
-      if (!k) continue;
-      const had = salesBy.get(k);
-      if (!had || String(s.sale_date || '9999') < String(had.sale_date || '9999')) salesBy.set(k, s);
-    }
-    const ctx = {
-      watu: new Map(watu.filter(r => r.imei).map(r => [String(r.imei), r])),
-      sales: salesBy,
-      aged: new Map(aged.filter(r => r.serial).map(r => [String(r.serial), r])),
-      byName: new Map(agents.filter(r => r.name).map(r => [nameKey(r.name), r])),
-      byPhone: new Map(agents.filter(r => r.phone).map(r => [pnorm(r.phone), r])),
-      tree: salesTree(agents),
-    };
-
-    /* AND THE ONES THAT SOLD WITHOUT EVER BEING LOCKED.
-       -----------------------------------------------------------------------------------
-         "If a phone imei once reads in sales [in watu deck] and it was in old stock not in
-          new stock, move its column data needed into NEW STOCK, so that we can always get the
-          update of current activities no matter the stock age."
-
-       The register was the whole population: we locked it, so it is ours to watch. But a
-       handset off the old list that turns up SOLD is current activity by any reading -- the
-       very thing this pane is opened for -- and leaving it in OLD STOCK would file a live sale
-       under "never enrolled, gathering dust".
-
-       So a sold handset joins on the strength of the sale, with no device row behind it. Its
-       status reads `haijafungwa` rather than being dressed as one of the four states the
-       register can hold: we do not control this phone, and the pane must not imply we do.
-
-       ANY SALE BOOK MOVES IT, AND THE MOVE IS PERMANENT.
-       -----------------------------------------------------------------------------------
-       Both sale feeds are asked -- the Watu deck and our own shop's export are two uploads of
-       the same event, and a handset written in one and not the other is still sold -- and so
-       is the stamp we made last time. That third test is what makes this one-way: the decks
-       are re-uploaded over themselves with rows deleted, and without it a phone that moved in
-       September would reappear in OLD STOCK in October because Watu trimmed its export.
-
-       oldStockIndex() asks the identical question, deliberately. The two lists are defined
-       against each other, so the day they disagreed a handset would be on both or on neither
-       -- and the whole point of having no `moved` column is that there is only one answer. */
-    let joined = [];
-    try {
-      const have = new Set(devs.map(d => String(d.imei)));
-      const olds = await fetchAll(() => db.from('old_stock')
-        .select('imei, item, agent, agent_phone, rsm, rsm_phone'));
-      joined = olds.filter(o => {
-        const k = String(o.imei);
-        if (have.has(k)) return false;   // locked on a visit: it is in the register on its own
-        return ctx.watu.has(k) || ctx.sales.has(k) || stampedSale(stampedBy.get(k));
-      });
-    } catch (ignored) { joined = []; }   // no old_stock table yet: the register alone, as before
-
-    let rows = [];
-    const changed = [];
-    for (const o of joined) {
-      /* Stamped exactly like a locked one -- a sale is a sale -- then given the shape of a row
-         with no device behind it. */
-      const imei = String(o.imei);
-      const was = stampedBy.get(imei) || null;
-      const f = newStockFill(imei, was, ctx);
-      if (f.hits) changed.push(newStockRow(imei, f, was, at));
-      const R = newStockRsm(f, o.agent, ctx, o.rsm, o.rsm_phone);
-      rows.push({
-        imei,
-        rsm: R.rsm, rsmPhone: R.phone,
-        agent: f.row.agent || o.agent || '', agentPhone: f.row.agent_phone || o.agent_phone || '',
-        holder: o.agent || '',
-        customer: f.row.customer || '', customerPhone: f.row.customer_phone || '',
-        price: f.row.price == null ? null : num(f.row.price),
-        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
-        branch: f.row.branch || '', model: f.row.model || o.item || '',
-        saleDate: f.row.sale_date || null,
-        status: 'unlocked', neverLocked: true,
-        by: '', atMs: null,
-        seenAt: null, neverSeen: true, silentDays: null,
-        lat: null, lng: null, locAcc: null, locAt: null,
-        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
-        src: R.src,
-      });
-    }
-    for (const d of devs) {
-      const imei = String(d.imei);
-      const was = stampedBy.get(imei) || null;
-      const f = newStockFill(imei, was, ctx);
-      if (f.hits) changed.push(newStockRow(imei, f, was, at));
-      /* THE BLANK RSM, ANSWERED FROM THE HOLDER -- see rsmOfHolder. Shown, searched and fenced
-         on exactly like a stamped one; written into stock_audit never. */
-      const R = newStockRsm(f, d.holder, ctx);
-      const seen = d.last_seen ? Date.parse(d.last_seen) : null;
-      rows.push({
-        imei,
-        rsm: R.rsm, rsmPhone: R.phone,
-        agent: f.row.agent || '', agentPhone: f.row.agent_phone || '',
-        holder: d.holder || '',                 // whose hands it is in -- what a transfer moves
-        /* devices.customer is stamped at the till by whoever sold it, so it stands in where
-           no sales feed has ever mentioned this handset. */
-        customer: f.row.customer || d.customer || '', customerPhone: f.row.customer_phone || '',
-        price: f.row.price == null ? null : num(f.row.price),
-        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
-        branch: f.row.branch || '', model: f.row.model || d.item || '',
-        saleDate: f.row.sale_date || null,
-        /* THE THREE WORDS THE OWNER USES, and the fourth this register also has. `lost` is not
-           in their list because it is rare -- but calling it "locked" because that is what the
-           handset does would hide a written-off phone inside the locked count, which is the
-           one number this audit is read for. */
-        status: NEWSTOCK_STATE[String(d.state || '')] || String(d.state || ''),
-        neverLocked: false,
-        by: d.state_by || '', atMs: d.state_at ? Date.parse(d.state_at) : null,
-        /* The position rides under the status because they answer one question together --
-           what is this handset doing, and where. `locAt` is the fix's OWN age, not the beat's:
-           collapsing them would let the register claim a phone is somewhere it left days ago.
-           `locAcc` travels too, because a 2,000m fix is a suburb and drawing it as a pin sends
-           somebody to the wrong building. */
-        lat: d.last_lat == null ? null : Number(d.last_lat),
-        lng: d.last_lng == null ? null : Number(d.last_lng),
-        locAcc: d.last_loc_acc == null ? null : Number(d.last_loc_acc),
-        locAt: d.last_loc_at ? Date.parse(d.last_loc_at) : null,
-        seenAt: seen, neverSeen: !seen,
-        silentDays: seen ? Math.max(0, Math.floor((now - seen) / 86400000)) : null,
-        /* THE GAP COUNT IS ABOUT THE STAMP, not the screen. A derived RSM does not close it:
-           `gappy` asks how much of the SALE the feeds have never answered, and whose hands the
-           handset is in today is not an answer to that question. */
-        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
-        src: R.src,
-      });
-    }
-
-    /* THE STAMP. Only rows that actually GAINED something are written -- on a steady morning
-       that is none of them -- and each one carries the whole merged row, so a column filled
-       last month survives a feed that has since gone blank. */
-    let stamped = 0;
-    if (!notReady && !isReadOnly(user) && changed.length) {
-      for (let i = 0; i < changed.length; i += 200) {
-        const slice = changed.slice(i, i + 200);
-        const { error } = await db.from('stock_audit').upsert(slice, { onConflict: 'imei' });
-        /* POSTGREST REFUSES BY RESOLVING, NOT BY THROWING. A stamp that reported success on a
-           write the database rejected is the exact failure this table exists to prevent: the
-           deck moves on, and the office believes the sale was captured. */
-        if (error) {
-          if (!tableMissing(error)) throw new Error(error.message);
-          notReady = true; stamped = 0; break;
-        }
-        stamped += slice.length;
-      }
-    }
-
-    /* WHO THE STOCK NAMES BECOMES A SYSTEM USER -- see syncStaffFromStock. Off the fenced rows
-       would be wrong (an RSM's open must not be the only thing that minted their agents' codes
-       -- it is the DESK's open that should), so it reads the whole register's rsm/agent columns
-       before the fence; it writes only what is missing, and only for a code that can write. */
-    const staffSync = await syncStaffFromStock(db, user, rows.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })));
-
-    /* WORST FIRST: a handset that has never once spoken, then the longest silence. That is the
-       order somebody chasing stock wants, and every column still sorts on its own click. */
-    rows.sort((x, y) => (y.neverSeen ? 1 : 0) - (x.neverSeen ? 1 : 0)
-      || (y.silentDays || 0) - (x.silentDays || 0)
-      || String(x.imei).localeCompare(String(y.imei)));
+    const built = await newStockBuild(db, user);
+    let { rows, agents, notReady, noDevices, hasLoc, stamped, staffSync } = built;
 
     /* THE FENCE (stockAllow): an RSM sees their region -- handsets they or their agents hold,
        or that their region sold -- an agent their own; the desk and ADMIN everything. Applied
-       before the tiles and the board, so a fenced code's numbers are their own numbers. */
-    const allow = await stockAllow(db, user);
+       before the tiles and the board, so a fenced code's numbers are their own numbers.
+       `agents` is the SAME feed the join used -- 0 further trips. */
+    const allow = await stockAllow(db, user, { agents });
     if (allow) rows = rows.filter(r => allow(r.holder, r.agent, r.rsm));
 
     const want = String(a.status || '').trim();
@@ -7584,7 +7688,7 @@ const FNS = {
       } };
   },
 
-  /* =====================================================================================
+/* =====================================================================================
      LOSS AND DAMAGE -- the price list, the case, and the acknowledgement of liability.
      =====================================================================================
        Finance SOP H     valuation, liability and recovery, handled centrally by Finance
@@ -8791,8 +8895,12 @@ const FNS = {
       if (!(qty > 0)) bad('Idadi inayotolewa lazima iwe zaidi ya sifuri. / The released quantity must be more than zero.');
       if (qty > num(row.qty)) bad('Huwezi kutoa zaidi ya kilichoombwa. / You cannot release more than was asked for.');
       patch.approved_qty = qty;
-      /* THE GATE, RECOMPUTED LIVE rather than read off the stamp. */
-      const gate = (await stockAgingIndex(db)).for(row.holder);
+      /* THE GATE, RECOMPUTED LIVE rather than read off the stamp -- and { fresh: true } so
+         it is recomputed off the DATABASE rather than off the shared 20-30s memo too. A SOP-E
+         release decision must never pass on the strength of a devices/old_stock snapshot a
+         deviceEnrol or a bad busting path let go stale: this is the one caller that cannot
+         wait out the TTL, so it always pays the full read instead of trusting the cache. */
+      const gate = (await stockAgingIndex(db, { fresh: true })).for(row.holder);
       if (gate.blocked) {
         const reason = S(a.overrideReason, 500);
         if (a.overrideAging !== true || !reason) {

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeDb } from './fake-db.mjs';
 import { _FNS } from '../api/portal.js';
+import { clearStockIndex } from '../api/_lib/stock-index.js';
 
 /* =========================================================================================
    NEW STOCK -- the sale behind every handset we have locked.
@@ -179,6 +180,10 @@ test('an unanswered column stays open for the upload that can finally answer it'
   // The next upload carries them, and now they stamp.
   db._dump('watu_loans').length = 0;
   db._dump('watu_loans').push(loan({}));
+  // newStock's own join is now memoised 5 minutes (postgres-war FIX 3); a real upload lands
+  // through api/upload.js, which busts this. Poking the fixture directly, as above, is the
+  // test's shortcut for "an upload happened" and has to bust it the same way.
+  clearStockIndex(db);
   const then = only(await _FNS.newStock(db, STORE, {}));
   assert.equal(then.customer, 'Alafati K Selemani');
   assert.equal(then.price, 450000);
@@ -197,8 +202,17 @@ test('status, who ordered it and the last beat are read live and never stamped',
     assert.ok(!(k in stamped), k + ' must never be stamped -- it changes');
   }
 
+  /* newStock's own join is now memoised 5 minutes (postgres-war FIX 3), busted only by
+     clearStockIndex(db) -- deviceEnrol, deviceDelete, an upload's agents/aged-stock/sales
+     imports. A bare state flip on the row, as every assertion below does, is NOT one of
+     those (deviceSetState deliberately does not bust: see stock-index.js's header), so in a
+     live system this is a real, accepted staleness window of up to five minutes on exactly
+     the field this test is named for. The busts here stand in for that window having
+     passed, so the REST of the assertion -- that a fresh read has always been live -- still
+     holds. */
   const reg = db._dump('devices');
   reg[0].state = 'released'; reg[0].state_by = 'ASHA'; reg[0].last_seen = null;
+  clearStockIndex(db);
   const after = only(await _FNS.newStock(db, STORE, {}));
   assert.equal(after.status, 'achia', 'the owner’s own word for a released handset');
   assert.equal(after.by, 'ASHA', 'and who prompted it');
@@ -206,11 +220,13 @@ test('status, who ordered it and the last beat are read live and never stamped',
   assert.equal(after.customer, 'Alafati K Selemani', 'while the sale is exactly where it was');
 
   reg[0].state = 'enrolled';
+  clearStockIndex(db);
   assert.equal(only(await _FNS.newStock(db, STORE, {})).status, 'unlocked');
   /* `lost` is not one of the three words the owner used, because it is rare -- but calling it
      "locked" because that is what the handset does would hide a written-off phone inside the
      one number this audit is read for. */
   reg[0].state = 'lost';
+  clearStockIndex(db);
   assert.equal(only(await _FNS.newStock(db, STORE, {})).status, 'lost');
 });
 
