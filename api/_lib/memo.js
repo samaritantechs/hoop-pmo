@@ -35,16 +35,23 @@ export async function settingRead(db, key) {
     is simply forgotten rather than pinned.
 
     Budget: 1 round trip (the keyed DATA_VERSION read) on every call, warm or cold; `build`'s
-    own cost is paid only on a miss. */
+    own cost is paid only on a miss -- and on a cold cache, once per db however many callers
+    arrive together: the build in flight is shared, the same way agentIndex's is, so two panes
+    opening at the same moment do not each scan the table. */
 export function memoByDataVersion(ttlMs) {
   const cache = new WeakMap();
+  const inFlight = new WeakMap();
   return async function memo(db, build, nowMs) {
     const now = nowMs == null ? Date.now() : nowMs;
     const version = (await settingRead(db, 'DATA_VERSION')) || '';
     const hit = cache.get(db);
     if (hit && hit.version === version && (now - hit.at) < ttlMs) return hit.value;
-    const value = await build();
-    cache.set(db, { version, at: now, value });
-    return value;
+    let p = inFlight.get(db);
+    if (!p) {
+      p = Promise.resolve().then(build).then(value => { cache.set(db, { version, at: now, value }); return value; })
+        .finally(() => { if (inFlight.get(db) === p) inFlight.delete(db); });
+      inFlight.set(db, p);
+    }
+    return p;
   };
 }

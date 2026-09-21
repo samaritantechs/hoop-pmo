@@ -5,7 +5,12 @@
    deletes that one line from a handler while the flag stays on its spec, nothing throws: the
    audit row simply logs `before: null`, and a before-read cannot be recovered after the write.
    There is no cheaper way to know a value from before a write that already happened, so the
-   guard has to be static -- every flagged handler's source must carry both assignments. */
+   guard has to be static -- every flagged handler's source must carry both assignments.
+
+   AND THE HAND-OVER MUST COME BEFORE THE GUARDS. The first cut of this set ctx.before AFTER
+   "already decided" / "already paid" / "not approved" had thrown, so exactly the refusal the
+   log exists for -- two approvers acting at once, a double-click on Pay -- was written with
+   before: null. The review caught it; this pins the order. */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,6 +44,23 @@ test('every selfCtx handler leaves both halves of the diff in args.__auditCtx', 
     const body = fnBody(name);
     assert.match(body, /__auditCtx\.before\s*=/, name + ' no longer hands audited() the row it read');
     assert.match(body, /__auditCtx\.afterPatch\s*=/, name + ' no longer hands audited() the patch it wrote');
+  }
+});
+
+/* The state guards all say so in both languages -- "tayari" / "already", "imekamilika" /
+   "complete", "halijaidhinishwa" / "not approved", "kimeshalipwa" -- so the rule is checkable
+   from the source: none of them may throw before the row has been handed over. */
+const STATE_GUARD = /bad\((?:[^)]|\([^)]*\))*?(tayari|already|imekamilika|halijaidhinishwa|kimeshalipwa|not approved)/g;
+
+test('every selfCtx handler hands the row over BEFORE any "already decided" guard can refuse', () => {
+  for (const name of selfCtxFns()) {
+    const body = fnBody(name);
+    const handOver = body.search(/__auditCtx\.before\s*=/);
+    for (const m of body.matchAll(STATE_GUARD)) {
+      assert.ok(m.index > handOver,
+        name + ': a state guard ("' + m[0].slice(0, 60) + '...") throws before ctx.before is set, so a refused '
+        + 'attempt would be logged with before: null');
+    }
   }
 });
 

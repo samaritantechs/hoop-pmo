@@ -5856,12 +5856,12 @@ const FNS = {
     }
     const dev = rows.find(r => String(r.id) === id);
     if (!dev) bad('Ombi halipo. / That request no longer exists.');
+    if (args.__auditCtx) args.__auditCtx.before = dev;
     if (String(dev.status) !== 'pending') {
       bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     }
     /* THE ROW audited() WOULD OTHERWISE READ A SECOND TIME. `dev` above IS the before-state its
        diff needs; leaving it on args.__auditCtx saves the extra keyed read -- see audit.js. */
-    if (args.__auditCtx) args.__auditCtx.before = dev;
     /* DECIDING YOUR OWN REQUEST IS ALLOWED, AND THAT IS DELIBERATE. Do not "fix" this.
 
          "role is navigation based so i didnt expect (This is your own request — another
@@ -6020,9 +6020,9 @@ const FNS = {
     }
     const r = rows.find(x => String(x.id) === id);
     if (!r) bad('Ombi halipo. / That request no longer exists.');
+    if (args.__auditCtx) args.__auditCtx.before = r;
     if (String(r.status) !== 'approved') bad('Ombi hili halijaidhinishwa. / That request is not approved.');
     if (r.paid_at) bad('Advance hii tayari imelipwa. / That advance has already been paid.');
-    if (args.__auditCtx) args.__auditCtx.before = r;
     const at = new Date().toISOString();
     /* `status` itself never moves here -- paying an already-approved advance does not change
        its status column -- so AUDIT_DIFF's ['status'] never actually shows a diff for advPay,
@@ -6365,8 +6365,8 @@ const FNS = {
     }
     const row = rows.find(r => String(r.id) === id);
     if (!row) bad('Ombi halipo. / That request no longer exists.');
-    if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     if (args.__auditCtx) args.__auditCtx.before = row;
+    if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     const asked = num(row.total_amount);
     let granted = null;
     if (approve) {
@@ -6432,11 +6432,11 @@ const FNS = {
     /* NOT YOURS reads the same as NOT THERE, on purpose: the right to ask is not the right to
        learn which requests exist. */
     if (!row || String(row.staff_code || '') !== String(user.code || '')) bad('Ombi halipo. / That request no longer exists.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
     if (String(row.status) !== 'approved') bad('Retirement ni ya ombi lililoidhinishwa tu. / Only an approved request can be retired.');
     /* FINISHED is retire_total set -- see the write order below. A claim with no summary is a
        filing that died, or one that is going on right now; both are handled at the claim. */
     if (row.retire_total != null) bad('Ombi hili tayari lina retirement. / This request has already been retired.');
-    if (args.__auditCtx) args.__auditCtx.before = row;
 
     const fare = intNN(a.fareActual), accom = intNN(a.accomActual);
     const o1 = intNN(a.other1Actual), o2 = intNN(a.other2Actual), o3 = intNN(a.other3Actual);
@@ -6737,8 +6737,8 @@ const FNS = {
     }
     const row = rows.find(r => String(r.id) === id);
     if (!row) bad('Ombi halipo. / That request no longer exists.');
-    if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     if (args.__auditCtx) args.__auditCtx.before = row;
+    if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     const at = new Date().toISOString();
     const patch = { status: approve ? 'approved' : 'rejected', comment: comment || null,
       decided_by: user.name || '', decided_at: at, updated_at: at };
@@ -7352,8 +7352,8 @@ const FNS = {
     }
     const row = rows.find(r => String(r.id) === id);
     if (!row) bad('Top-up haipo. / That top-up no longer exists.');
-    if (row.status === 'unlocked') bad('Top-up hii imekamilika. / That top-up is already complete.');
     if (args.__auditCtx) args.__auditCtx.before = row;
+    if (row.status === 'unlocked') bad('Top-up hii imekamilika. / That top-up is already complete.');
     const step = String(a.step || '').trim().toLowerCase();
     const at = new Date().toISOString();
     const patch = { updated_by: user.name || '', updated_at: at };
@@ -8544,8 +8544,8 @@ const FNS = {
     }
     const r = runs.find(x => String(x.id) === id);
     if (!r) bad('Kipindi hakipo. / That cycle no longer exists.');
-    if (r.status === 'paid') bad('Kipindi hiki tayari kimelipwa. / That cycle has already been paid.');
     if (args.__auditCtx) args.__auditCtx.before = r;
+    if (r.status === 'paid') bad('Kipindi hiki tayari kimelipwa. / That cycle has already been paid.');
     const approve = a.approve === true;
     const comment = String(a.comment == null ? '' : a.comment).trim().slice(0, 2000);
     if (!approve && !comment) bad('Sababu inahitajika ukirudisha. / A reason is required when sending it back.');
@@ -8582,12 +8582,12 @@ const FNS = {
     }
     const r = runs.find(x => String(x.id) === id);
     if (!r) bad('Kipindi hakipo. / That cycle no longer exists.');
+    if (args.__auditCtx) args.__auditCtx.before = r;
     if (r.cleared_at || r.status === 'paid') {
       bad('Kipindi hiki kimeshalipwa na kufungwa — hakiwezi kulipwa mara ya pili (SOP A.6). '
         + '/ This cycle is already paid and cleared; it cannot be paid twice.');
     }
     if (r.status !== 'approved') bad('Inahitaji idhini kabla ya malipo (SOP A.4). / It needs sign-off before payment.');
-    if (args.__auditCtx) args.__auditCtx.before = r;
     const ref = String(a.paymentRef == null ? '' : a.paymentRef).trim().slice(0, 120);
     if (!ref) bad('Andika kumbukumbu ya malipo. / Give the payment reference (SOP A.7).');
     const checks = a.checks || {};
