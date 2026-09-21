@@ -91,7 +91,7 @@ test('portal.html: the dashboard sales card compares money with money', () => {
 
      Pinned as source text because there is no browser here to render the card in. */
   const css = read('portal.html');
-  const fn = css.match(/function drawDashSales\(\)\{[\s\S]*?\n\}/);
+  const fn = css.match(/function drawDashSales\(d\)\{[\s\S]*?\n\}/);
   assert.ok(fn, 'drawDashSales not found');
   assert.match(fn[0], /var over\s*=\s*tgt\s*\?\s*\(\s*amt\s*-\s*tgt\s*\)/,
     'the target delta must be amount minus target -- never the handset count');
@@ -233,10 +233,16 @@ test('portal.html: the sign-in panel can be shrunk and moved by the keyboard fit
    why every draw goes through ONE function and this checks that function rather than the
    call sites.
    ========================================================================================= */
-test('portal.html: one week governs every card on the dashboard', () => {
+test('portal.html: one week governs every card on the dashboard, in one trip', () => {
   const src = read('portal.html');
   const fn = src.match(/function dashWeekRedraw\(\)\{[\s\S]*?\n\}/);
   assert.ok(fn, 'dashWeekRedraw not found -- the single redraw path is the whole design');
+  /* ONE FETCH FOR ALL FIVE CARDS. lockedTrend, recoveryWeek (twice over), salesWeek and
+     stockAccount used to be five separate srv() calls from this one function; dashboardWeek
+     folds them into one server-side Promise.all, so the week-change path is one round trip
+     however many cards are on screen for it. */
+  assert.match(fn[0], /srv\('dashboardWeek',\{week:RECWEEK\}\)/,
+    'dashWeekRedraw must fetch every card\'s data in one dashboardWeek call, not one per card');
   for (const card of ['drawTrend', 'drawCreditRecovery', 'drawRecoveryTrend',
                       'drawDashSales', 'drawDashStock']) {
     assert.match(fn[0], new RegExp('\\b' + card + '\\('),
@@ -245,11 +251,28 @@ test('portal.html: one week governs every card on the dashboard', () => {
   // The bar itself must be at the head of the board, not inside a card it appears to belong to.
   assert.match(src, /id="dashWeekBar"[\s\S]{0,400}?<div class="tiles">/,
     'the week bar must sit above the tiles, or it reads as belonging to whatever is beside it');
-  // And the two cards that used to ignore it must now ask for it.
-  assert.match(src, /srv\('salesWeek',\{week:RECWEEK\}\)/,
-    'the sales card must ask for the week the board is standing on');
-  assert.match(src, /srv\('stockAccount', RECWEEK\?\{asOf:/,
-    'the stock card must ask for the book as it stood at the end of that week');
+  // Neither card may keep a fetch of its own now that dashboardWeek supplies both.
+  assert.doesNotMatch(src, /srv\('salesWeek',\{week:RECWEEK\}\)/,
+    'the dashboard sales card must not fetch on its own now that dashboardWeek carries it');
+  assert.doesNotMatch(src, /srv\('stockAccount', RECWEEK\?\{asOf:/,
+    'the dashboard stock card must not fetch on its own now that dashboardWeek carries it');
+});
+
+test('api/portal.js: dashboardWeek runs the four existing dashboard fns under their own gates', () => {
+  const src = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  const fn = src.match(/async dashboardWeek\(db, user, args\) \{[\s\S]*?\n  \},/);
+  assert.ok(fn, 'dashboardWeek(db, user, args) not found on FNS, right after salesWeek');
+  assert.match(fn[0], /requireNav\(user, 'dashboard'\)/,
+    'dashboardWeek must itself require the dashboard nav -- FNS has no other gate');
+  for (const inner of ['FNS.lockedTrend(db, user, args)', 'FNS.recoveryWeek(db, user, args)',
+                       'FNS.salesWeek(db, user, args)', 'FNS.stockAccount(db, user, stockArgs)']) {
+    assert.ok(fn[0].includes(inner),
+      `dashboardWeek must call the existing ${inner.split('(')[0]} rather than reimplement it`);
+  }
+  // scorecards/stock are checked here, not left to throw, so a dashboard-only code gets a
+  // missing card rather than an error string where a card should be.
+  assert.match(fn[0], /have\.includes\('scorecards'\)/);
+  assert.match(fn[0], /have\.includes\('stock'\)/);
 });
 
 test('portal.html: a Swahili day axis names seven different days', () => {
@@ -1603,7 +1626,7 @@ test('portal.html: the drawers refuse what the server would refuse, and say so f
   const decide = IMP_SRC('impDecideDrawer', html);
   assert.match(decide, /if\(approve\)\{ var amt=\$\('#imdAmt'\)\.value; if\(amt===''\|\|!\(Number\(amt\)>0\)\)\{ toast\(/,
     'a cleared amount box is not "approve the full amount"');
-  const appr = IMP_SRC('drawImpAppr', html);
+  const appr = IMP_SRC('impApprRender', html);
   assert.match(appr, /if\(\$\('#rlRate'\)\.value===''\)\{ toast\(/, 'a blank rate is not a zero rate');
   const req = IMP_SRC('drawImpReq', html);
   assert.match(req, /Math\.floor\(n\)!==n\|\|n<0/, 'the preview refuses decimals and negatives like the server');
@@ -1650,10 +1673,10 @@ test('portal.html: the leave preview counts the same working days the server wil
 
 test('portal.html: every imprest and leave list says which migration to run when the tables are missing', () => {
   const html = read('portal.html');
-  for (const name of ['drawImpReq', 'drawImpAppr', 'drawImpRep']) {
+  for (const name of ['drawImpReq', 'impApprRender', 'drawImpRep']) {
     assert.match(IMP_SRC(name, html), /if\(d\.notReady\)\{ m\.innerHTML=impNotReady\(\); return; \}/, name + ' handles notReady');
   }
-  for (const name of ['drawLeaveReq', 'drawLeaveAppr', 'drawLeaveRep']) {
+  for (const name of ['drawLeaveReq', 'leaveApprRender', 'drawLeaveRep']) {
     assert.match(IMP_SRC(name, html), /if\(d\.notReady\)\{ m\.innerHTML=leaveNotReady\(\); return; \}/, name + ' handles notReady');
   }
   assert.match(IMP_SRC('impNotReady', html), /RUN-ME-2026-09-07-imprest-leave\.sql/);
@@ -1664,7 +1687,7 @@ test('portal.html: every imprest and leave list says which migration to run when
 
 test('portal.html: the approval pane owns the rate table and the CEO report reads by travel date', () => {
   const html = read('portal.html');
-  const appr = IMP_SRC('drawImpAppr', html);
+  const appr = IMP_SRC('impApprRender', html);
   assert.match(appr, /srv\('impRoleSave',\{role:role, rate:rate\}\)/, 'add or change a role\'s nightly rate');
   assert.match(appr, /srv\('impRoleDelete',\{role:role\}\)/);
   assert.match(appr, /confirm\('Futa wadhifa/, 'deleting a role asks first');
@@ -1733,9 +1756,9 @@ test('portal.html: the raise form sends the parts of an issue and never who rais
   assert.match(wire, /needs=t==='imei'\|\|t==='agent'\|\|t==='receipt'/);
   // Both panes build the same form: the desk logs on a caller's behalf (the complaints form).
   assert.match(IMP_SRC('drawIssueReq', html), /issueRaiseHtml\(d,'is'\)/);
-  assert.match(IMP_SRC('drawIssues', html), /issueRaiseHtml\(d,'isn'\)/);
+  assert.match(IMP_SRC('issuesRender', html), /issueRaiseHtml\(d,'isn'\)/);
   // And the desk's form is not offered to a view-only code.
-  assert.match(IMP_SRC('drawIssues', html), /BOOT\.readOnly\?'':'<button class="btn sm" id="isqNew"/);
+  assert.match(IMP_SRC('issuesRender', html), /BOOT\.readOnly\?'':'<button class="btn sm" id="isqNew"/);
 });
 
 test('portal.html: the drawer gives the controls that move an issue to the desk nav alone', () => {
@@ -1762,8 +1785,9 @@ test('portal.html: the desk is one queue with a department chip, and the report 
      that knows whether routing exists yet and whether this code is a supervisor. */
   assert.match(html, /var ISSUEQ=\{department:'',state:'',view:''\};/,
     'unresolved, every department, and the desk view left to the server');
-  assert.match(desk, /\(d\.departments\|\|\[\]\)\.map\(function\(k\)\{ return chip\(k,issueDept\(k\),byDept\[k\]\|\|0\); \}\)/, 'one chip per department, with its open count');
-  assert.match(desk, /ISSUEQ\.state=\(ISSUEQ\.state==='all'\?'':'all'\)/, 'resolved ones are a toggle away, not gone');
+  const deskRender = IMP_SRC('issuesRender', html);
+  assert.match(deskRender, /\(d\.departments\|\|\[\]\)\.map\(function\(k\)\{ return chip\(k,issueDept\(k\),byDept\[k\]\|\|0\); \}\)/, 'one chip per department, with its open count');
+  assert.match(deskRender, /ISSUEQ\.state=\(ISSUEQ\.state==='all'\?'':'all'\)/, 'resolved ones are a toggle away, not gone');
   const rep = IMP_SRC('drawIssueRep', html);
   assert.match(rep, /Tarehe ya kuletwa:/, 'the period is the date raised');
   assert.match(rep, /monthRange_\(\)/, 'this month by default, like every other report here');
@@ -1776,7 +1800,7 @@ test('portal.html: the desk is one queue with a department chip, and the report 
   assert.match(html, /<b>GM_EMAIL<\/b>/);
   // Every pane names the migration when the table is not there yet.
   assert.match(IMP_SRC('issueNotReady', html), /RUN-ME-2026-09-08-issues\.sql/);
-  for (const fn of ['drawIssueReq', 'drawIssues', 'drawIssueRep']) {
+  for (const fn of ['drawIssueReq', 'issuesRender', 'drawIssueRep']) {
     assert.match(IMP_SRC(fn, html), /if\(d\.notReady\)\{ m\.innerHTML=issueNotReady\(\); return; \}/, fn + ' says which file to run');
   }
 });
@@ -1791,16 +1815,21 @@ test('portal.html: the desk is one queue with a department chip, and the report 
    ========================================================================================= */
 test('portal.html: the follow-up report draws the server\'s own buckets and each tile filters the table', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawFuRep', html);
-  assert.match(fn, /srv\('fuOutcomes',\{from:FUR\.from,to:FUR\.to,team:FUR\.team\}\)/);
+  /* FETCH/RENDER SPLIT: drawFuRep only fetches (and renders straight from FUR.last when a
+     kind tile or "Vikapu vyote" changed nothing the server was asked); fuRepRender draws
+     the tiles and the table. See the postgres-round-trip-audit fix -- every kind tile used
+     to re-fetch srv('fuOutcomes') for the identical period. */
+  const fetchFn = IMP_SRC('drawFuRep', html);
+  assert.match(fetchFn, /srv\('fuOutcomes',args\)/);
+  assert.match(fetchFn, /FUR\.from=isoToday\(0\); FUR\.to=isoToday\(0\);/, 'today by default: this is a daily report');
+  const fn = IMP_SRC('fuRepRender', html);
   // The tiles are built from d.kinds, so a bucket added on the server appears here with no
   // second edit -- the failure mode this replaces is a screen quietly missing a category.
   assert.match(fn, /kinds\.map\(function\(k\)\{/);
   assert.match(fn, /labels\[k\]\|\|k/, 'and labelled with the server\'s own words');
   assert.match(fn, /FUR\.kind\?rows\.filter\(function\(r\)\{ return r\.kind===FUR\.kind; \}\):rows/,
     'tapping a tile filters the table under it');
-  assert.match(html, /var FUR=\{from:'',to:'',team:'',kind:''\};/);
-  assert.match(fn, /FUR\.from=isoToday\(0\); FUR\.to=isoToday\(0\);/, 'today by default: this is a daily report');
+  assert.match(html, /var FUR=\{from:'',to:'',team:'',kind:'',last:null\};/);
   assert.match(fn, /go\(isoToday\(-6\),isoToday\(0\)\)/, 'and a week back is a NEGATIVE offset');
   // Sending the GM his copy: a write, so not offered to a view-only code, and never re-sent.
   assert.match(fn, /BOOT\.readOnly\?'':'<button class="btn sm" id="furSend"/);
@@ -1818,7 +1847,9 @@ test('portal.html: the KPI card names its own proxy and only shouts when it is o
   assert.match(fn, /pct>k\.target/, 'red is measured against the setting, not a hard-coded 5');
   assert.match(fn, /closest proxy for the WATU default rate, not WATU/, 'the card says what it is and what it is not');
   // Drawn on the recovery pane in BOTH states: with two decks, and on the very first upload.
-  const rec = IMP_SRC('drawRecovery', html);
+  // recoveryRender is the render half of the fetch/render split (drawRecovery only fetches,
+  // or renders a held answer straight back for a REC.kind-only tile click).
+  const rec = IMP_SRC('recoveryRender', html);
   assert.equal((rec.match(/kpiCard\(d\.kpi\)/g) || []).length, 2,
     'the first upload has no recovery to show and still has a KPI');
   assert.match(html, /<b>KPI_DEFAULT_RATE<\/b>/, 'and Settings explains the key');
@@ -1917,12 +1948,17 @@ test('portal.html: the handover form asks for what the SOP says makes somebody a
 
 test('portal.html: the stock report is the aging tracker and the distribution book on one pane', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawStockRep', html);
-  assert.match(fn, /srv\('stockReqReport',STOCKR\)/);
+  /* FETCH/RENDER SPLIT, into TWO independent halves: drawStockRep only fetches both trackers
+     (the pane's first open); stockRepRender draws them. A control that moves only one of the
+     two re-fetches through stockRepRefetchReport_ / the syncWire callback, never both -- see
+     the postgres-round-trip-audit fix. */
+  const fetchFn = IMP_SRC('drawStockRep', html);
+  assert.match(fetchFn, /srv\('stockReqReport',STOCKR\)/);
+  assert.match(fetchFn, /monthRange_\(\)/, 'this month by default, like every other report here');
+  const fn = IMP_SRC('stockRepRender', html);
   assert.match(fn, /ag\.low\?'<div class="note bad">/, 'SOP G: the low-stock alert is a banner, not a tile nobody reads');
   assert.match(fn, /t\.overrides/, 'and how often the gate was overridden');
   assert.match(fn, /Stoo iliyokaa \/ Aging stock tracker/);
-  assert.match(fn, /monthRange_\(\)/, 'this month by default, like every other report here');
   assert.match(html, /<b>STOCK_AGING_DAYS<\/b>/, 'Settings explains the threshold');
   assert.match(html, /<b>STOCK_LOW_ALERT<\/b>/);
 });
@@ -1935,10 +1971,16 @@ test('portal.html: the stock report is the aging tracker and the distribution bo
    ========================================================================================= */
 test('portal.html: the targets pane draws four scopes and never invents a percentage', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawTargets', html);
-  assert.match(fn, /srv\('targetsView',\{period:TGT\.period\}\)/);
-  assert.match(html, /var TGT=\{period:'',scope:'agent'\};/);
-  assert.match(fn, /TGT\.period=thisMonth_\(\)/, 'this month by default');
+  /* FETCH/RENDER SPLIT: drawTargets only fetches (or renders TGT.data straight back when a
+     scope tab changed nothing the server was asked); targetsRender draws the tiles, the
+     scope tabs and the table. See the postgres-round-trip-audit fix -- every scope tab used
+     to re-fetch srv('targetsView') for the identical period even though it already returns
+     every scope in one payload. */
+  const fetchFn = IMP_SRC('drawTargets', html);
+  assert.match(fetchFn, /srv\('targetsView',\{period:TGT\.period\}\)/);
+  assert.match(html, /var TGT=\{period:'',scope:'agent',data:null\};/);
+  assert.match(fetchFn, /TGT\.period=thisMonth_\(\)/, 'this month by default');
+  const fn = IMP_SRC('targetsRender', html);
   // The scope buttons come from the server's list, so a scope added there appears here.
   assert.match(fn, /\(d\.scopes\|\|\['agent','rsm','branch','company'\]\)\.map/);
   assert.match(fn, /rows=\(d\.rows&&d\.rows\[TGT\.scope\]\)\|\|\[\]/);
@@ -1993,7 +2035,10 @@ test('portal.html: the staff register is edited from the leader’s side, not th
      which end of the question the screen asks: a leader's panel lists the rank below and you
      tick it, instead of opening each subordinate and typing their leader's name. */
   const html = read('portal.html');
-  const fn = IMP_SRC('drawStaff', html);
+  // The register itself is drawn by staffDirRender_ -- drawStaff only fetches (see the
+  // postgres-round-trip-audit fix: a directory-only redraw for the three writes that never
+  // touch a salary, so they stop re-fetching salaryList through drawStaff -> drawSalaries()).
+  const fn = IMP_SRC('staffDirRender_', html);
   assert.match(fn, /<th>Chaneli \/ Channel<\/th>/);
   assert.ok(!/Reports to/.test(fn), 'the reports-to column is what this replaced');
   assert.ok(!/data-mgr=/.test(fn), 'and the per-person pencil with it');
@@ -2234,7 +2279,7 @@ test('portal.html: the top-up queue draws the wait and shouts when somebody has 
   const w = IMP_SRC('topupWait', html);
   assert.match(w, /m>=120\?'bad':\(m>=30\?'warn':'ok'\)/, 'minutes turn amber then red');
   assert.match(w, /done\) return '<span class="mut">/, 'a finished one is not still shouting');
-  const fn = IMP_SRC('drawTopups', html);
+  const fn = IMP_SRC('topupsRender', html);
   assert.match(fn, /longest>=120\?'<div class="note bad">/, 'and a long wait is a banner, not a tile nobody reads');
   assert.match(fn, /SOP B\.5/);
   assert.match(fn, /c\.longestWaitMins/);
@@ -2493,11 +2538,17 @@ test('portal.html: the sync report counts silence and never accuses anybody of t
 
 test('portal.html: the stock report reads both trackers, and the sync columns sort', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawStockRep', html);
-  assert.match(fn, /Promise\.all\(\[srv\('stockReqReport',STOCKR\), srv\('syncAging',SYNCQ\)\]\)/,
-    'shelf age and silence are different questions about the same handsets, on one screen');
+  const fetchFn = IMP_SRC('drawStockRep', html);
+  assert.match(fetchFn, /Promise\.all\(\[srv\('stockReqReport',STOCKR\), srv\('syncAging',SYNCQ\)\]\)/,
+    'shelf age and silence are different questions about the same handsets, on one screen -- fetched together only on the pane\'s first open');
+  const fn = IMP_SRC('stockRepRender', html);
   assert.match(fn, /\+syncSection\(sy\)/);
-  assert.match(fn, /syncWire\(m, function\(\)\{ if\(TAB==='strep'\) drawStockRep\(m\); \}\)/);
+  // The sync half re-fetches ONLY syncAging -- never stockReqReport, which a status tile or
+  // #strGo already covers on its own via stockRepRefetchReport_.
+  assert.match(fn, /syncWire\(m, function\(\)\{/);
+  assert.match(fn, /srv\('syncAging',SYNCQ\)\.then\(function\(sy2\)\{/);
+  assert.doesNotMatch(fn, /syncWire\(m, function\(\)\{ if\(TAB==='strep'\) (draw|stockRep)[A-Za-z_]*\(m\); \}\)/,
+    'the sync control must not re-fetch the report half too');
   /* Every table on this page sorts itself on a header click, so the only thing the columns
      have to do is lead with a number that means something. */
   const sec = IMP_SRC('syncSection', html);
@@ -2529,7 +2580,7 @@ test('portal.html: every target on the board says where it came from', () => {
   assert.match(src, /wadhifa: /, 'a role target names the role');
   assert.match(src, /sehemu ya /, 'a share names whose it was before it was divided');
   assert.match(src, /r\.shareOf\?' \\u00F7'\+money\(r\.shareOf\)/, 'and how many ways it went');
-  const fn = IMP_SRC('drawTargets', html);
+  const fn = IMP_SRC('targetsRender', html);
   assert.match(fn, /tgtSource\(r\)/, 'the row carries it');
   assert.match(fn, /r\.rolledQty!=null&&r\.under\?/,
     '"it increases to the higher leadership tiers" -- what everybody beneath adds up to');
@@ -2538,7 +2589,7 @@ test('portal.html: every target on the board says where it came from', () => {
 
 test('portal.html: the role scope is a source, not a scoreboard', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawTargets', html);
+  const fn = IMP_SRC('targetsRender', html);
   assert.match(fn, /TGT\.scope==='role'/);
   assert.match(fn, /<th>WADHIFA<\/th><th class="r">WANAOSHIKA<\/th>/,
     'a role has no sales of its own, so it gets its own columns');
@@ -2564,7 +2615,7 @@ test('portal.html: the raise form picks a role, then optionally a person in it',
 
 test('portal.html: the desk opens on my desk, with the whole log one click away', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawIssues', html);
+  const fn = IMP_SRC('issuesRender', html);
   assert.match(fn, /var mineOn=\(d\.view\|\|'mine'\)!=='all'/,
     'which view is live comes from the server, which decided the default');
   assert.match(fn, /Kwenye dawati langu/, 'the desk tile is what is on THIS person’s desk');

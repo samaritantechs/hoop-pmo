@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { supabase, fetchAll } from './_lib/supabase.js';
-import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole, USER_TABS, EXTRA_TABS } from './_lib/auth.js';
+import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole, USER_TABS, EXTRA_TABS,
+  clearRolesCache } from './_lib/auth.js';
+import { clearSystemOpenCache } from './_lib/system-gate.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey, addDaysKey, weekMondayKey, TZ_OFFSET_MS } from './_lib/time.js';
 import { sendMail, noticeHtml } from './_lib/mail.js';
@@ -8,7 +10,10 @@ import { nudge } from './_lib/push.js';
 import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signin.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList,
-  TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree } from './_lib/call-core.js';
+  TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree,
+  clearRosterCache, clearAgentIndex } from './_lib/call-core.js';
+import { memoByDataVersion } from './_lib/memo.js';
+import { getOldStockAux, getAgingAux, memoStock, clearStockIndex } from './_lib/stock-index.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -18,6 +23,10 @@ import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
    payload. A read-only code (AUDITOR) sees everything and changes nothing.
 
    THE POSTGRES BUDGET, warm, per fn:
+     door       every fn below sits behind gatedUser(code): 1 access_codes read (exact match,
+                THE DOOR part 1 in auth.js), the roles read memoised 30s (roleTabsOf), the
+                system-open read memoised 30s (system-gate.js) -- so a request arriving inside
+                both windows costs this pane exactly the one access_codes trip, not three.
      boot       auth+gate (cached) + summary (2-min cache; miss = 3 scoped reads)
                 + 1 teams read
      report     3 reads, date-bounded + team-scoped at the database (call-core's own)
@@ -35,7 +44,8 @@ import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
      salesAudit / agentScore   3 parallel bounded reads each (sales by date range,
                 register imei+agent columns / scoped register, agents ~1k) -- see the
                 fns' own headers; both are reads, nothing audited
-     staffDirectory  1 bounded read (~1k agents);  stockView  2 parallel bounded reads
+     staffDirectory  1 bounded register read + the loan-book branch list (memoised against
+                DATA_VERSION, 15-min TTL -- see loanBranches);  stockView  2 parallel bounded reads
      navsFor / requireNav  ZERO reads -- pure functions over the already-resolved tabs
                 (the permanent postgres rule: a permission check must never buy a trip)
    Row bounds: recovery reads two DAYS of snapshots, team-scoped; nothing reads the whole
@@ -939,8 +949,15 @@ const ageToday = (r, todayK) => (r.age_days == null ? null
   : num(r.age_days) + Math.max(0, daysApart(String(r.as_of || '').slice(0, 10), todayK)));
 
 /** Every un-enrolled handset, aged to today. One reader, so the pane, the stock report and any
-    later caller cannot each hold a different idea of what is still outstanding. */
-async function oldStockIndex(db) {
+    later caller cannot each hold a different idea of what is still outstanding.
+    Budget: 1 fresh old_stock read (never memoised -- see stock-index.js's header) + the
+    shared aux memo (devices/watu_loans/hoop_agents/hoop_sales/stock_audit -- 5 trips on a
+    miss, 0 on a hit within the 20-30s TTL). `opts.agents`, when a caller has already read
+    hoop_agents this request with a wider column set (oldStock/newStock, FIX 2 of the
+    postgres-war audit), is used instead of the memo's own narrower fetch; `opts.fresh`
+    forces the whole aux memo to re-read (stockAgingIndex passes this through for
+    stockDecide's live SOP-E gate). */
+async function oldStockIndex(db, opts) {
   const todayK = todayKey();
   let rows = [];
   let notReady = false;
@@ -966,17 +983,20 @@ async function oldStockIndex(db) {
     } else if (tableMissing(e)) notReady = true;
     else throw e;
   }
-  /* WHAT HAS SINCE BEEN FOUND. Every read is best-effort: a missing devices table means we have
-     locked nothing, which is the honest reading, not a reason to refuse the list. */
-  const locked = new Set();
+  /* WHAT HAS SINCE BEEN FOUND -- devices (locked), watu_loans, hoop_agents, hoop_sales and
+     stock_audit, all read through the shared per-db memo (api/_lib/stock-index.js) instead
+     of fetched fresh here: this used to be five trips at every one of nine call sites, and
+     one "submit a stock request" click built it twice. Every read inside the memo is still
+     best-effort -- a missing devices table means we have locked nothing, which is the honest
+     reading, not a reason to refuse the list -- see the memo's own header for why. */
+  const aux = await getOldStockAux(db, opts);
+  const locked = aux.locked;
   const sold = new Set();
-  try {
-    for (const d of await fetchAll(() => db.from('devices').select('imei'))) locked.add(String(d.imei));
-  } catch (ignored) { /* nothing enrolled yet */ }
 
   /* SOLD MEANS SOLD, WHICHEVER BOOK SAYS SO -- and it stays sold after the book forgets.
      -------------------------------------------------------------------------------------
-     Three reads, and the third is the one that makes the hand-off permanent:
+     Three reads (now three memoised feeds), and the third is the one that makes the
+     hand-off permanent:
 
        watu_loans   the Watu deck
        hoop_sales   our own shop's export -- a different upload, the same event. A handset
@@ -989,9 +1009,6 @@ async function oldStockIndex(db) {
 
      Membership in stock_audit is not itself evidence -- that table also holds handsets merged
      off the stock report alone -- so it counts only where a sale was actually captured. */
-  const feedImeis = async (table, cols) => {
-    try { return await fetchAll(() => db.from(table).select(cols)); } catch (ignored) { return []; }
-  };
   /* WHERE A HOLDER WORKS, built from the same read that answers "has it sold".
      -------------------------------------------------------------------------------------
        "the location we used as in PCOs calling not the kinondoni default"
@@ -1013,16 +1030,15 @@ async function oldStockIndex(db) {
     if (!t) { t = new Map(); branchTally.set(k, t); }
     t.set(b, (t.get(b) || 0) + 1);
   };
-  /* Widened to carry the agent and the branch, and narrowed again on a database that predates
-     the offline-queue migration -- the sold-or-not answer must not depend on a column that
-     arrived later. */
-  let loans = await feedImeis('watu_loans', 'imei, agent, branch');
-  if (!loans.length) loans = await feedImeis('watu_loans', 'imei');
-  for (const l of loans) { sold.add(String(l.imei)); noteBranch(l.agent, l.branch); }
+  /* The widen-then-narrow fallback (a database that predates the offline-queue migration)
+     now lives inside getOldStockAux -- see stock-index.js. */
+  for (const l of aux.loans) { sold.add(String(l.imei)); noteBranch(l.agent, l.branch); }
   /* The staff register answers first where it has been filled in: somebody typed that on
-     purpose, and a deck is a pile of receipts. */
+     purpose, and a deck is a pile of receipts. A caller that already read hoop_agents this
+     request with the wider column set every stock fn needs (oldStock/newStock, FIX 2) hands
+     it here instead of a second fetch; anybody else gets the memoised standalone read. */
   const staffBranch = new Map();
-  for (const a of await feedImeis('hoop_agents', 'name, branch')) {
+  for (const a of (opts && opts.agents) || aux.agents) {
     const k = nameKey(a.name || '');
     const b = String(a.branch == null ? '' : a.branch).trim();
     if (k && b && !staffBranch.has(k)) staffBranch.set(k, b);
@@ -1062,8 +1078,8 @@ async function oldStockIndex(db) {
     const b = t ? commonest(t) : null;
     return b ? { location: b, locFrom: 'sales', locNew: true } : { location: '', locFrom: '', locNew: false };
   };
-  for (const s of await feedImeis('hoop_sales', 'imei')) sold.add(String(s.imei));
-  for (const r of await feedImeis('stock_audit', 'imei, sale_date, customer, price')) {
+  for (const s of aux.sales) sold.add(String(s.imei));
+  for (const r of aux.audit) {
     if (stampedSale(r)) sold.add(String(r.imei));
   }
 
@@ -1088,9 +1104,12 @@ async function oldStockIndex(db) {
 /* THE AGING STOCK TRACKER (SOP E.3), read off the shop's OWN daily upload.
    hoop_aged_stock already carries age_days per serial per agent, so the gate and the tracker
    are the same file -- never a second private idea of what "old" means. The newest as_of is
-   the tracker: an aging report from last week is not evidence about this morning. */
-async function stockAgingIndex(db) {
-  const policy = await stockPolicy(db);
+   the tracker: an aging report from last week is not evidence about this morning.
+   Budget: the shared aux memo's hoop_aged_stock + policy reads (0 trips on a hit) plus
+   oldStockIndex's own cost (see there). `opts.fresh` bypasses BOTH -- stockDecide passes it
+   so the SOP-E release decision is never made against a memo a deviceEnrol just outran. */
+async function stockAgingIndex(db, opts) {
+  const fresh = !!(opts && opts.fresh);
   /* THE AGEING NOW COMES FROM THE TWO STOCK PANES, not from a daily upload.
      -------------------------------------------------------------------------------------
        "So use these two navs to update data of aging stock in stock reports -- not uploading
@@ -1104,11 +1123,8 @@ async function stockAgingIndex(db) {
      somebody does paste is more current than a list from last month. Dropping it outright
      would throw away the one feed that can still correct this, and neither list is a superset
      of the other. Where both name a serial, the newer as_of wins. */
+  const { aged: uploaded, policy } = await getAgingAux(db, { fresh }, stockPolicy);
   const todayK = todayKey();
-  let uploaded = [];
-  try {
-    uploaded = await fetchAll(() => db.from('hoop_aged_stock').select('serial, agent, item, age_days, as_of'));
-  } catch (e) { uploaded = []; }
   let asOf = null;
   for (const r of uploaded) if (r.as_of && (!asOf || String(r.as_of) > String(asOf))) asOf = String(r.as_of).slice(0, 10);
   const fromUpload = uploaded.filter(r => String(r.as_of).slice(0, 10) === asOf);
@@ -1117,7 +1133,7 @@ async function stockAgingIndex(db) {
      whole reason it can stand in for a daily file. */
   let fromOld = [];
   try {
-    const idx = await oldStockIndex(db);
+    const idx = await oldStockIndex(db, { fresh });
     fromOld = idx.open.map(r => ({ serial: r.imei, agent: r.agent, item: r.item,
       age_days: r.age, as_of: todayK }));
   } catch (ignored) { fromOld = []; }
@@ -1169,6 +1185,11 @@ const TOPUP_NOT_READY = 'Jedwali la top-up halijatengenezwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-09-09-topups.sql kwenye Supabase. '
   + '/ The top-up table has not been created yet — run that migration first.';
 const TOPUP_STATES = ['requested', 'verified', 'paid', 'unlocked', 'rejected'];
+/* STILL MOVING THROUGH THE PIPELINE -- the whole vocabulary minus the two finished states.
+   This is exactly what the desk's default view has always SHOWN (see topupQueue's own
+   `shown` filter, unchanged below), so scoping the default READ to the same three statuses
+   costs nothing the screen was not already throwing away. */
+const TOPUP_LIVE = ['requested', 'verified', 'paid'];
 const TOPUP_COLS = 'id, requested_at, staff_code, staff_name, staff_role, imei, customer, '
   + 'customer_phone, payer_name, paid_amount, proof_ref, price, balance, status, comment, '
   + 'verified_by, verified_at, paid_by, paid_at, payment_ref, unlocked_by, unlocked_at, '
@@ -1976,15 +1997,22 @@ function stockScopeRole(user) {
     the one-level check would miss them. salesTree.descendants walks the whole subtree, so
     an RSM sees their team leaders' agents too -- a superset of what the one-level check
     ever found, never a narrower one. */
-async function stockAllow(db, user) {
+/* Budget: 0 trips for STORE/ADMIN (returns null before any read); for RSM/TEAM LEADER, 1
+   hoop_agents read -- or 0 when `opts.agents` (a caller that already read it this request
+   with the wider column set, FIX 2 of the postgres-war audit) is handed in instead. */
+async function stockAllow(db, user, opts) {
   const role = stockScopeRole(user);
   if (!role) return null;
   const me = nameKey(user.name);
   const mine = new Set(me ? [me] : []);
   if ((role === 'RSM' || role === 'TEAM LEADER') && me) {
-    let agents = [];
-    try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
-    catch (ignored) { agents = []; }
+    // A pre-fetched register (oldStock/newStock) skips this fetch entirely; anybody calling
+    // without one (oldStockHolder, oldStockRound) keeps the standalone read, unchanged.
+    let agents = opts && opts.agents;
+    if (!agents) {
+      try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
+      catch (ignored) { agents = []; }
+    }
     for (const k of salesTree(agents).descendants(me)) mine.add(k);
   }
   const fn = (holder, agent, rsm) => {
@@ -2148,7 +2176,14 @@ async function locateStock(db, imeis) {
     `toRoleFallback` exists only for a pre-flow-migration document with no to_role column at
     all -- transferAccept passes the accepting user's own role, exactly as it always guessed;
     transferSign's three-way completion can never hit this case (a three-way document cannot
-    exist before the flow migration that gives it a to_role), so it passes ''. */
+    exist before the flow migration that gives it a to_role), so it passes ''.
+
+    NOT a clearStockIndex(db) buster (checked against every table this writes, postgres-war
+    FIX 1): it moves devices.holder and old_stock.agent/rsm, never inserting or deleting a
+    row in either -- the memo's `devices` entry is a Set of which IMEIs EXIST, unaffected by
+    a holder changing, and old_stock is never memoised at all (read fresh every time, see
+    stock-index.js's header). Its own hoop_agents read (managerIndex, below) is a plain,
+    unmemoised fetch, same as before. */
 async function trMoveStock(db, t, actorName, toRoleFallback) {
   /* WHOSE HANDS IT GOES INTO. The receiver's name -- unless the receiver is the store desk,
      whose stock the register has always written under SUPER AGENT ("role store =
@@ -2237,7 +2272,11 @@ function mintStamp() {
   mintTick = (mintTick + 1) % 1000;
   return new Date().toISOString().replace('Z', String(mintTick).padStart(3, '0') + 'Z');
 }
-async function syncStaffFromStock(db, user, pairs) {
+/* opts.agents / opts.codes: a caller that has already read hoop_agents / access_codes this
+   request (oldStock/newStock, FIX 2 of the postgres-war audit) hands them here instead of
+   the two standalone reads below -- each still falls back to its own fetch when called
+   without one. */
+async function syncStaffFromStock(db, user, pairs, opts) {
   const out = { staffAdded: 0, codesAdded: 0, noPhone: 0, note: '', rolesCreated: [], rolesUnconfigured: [] };
   if (!user || isReadOnly(user)) return out;
   try {
@@ -2259,11 +2298,15 @@ async function syncStaffFromStock(db, user, pairs) {
     if (!people.size) return out;
 
     // 2. What the register and the codes already know.
-    let staff = [], codes = [];
-    try { staff = await fetchAll(() => db.from('hoop_agents').select('phone, name, role')); }
-    catch (e) { if (!tableMissing(e)) throw e; staff = null; }
-    try { codes = await fetchAll(() => db.from('access_codes').select('code, name, role')); }
-    catch (e) { if (!tableMissing(e)) throw e; codes = null; }
+    let staff = opts && opts.agents, codes = opts && opts.codes;
+    if (!staff) {
+      try { staff = await fetchAll(() => db.from('hoop_agents').select('phone, name, role')); }
+      catch (e) { if (!tableMissing(e)) throw e; staff = null; }
+    }
+    if (!codes) {
+      try { codes = await fetchAll(() => db.from('access_codes').select('code, name, role')); }
+      catch (e) { if (!tableMissing(e)) throw e; codes = null; }
+    }
 
     // 3. Staff rows: only for a person with a phone (the register's key) the register lacks.
     //    Stored the way the enrolment desk stores it (phone0: 0 + nine digits), matched the way
@@ -2797,6 +2840,345 @@ async function weekOf(db, user, args, table, col) {
   // forward into a week that has not happened.
   const from = (latest && mondayOf(latest) < thisMon) ? mondayOf(latest) : thisMon;
   return { from, to: dayShift(from, 6), thisWeek: from === thisMon, fellBack: from !== thisMon };
+}
+
+/* THE COMMISSION FORM'S TWO DROPDOWNS -- every role a rate can be set against, every model
+   a phone can be. Both are read off the whole staff register and the whole loan book, which
+   the postgres-war audit measured at 4,073 rows to fill two <select>s that do not change
+   between one open of the pane and the next. Memoised per database against DATA_VERSION
+   (an upload moves it) with a 15-minute ceiling on top, exactly as call-core.js's own
+   agentIndex is -- so the register and the loan book are scanned once per version or per
+   quarter hour, not once per commission-pane open. */
+const commRolesItemsMemo = memoByDataVersion(15 * 60000);
+async function commRolesItems(db) {
+  return commRolesItemsMemo(db, async () => {
+    let roles = [], items = [];
+    try {
+      const agents = await fetchAll(() => db.from('hoop_agents').select('role'));
+      roles = [...new Set(agents.map(a => K(a.role || '').replace(/\s+/g, '_')).filter(Boolean))].sort();
+    } catch (e) { roles = []; }
+    try {
+      const models = await fetchAll(() => db.from('watu_loans').select('model'));
+      items = [...new Set(models.map(m => K(m.model || '')).filter(Boolean))].sort();
+    } catch (e) { items = []; }
+    return { roles, items };
+  });
+}
+
+/* WHO AN ISSUE CAN BE SENT TO -- every role, and the people holding it, off access_codes.
+   The raise form and the desk BOTH read this, once per sub-tab switch, and access_codes is
+   scanned whole to build it: the postgres-war audit measured 373 rows for a form that is
+   the same list at 09:03 as it was at 09:00. Memoised per database against DATA_VERSION
+   with a 5-minute ceiling -- shorter than commRolesItems' fifteen, because a person hired
+   or given a new access code this morning should show up on the raise form within the same
+   coffee break, not the same quarter hour. */
+const issueTargetsMemo = memoByDataVersion(5 * 60000);
+async function issueRoleIndex(db) {
+  return issueTargetsMemo(db, async () => {
+    let codes = [];
+    try {
+      codes = await fetchAll(() => db.from('access_codes').select('name, role'));
+    } catch (e) { codes = []; }
+    const by = new Map();
+    for (const c of codes) {
+      const role = K(c.role).replace(/[\s-]+/g, '_');
+      const name = String(c.name || '').trim();
+      if (!role) continue;
+      if (!by.has(role)) by.set(role, new Set());
+      if (name) by.get(role).add(name);
+    }
+    /* A role somebody holds but that no code names is still offerable -- and so are the
+       departments this log was born with, so an office mid-way through moving from one
+       vocabulary to the other can address an issue either way. */
+    for (const d of ISSUE_DEPTS) if (!by.has(d)) by.set(d, new Set());
+    return [...by.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1))
+      .map(([role, people]) => ({ role, people: [...people].sort() }));
+  });
+}
+
+/* EVERY BRANCH SPELLING THE LOAN BOOK KNOWS, for the staff directory's "branches that already
+   exist" list. The whole of watu_loans (3,000+ rows in the audit's fixture) used to be read
+   down to one column on every open of a pane that is a staff list first and a place-name
+   picker second. Memoised per database against DATA_VERSION -- an upload is exactly the event
+   that can add a new branch spelling to the loan book -- with the same 15-minute ceiling as
+   commRolesItems, for the same reason: this list changes only as fast as the deck does. */
+const loanBranchesMemo = memoByDataVersion(15 * 60000);
+async function loanBranches(db) {
+  return loanBranchesMemo(db, async () => {
+    const places = new Set();
+    for (const l of await fetchAll(() => db.from('watu_loans').select('branch'))) {
+      const b = String(l.branch == null ? '' : l.branch).trim();
+      if (b) places.add(b);
+    }
+    return [...places];
+  });
+}
+
+/** THE FEEDS BEHIND newStock's join, memoised 5 minutes (postgres-war FIX 3; trendCache-style,
+    see stockAccount ~4046): watu_loans, hoop_sales, hoop_agents, hoop_aged_stock and old_stock
+    are Sipho's and Watu's own books, and none of them holds a LIVE fact -- they change on an
+    upload or an enrolment, not between one click and the next, so five reads become one per
+    TTL window shared by every caller (no fence to key on: they are unscoped feeds, read whole,
+    the same for everyone). Busted by clearStockIndex(db) -- deviceEnrol, deviceDelete, an
+    upload's agents/aged-stock/sales imports.
+
+    DEVICES AND stock_audit ARE DELIBERATELY NOT IN HERE. newStock's own header is explicit --
+    "THE STATE CHANGES, SO IT IS NEVER STAMPED... read live from `devices` on every open" -- and
+    it is also the table this very function WRITES to, so it has to see its own writes back on
+    the very next call (the idempotent-stamp test) with nothing else in between. Caching either
+    would mean an achia five minutes ago still reading as locked, or a stamp that keeps writing
+    the same row every open because it never saw itself land. Both stay a fresh, per-call read;
+    see newStockBuild. */
+async function newStockFeeds(db, opts) {
+  const feed = async (table, cols) => {
+    try { return await fetchAll(() => db.from(table).select(cols)); } catch (ignored) { return []; }
+  };
+  const { value } = await memoStock(db, 'newstockFeeds', 5 * 60000, opts, async () => {
+    const [watu, sales, agents, aged, olds] = await Promise.all([
+      feed('watu_loans', 'imei, client_name, client_mobile, agent, team, shop, model, '
+        + 'model_details, disbursed_date, price, guarantor_name, guarantor_phone, branch'),
+      feed('hoop_sales', 'imei, sale_date, branch, agent, client_name, client_phone, model, '
+        + 'commission_agent, commission_phone, price'),
+      feed('hoop_agents', 'phone, name, role, branch, manager, active'),
+      feed('hoop_aged_stock', 'serial, agent, item'),
+      feed('old_stock', 'imei, item, agent, agent_phone, rsm, rsm_phone'),
+    ]);
+    return { watu, sales, agents, aged, olds };
+  });
+  return value;
+}
+
+/** newStock's own join. devices and stock_audit are read FRESH on every call (see
+    newStockFeeds's header for why); the other five tables come from the shared 5-minute memo.
+    Everything past that point is exactly what newStock used to do inline, in the same order,
+    with the same fallbacks. */
+async function newStockBuild(db, user) {
+  const at = new Date().toISOString();
+  const now = Date.now();
+
+  let cur = [];
+  let notReady = false;
+  try {
+    cur = await fetchAll(() => db.from('stock_audit').select(NEWSTOCK_COLS));
+  } catch (e) {
+    if (!tableMissing(e)) throw e;
+    /* NOT AN EMPTY AUDIT -- an audit that cannot be saved yet. The pane still computes and
+       still shows every row, because the joins underneath work perfectly well; what it
+       cannot do is REMEMBER, which is the one thing worth saying out loud. */
+    notReady = true;
+  }
+  const stampedBy = new Map(cur.map(r => [String(r.imei), r]));
+
+  /* THE POPULATION IS THE REGISTER, not the sales books: "our existing imeis since we
+     started locking on our own". A phone nobody locked is somebody else's audit. */
+  /* WHERE IT WAS WHEN IT LAST SPOKE, on the same row as what it is doing.
+     -----------------------------------------------------------------------------------
+       "At hali/status column, below status, add the second in one [location coordinate
+        link] so that we can click to view where the phone is, and always stamp the latest
+        read coordinates whenever the phone pings the system. So even if achia we'll always
+        find the latest ping coordinate location."
+
+     NOTHING NEW IS STAMPED HERE, because the handset has been doing it since the location
+     migration: every beat writes last_lat/last_lng and, separately, WHEN that fix was taken.
+     The two timestamps are never collapsed -- a phone that beat a minute ago can be carrying
+     a fix from Tuesday -- so the pane shows the fix's own age rather than the beat's.
+
+     AND ACHIA DOES NOT ERASE IT. deviceSetState writes state, reason, who and when; it has
+     never touched the position columns, so the last place a released handset was seen
+     survives the release. That is the case the owner asked about and the one that matters
+     most: a phone let go is a phone nobody is tracking any more, and its last fix is all
+     that is left of it. */
+  const DEV_CORE = 'imei, item, holder, state, state_by, state_at, last_seen, customer';
+  const DEV_LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
+  let devs = [];
+  let noDevices = false;
+  let hasLoc = true;
+  try {
+    devs = await fetchAll(() => db.from('devices').select(DEV_CORE + DEV_LOC));
+  } catch (e) {
+    /* THE COLUMN CHECK COMES FIRST, and the order is the whole of it. tableMissing() matches
+       a missing COLUMN as well as a missing table -- deliberately, because for most callers
+       both mean "run the migration" -- so asking it first would answer a missing `last_lat`
+       with "the devices register does not exist". That is a false alarm about the wrong
+       thing, on the pane somebody opens when stock has gone missing. */
+    if (/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) {
+      /* The audit without a map is still the audit; the audit without itself is an outage.
+         PostgREST refuses a whole select over one unknown column, so a deployment that has
+         not run the location migration drops back rather than going dark. */
+      hasLoc = false;
+      devs = await fetchAll(() => db.from('devices').select(DEV_CORE));
+    } else if (tableMissing(e)) noDevices = true;
+    else throw e;
+  }
+
+  const { watu, sales, agents, aged, olds } = await newStockFeeds(db);
+
+  /* THE EARLIEST RECEIPT WINS where the shop wrote more than one for an IMEI. A later
+     receipt against the same handset is a top-up or a correction; the ORIGINAL sale is the
+     one this audit is about, and "first catch" has to mean the first sale, not the first row
+     the database happened to return. */
+  const salesBy = new Map();
+  for (const s of sales) {
+    const k = String(s.imei || '');
+    if (!k) continue;
+    const had = salesBy.get(k);
+    if (!had || String(s.sale_date || '9999') < String(had.sale_date || '9999')) salesBy.set(k, s);
+  }
+  const ctx = {
+    watu: new Map(watu.filter(r => r.imei).map(r => [String(r.imei), r])),
+    sales: salesBy,
+    aged: new Map(aged.filter(r => r.serial).map(r => [String(r.serial), r])),
+    byName: new Map(agents.filter(r => r.name).map(r => [nameKey(r.name), r])),
+    byPhone: new Map(agents.filter(r => r.phone).map(r => [pnorm(r.phone), r])),
+    tree: salesTree(agents),
+  };
+
+  /* AND THE ONES THAT SOLD WITHOUT EVER BEING LOCKED.
+     -----------------------------------------------------------------------------------
+       "If a phone imei once reads in sales [in watu deck] and it was in old stock not in
+        new stock, move its column data needed into NEW STOCK, so that we can always get the
+        update of current activities no matter the stock age."
+
+     The register was the whole population: we locked it, so it is ours to watch. But a
+     handset off the old list that turns up SOLD is current activity by any reading -- the
+     very thing this pane is opened for -- and leaving it in OLD STOCK would file a live sale
+     under "never enrolled, gathering dust".
+
+     So a sold handset joins on the strength of the sale, with no device row behind it. Its
+     status reads `haijafungwa` rather than being dressed as one of the four states the
+     register can hold: we do not control this phone, and the pane must not imply we do.
+
+     ANY SALE BOOK MOVES IT, AND THE MOVE IS PERMANENT.
+     -----------------------------------------------------------------------------------
+     Both sale feeds are asked -- the Watu deck and our own shop's export are two uploads of
+     the same event, and a handset written in one and not the other is still sold -- and so
+     is the stamp we made last time. That third test is what makes this one-way: the decks
+     are re-uploaded over themselves with rows deleted, and without it a phone that moved in
+     September would reappear in OLD STOCK in October because Watu trimmed its export.
+
+     oldStockIndex() asks the identical question, deliberately. The two lists are defined
+     against each other, so the day they disagreed a handset would be on both or on neither
+     -- and the whole point of having no `moved` column is that there is only one answer.
+     `olds` comes off the memoised feed above; the FILTER against `have` still runs fresh
+     every call, off the live devices list, so a handset locked seconds ago is excluded
+     immediately rather than after the memo's own TTL. */
+  const have = new Set(devs.map(d => String(d.imei)));
+  const joined = olds.filter(o => {
+    const k = String(o.imei);
+    if (have.has(k)) return false;   // locked on a visit: it is in the register on its own
+    return ctx.watu.has(k) || ctx.sales.has(k) || stampedSale(stampedBy.get(k));
+  });
+
+  let rows = [];
+  const changed = [];
+  for (const o of joined) {
+      /* Stamped exactly like a locked one -- a sale is a sale -- then given the shape of a row
+         with no device behind it. */
+      const imei = String(o.imei);
+      const was = stampedBy.get(imei) || null;
+      const f = newStockFill(imei, was, ctx);
+      if (f.hits) changed.push(newStockRow(imei, f, was, at));
+      const R = newStockRsm(f, o.agent, ctx, o.rsm, o.rsm_phone);
+      rows.push({
+        imei,
+        rsm: R.rsm, rsmPhone: R.phone,
+        agent: f.row.agent || o.agent || '', agentPhone: f.row.agent_phone || o.agent_phone || '',
+        holder: o.agent || '',
+        customer: f.row.customer || '', customerPhone: f.row.customer_phone || '',
+        price: f.row.price == null ? null : num(f.row.price),
+        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
+        branch: f.row.branch || '', model: f.row.model || o.item || '',
+        saleDate: f.row.sale_date || null,
+        status: 'unlocked', neverLocked: true,
+        by: '', atMs: null,
+        seenAt: null, neverSeen: true, silentDays: null,
+        lat: null, lng: null, locAcc: null, locAt: null,
+        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
+        src: R.src,
+      });
+    }
+    for (const d of devs) {
+      const imei = String(d.imei);
+      const was = stampedBy.get(imei) || null;
+      const f = newStockFill(imei, was, ctx);
+      if (f.hits) changed.push(newStockRow(imei, f, was, at));
+      /* THE BLANK RSM, ANSWERED FROM THE HOLDER -- see rsmOfHolder. Shown, searched and fenced
+         on exactly like a stamped one; written into stock_audit never. */
+      const R = newStockRsm(f, d.holder, ctx);
+      const seen = d.last_seen ? Date.parse(d.last_seen) : null;
+      rows.push({
+        imei,
+        rsm: R.rsm, rsmPhone: R.phone,
+        agent: f.row.agent || '', agentPhone: f.row.agent_phone || '',
+        holder: d.holder || '',                 // whose hands it is in -- what a transfer moves
+        /* devices.customer is stamped at the till by whoever sold it, so it stands in where
+           no sales feed has ever mentioned this handset. */
+        customer: f.row.customer || d.customer || '', customerPhone: f.row.customer_phone || '',
+        price: f.row.price == null ? null : num(f.row.price),
+        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
+        branch: f.row.branch || '', model: f.row.model || d.item || '',
+        saleDate: f.row.sale_date || null,
+        /* THE THREE WORDS THE OWNER USES, and the fourth this register also has. `lost` is not
+           in their list because it is rare -- but calling it "locked" because that is what the
+           handset does would hide a written-off phone inside the locked count, which is the
+           one number this audit is read for. */
+        status: NEWSTOCK_STATE[String(d.state || '')] || String(d.state || ''),
+        neverLocked: false,
+        by: d.state_by || '', atMs: d.state_at ? Date.parse(d.state_at) : null,
+        /* The position rides under the status because they answer one question together --
+           what is this handset doing, and where. `locAt` is the fix's OWN age, not the beat's:
+           collapsing them would let the register claim a phone is somewhere it left days ago.
+           `locAcc` travels too, because a 2,000m fix is a suburb and drawing it as a pin sends
+           somebody to the wrong building. */
+        lat: d.last_lat == null ? null : Number(d.last_lat),
+        lng: d.last_lng == null ? null : Number(d.last_lng),
+        locAcc: d.last_loc_acc == null ? null : Number(d.last_loc_acc),
+        locAt: d.last_loc_at ? Date.parse(d.last_loc_at) : null,
+        seenAt: seen, neverSeen: !seen,
+        silentDays: seen ? Math.max(0, Math.floor((now - seen) / 86400000)) : null,
+        /* THE GAP COUNT IS ABOUT THE STAMP, not the screen. A derived RSM does not close it:
+           `gappy` asks how much of the SALE the feeds have never answered, and whose hands the
+           handset is in today is not an answer to that question. */
+        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
+        src: R.src,
+      });
+    }
+
+  /* THE STAMP. Only rows that actually GAINED something are written -- on a steady morning
+     that is none of them -- and each one carries the whole merged row, so a column filled
+     last month survives a feed that has since gone blank. */
+  let stamped = 0;
+  if (!notReady && !isReadOnly(user) && changed.length) {
+    for (let i = 0; i < changed.length; i += 200) {
+      const slice = changed.slice(i, i + 200);
+      const { error } = await db.from('stock_audit').upsert(slice, { onConflict: 'imei' });
+      /* POSTGREST REFUSES BY RESOLVING, NOT BY THROWING. A stamp that reported success on a
+         write the database rejected is the exact failure this table exists to prevent: the
+         deck moves on, and the office believes the sale was captured. */
+      if (error) {
+        if (!tableMissing(error)) throw new Error(error.message);
+        notReady = true; stamped = 0; break;
+      }
+      stamped += slice.length;
+    }
+  }
+
+  /* WHO THE STOCK NAMES BECOMES A SYSTEM USER -- see syncStaffFromStock. Off the fenced rows
+     would be wrong (an RSM's open must not be the only thing that minted their agents' codes
+     -- it is the DESK's open that should), so it reads the whole register's rsm/agent columns
+     before the fence; it writes only what is missing, and only for a code that can write.
+     `agents` is the SAME hoop_agents feed the join above already paid for -- 0 further reads. */
+  const staffSync = await syncStaffFromStock(db, user,
+    rows.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })),
+    { agents });
+
+  /* WORST FIRST: a handset that has never once spoken, then the longest silence. That is the
+     order somebody chasing stock wants, and every column still sorts on its own click. */
+  rows.sort((x, y) => (y.neverSeen ? 1 : 0) - (x.neverSeen ? 1 : 0)
+    || (y.silentDays || 0) - (x.silentDays || 0)
+    || String(x.imei).localeCompare(String(y.imei)));
+
+  return { rows, agents, notReady, noDevices, hasLoc, stamped, staffSync };
 }
 
 const FNS = {
@@ -3431,6 +3813,48 @@ const FNS = {
     return { ...value, cached: false };
   },
 
+  /* =====================================================================================
+     ONE WEEK CHANGE, ONE TRIP -- the dashboard used to be four.
+
+       landing fired lockedTrend + recoveryWeek + (salesWeek if scorecards) + (stockAccount
+       if stock) as four separate POSTs, every one of them paying the door (auth + gate
+       reads) before its own read even starts; the week arrows then refired all four; and
+       recoveryWeek was fetched TWICE more, once each by drawCreditRecovery and
+       drawRecoveryTrend, for the identical week.
+
+     This does not recompute anything -- it calls the four existing FNS the way the client
+     used to, under the SAME nav gates each one already enforces, and hands back whatever
+     they returned. ONE DEFINITION of each figure stays true: lockedTrend, recoveryWeek,
+     salesWeek and stockAccount are the only place any of these numbers is computed, this
+     just stops asking for them four separate times. Each still rides its own five-minute
+     trendCache entry, so a second dashboardWeek call in that window is nearly free.
+
+     scorecards and stock are gated here rather than left to throw, because a code holding
+     only `dashboard` is meant to see a card missing, not an error string where it should
+     be -- the exact reason salesWeek/stockAccount are never called for a nav the code does
+     not hold. Reads navsFor(user), the one list requireNav itself reads, so this can never
+     drift into granting a pane requireNav would refuse.
+
+     NOT folded into boot: boot's summary is a one-day snapshot and boot is also called from
+     the team-code mint/rotate chain, which has nothing to do with a week of dashboard
+     charts. */
+  async dashboardWeek(db, user, args) {
+    requireNav(user, 'dashboard');
+    const have = navsFor(user);
+    const week = String((args && args.week) || '').slice(0, 10);
+    // The same arithmetic drawDashStock used to do on the client (mondayOf_ + addDays_(…,6))
+    // -- "the book as it stood at the end of that week" -- so an explicit week asks
+    // stockAccount for the same day it always did, and an empty one still means "latest".
+    const stockArgs = /^\d{4}-\d{2}-\d{2}$/.test(week) ? { asOf: dayShift(mondayOf(week), 6) } : {};
+    const [trend, recovery, sales, stock] = await Promise.all([
+      FNS.lockedTrend(db, user, args),
+      FNS.recoveryWeek(db, user, args),
+      have.includes('scorecards') ? FNS.salesWeek(db, user, args) : Promise.resolve(null),
+      have.includes('stock') ? FNS.stockAccount(db, user, stockArgs) : Promise.resolve(null),
+    ]);
+    return { ok: true, trend, recovery, sales, stock };
+  },
+
   /* RECOVERY -- who came back after our calls. The newest two uploads, diffed per IMEI:
      paid for the first time, reconnected (days_offline fell), or sank deeper. */
   async recovery(db, user) {
@@ -3688,7 +4112,14 @@ const FNS = {
       last_comment: a.comment || null, comment_by: user.name, comment_at: now, updated_at: now,
     }).eq('imei', ref);
     if (uErr) throw new Error(uErr.message);
-    return { ok: true, imei: ref, savedAt: now };
+    /* THE NEW ROW RIDES BACK ON THE WRITE. The drawer used to follow this with its own
+       srv('customerComments') just to learn the one row it had itself just inserted --
+       exactly the shape customerComments already returns per item, so the client can
+       prepend it to the history it is already holding instead of asking the server to
+       read the whole list back. */
+    return { ok: true, imei: ref, savedAt: now,
+      comment: a.comment || null, fu_status: a.fu || null, promise_date: a.promiseDate || null,
+      created_by: user.name, created_at: now };
   },
 
   async customerComments(db, user, args) {
@@ -4492,7 +4923,13 @@ const FNS = {
      enrolment station can scan a box or paste a column straight out of Sipho's report;
      the stock report itself fills in model and holder where it knows them.
      Idempotent: re-enrolling a phone already on the registry is a no-op that reports
-     itself, never a duplicate and never a silent state reset. */
+     itself, never a duplicate and never a silent state reset.
+     Budget: 2 parallel bounded reads (devices, hoop_aged_stock, both .in()) + a bounded
+     device_tokens read for IMEIs new to the register + up to 4 chunked writes (devices
+     insert, device_events insert, a rejoin update, a revive update+insert) -- each only when
+     that group of IMEIs is non-empty. Busts the stock-index memo (clearStockIndex) only when
+     it actually inserted a device: a rejoin or revive touches no IMEI the memo did not
+     already know existed. */
   async deviceEnrol(db, user, args) {
     /* PROVISIONING IS THE BENCH'S OWN WORK: the store keeper puts the app on the phone,
        so enrolling belongs with locking. */
@@ -4663,6 +5100,12 @@ const FNS = {
       if (eErr) throw new Error(eErr.message);
     }
 
+    /* THE STOCK-INDEX MEMO'S `devices` READ IS A SET OF WHICH IMEIS EXIST -- and this is the
+       one place that changes it (a `revive` is a state flip on a row already there, which the
+       memo never cared about). Busted only when something was actually inserted: a rejoin- or
+       revive-only call touches no imei the memo did not already know about. */
+    if (fresh.length) clearStockIndex(db);
+
     return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length,
       unknownToStock: fresh.filter(i => !stockBy.has(i)).length,
       /* Said out loud on the screen, because it is a state change the operator did not
@@ -4707,7 +5150,11 @@ const FNS = {
      than this function reaching across automatically: these are two separate companies'
      deployments with no standing trust between their backends. The only channel this uses
      is the one that already exists and is already narrow -- the handset itself, proving its
-     own IMEI against a batch, exactly like a bench enrolment. */
+     own IMEI against a batch, exactly like a bench enrolment.
+     Budget: 1 bounded devices read (.in) + an optional cross-office HTTP call for the batch
+     (no batch pasted) + up to 2 writes (devices update, device_events insert) when at least
+     one IMEI is eligible. Not a stock-index buster: it writes shift_server/shift_batch/
+     shift_at, never the row's existence. */
   async deviceShift(db, user, args) {
     requireWrite(user); requireNav(user, 'devlock');
     const a = args || {};
@@ -4767,7 +5214,11 @@ const FNS = {
      setting to fall back to any more, and no REASON line on the lock screen at all, ordered
      lock or write-off alike -- see LockActivity.java. A reason typed here still lands in
      state_reason and the portal's own history (deviceHistory), it just never travels onto
-     glass a customer or an agent can read. */
+     glass a customer or an agent can read.
+     Budget: 1 bounded devices read (.in) + up to 2 writes (devices update, device_events
+     insert) when at least one IMEI actually changes state + nudge()'s own push, not a DB
+     trip. Not a stock-index buster (postgres-war FIX 1): it changes devices.state on rows
+     that already exist, never which IMEIs exist -- the memo's only fact about this table. */
   async deviceSetState(db, user, args) {
     requireWrite(user);
     const a = args || {};
@@ -4913,7 +5364,8 @@ const FNS = {
 
   /* ONE PHONE'S WHOLE STORY -- its current row and every state change ever ordered against
      it. This is what somebody opens when a customer is standing in front of them asking
-     why their phone is locked. */
+     why their phone is locked.
+     Budget: 2 parallel keyed reads (devices, device_events -- both .eq('imei', ...)). */
   async deviceHistory(db, user, args) {
     /* BOTH PANES SEE EVERY PHONE. A store keeper who cannot tell whether the handset in
        their hand is locked cannot do the one job they have. */
@@ -4980,7 +5432,9 @@ const FNS = {
      anything -- those are decisions taken in this portal by a signed-in person and merely
      RELAYED to whoever presents the token. The worst it buys is a lie about one phone's
      battery, position or screen state. Stranding the handset to close that is the more
-     expensive mistake, and it is the one that would be made in a hurry. */
+     expensive mistake, and it is the one that would be made in a hurry.
+     Budget: 1 keyed devices read; a device the register no longer lists costs one more,
+     keyed, against device_tokens. */
   async deviceToken(db, user, args) {
     /* A token is the credential that lets a handset be provisioned at all -- bench work. */
     requireWrite(user); requireNav(user, 'devlock');
@@ -5034,7 +5488,10 @@ const FNS = {
 
      A LOCKED PHONE IS REFUSED. Deleting the row of a phone that is currently locked would
      strand it: locked forever, with nothing on the register to unlock it from. Unlock it
-     first, watch it confirm, then delete. */
+     first, watch it confirm, then delete.
+     Budget: 1 keyed devices read + 1 device_tokens upsert (when the row carried a token) +
+     2 keyed deletes (device_events, devices). Busts the stock-index memo: this removes an
+     IMEI the memo's `devices` Set said existed. */
   async deviceDelete(db, user, args) {
     /* An eraser on the register the bench keeps. */
     requireWrite(user); requireNav(user, 'devlock');
@@ -5173,6 +5630,9 @@ const FNS = {
     await db.from('device_events').delete().eq('imei', imei);
     const { error } = await db.from('devices').delete().eq('imei', imei);
     if (error) throw new Error(error.message);
+    // The memo's `devices` read is a Set of which IMEIs exist; this just removed one, so a
+    // handset just futa'd must read as un-enrolled again immediately, not for up to 30s.
+    clearStockIndex(db);
     return { ok: true, imei };
   },
 
@@ -5250,13 +5710,17 @@ const FNS = {
        migration, so a failed insert is retried without them rather than refusing the request:
        an office that cannot ask for an advance because a rule column is missing is worse off
        than one whose lateness is not yet being recorded. */
-    const policy = await advPolicy(db);
     /* ONE A MONTH, AND THIS ONE *IS* A REFUSAL -- unlike G.4's deadline, which only flags.
        The difference is who the rule is for: a late request is a judgement the approver is
        entitled to make, and a second advance against one month's salary is a thing the office
        has decided does not happen. A decline erases the month, so the way out of a mistake is
-       the one the owner already used. */
-    const live = await advSameMonth(db, user.code, applyDate);
+       the one the owner already used.
+       THE POLICY AND THE MONTH ARE INDEPENDENT QUESTIONS -- neither reads the other -- so they
+       are asked of the database AT THE SAME TIME rather than one after the other. A refusal
+       here must still cost exactly these two round trips and nothing more: salaryOf is asked
+       for ONLY after this check passes, never before, so a declined request never pays for a
+       salary lookup nobody needed. */
+    const [policy, live] = await Promise.all([advPolicy(db), advSameMonth(db, user.code, applyDate)]);
     if (live.length >= policy.maxPerMonth) {
       const other = live.sort((x, y) => String(x.apply_date || '').localeCompare(String(y.apply_date || '')))[0];
       const what = other
@@ -5290,14 +5754,26 @@ const FNS = {
 
   /** A requester's own history, and only their own: this pane grants the right to ASK, which
       is not the right to read what anybody else earns or owes. Keyed on the access code they
-      signed in with rather than their name, because two people can share a name. */
+      signed in with rather than their name, because two people can share a name.
+      THREE INDEPENDENT READS, FIRED TOGETHER. advPolicy, salaryOf and this person's own
+      advances used to be awaited one after another though none of them reads the others'
+      answer -- three round trips of latency for what is really the slowest of the three.
+      Each is CALLED before any of them is awaited, so all three are in flight at once; policy
+      is awaited on its own because the notReady branch below needs it even when the advances
+      read is the one that fails. Budget: 3 round trips, unchanged -- concurrent instead of a
+      waterfall. */
   async advMine(db, user) {
     requireNav(user, 'advreq');
-    const policy = await advPolicy(db);
-    let rows;
+    const policyP = advPolicy(db);
+    const salaryP = salaryOf(db, user.code);
+    const selectP = advSelect(db, cols => db.from('staff_advances').select(cols)
+      .eq('staff_code', user.code || '~none~'), ADV_COLS_RULES, ADV_COLS);
+    const policy = await policyP;
+    let rows, salary;
     try {
-      rows = (await advSelect(db, cols => db.from('staff_advances').select(cols)
-        .eq('staff_code', user.code || '~none~'), ADV_COLS_RULES, ADV_COLS)).rows;
+      const got = await selectP;
+      rows = got.rows;
+      salary = await salaryP;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS,
@@ -5306,7 +5782,6 @@ const FNS = {
     /* THE DEADLINE AND THE CEILING TRAVEL WITH THE FORM (Finance SOP G.4, G.5), so the page can
        say what will happen before somebody presses the button rather than after. The salary
        itself never goes out: the person is told their ceiling, not what anybody earns. */
-    const salary = await salaryOf(db, user.code);
     const out = rows.map(r => advRow(r, user.code)).sort((x, y) => (y.at || 0) - (x.at || 0));
     /* WHICH MONTHS ARE ALREADY SPOKEN FOR, so the form can say it before the button rather
        than after -- the same courtesy the G.4 deadline line already gets. Computed from the
@@ -5348,7 +5823,9 @@ const FNS = {
         || (y.at || 0) - (x.at || 0)) };
   },
 
-  /** APPROVE (possibly for less) OR DECLINE, with a comment either way. */
+  /** APPROVE (possibly for less) OR DECLINE, with a comment either way.
+      Budget: 1 keyed read (also serves as audited()'s before-state, via __auditCtx) + 1
+      keyed update + 1 audit_log insert -- 3 trips, not 5: see audit.js's selfCtx. */
   async advDecide(db, user, args) {
     requireNav(user, 'advappr');
     requireWrite(user);
@@ -5382,6 +5859,9 @@ const FNS = {
     if (String(dev.status) !== 'pending') {
       bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     }
+    /* THE ROW audited() WOULD OTHERWISE READ A SECOND TIME. `dev` above IS the before-state its
+       diff needs; leaving it on args.__auditCtx saves the extra keyed read -- see audit.js. */
+    if (args.__auditCtx) args.__auditCtx.before = dev;
     /* DECIDING YOUR OWN REQUEST IS ALLOWED, AND THAT IS DELIBERATE. Do not "fix" this.
 
          "role is navigation based so i didnt expect (This is your own request — another
@@ -5441,6 +5921,7 @@ const FNS = {
       decided_at: at,
       updated_at: at,
     };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     /* Guarded on status so two approvers pressing at the same moment cannot both win: the
        second update matches no row, and that person is told it was already decided rather
        than silently overwriting the first decision. */
@@ -5453,34 +5934,44 @@ const FNS = {
     return { ok: true, id, status: patch.status, granted };
   },
 
-  /** HR'S PANE: the filing copy and the bank payment run, in the owner's column order. */
+  /** HR'S PANE: the filing copy and the bank payment run, in the owner's column order.
+      FILTERED ON THE APPLICATION DATE, not on when the row was created. HR files and pays
+      against the period the advance is FOR, and those two dates can fall either side of a
+      month end -- which is exactly the row that goes missing from a payment run otherwise.
+      THE BOUND IS THE QUERY NOW, not a JS re-filter of a full-table read: `apply_date` is a
+      date column, so `.gte`/`.lte` on it is exactly what the old `r.applyDate >= from`/`<= to`
+      meant, asked of Postgres instead of asked of every row after the whole table arrived.
+      A default open (no from/to, HR's own first click) is unchanged -- still the whole table
+      -- because there is no period yet to hand the database. Budget: 1 round trip either way;
+      a bounded week reads that week, not the quarter behind it. */
   async advReport(db, user, args) {
     requireNav(user, 'advrep');
     const a = args || {};
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? String(a.from) : null;
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? String(a.to) : null;
+    const want = String(a.status || '').trim();
     let rows, hasRules = false;
     try {
-      const got = await advSelect(db, cols => db.from('staff_advances').select(cols), ADV_COLS_RULES, ADV_COLS);
+      const build = cols => {
+        let q = db.from('staff_advances').select(cols);
+        if (from) q = q.gte('apply_date', from);
+        if (to) q = q.lte('apply_date', to);
+        return q;
+      };
+      const got = await advSelect(db, build, ADV_COLS_RULES, ADV_COLS);
       rows = got.rows; hasRules = got.rules;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, totals: { approved: 0, count: 0 } };
     }
-    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? String(a.from) : null;
-    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? String(a.to) : null;
-    const want = String(a.status || '').trim();
-    /* FILTERED ON THE APPLICATION DATE, not on when the row was created. HR files and pays
-       against the period the advance is FOR, and those two dates can fall either side of a
-       month end -- which is exactly the row that goes missing from a payment run otherwise. */
-    /* THE PERIOD IS THE DATE RANGE. THE STATUS IS A LENS ON IT.
-       Both filters used to be applied before the totals were counted, so the tiles moved every
-       time somebody narrowed the view -- and since the tiles ARE the status control, ticking
-       "Za kulipa" made the tile beside it report the approved count under the words "kwenye
-       kipindi hiki" (in this period). The period had not changed; only what was on screen had.
-       So the totals are counted over the DATE-filtered set and stay put, and only the table
-       below responds to the status lens. */
-    const inPeriod = rows.map(r => advRow(r, user.code))
-      .filter(r => !from || (r.applyDate && r.applyDate >= from))
-      .filter(r => !to || (r.applyDate && r.applyDate <= to));
+    /* THE PERIOD IS THE QUERY. THE STATUS IS A LENS ON IT.
+       Both filters used to be applied in JS before the totals were counted, so the tiles moved
+       every time somebody narrowed the view -- and since the tiles ARE the status control,
+       ticking "Za kulipa" made the tile beside it report the approved count under the words
+       "kwenye kipindi hiki" (in this period). The period had not changed; only what was on
+       screen had. So the totals are counted over the date-bounded read and stay put, and only
+       the table below responds to the status lens. */
+    const inPeriod = rows.map(r => advRow(r, user.code));
     const out = inPeriod
       .filter(r => !['pending', 'approved', 'declined'].includes(want) || r.status === want)
       .sort((x, y) => (y.at || 0) - (x.at || 0));
@@ -5508,7 +5999,9 @@ const FNS = {
 
   /** THE MONEY GOING OUT (Finance SOP G.6, first half). Separate from the approval because
       they happen on different days and by different hands, and a report that cannot tell
-      "approved" from "paid" can chase neither. */
+      "approved" from "paid" can chase neither.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5. */
   async advPay(db, user, args) {
     requireNav(user, 'advrep');
     requireWrite(user);
@@ -5529,10 +6022,16 @@ const FNS = {
     if (!r) bad('Ombi halipo. / That request no longer exists.');
     if (String(r.status) !== 'approved') bad('Ombi hili halijaidhinishwa. / That request is not approved.');
     if (r.paid_at) bad('Advance hii tayari imelipwa. / That advance has already been paid.');
+    if (args.__auditCtx) args.__auditCtx.before = r;
     const at = new Date().toISOString();
+    /* `status` itself never moves here -- paying an already-approved advance does not change
+       its status column -- so AUDIT_DIFF's ['status'] never actually shows a diff for advPay,
+       exactly as it did not before this change; the patch is still handed over so audited()
+       need not read the row again to confirm that. */
+    const patch = { paid_at: at, paid_by: user.name || '', payment_ref: ref, updated_at: at };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     const { data, error } = await db.from('staff_advances')
-      .update({ paid_at: at, paid_by: user.name || '', payment_ref: ref, updated_at: at })
-      .eq('id', id).eq('status', 'approved').is('paid_at', null).select('id');
+      .update(patch).eq('id', id).eq('status', 'approved').is('paid_at', null).select('id');
     if (error) {
       if (/paid_at|payment_ref/i.test(String(error.message))) bad(ADV_RULES_NOT_READY);
       throw new Error(error.message);
@@ -5843,7 +6342,11 @@ const FNS = {
   },
 
   /** APPROVE (possibly for less) OR REJECT, with a comment either way; a rejection must say why.
-      Deciding your own request is allowed, and recorded, for the reason advDecide gives. */
+      Deciding your own request is allowed, and recorded, for the reason advDecide gives.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips for the decision itself, not 5; unchanged by this fix, the
+      two best-effort mail sends afterwards are pre-existing and each may cost sendMail its
+      own keyed settings read when a toKey recipient is used. */
   async impDecide(db, user, args) {
     requireNav(user, 'impappr');
     requireWrite(user);
@@ -5863,6 +6366,7 @@ const FNS = {
     const row = rows.find(r => String(r.id) === id);
     if (!row) bad('Ombi halipo. / That request no longer exists.');
     if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
     const asked = num(row.total_amount);
     let granted = null;
     if (approve) {
@@ -5874,6 +6378,7 @@ const FNS = {
     const at = new Date().toISOString();
     const patch = { status: approve ? 'approved' : 'rejected', approved_amount: approve ? granted : null,
       comment: comment || null, decided_by: user.name || '', decided_at: at, updated_at: at };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     // Guarded on status so two approvers pressing at once cannot both win.
     const { data, error } = await db.from('imprest_requests')
       .update(patch).eq('id', id).eq('status', 'pending').select('id');
@@ -5904,7 +6409,12 @@ const FNS = {
   /** THE RETIREMENT. "when someone gets where he was destinated for their tasks they fill
       retirement with 3 pictures ... to keep reference of actual incurred costs". Own request,
       approved, not yet retired; once, ever. The photos are checked for size here regardless of
-      what the phone did, and stored in their own table -- see the migration. */
+      what the phone did, and stored in their own table -- see the migration.
+      Budget: 1 keyed read (shared with audited() via __auditCtx; AUDIT_DIFF's only tracked
+      field, status, never actually moves here, so the diff is always empty either way) + the
+      claim/finish writes the comment above already accounts for + 1 audit_log insert --
+      audited()'s own before- and after-reads are both gone: two fewer trips than before this
+      fix, for a diff that was never going to say anything regardless. */
   async impRetire(db, user, args) {
     requireNav(user, 'impreq');
     requireWrite(user);
@@ -5926,6 +6436,7 @@ const FNS = {
     /* FINISHED is retire_total set -- see the write order below. A claim with no summary is a
        filing that died, or one that is going on right now; both are handled at the claim. */
     if (row.retire_total != null) bad('Ombi hili tayari lina retirement. / This request has already been retired.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
 
     const fare = intNN(a.fareActual), accom = intNN(a.accomActual);
     const o1 = intNN(a.other1Actual), o2 = intNN(a.other2Actual), o3 = intNN(a.other3Actual);
@@ -5994,8 +6505,13 @@ const FNS = {
       if (dup(pErr)) busy();
       throw new Error(pErr.message);
     }
+    /* `status` never appears in this write -- retiring an approved claim does not change its
+       status column -- so AUDIT_DIFF's ['status'] shows no diff here either way; the patch is
+       still handed over so audited() need not read the row a second time to learn that. */
+    const finishPatch = { retire_total: total, retire_balance: balance, updated_at: at };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = finishPatch;
     const { data: done, error: uErr } = await db.from('imprest_requests')
-      .update({ retire_total: total, retire_balance: balance, updated_at: at })
+      .update(finishPatch)
       .eq('id', id).eq('retired_at', at).select('id');
     if (uErr) throw new Error(uErr.message);
     // Cannot happen inside RETIRE_CLAIM_MS; kept so a stale re-claim can never finish over a live one.
@@ -6036,27 +6552,37 @@ const FNS = {
   /** THE CEO'S REVIEW COPY: every request in a period, with its retirement beside it, and the
       widgets -- what is waiting, what was paid, what is out with no receipts back, and the net
       balance the company is owed or owes. Filtered on TRAVEL DATE, like the advance is filtered
-      on its application date: a review reads by the trip, not by the click. */
+      on its application date: a review reads by the trip, not by the click.
+      THE BOUND IS THE QUERY, not a JS re-filter of a full read: `travel_date` is a date column,
+      so `.gte`/`.lte` on it asks Postgres for the trip, not the company's whole history of them.
+      The retirements read stays whole -- it is keyed by request id, not by date, and a request
+      that travelled inside the period may have been retired well after it, so there is no date
+      column on THIS table to bound by that would not risk dropping a real match. Budget: 2
+      round trips either way (unchanged), a bounded week reading that week's requests rather
+      than the quarter behind it. */
   async impReport(db, user, args) {
     requireNav(user, 'imprep');
     const a = args || {};
+    const from = isDay(a.from) ? String(a.from) : null;
+    const to = isDay(a.to) ? String(a.to) : null;
+    const want = String(a.status || '').trim();
     let rows, rets;
     try {
       [rows, rets] = await Promise.all([
-        fetchAll(() => db.from('imprest_requests').select(IMP_COLS)),
+        fetchAll(() => {
+          let q = db.from('imprest_requests').select(IMP_COLS);
+          if (from) q = q.gte('travel_date', from);
+          if (to) q = q.lte('travel_date', to);
+          return q;
+        }),
         fetchAll(() => db.from('imprest_retirements').select(IMP_RET_COLS)),
       ]);
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, totals: {} };
     }
-    const from = isDay(a.from) ? String(a.from) : null;
-    const to = isDay(a.to) ? String(a.to) : null;
-    const want = String(a.status || '').trim();
     const retBy = new Map(rets.map(r => [String(r.request_id), r]));
     const inPeriod = rows.map(r => impRow(r, user.code))
-      .filter(r => !from || (r.travelDate && r.travelDate >= from))
-      .filter(r => !to || (r.travelDate && r.travelDate <= to))
       .map(r => {
         // Only a FINISHED retirement is shown beside its trip -- retiredAt, see impRow.
         const t = r.retiredAt ? retBy.get(r.id) : null;
@@ -6191,6 +6717,8 @@ const FNS = {
       rows: shown.sort(pendingFirst) };
   },
 
+  /** Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5. */
   async leaveDecide(db, user, args) {
     requireNav(user, 'leaveappr');
     requireWrite(user);
@@ -6210,9 +6738,11 @@ const FNS = {
     const row = rows.find(r => String(r.id) === id);
     if (!row) bad('Ombi halipo. / That request no longer exists.');
     if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
     const at = new Date().toISOString();
     const patch = { status: approve ? 'approved' : 'rejected', comment: comment || null,
       decided_by: user.name || '', decided_at: at, updated_at: at };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     const { data, error } = await db.from('leave_requests')
       .update(patch).eq('id', id).eq('status', 'pending').select('id');
     if (error) throw new Error(error.message);
@@ -6226,28 +6756,41 @@ const FNS = {
       imprest reports read by the thing they are about rather than by the click.
         "REPORTS are seen by CEO, Admin, HR and Finance ... so for leaves we should have
          requests, approval and reports"
-      "Away today" is counted over the whole table, not the period: somebody whose leave began
-      last month is still away this morning, and that is the question being asked. */
+      "Away today" is a DIFFERENT QUESTION FROM THE PERIOD and gets its OWN small read rather
+      than riding on the bounded one: somebody whose leave began last month, or next month's
+      request that starts today, is still away this morning regardless of what week HR typed
+      into the report, so folding it into the period-bounded query would answer it wrong the
+      moment the two ranges disagree. It is bounded on its own terms instead -- approved,
+      and today falls inside it -- which is always a handful of rows, never the table.
+      Budget: 2 round trips (the period read, the today read) where this used to be 1 that
+      read the whole table; a bounded week now reads that week plus a few rows for "today"
+      rather than the quarter behind it. */
   async leaveReport(db, user, args) {
     requireNav(user, 'leaverep');
     const a = args || {};
-    let rows;
-    try {
-      rows = await fetchAll(() => db.from('leave_requests').select(LEAVE_COLS));
-    } catch (e) {
-      if (!tableMissing(e)) throw e;
-      return { ok: true, rows: [], notReady: true, totals: {} };
-    }
     const from = isDay(a.from) ? String(a.from) : null;
     const to = isDay(a.to) ? String(a.to) : null;
     const want = String(a.status || '').trim();
     const today = todayKey();
-    const all = rows.map(r => leaveRow(r, user.code));
-    const away = r => r.status === 'approved' && r.from <= today && r.to >= today;
-    const inPeriod = all
-      .filter(r => !from || (r.from && r.from >= from))
-      .filter(r => !to || (r.from && r.from <= to));
-    const shown = (want === 'today' ? all.filter(away)
+    let rows, todayRows;
+    try {
+      [rows, todayRows] = await Promise.all([
+        fetchAll(() => {
+          let q = db.from('leave_requests').select(LEAVE_COLS);
+          if (from) q = q.gte('from_date', from);
+          if (to) q = q.lte('from_date', to);
+          return q;
+        }),
+        fetchAll(() => db.from('leave_requests').select(LEAVE_COLS)
+          .eq('status', 'approved').lte('from_date', today).gte('to_date', today)),
+      ]);
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, totals: {} };
+    }
+    const inPeriod = rows.map(r => leaveRow(r, user.code));
+    const onLeave = todayRows.map(r => leaveRow(r, user.code));
+    const shown = (want === 'today' ? onLeave
       : want === 'shortNotice' ? inPeriod.filter(r => r.shortNotice)
       : inPeriod.filter(r => !['pending', 'approved', 'rejected'].includes(want) || r.status === want))
       .sort((x, y) => (y.at || 0) - (x.at || 0));
@@ -6261,7 +6804,7 @@ const FNS = {
         // Working days actually granted -- the figure payroll and cover planning start from.
         approvedDays: approved.reduce((s, r) => s + (r.workingDays || 0), 0),
         shortNotice: inPeriod.filter(r => r.shortNotice).length,
-        onLeaveToday: all.filter(away).length,
+        onLeaveToday: onLeave.length,
       } };
   },
 
@@ -6379,28 +6922,15 @@ const FNS = {
       raise form needs a person's NAME to address an issue to them, and that is all it gets.
 
       Behind either issue nav rather than behind Settings: the person filing an issue is the
-      one who has to choose where it goes, and they will not hold the codes pane. */
+      one who has to choose where it goes, and they will not hold the codes pane.
+      MEMOISED -- see issueRoleIndex above. Every sub-tab (raise, desk, report) opens onto
+      this same list, and used to re-scan access_codes to build it every single time.
+      Budget: 1 round trip (the memo's own DATA_VERSION check), warm; a version change or
+      5-minute lapse costs 1 more (the access_codes scan) -- unchanged from before, just paid
+      once per window instead of once per sub-tab switch. */
   async issueTargets(db, user) {
     requireAnyNav(user, ['issuereq', 'issues']);
-    let codes = [];
-    try {
-      codes = await fetchAll(() => db.from('access_codes').select('name, role'));
-    } catch (e) { codes = []; }
-    const by = new Map();
-    for (const c of codes) {
-      const role = K(c.role).replace(/[\s-]+/g, '_');
-      const name = String(c.name || '').trim();
-      if (!role) continue;
-      if (!by.has(role)) by.set(role, new Set());
-      if (name) by.get(role).add(name);
-    }
-    /* A role somebody holds but that no code names is still offerable -- and so are the
-       departments this log was born with, so an office mid-way through moving from one
-       vocabulary to the other can address an issue either way. */
-    for (const d of ISSUE_DEPTS) if (!by.has(d)) by.set(d, new Set());
-    return { ok: true,
-      roles: [...by.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1))
-        .map(([role, people]) => ({ role, people: [...people].sort() })) };
+    return { ok: true, roles: await issueRoleIndex(db) };
   },
 
   async issueMine(db, user) {
@@ -6514,7 +7044,12 @@ const FNS = {
 
   /** MOVE IT. The desk changes status, assignment, references and the verified tick, and
       writes the note that explains the move; a raiser may only add a note to their own issue
-      ("here is the document"). Resolving needs a resolution; escalating tells the GM. */
+      ("here is the document"). Resolving needs a resolution; escalating tells the GM.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      issue_notes insert when there is a note or a status change + 1 audit_log insert -- 4
+      trips, not 6 (was the worst of the nine: two DIFFERENT bugs used to hide in this one --
+      see AUDIT_DIFF.issueUpdate's to_name fix, without which the before/after read was
+      refused outright on any migrated database and every diff here was silently dropped). */
   async issueUpdate(db, user, args) {
     requireAnyNav(user, ['issuereq', 'issues']);
     requireWrite(user);
@@ -6533,6 +7068,7 @@ const FNS = {
     const desk = navsFor(user).includes('issues');
     /* NOT YOURS reads as NOT THERE, and a raiser who is not the desk may only talk. */
     if (!row || (!desk && String(row.staff_code || '') !== String(user.code || ''))) bad('Suala halipo. / That issue no longer exists.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
     const note = S(a.note, 2000);
     const at = new Date().toISOString();
     const patch = { updated_by: user.name || '', updated_at: at };
@@ -6562,6 +7098,7 @@ const FNS = {
       if (a.verified != null) patch.verified = a.verified === true;
     }
     if (!note && !change && Object.keys(patch).length === 2) bad('Hakuna kilichobadilika. / Nothing to save.');
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     /* GUARDED on what was read, so two desks cannot silently overwrite each other's move. */
     const { data, error } = await db.from('issues').update(patch).eq('id', id).eq('updated_at', row.updated_at).select('id');
     if (error) throw new Error(error.message);
@@ -6587,27 +7124,37 @@ const FNS = {
 
   /** THE LOG BOOK. A period by the date raised, every department, with the widgets the CEO
       and a department head ask across a desk: how many, how many still open, how long they
-      take, and where the oldest open one sits. */
+      take, and where the oldest open one sits.
+      THE PERIOD IS THE QUERY. `raised_at` is a timestamp, not a date, so the upper bound
+      needs the end of that day the same way auditList (api/_lib/audit.js) already does it --
+      `to + 'T23:59:59.999Z'` -- or a request raised at 14:00 on the last day of the period
+      would compare as greater than the bare date and be dropped. Department and status stay
+      as JS filters on the (now much smaller) result: they are lenses on the period, not the
+      period itself, and pushing every combination into the query would be a filter per click
+      for a saving the date bound already delivers. Budget: 1 round trip either way; a bounded
+      week reads that week, not the quarter behind it. */
   async issueReport(db, user, args) {
     requireNav(user, 'issuerep');
     const a = args || {};
-    let rows;
-    try {
-      rows = (await issueSelect(db, cols => db.from('issues').select(cols))).rows;
-    } catch (e) {
-      if (!tableMissing(e)) throw e;
-      return { ok: true, rows: [], notReady: true, totals: {}, departments: ISSUE_DEPTS };
-    }
     const from = isDay(a.from) ? String(a.from) : null;
     const to = isDay(a.to) ? String(a.to) : null;
     const dept = K(a.department).replace(/ /g, '_');
     const want = String(a.status || '').trim();
+    let rows;
+    try {
+      const build = cols => {
+        let q = db.from('issues').select(cols);
+        if (from) q = q.gte('raised_at', from);
+        if (to) q = q.lte('raised_at', to + 'T23:59:59.999Z');
+        return q;
+      };
+      rows = (await issueSelect(db, build)).rows;
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, totals: {}, departments: ISSUE_DEPTS };
+    }
     const all = rows.map(r => issueRow(r, user.code));
-    const day = ms => new Date(ms).toISOString().slice(0, 10);
-    const inPeriod = all
-      .filter(r => !from || (r.at && day(r.at) >= from))
-      .filter(r => !to || (r.at && day(r.at) <= to))
-      .filter(r => !dept || r.department === dept);
+    const inPeriod = all.filter(r => !dept || r.department === dept);
     const shown = inPeriod.filter(r => !ISSUE_STATES.includes(want) || r.status === want)
       .sort((x, y) => (y.at || 0) - (x.at || 0));
     const resolved = inPeriod.filter(r => r.status === 'resolved');
@@ -6723,13 +7270,33 @@ const FNS = {
   },
 
   /** THE DESK. Waiting first, longest-waiting first among those, because that is the only
-      order a rule that says "must never be delayed" can be served by. */
+      order a rule that says "must never be delayed" can be served by.
+      THE DEFAULT OPEN READS ONLY THE LIVE QUEUE. This is what three hundred officers'
+      "Zinaendelea / Live" tab shows all day, and it used to cost the whole history of every
+      top-up ever finished to answer it. `unlocked`/`rejected` are done business -- B.5's
+      whole point is what is STILL waiting -- so the default read now asks Postgres for
+      TOPUP_LIVE directly rather than the table. The one thing the default view still shows
+      from outside that set is the "Zimefunguliwa" tile's running total (public/portal.html
+      draws it on every open, not only when that tile is picked), so that ONE number is a
+      HEAD count -- no rows, one indexed count -- rather than a second full read.
+      `state: 'all'` keeps the old, unfiltered read: something that already asked for
+      everything is not the case this fix is for. A single named state (a tile drill-down,
+      e.g. 'unlocked') also keeps the old full read, because the tiles beside that list must
+      keep showing an honest count of every OTHER status too, which only a full read can
+      answer without a trip per status. Budget: 2 round trips for the default open (the live
+      rows, the one head count) where this used to be 1 that read the whole table; unchanged
+      for 'all' and for a single named state. */
   async topupQueue(db, user, args) {
     requireNav(user, 'topups');
     const a = args || {};
+    const want = String(a.state || '').trim();
     let rows;
     try {
-      rows = await fetchAll(() => db.from('topups').select(TOPUP_COLS));
+      if (!want) {
+        rows = await fetchAll(() => db.from('topups').select(TOPUP_COLS).in('status', TOPUP_LIVE));
+      } else {
+        rows = await fetchAll(() => db.from('topups').select(TOPUP_COLS));
+      }
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true,
@@ -6738,19 +7305,27 @@ const FNS = {
     }
     const now = Date.now();
     const all = rows.map(r => topupRow(r, user.code, now));
-    const want = String(a.state || '').trim();
     const shown = all
       .filter(r => want === 'all' ? true : want ? r.status === want
         : (r.status !== 'unlocked' && r.status !== 'rejected'))
       .sort(topupWaitFirst);
     const waiting = all.filter(r => r.status === 'requested' || r.status === 'verified');
+    /* The default read never carries an unlocked row, so the tile beside "Live" that still
+       shows how many have EVER been unlocked needs its own tiny count -- 0 rows, 1 trip. */
+    let unlocked;
+    if (!want) {
+      const { count } = await db.from('topups').select('id', { count: 'exact', head: true }).eq('status', 'unlocked');
+      unlocked = num(count);
+    } else {
+      unlocked = all.filter(r => r.status === 'unlocked').length;
+    }
     return { ok: true, rows: shown,
       checks: TOPUP_CHECKS.map(([js, , label]) => ({ key: js, label })),
       counts: {
         requested: all.filter(r => r.status === 'requested').length,
         verified: all.filter(r => r.status === 'verified').length,
         paid: all.filter(r => r.status === 'paid').length,
-        unlocked: all.filter(r => r.status === 'unlocked').length,
+        unlocked,
         waiting: waiting.length,
         // The number B.5 exists to keep at zero: the longest anybody is currently waiting.
         longestWaitMins: waiting.reduce((mx, r) => Math.max(mx, r.waitedMins || 0), 0),
@@ -6758,7 +7333,9 @@ const FNS = {
   },
 
   /** MOVE ONE (SOP B.2-B.6). Verifying, paying and confirming the unlock are three different
-      acts by possibly three different people, so each is its own step with its own stamp. */
+      acts by possibly three different people, so each is its own step with its own stamp.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5 (the postgres-war audit's own measured example). */
   async topupUpdate(db, user, args) {
     requireNav(user, 'topups');
     requireWrite(user);
@@ -6776,6 +7353,7 @@ const FNS = {
     const row = rows.find(r => String(r.id) === id);
     if (!row) bad('Top-up haipo. / That top-up no longer exists.');
     if (row.status === 'unlocked') bad('Top-up hii imekamilika. / That top-up is already complete.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
     const step = String(a.step || '').trim().toLowerCase();
     const at = new Date().toISOString();
     const patch = { updated_by: user.name || '', updated_at: at };
@@ -6814,6 +7392,7 @@ const FNS = {
     if (comment) patch.comment = comment;
     for (const [js, col] of TOPUP_CHECKS) if (a.checks && a.checks[js] === true) patch[col] = true;
     if (Object.keys(patch).length === 2) bad('Hakuna kilichobadilika. / Nothing to save.');
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     /* GUARDED on the status that was read, so two desks cannot both pay the same top-up. */
     const { data, error } = await db.from('topups').update(patch)
       .eq('id', id).eq('status', row.status).select('id');
@@ -6847,6 +7426,18 @@ const FNS = {
      cases under every lock ordered today. So a row is only SUSPECT once the silence has
      outlasted the order that caused it. */
 
+  /* Budget: 1 devices read (full operational columns: state, reported, last_seen, state_at,
+     released_at) + 1 hoop_aged_stock read + syncAlertDays' own settings read.
+     NOT MEMOISED (postgres-war FIX 6 -- considered and declined): its answer is not a pure
+     function of what stock-index.js's memo holds. That memo's ONLY `devices` fact is a Set of
+     which IMEIs exist (oldStockIndex's own need); this reads five live/operational columns
+     off every row, so reusing the memo would mean widening it to carry those columns for the
+     other eight callers that never asked for them, or maintaining two different `devices`
+     shapes under one cache key. hoop_aged_stock's columns DO match getAgingAux's, but pairing
+     a memoised hoop_aged_stock with a fresh devices read buys nothing here -- devices is the
+     bigger of the two reads and stays live regardless. Already cheap (4 trips / 2,300 rows
+     measured, ceiling 6 / 3,450): leave, and ask again if a real deployment measures it
+     costing more than that. */
   async syncAging(db, user, args) {
     /* Three desks need this and it is a read: the store keeper who will chase the handset,
        the desk issuing stock against it, and whoever reads the tracker. */
@@ -6953,10 +7544,33 @@ const FNS = {
      been locked or sold -- because a list that only shrinks tells you nothing about whether it
      is shrinking for the right reason.
      ===================================================================================== */
+  /* Budget: 1 hoop_agents read (union columns, shared with stockAllow and syncStaffFromStock
+     below -- FIX 2 of the postgres-war audit, was 3) + the shared aux memo behind
+     oldStockIndex (0 trips warm) + 1 fresh old_stock read + up to ~15 grouped location-stamp
+     writes (self-heals once per place, not per handset) + syncStaffFromStock's own writes.
+     Measured on the fixture: 56 trips -> see test/pgwar-stock.test.mjs for the new count. */
   async oldStock(db, user, args) {
     requireNav(user, 'oldstock');
     const a = args || {};
-    const idx = await oldStockIndex(db);
+    /* ONE hoop_agents READ FOR THE WHOLE CLICK.
+       -----------------------------------------------------------------------------------
+       oldStockIndex's branch fallback, stockAllow's RSM/TEAM LEADER descendants walk and
+       syncStaffFromStock's own-register check each used to fetch this register separately
+       -- three trips for one open. The union of every column any of the three reads is
+       asked for once, here, and handed to all three; each still falls back to its own
+       standalone read when called without it (oldStockHolder, oldStockRound). */
+    let agents = [];
+    try { agents = await fetchAll(() => db.from('hoop_agents').select('phone, name, role, branch, manager')); }
+    catch (e) {
+      // Pre-targets-migration: no `manager` column. The other four are foundational and
+      // always there, so narrow rather than losing the branch/role data every reader here
+      // still needs -- a missing MANAGER must not read as a missing REGISTER.
+      if (/manager/i.test(String((e && e.message) || ''))) {
+        try { agents = await fetchAll(() => db.from('hoop_agents').select('phone, name, role, branch')); }
+        catch (ignored) { agents = []; }
+      } else { agents = []; }
+    }
+    const idx = await oldStockIndex(db, { agents });
     /* THE PLACE IS WRITTEN DOWN THE FIRST TIME IT IS WORKED OUT.
        -----------------------------------------------------------------------------------
          "we always fall to another alternative if that data is not somewhere, and if such
@@ -7022,10 +7636,10 @@ const FNS = {
     }
     /* THE FENCE: an RSM sees their region, an agent their own hands, the desk and ADMIN all
        -- see stockAllow. Applied before every count, so a fenced code's numbers are theirs. */
-    const allow = await stockAllow(db, user);
+    const allow = await stockAllow(db, user, { agents });
     const open = allow ? idx.open.filter(r => allow(r.agent, r.agent, r.rsm)) : idx.open.slice();
     // Who the stock names becomes a system user -- off the WHOLE list, before the fence (see newStock).
-    const staffSync = await syncStaffFromStock(db, user, idx.open.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })));
+    const staffSync = await syncStaffFromStock(db, user, idx.open.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })), { agents });
     const q = String(a.q == null ? '' : a.q).replace(/\D/g, '');
     const who = K(a.agent || '');
     const boss = K(a.rsm || '');
@@ -7176,7 +7790,11 @@ const FNS = {
      IT READS THE SAME INDEX THE BOARD WAS COUNTED FROM, so the list can never disagree with
      the number that opened it -- and it ignores the pane's own filter for the same reason:
      the board is not filtered either, and a drawer that quietly dropped rows would be a count
-     of five opening a list of two. */
+     of five opening a list of two.
+     Budget: 1 fresh old_stock read + the shared aux memo behind oldStockIndex (0 trips warm
+     within its 20-30s TTL, ~5 on a miss) + its own standalone hoop_agents read for stockAllow
+     (no `agents` param threaded here -- only oldStock/newStock do that, FIX 2). Measured
+     cold: 8 trips / 10,071 rows (ADMIN), 9 / 11,142 (RSM). */
   async oldStockHolder(db, user, args) {
     requireNav(user, 'oldstock');
     const a = args || {};
@@ -7237,7 +7855,10 @@ const FNS = {
      UNFILTERED, like the board it belongs to. The pane's filter narrows the table underneath;
      the round has always described the whole outstanding list, and an export that quietly
      obeyed a filter the card ignores would be a file that disagrees with the number that
-     produced it. */
+     produced it.
+     Budget: same shape as oldStockHolder -- 1 fresh old_stock read + the shared aux memo
+     (0 trips warm, ~5 on a miss) + its own standalone hoop_agents read for stockAllow.
+     Measured cold: 8 trips / 10,071 rows (ADMIN), 9 / 11,142 (RSM). */
   async oldStockRound(db, user, args) {
     requireNav(user, 'oldstock');
     const idx = await oldStockIndex(db);
@@ -7304,249 +7925,25 @@ const FNS = {
      is deleted. So the provenance travels with it -- `src` says which feed answered each
      column -- and nothing is ever overwritten, which is what makes the capture worth having.
      ===================================================================================== */
+  /* Budget: devices + stock_audit are read fresh every call (see newStockFeeds's header for
+     why -- live state and read-your-own-write on the table this fn stamps). The other five
+     (watu_loans, hoop_sales, hoop_agents, hoop_aged_stock, old_stock) come off a shared
+     5-minute memo: ~5 trips on a miss, 0 on a hit. The page re-runs this whole audit for
+     every status tile, week arrow and search; the status/q filter, the 2,000-row slice and
+     newStockSales() below are cheap enough to redo every call regardless. */
   async newStock(db, user, args) {
     requireNav(user, 'newstock');
     const a = args || {};
-    const at = new Date().toISOString();
     const now = Date.now();
 
-    let cur = [];
-    let notReady = false;
-    try {
-      cur = await fetchAll(() => db.from('stock_audit').select(NEWSTOCK_COLS));
-    } catch (e) {
-      if (!tableMissing(e)) throw e;
-      /* NOT AN EMPTY AUDIT -- an audit that cannot be saved yet. The pane still computes and
-         still shows every row, because the joins underneath work perfectly well; what it
-         cannot do is REMEMBER, which is the one thing worth saying out loud. */
-      notReady = true;
-    }
-    const stampedBy = new Map(cur.map(r => [String(r.imei), r]));
-
-    /* THE POPULATION IS THE REGISTER, not the sales books: "our existing imeis since we
-       started locking on our own". A phone nobody locked is somebody else's audit. */
-    /* WHERE IT WAS WHEN IT LAST SPOKE, on the same row as what it is doing.
-       -----------------------------------------------------------------------------------
-         "At hali/status column, below status, add the second in one [location coordinate
-          link] so that we can click to view where the phone is, and always stamp the latest
-          read coordinates whenever the phone pings the system. So even if achia we'll always
-          find the latest ping coordinate location."
-
-       NOTHING NEW IS STAMPED HERE, because the handset has been doing it since the location
-       migration: every beat writes last_lat/last_lng and, separately, WHEN that fix was taken.
-       The two timestamps are never collapsed -- a phone that beat a minute ago can be carrying
-       a fix from Tuesday -- so the pane shows the fix's own age rather than the beat's.
-
-       AND ACHIA DOES NOT ERASE IT. deviceSetState writes state, reason, who and when; it has
-       never touched the position columns, so the last place a released handset was seen
-       survives the release. That is the case the owner asked about and the one that matters
-       most: a phone let go is a phone nobody is tracking any more, and its last fix is all
-       that is left of it. */
-    const DEV_CORE = 'imei, item, holder, state, state_by, state_at, last_seen, customer';
-    const DEV_LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
-    let devs = [];
-    let noDevices = false;
-    let hasLoc = true;
-    try {
-      devs = await fetchAll(() => db.from('devices').select(DEV_CORE + DEV_LOC));
-    } catch (e) {
-      /* THE COLUMN CHECK COMES FIRST, and the order is the whole of it. tableMissing() matches
-         a missing COLUMN as well as a missing table -- deliberately, because for most callers
-         both mean "run the migration" -- so asking it first would answer a missing `last_lat`
-         with "the devices register does not exist". That is a false alarm about the wrong
-         thing, on the pane somebody opens when stock has gone missing. */
-      if (/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) {
-        /* The audit without a map is still the audit; the audit without itself is an outage.
-           PostgREST refuses a whole select over one unknown column, so a deployment that has
-           not run the location migration drops back rather than going dark. */
-        hasLoc = false;
-        devs = await fetchAll(() => db.from('devices').select(DEV_CORE));
-      } else if (tableMissing(e)) noDevices = true;
-      else throw e;
-    }
-
-    /* THE FEEDS, ALL BEST-EFFORT. A missing one costs its columns and nothing else -- an audit
-       that refuses to open because one upload has never happened is an audit nobody uses. */
-    const feed = async (table, cols) => {
-      try { return await fetchAll(() => db.from(table).select(cols)); } catch (ignored) { return []; }
-    };
-    const [watu, sales, agents, aged] = await Promise.all([
-      feed('watu_loans', 'imei, client_name, client_mobile, agent, team, shop, model, '
-        + 'model_details, disbursed_date, price, guarantor_name, guarantor_phone, branch'),
-      feed('hoop_sales', 'imei, sale_date, branch, agent, client_name, client_phone, model, '
-        + 'commission_agent, commission_phone, price'),
-      feed('hoop_agents', 'phone, name, role, branch, manager, active'),
-      feed('hoop_aged_stock', 'serial, agent, item'),
-    ]);
-
-    /* THE EARLIEST RECEIPT WINS where the shop wrote more than one for an IMEI. A later
-       receipt against the same handset is a top-up or a correction; the ORIGINAL sale is the
-       one this audit is about, and "first catch" has to mean the first sale, not the first row
-       the database happened to return. */
-    const salesBy = new Map();
-    for (const s of sales) {
-      const k = String(s.imei || '');
-      if (!k) continue;
-      const had = salesBy.get(k);
-      if (!had || String(s.sale_date || '9999') < String(had.sale_date || '9999')) salesBy.set(k, s);
-    }
-    const ctx = {
-      watu: new Map(watu.filter(r => r.imei).map(r => [String(r.imei), r])),
-      sales: salesBy,
-      aged: new Map(aged.filter(r => r.serial).map(r => [String(r.serial), r])),
-      byName: new Map(agents.filter(r => r.name).map(r => [nameKey(r.name), r])),
-      byPhone: new Map(agents.filter(r => r.phone).map(r => [pnorm(r.phone), r])),
-      tree: salesTree(agents),
-    };
-
-    /* AND THE ONES THAT SOLD WITHOUT EVER BEING LOCKED.
-       -----------------------------------------------------------------------------------
-         "If a phone imei once reads in sales [in watu deck] and it was in old stock not in
-          new stock, move its column data needed into NEW STOCK, so that we can always get the
-          update of current activities no matter the stock age."
-
-       The register was the whole population: we locked it, so it is ours to watch. But a
-       handset off the old list that turns up SOLD is current activity by any reading -- the
-       very thing this pane is opened for -- and leaving it in OLD STOCK would file a live sale
-       under "never enrolled, gathering dust".
-
-       So a sold handset joins on the strength of the sale, with no device row behind it. Its
-       status reads `haijafungwa` rather than being dressed as one of the four states the
-       register can hold: we do not control this phone, and the pane must not imply we do.
-
-       ANY SALE BOOK MOVES IT, AND THE MOVE IS PERMANENT.
-       -----------------------------------------------------------------------------------
-       Both sale feeds are asked -- the Watu deck and our own shop's export are two uploads of
-       the same event, and a handset written in one and not the other is still sold -- and so
-       is the stamp we made last time. That third test is what makes this one-way: the decks
-       are re-uploaded over themselves with rows deleted, and without it a phone that moved in
-       September would reappear in OLD STOCK in October because Watu trimmed its export.
-
-       oldStockIndex() asks the identical question, deliberately. The two lists are defined
-       against each other, so the day they disagreed a handset would be on both or on neither
-       -- and the whole point of having no `moved` column is that there is only one answer. */
-    let joined = [];
-    try {
-      const have = new Set(devs.map(d => String(d.imei)));
-      const olds = await fetchAll(() => db.from('old_stock')
-        .select('imei, item, agent, agent_phone, rsm, rsm_phone'));
-      joined = olds.filter(o => {
-        const k = String(o.imei);
-        if (have.has(k)) return false;   // locked on a visit: it is in the register on its own
-        return ctx.watu.has(k) || ctx.sales.has(k) || stampedSale(stampedBy.get(k));
-      });
-    } catch (ignored) { joined = []; }   // no old_stock table yet: the register alone, as before
-
-    let rows = [];
-    const changed = [];
-    for (const o of joined) {
-      /* Stamped exactly like a locked one -- a sale is a sale -- then given the shape of a row
-         with no device behind it. */
-      const imei = String(o.imei);
-      const was = stampedBy.get(imei) || null;
-      const f = newStockFill(imei, was, ctx);
-      if (f.hits) changed.push(newStockRow(imei, f, was, at));
-      const R = newStockRsm(f, o.agent, ctx, o.rsm, o.rsm_phone);
-      rows.push({
-        imei,
-        rsm: R.rsm, rsmPhone: R.phone,
-        agent: f.row.agent || o.agent || '', agentPhone: f.row.agent_phone || o.agent_phone || '',
-        holder: o.agent || '',
-        customer: f.row.customer || '', customerPhone: f.row.customer_phone || '',
-        price: f.row.price == null ? null : num(f.row.price),
-        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
-        branch: f.row.branch || '', model: f.row.model || o.item || '',
-        saleDate: f.row.sale_date || null,
-        status: 'unlocked', neverLocked: true,
-        by: '', atMs: null,
-        seenAt: null, neverSeen: true, silentDays: null,
-        lat: null, lng: null, locAcc: null, locAt: null,
-        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
-        src: R.src,
-      });
-    }
-    for (const d of devs) {
-      const imei = String(d.imei);
-      const was = stampedBy.get(imei) || null;
-      const f = newStockFill(imei, was, ctx);
-      if (f.hits) changed.push(newStockRow(imei, f, was, at));
-      /* THE BLANK RSM, ANSWERED FROM THE HOLDER -- see rsmOfHolder. Shown, searched and fenced
-         on exactly like a stamped one; written into stock_audit never. */
-      const R = newStockRsm(f, d.holder, ctx);
-      const seen = d.last_seen ? Date.parse(d.last_seen) : null;
-      rows.push({
-        imei,
-        rsm: R.rsm, rsmPhone: R.phone,
-        agent: f.row.agent || '', agentPhone: f.row.agent_phone || '',
-        holder: d.holder || '',                 // whose hands it is in -- what a transfer moves
-        /* devices.customer is stamped at the till by whoever sold it, so it stands in where
-           no sales feed has ever mentioned this handset. */
-        customer: f.row.customer || d.customer || '', customerPhone: f.row.customer_phone || '',
-        price: f.row.price == null ? null : num(f.row.price),
-        guarantor: f.row.guarantor || '', guarantorPhone: f.row.guarantor_phone || '',
-        branch: f.row.branch || '', model: f.row.model || d.item || '',
-        saleDate: f.row.sale_date || null,
-        /* THE THREE WORDS THE OWNER USES, and the fourth this register also has. `lost` is not
-           in their list because it is rare -- but calling it "locked" because that is what the
-           handset does would hide a written-off phone inside the locked count, which is the
-           one number this audit is read for. */
-        status: NEWSTOCK_STATE[String(d.state || '')] || String(d.state || ''),
-        neverLocked: false,
-        by: d.state_by || '', atMs: d.state_at ? Date.parse(d.state_at) : null,
-        /* The position rides under the status because they answer one question together --
-           what is this handset doing, and where. `locAt` is the fix's OWN age, not the beat's:
-           collapsing them would let the register claim a phone is somewhere it left days ago.
-           `locAcc` travels too, because a 2,000m fix is a suburb and drawing it as a pin sends
-           somebody to the wrong building. */
-        lat: d.last_lat == null ? null : Number(d.last_lat),
-        lng: d.last_lng == null ? null : Number(d.last_lng),
-        locAcc: d.last_loc_acc == null ? null : Number(d.last_loc_acc),
-        locAt: d.last_loc_at ? Date.parse(d.last_loc_at) : null,
-        seenAt: seen, neverSeen: !seen,
-        silentDays: seen ? Math.max(0, Math.floor((now - seen) / 86400000)) : null,
-        /* THE GAP COUNT IS ABOUT THE STAMP, not the screen. A derived RSM does not close it:
-           `gappy` asks how much of the SALE the feeds have never answered, and whose hands the
-           handset is in today is not an answer to that question. */
-        gaps: NEWSTOCK_FIELDS.filter(k => unanswered(f.row[k])).length,
-        src: R.src,
-      });
-    }
-
-    /* THE STAMP. Only rows that actually GAINED something are written -- on a steady morning
-       that is none of them -- and each one carries the whole merged row, so a column filled
-       last month survives a feed that has since gone blank. */
-    let stamped = 0;
-    if (!notReady && !isReadOnly(user) && changed.length) {
-      for (let i = 0; i < changed.length; i += 200) {
-        const slice = changed.slice(i, i + 200);
-        const { error } = await db.from('stock_audit').upsert(slice, { onConflict: 'imei' });
-        /* POSTGREST REFUSES BY RESOLVING, NOT BY THROWING. A stamp that reported success on a
-           write the database rejected is the exact failure this table exists to prevent: the
-           deck moves on, and the office believes the sale was captured. */
-        if (error) {
-          if (!tableMissing(error)) throw new Error(error.message);
-          notReady = true; stamped = 0; break;
-        }
-        stamped += slice.length;
-      }
-    }
-
-    /* WHO THE STOCK NAMES BECOMES A SYSTEM USER -- see syncStaffFromStock. Off the fenced rows
-       would be wrong (an RSM's open must not be the only thing that minted their agents' codes
-       -- it is the DESK's open that should), so it reads the whole register's rsm/agent columns
-       before the fence; it writes only what is missing, and only for a code that can write. */
-    const staffSync = await syncStaffFromStock(db, user, rows.map(r => ({ rsm: r.rsm, rsmPhone: r.rsmPhone, agent: r.agent, agentPhone: r.agentPhone })));
-
-    /* WORST FIRST: a handset that has never once spoken, then the longest silence. That is the
-       order somebody chasing stock wants, and every column still sorts on its own click. */
-    rows.sort((x, y) => (y.neverSeen ? 1 : 0) - (x.neverSeen ? 1 : 0)
-      || (y.silentDays || 0) - (x.silentDays || 0)
-      || String(x.imei).localeCompare(String(y.imei)));
+    const built = await newStockBuild(db, user);
+    let { rows, agents, notReady, noDevices, hasLoc, stamped, staffSync } = built;
 
     /* THE FENCE (stockAllow): an RSM sees their region -- handsets they or their agents hold,
        or that their region sold -- an agent their own; the desk and ADMIN everything. Applied
-       before the tiles and the board, so a fenced code's numbers are their own numbers. */
-    const allow = await stockAllow(db, user);
+       before the tiles and the board, so a fenced code's numbers are their own numbers.
+       `agents` is the SAME feed the join used -- 0 further trips. */
+    const allow = await stockAllow(db, user, { agents });
     if (allow) rows = rows.filter(r => allow(r.holder, r.agent, r.rsm));
 
     const want = String(a.status || '').trim();
@@ -7584,7 +7981,7 @@ const FNS = {
       } };
   },
 
-  /* =====================================================================================
+/* =====================================================================================
      LOSS AND DAMAGE -- the price list, the case, and the acknowledgement of liability.
      =====================================================================================
        Finance SOP H     valuation, liability and recovery, handled centrally by Finance
@@ -7605,7 +8002,10 @@ const FNS = {
      it moves -- and a price change next month must not re-price a debt somebody has already
      signed for. Two navs: `lossreq` opens and reads own, `loss` is Finance's desk. */
 
-  /** The current price list (SOP H.2). Read by both navs; written only by the desk. */
+  /** The current price list (SOP H.2). Read by both navs; written only by the desk.
+      Budget: 1 device_prices read + 1 watu_loans read (model column only, for the item
+      list). Measured 2 trips / 3,004 rows -- almost all of it the 3,000-loan model scan for
+      four prices; see priceSave/priceDelete for the actual writes this pane makes. */
   async priceList(db, user) {
     requireAnyNav(user, ['loss', 'lossreq']);
     let rows = [];
@@ -7627,6 +8027,7 @@ const FNS = {
         .sort((x, y) => (x.item < y.item ? -1 : 1)) };
   },
 
+  // Budget: 1 keyed upsert.
   async priceSave(db, user, args) {
     requireNav(user, 'loss');
     requireWrite(user);
@@ -7646,6 +8047,7 @@ const FNS = {
     return { ok: true, item, amount };
   },
 
+  // Budget: 1 keyed delete.
   async priceDelete(db, user, args) {
     requireNav(user, 'loss');
     requireWrite(user);
@@ -7661,7 +8063,9 @@ const FNS = {
 
   /** OPEN A CASE (Store SOP C.7). The store keeper who finds the shortage opens it; so does
       anybody else who holds the nav. Valued straight away from the price list where the model
-      is on it, because a case with no number attached is a conversation, not a liability. */
+      is on it, because a case with no number attached is a conversation, not a liability.
+      Budget: 1 keyed device_prices read (only when a model was given) + 1 insert + the
+      notification email (not a DB trip). */
   async lossRaise(db, user, args) {
     requireAnyNav(user, ['loss', 'lossreq']);
     requireWrite(user);
@@ -7715,7 +8119,9 @@ const FNS = {
     return { ok: true, id, value, status: row.status, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
   },
 
-  /** The desk sees every case; a raiser sees only their own. */
+  /** The desk sees every case; a raiser sees only their own.
+      Budget: 1 bounded loss_cases read (desk: every case; a raiser: .eq('staff_code', ...)).
+      Measured 1 trip / 200 rows. */
   async lossList(db, user, args) {
     requireAnyNav(user, ['loss', 'lossreq']);
     const a = args || {};
@@ -7755,6 +8161,8 @@ const FNS = {
       } };
   },
 
+  // Budget: 1 keyed loss_case_notes read; a raiser (not the desk) pays 1 more, keyed against
+  // loss_cases, to check the case is theirs. Measured 1 trip / 1 row (desk).
   async lossNotes(db, user, args) {
     requireAnyNav(user, ['loss', 'lossreq']);
     const id = String((args && args.id) || '').trim();
@@ -7780,7 +8188,9 @@ const FNS = {
 
   /** MOVE A CASE (SOP H.2-H.5). Valuing, agreeing the recovery, taking the custodian's
       acknowledgement, recording money in, and settling. The desk's grant; a raiser may only
-      add a note to their own case. */
+      add a note to their own case.
+      Budget: 1 keyed loss_cases read + 1 guarded update + 1 loss_case_notes insert (only
+      when there is a note or a status change to record). */
   async lossUpdate(db, user, args) {
     requireAnyNav(user, ['loss', 'lossreq']);
     requireWrite(user);
@@ -7904,7 +8314,15 @@ const FNS = {
      Two navs: `commission` builds, pays and clears (Finance); `commappr` signs off (the
      Administration approval group). Nobody can do both halves unless the owner ticks both. */
 
-  /** The rate table, and the words the form offers for it. */
+  /** The rate table, and the words the form offers for it. Only the rate table itself is
+      read fresh every time -- it is what the form is FOR, and it is a handful of rows. The
+      two dropdowns beside it (every role, every model) used to cost the whole staff register
+      and the whole loan book on every open, which is 4,071 rows to fill two <select>s that
+      almost never change between one open and the next; see commRolesItems below.
+      Budget: warm = 2 round trips (the rates read, the memo's own DATA_VERSION check); a
+      version change or 15-minute lapse costs 2 more (the register, the loan book), same as
+      the unmemoised cost -- wider only in wall-clock time saved across the panes and clicks
+      that share it, not in what any single call pays when it must actually rebuild. */
   async commRates(db, user) {
     requireAnyNav(user, ['commission', 'commappr']);
     let rows = [];
@@ -7915,15 +8333,7 @@ const FNS = {
       if (!tableMissing(e)) throw e;
       notReady = true;
     }
-    let roles = [], items = [];
-    try {
-      const agents = await fetchAll(() => db.from('hoop_agents').select('role'));
-      roles = [...new Set(agents.map(a => K(a.role || '').replace(/\s+/g, '_')).filter(Boolean))].sort();
-    } catch (e) { roles = []; }
-    try {
-      const models = await fetchAll(() => db.from('watu_loans').select('model'));
-      items = [...new Set(models.map(m => K(m.model || '')).filter(Boolean))].sort();
-    } catch (e) { items = []; }
+    const { roles, items } = await commRolesItems(db);
     return { ok: true, notReady, roles: ['ANY'].concat(roles), items: ['ANY'].concat(items),
       rates: rows.map(r => ({ role: r.role, item: r.item, amount: num(r.amount),
         updatedBy: r.updated_by || '', updatedAt: r.updated_at ? Date.parse(r.updated_at) : null }))
@@ -8116,7 +8526,9 @@ const FNS = {
   },
 
   /** SIGN-OFF (SOP A.4). The Administration approval group's own grant; rejecting sends the
-      sheet back to draft so Finance can fix it and rebuild. */
+      sheet back to draft so Finance can fix it and rebuild.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5. */
   async commDecide(db, user, args) {
     requireNav(user, 'commappr');
     requireWrite(user);
@@ -8133,6 +8545,7 @@ const FNS = {
     const r = runs.find(x => String(x.id) === id);
     if (!r) bad('Kipindi hakipo. / That cycle no longer exists.');
     if (r.status === 'paid') bad('Kipindi hiki tayari kimelipwa. / That cycle has already been paid.');
+    if (args.__auditCtx) args.__auditCtx.before = r;
     const approve = a.approve === true;
     const comment = String(a.comment == null ? '' : a.comment).trim().slice(0, 2000);
     if (!approve && !comment) bad('Sababu inahitajika ukirudisha. / A reason is required when sending it back.');
@@ -8141,6 +8554,7 @@ const FNS = {
     const patch = approve
       ? { status: 'approved', approved_by: user.name || '', approved_at: now, comment: comment || null, updated_at: now }
       : { status: 'draft', approved_by: null, approved_at: null, comment, updated_at: now };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     const { data, error } = await db.from('commission_runs').update(patch)
       .eq('id', id).eq('status', r.status).select('id');
     if (error) throw new Error(error.message);
@@ -8150,7 +8564,9 @@ const FNS = {
 
   /** PAY AND CLEAR (SOP A.5-A.7). The checklist is a GATE: all five ticks and a payment
       reference, or nothing moves. Guarded on cleared_at being empty, which is what stops the
-      same cycle being paid twice however many people press the button. */
+      same cycle being paid twice however many people press the button.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5. */
   async commPay(db, user, args) {
     requireNav(user, 'commission');
     requireWrite(user);
@@ -8171,6 +8587,7 @@ const FNS = {
         + '/ This cycle is already paid and cleared; it cannot be paid twice.');
     }
     if (r.status !== 'approved') bad('Inahitaji idhini kabla ya malipo (SOP A.4). / It needs sign-off before payment.');
+    if (args.__auditCtx) args.__auditCtx.before = r;
     const ref = String(a.paymentRef == null ? '' : a.paymentRef).trim().slice(0, 120);
     if (!ref) bad('Andika kumbukumbu ya malipo. / Give the payment reference (SOP A.7).');
     const checks = a.checks || {};
@@ -8183,6 +8600,7 @@ const FNS = {
     const patch = { status: 'paid', paid_by: user.name || '', paid_at: now, payment_ref: ref,
       cleared_at: now, updated_at: now };
     for (const [js, col] of COMM_CHECKS) patch[col] = true;
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     /* GUARDED ON cleared_at BEING NULL. Two people pressing Pay at the same moment: the second
        update matches nothing and is told the cycle is already cleared. */
     const { data, error } = await db.from('commission_runs').update(patch)
@@ -8565,6 +8983,7 @@ const FNS = {
     };
     await write(add, leader.name);
     await write(drop, null);
+    clearAgentIndex(db);   // the channel just moved in hoop_agents -- the next read sees it now
     return { ok: true, phone, added: add.length, removed: drop.length };
   },
 
@@ -8621,6 +9040,12 @@ const FNS = {
       if (!tableMissing(e)) throw e;
       doorKnown = false;
     }
+    // Two tables moved: hoop_agents.active (agentIndex's own read) and, where the door
+    // matched a code, access_codes.suspend_from/to (rosterFull's away set). Both busted so
+    // the very next list()/summary or "who reports to whom" sees this instant, not in 15
+    // minutes or 30 seconds.
+    clearAgentIndex(db);
+    clearRosterCache(db);
     return { ok: true, phone, name, active,
       /* What actually happened at the door, in the caller's hands rather than assumed. */
       doorKnown,
@@ -8643,6 +9068,7 @@ const FNS = {
       throw new Error(error.message);
     }
     if (!data || !data.length) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    clearAgentIndex(db);   // the tree just changed -- the next roll-up/fence read sees it now
     return { ok: true, phone, manager };
   },
 
@@ -8665,7 +9091,10 @@ const FNS = {
      Three navs, granted the ordinary way: stockreq asks, stockappr decides and hands over,
      stockrep reads the tracker and the distribution report. */
 
-  /** Anybody who may ask, and the desk (which files on an RSM's behalf when they phone in). */
+  /** Anybody who may ask, and the desk (which files on an RSM's behalf when they phone in).
+      Budget: the shared stockAgingIndex (0 trips warm within its 20-30s TTL, ~7 on a miss --
+      the memo's own aux reads plus its hoop_aged_stock/policy pair) + 1 stock_requests
+      insert + the notification email (not a DB trip). */
   async stockRequest(db, user, args) {
     requireAnyNav(user, ['stockreq', 'stockappr']);
     requireWrite(user);
@@ -8711,7 +9140,10 @@ const FNS = {
     return { ok: true, id, aging: gate, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
   },
 
-  /** The asker's own requests, and the gate as it stands for them right now. */
+  /** The asker's own requests, and the gate as it stands for them right now.
+      Budget: 1 bounded stock_requests read (.eq('staff_code', ...)) + the shared
+      stockAgingIndex (0 trips warm, ~7 on a miss). Two back-to-back calls on the same
+      request now cost the aux reads once, not twice. */
   async stockMine(db, user) {
     requireNav(user, 'stockreq');
     let rows;
@@ -8727,7 +9159,9 @@ const FNS = {
   },
 
   /** THE STORE DESK. Every request, work first, each carrying the gate as it stands NOW --
-      a request filed on Monday is a different question by Wednesday. */
+      a request filed on Monday is a different question by Wednesday.
+      Budget: 1 stock_requests read + the shared stockAgingIndex (0 trips warm, ~7 on a
+      miss). Measured 11 trips / 10,671 rows cold. */
   async stockQueue(db, user, args) {
     requireNav(user, 'stockappr');
     const a = args || {};
@@ -8762,7 +9196,9 @@ const FNS = {
   },
 
   /** THE DECISION, AND THE GATE (SOP B.2, E). Approving somebody who is holding aging stock
-      takes an explicit override and a reason; rejecting never does. */
+      takes an explicit override and a reason; rejecting never does.
+      Budget: 1 keyed stock_requests read +, on approval, a FRESH stockAgingIndex (always a
+      real read, `{ fresh: true }` -- see there for why) + 1 guarded update. */
   async stockDecide(db, user, args) {
     requireNav(user, 'stockappr');
     requireWrite(user);
@@ -8791,8 +9227,12 @@ const FNS = {
       if (!(qty > 0)) bad('Idadi inayotolewa lazima iwe zaidi ya sifuri. / The released quantity must be more than zero.');
       if (qty > num(row.qty)) bad('Huwezi kutoa zaidi ya kilichoombwa. / You cannot release more than was asked for.');
       patch.approved_qty = qty;
-      /* THE GATE, RECOMPUTED LIVE rather than read off the stamp. */
-      const gate = (await stockAgingIndex(db)).for(row.holder);
+      /* THE GATE, RECOMPUTED LIVE rather than read off the stamp -- and { fresh: true } so
+         it is recomputed off the DATABASE rather than off the shared 20-30s memo too. A SOP-E
+         release decision must never pass on the strength of a devices/old_stock snapshot a
+         deviceEnrol or a bad busting path let go stale: this is the one caller that cannot
+         wait out the TTL, so it always pays the full read instead of trusting the cache. */
+      const gate = (await stockAgingIndex(db, { fresh: true })).for(row.holder);
       if (gate.blocked) {
         const reason = S(a.overrideReason, 500);
         if (a.overrideAging !== true || !reason) {
@@ -8819,7 +9259,11 @@ const FNS = {
   /** THE HANDOVER (SOP B.5-B.9). Only on an approved request, once: the note number, the joint
       count, who signed, the courier's papers, the IMEIs and up to three photographs. Any IMEI
       the phone registry already knows has its holder moved, so "who has it" stops being two
-      different answers in two different panes. */
+      different answers in two different panes.
+      Budget: 1 keyed stock_requests read + 1 guarded claim update + 1 stock_handovers insert
+      + up to 2 more inserts (items, photos, only when either is non-empty) + 1 devices
+      `.in()` update per 200-IMEI chunk of the note (FIX 4 of the postgres-war audit -- was
+      one per IMEI). */
   async stockIssue(db, user, args) {
     requireNav(user, 'stockappr');
     requireWrite(user);
@@ -8904,21 +9348,29 @@ const FNS = {
         .insert(sized.map((p, i) => ({ handover_id: hid, seq: i + 1, data: p.data, bytes: p.bytes })));
       if (pErr) throw new Error(pErr.message);
     }
-    /* WHO HAS IT, in the one place that locks phones. Allowed to fail quietly per IMEI: a
-       device not in the registry is normal (only enrolled phones are there), and a registry
-       hiccup must never undo a handover the store has physically made. */
+    /* WHO HAS IT, in the one place that locks phones. Allowed to fail quietly PER CHUNK: a
+       device not in the registry is normal (only enrolled phones are there -- `.in()` simply
+       does not match it, no error at all), and a registry hiccup must never undo a handover
+       the store has physically made. One `.in()` update per 200 IMEIs, not one round trip per
+       handset: a note for five hundred phones used to be five hundred awaited updates, and
+       `moved` is counted off the rows PostgREST actually reports changed, exactly as before. */
     let moved = 0;
-    for (const imei of imeis) {
+    for (let i = 0; i < imeis.length; i += 200) {
+      const slice = imeis.slice(i, i + 200);
       try {
-        const { data: up } = await db.from('devices').update({ holder: row.holder }).eq('imei', imei).select('imei');
-        if (up && up.length) moved++;
+        const { data: up } = await db.from('devices').update({ holder: row.holder }).in('imei', slice).select('imei');
+        if (up) moved += up.length;
       } catch (e) { /* the note is the record either way */ }
     }
     return { ok: true, id, handoverId: hid, imeis: imeis.length, photos: sized.length, holdersMoved: moved };
   },
 
   /** One handover note, with its IMEIs. The desk and the report see any; an asker sees only
-      the note for their own request. */
+      the note for their own request.
+      Budget: 1 keyed stock_handovers read + 1 keyed stock_handover_items read + 1 keyed
+      stock_handover_photos read (count only); an asker (not the desk/report) pays 1 more,
+      keyed against stock_requests, to check the request is theirs. Measured 3 trips / 6 rows
+      (desk). */
   async stockHandover(db, user, args) {
     requireAnyNav(user, ['stockreq', 'stockappr', 'stockrep']);
     const id = String((args && args.id) || '').trim();
@@ -8960,7 +9412,9 @@ const FNS = {
       items: items.map(i => ({ imei: String(i.imei), condition: i.condition || '' })).sort((x, y) => (x.imei < y.imei ? -1 : 1)) };
   },
 
-  /** The photographs of one handover (SOP B.7), fetched only when somebody asks to see them. */
+  /** The photographs of one handover (SOP B.7), fetched only when somebody asks to see them.
+      Budget: 1 keyed stock_handovers read + 1 keyed stock_handover_photos read; an asker
+      pays 1 more, keyed against stock_requests. Measured 2 trips / 1 row (desk). */
   async stockPhotos(db, user, args) {
     requireAnyNav(user, ['stockreq', 'stockappr', 'stockrep']);
     const id = String((args && args.id) || '').trim();
@@ -8995,7 +9449,9 @@ const FNS = {
 
   /** THE AGING STOCK TRACKER (SOP E.3) and the distribution report (B.11), on one pane: who is
       holding what and for how long, the low-stock alert (SOP G), and every request in a period
-      with what was released against it. */
+      with what was released against it.
+      Budget: the shared stockAgingIndex (0 trips warm, ~7 on a miss) + 1 stock_requests
+      read. Measured 11 trips / 10,671 rows cold. */
   async stockReqReport(db, user, args) {
     requireNav(user, 'stockrep');
     const a = args || {};
@@ -9038,6 +9494,9 @@ const FNS = {
       } };
   },
 
+  /** STOCK MOVEMENT -- what got away after every upload, on BOTH books, checkable by date.
+      Budget: 2 tiny ordered date lookups per source + up to 4 date-keyed bounded reads.
+      Measured 7 trips / 6,023 rows -- same for ADMIN and an RSM (KNOWN_UNSCOPED). */
   async stockMovement(db, user, args) {
     requireNav(user, 'movement');
     const a = args || {};
@@ -9222,7 +9681,10 @@ const FNS = {
   /** THE OFFICE, not the logins: everyone on Sipho's register -- agents, team leaders,
       RSMs, the CSM -- ranked seniority-first. System logins (portal codes, app users)
       live under Access codes. Next of kin shows only to settings holders / ADMIN.
-      Budget: 1 bounded read (~1k rows). */
+      Budget: warm = 2 round trips (the register, the branch memo's own DATA_VERSION check);
+      a version change or 15-minute lapse costs 1 more (the loan book's branch column) -- see
+      loanBranches below. The register itself (~1k rows) is always read fresh; only the
+      3,000-row scan for "every branch spelling in the loan book" is memoised. */
   async staffDirectory(db, user) {
     requireNav(user, 'staff');
     /* `manager` post-dates this table (the targets migration adds it). A directory that 500s
@@ -9257,10 +9719,7 @@ const FNS = {
        register and the loan book, because the office already talks in the deck's names. */
     const places = new Set(staff.map(r => r.branch).filter(Boolean));
     try {
-      for (const l of await fetchAll(() => db.from('watu_loans').select('branch'))) {
-        const b = String(l.branch == null ? '' : l.branch).trim();
-        if (b) places.add(b);
-      }
+      for (const b of await loanBranches(db)) places.add(b);
     } catch (ignored) { /* no deck, or no branch column: the register's own list will do */ }
     return { ok: true, total: staff.length, byRole, staff: staff.slice(0, 1500),
       branches: [...places].sort() };
@@ -9317,6 +9776,7 @@ const FNS = {
     const active = !!(args && args.active);
     const { error } = await db.from('call_users').update({ active }).eq('user_id', uid);
     if (error) throw new Error(error.message);
+    clearRosterCache(db);   // active just moved -- today's deal must not go on skipping/dealing them
     return { ok: true, userId: uid, active };
   },
 
@@ -9391,7 +9851,9 @@ const FNS = {
   /** A role leaves only when NOBODY holds it -- reassign the codes first. A deleted
       suggested-set name also lands on ROLES_HIDDEN (a settings row this fn alone writes;
       it sits outside settingSet's whitelist) or the next read would resurrect it.
-      Budget: 1 bounded codes read + 1 keyed delete + 1 keyed read + 1 keyed write. */
+      Budget: 1 bounded codes read + 1 keyed delete + 1 keyed read + 1 keyed write, plus
+      clearRolesCache(db) -- no trip of its own, an in-memory drop so the next signed-in
+      request sees this role gone rather than waiting out the 30s memo (auth.js). */
   async deleteRole(db, user, args) {
     requireWrite(user); requireNav(user, 'codes');
     const role = K(args && args.role);
@@ -9405,6 +9867,11 @@ const FNS = {
     }
     const { error } = await db.from('roles').delete().eq('role', role);
     if (error) throw new Error(error.message);
+    /* THE READ EVERY OTHER REQUEST TRUSTS FOR THIRTY SECONDS (auth.js's roleTabsOf) now knows
+       something that just became false: this role no longer has a row at all. Left uncleared,
+       whoever is still holding it would keep their OLD tabs for up to half a minute after the
+       delete -- not wrong forever, but wrong right when an admin is watching to confirm it. */
+    clearRolesCache(db);
     const { data } = await db.from('settings').select('value').eq('key', 'ROLES_HIDDEN').maybeSingle();
     let hidden = [];
     try { hidden = JSON.parse((data && data.value) || '[]') || []; } catch (e) { hidden = []; }
@@ -9416,7 +9883,10 @@ const FNS = {
   },
 
   /** A role is a name plus the doors it opens. Tabs come from a fixed vocabulary; every
-      code carrying the role inherits them at sign-in (auth.js resolveTabs). */
+      code carrying the role inherits them at sign-in (auth.js resolveTabs).
+      Budget: 1 keyed upsert, plus clearRolesCache(db) -- no trip of its own, an in-memory
+      drop so the admin who just ticked a box sees it take on their very next request rather
+      than waiting out the roles memo's 30s TTL (auth.js). */
   async saveRole(db, user, args) {
     requireWrite(user); requireNav(user, 'codes');
     const role = K(args && args.role);
@@ -9431,6 +9901,10 @@ const FNS = {
       .map(t => String(t).toLowerCase()).filter(t => ALLOWED.has(t));
     const { error } = await db.from('roles').upsert({ role, tabs }, { onConflict: 'role' });
     if (error) throw new Error(error.message);
+    /* Same reason deleteRole clears it: the roles memo (auth.js's roleTabsOf) is trusted for
+       thirty seconds by every request that resolves a user, and the admin who just ticked a
+       box is usually the next person to look -- they should see it take, not wait out a TTL. */
+    clearRolesCache(db);
     return { ok: true, role, tabs };
   },
 
@@ -9604,6 +10078,7 @@ const FNS = {
       throw new Error(error.message);
     }
     if (!data || !data.length) throw new Error('Unknown code: ' + code);
+    clearRosterCache(db);   // the suspension window just moved -- today's deal must see it now
     return { ok: true, code, from, to };
   },
 
@@ -9629,6 +10104,9 @@ const FNS = {
       settings: EDITABLE_SETTINGS.map(k => ({ key: k, value: by[k] == null ? '' : by[k] })) };
   },
 
+  /** Budget: 1 keyed upsert, plus, only when key is SYSTEM_OPEN, clearSystemOpenCache(db) --
+      no trip of its own, an in-memory drop so the admin who just closed the system sees it
+      take effect immediately rather than waiting out isSystemOpen's 30s TTL. */
   async settingSet(db, user, args) {
     requireWrite(user); requireSettings(user);
     const key = K(args && args.key);
@@ -9638,6 +10116,12 @@ const FNS = {
     const { error } = await db.from('settings')
       .upsert({ key, value: String((args && args.value) || '') }, { onConflict: 'key' });
     if (error) throw new Error(error.message);
+    /* THE COMMENT THIS USED TO BE WRONG UNDER: system-gate.js's isSystemOpen cache said, in its
+       own header, that "settingSet clears it outright" -- and nothing here ever called
+       clearSystemOpenCache. An admin flipping SYSTEM_OPEN off saw the switch move on their own
+       screen and had no way to know the portal stayed reachable for up to thirty more seconds
+       for everybody else, on the one setting whose whole job is "not reachable, right now". */
+    if (key === 'SYSTEM_OPEN') clearSystemOpenCache(db);
     return { ok: true, key };
   },
 
@@ -9795,6 +10279,7 @@ const FNS = {
       throw new Error(error.message);
     }
     const gaps = enrolGaps({ ...(before || {}), ...row });
+    clearAgentIndex(db);   // hoop_agents just moved -- the next agentIndex-backed read sees it now
     return { ok: true, phone, created: !before, gaps,
       complete: gaps.length === 0,
       /* Said back rather than left for somebody to notice: an ID of the wrong length is the
@@ -9882,6 +10367,7 @@ const FNS = {
       throw new Error(error.message);
     }
     if (!data || !data.length) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    clearAgentIndex(db);   // hoop_agents just moved -- the next agentIndex-backed read sees it now
     return { ok: true, phone, step,
       verified: !!patch.verified_at, active: patch.active,
       emailed: !!(mail && mail.sent), to: (mail && mail.to) || '' };
@@ -9923,15 +10409,19 @@ const FNS = {
     const fromISO = from + 'T00:00:00.000Z';
     const toISO = to + 'T23:59:59.999Z';
 
-    /* ---- 1. SYSTEM PERFORMANCE (SOP C.2's three modules, and the door) ---- */
-    const feeds = [];
-    for (const [key, table, col, label] of ITREP_FEEDS) {
-      const byDay = [];
-      for (const d of days) byDay.push({ day: d, rows: await feedDay(db, table, col, d) });
-      feeds.push({ key, label, byDay,
+    /* ---- 1. SYSTEM PERFORMANCE (SOP C.2's three modules, and the door) ----
+       THREE FILES x SEVEN DAYS OF THESE, and every one is an independent HEAD count that
+       does not read from any other -- so all 21 are fired at once rather than waited on
+       one after another. A sequential waterfall of 21 round trips is 21x whatever one of
+       them costs in latency; run together, it is roughly the cost of the slowest one. The
+       COUNT of trips does not change -- still 21 HEAD requests, no rows -- only whether the
+       report waits for them one at a time or all together. */
+    const feeds = await Promise.all(ITREP_FEEDS.map(async ([key, table, col, label]) => {
+      const byDay = await Promise.all(days.map(async d => ({ day: d, rows: await feedDay(db, table, col, d) })));
+      return { key, label, byDay,
         arrived: byDay.filter(x => x.rows > 0).length,
-        missing: byDay.filter(x => x.rows === 0).map(x => x.day) });
-    }
+        missing: byDay.filter(x => x.rows === 0).map(x => x.day) };
+    }));
     const door = await signinWindow(db, from, to);
     const doorGroups = signinGroups(door.rows);
     const alertFails = await signinAlertFails(db);
@@ -10359,7 +10849,10 @@ const FNS = {
      RUN-ME-2026-09-17-transfers-flow.sql (sent / accepted / declined, and who is who). */
 
   /** The Send form's vocabulary: everybody a transfer can be sent to, grouped by role on the
-      page; every model the stock has ever named; and who is sending, which is always you. */
+      page; every model the stock has ever named; and who is sending, which is always you.
+      Budget: 1 access_codes read (transferParties) + 3 best-effort bounded reads
+      (stockModels: devices, old_stock, stock_audit). Measured 5 trips / 4,373 rows -- same
+      for ADMIN and an RSM (KNOWN_UNSCOPED). */
   async transferUsers(db, user, args) {
     requireNav(user, 'transfers');
     const q = K((args || {}).q);
@@ -10376,7 +10869,10 @@ const FNS = {
 
   /** THE STOCK WINDOW: what this person is holding right now -- exactly what they can send.
       A locked or enrolled handset that has not gone out on a sale, plus anything on the
-      old-stock list that is still open. The store desk and ADMIN see everybody's. */
+      old-stock list that is still open. The store desk and ADMIN see everybody's.
+      Budget: 1 devices read + the shared aux memo behind oldStockIndex (0 trips warm, ~5 on
+      a miss) + 1 fresh old_stock read. Measured 10 trips / 12,071 rows cold -- "what YOU
+      hold" still reads everybody's (KNOWN_UNSCOPED). */
   async transferStock(db, user, args) {
     requireNav(user, 'transfers');
     const a = args || {};
@@ -10414,7 +10910,8 @@ const FNS = {
       rows: shown.slice(0, 3000), truncated: Math.max(0, shown.length - 3000) };
   },
 
-  /** THE RECEIVE WINDOW: waiting for me, sent by me, and what was settled. */
+  /** THE RECEIVE WINDOW: waiting for me, sent by me, and what was settled.
+      Budget: 1 transfers read (trReadAll). Measured 1 trip / 200 rows. */
   async transferInbox(db, user, args) {
     requireNav(user, 'transfers');
     const r = await trReadAll(db);
@@ -10430,7 +10927,8 @@ const FNS = {
   },
 
   /** The register. The desk and ADMIN see every document; everybody else only the ones they
-      are a party to -- narrow columns, the signature images never travel here. */
+      are a party to -- narrow columns, the signature images never travel here.
+      Budget: 1 transfers read (trReadAll). Measured 1 trip / 200 rows. */
   async transferList(db, user, args) {
     requireNav(user, 'transfers');
     const a = args || {};
@@ -10453,7 +10951,8 @@ const FNS = {
       counts: { total: all.length, sent: n('sent'), accepted: n('accepted'), declined: n('declined') } };
   },
 
-  /** One document, in full -- the only read that ever names the signature columns. */
+  /** One document, in full -- the only read that ever names the signature columns.
+      Budget: 1 keyed transfers read (trOne). Measured 2 trips / 2 rows. */
   async transferGet(db, user, args) {
     requireNav(user, 'transfers');
     const a = args || {};
@@ -10488,11 +10987,21 @@ const FNS = {
       receives (a system user), a model and a price for the batch -- the price pulled off NEW
       STOCK per handset when the box is left blank -- and the sender's signature. The sender is
       the signed-in account, full stop. */
-  async transferCreate(db, user, args) {
+  /* `ctx` (optional): { parties, agents, located } -- transferCreateBulk's way of sharing one
+     transferParties/hoop_agents read and one locateStock sweep across every receiver in a
+     paste, instead of each group's dry run and real write re-fetching all three on its own.
+     A lone Send (no ctx) is unaffected: every one of the three keeps its standalone fetch.
+     Budget (a lone Send, no ctx): 1 access_codes read (transferParties) + 0-1 hoop_agents
+     reads (only when the pairing might be two field agents -- FIX 5) + up to 2 more,
+     keyed, when that check needs an RSM off the stock lists (stockRsmOf) + 1 bounded
+     locateStock sweep (old_stock/devices/stock_audit, per 200-IMEI chunk) + a dry run stops
+     here; a real send adds 1-2 transfers inserts (the flow/three-way fallback) + 1
+     transfer_items insert. */
+  async transferCreate(db, user, args, ctx) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
     const desk = isStoreDesk(user);
-    const parties = await transferParties(db);
+    const parties = (ctx && ctx.parties) || await transferParties(db);
 
     /* WHO IS HANDING OVER: you. "sender must be current account settings" -- a typed sender
        is refused, with ONE exception: the desk naming a different SENDER *and* that sender is
@@ -10567,53 +11076,72 @@ const FNS = {
        register and the same manager-derivation the targets roll-up already uses
        (managerIndex, see "WHICH RSM AN AGENT BELONGS TO" above), so a name not in that
        roster at all (the store desk, "SUPER AGENT") is never restricted by this rule, and
-       neither is anybody who IS an RSM/country manager on either side. */
-    let agentsForRule = [];
-    try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
-    catch (e) {
-      /* Before the targets migration there is no `manager` column, and before the register
-         exists at all there is no table: the rule then reads the code's role and the stock
-         lists (below) rather than refusing every hand-off in the company with a column error. */
-      if (/manager/i.test(String((e && e.message) || ''))) {
-        try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch')); }
-        catch (e2) { if (!tableMissing(e2)) throw e2; }
-      } else if (!tableMissing(e)) throw e;
-    }
-    const mgrIdx = managerIndex(agentsForRule);
+       neither is anybody who IS an RSM/country manager on either side.
+
+       FETCHED LAZILY -- ctx.agents when transferCreateBulk already has it for every group in
+       a paste; otherwise ONLY once the cheap check below (off the access-code roles alone,
+       no read at all) says this pairing might actually be two field agents, which is the one
+       case the rule exists for. A lone Send between an RSM and an agent, or two RSMs, or
+       anybody and the desk, never touches hoop_agents at all any more. */
+    let agentsForRule = (ctx && ctx.agents) || null;
     /* WHO IS AN AGENT: the register's word where it has a row, otherwise the ACCESS CODE's role.
        The register is keyed by phone, and a name the stock lists without one holds a code
        (syncStaffFromStock) but no row -- and "no row" used to read as "not an agent", which let
        exactly those agents hand off across regions with nobody checking. */
     const tierOf = (name, codeRole) => {
-      const row = agentsForRule.find(r => nameKey(r.name) === nameKey(name));
+      const row = (agentsForRule || []).find(r => nameKey(r.name) === nameKey(name));
       if (row) return /REGIONAL|COUNTRY_SALES/.test(K(row.role).replace(/\s+/g, '_')) ? 'other' : 'agent';
       return codeRole === 'AGENT' ? 'agent' : 'other';
     };
     if (tierOf(fromName, fromRole) === 'agent' && tierOf(to.name, to.role) === 'agent') {
-      /* WHOSE AGENT: the register's manager/branch derivation first, then what the stock lists
-         say beside that agent -- the rsm column on their own handsets. No answer from either
-         means the chain of custody CANNOT be checked, and a check that cannot be made is a
-         refusal that says why, never a pass: the RSM route always works. */
-      const rsmOf = async name => nameKey(mgrIdx.of(name)) || nameKey(await stockRsmOf(db, name));
-      const fromRsm = await rsmOf(fromName);
-      const toRsm = await rsmOf(to.name);
-      if (!fromRsm || !toRsm) {
-        const who = !fromRsm ? fromName : to.name;
-        bad('Haijulikani ' + who + ' ni wakala wa RSM gani -- weka RSM wake kwenye safu ya Chaneli '
-          + 'kwenye ukurasa wa Staff, au pitisha kwa RSM au Super Agent. / It is not known which RSM ' + who
-          + ' reports to -- set their RSM in the Chaneli column on the Staff pane, or route this '
-          + 'through an RSM or Super Agent.');
+      if (agentsForRule == null) {
+        agentsForRule = [];
+        try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
+        catch (e) {
+          /* Before the targets migration there is no `manager` column, and before the register
+             exists at all there is no table: the rule then reads the code's role and the stock
+             lists (below) rather than refusing every hand-off in the company with a column error. */
+          if (/manager/i.test(String((e && e.message) || ''))) {
+            try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch')); }
+            catch (e2) { if (!tableMissing(e2)) throw e2; }
+          } else if (!tableMissing(e)) throw e;
+        }
       }
-      if (fromRsm !== toRsm) bad('Mawakala wawili wa RSM tofauti hawawezi '
-        + 'kuhamishiana moja kwa moja -- pitisha kwa RSM au Super Agent. / Two agents under '
-        + 'different RSMs cannot transfer directly to each other -- route this through an RSM '
-        + 'or Super Agent instead.');
+      /* RE-SETTLED now the register (if any) is actually in hand: a row can push a pairing
+         OUT of 'agent' tier just as easily as the cheap code-role check can push one IN --
+         this only ever widens the gate the cheap check opened, never the other way round, so
+         a pairing the cheap check ruled out is never re-examined here (and never needs to be:
+         nothing a fetch could show would turn "not two agents by their own codes" into "two
+         agents" for the rule's purposes). */
+      if (tierOf(fromName, fromRole) === 'agent' && tierOf(to.name, to.role) === 'agent') {
+        const mgrIdx = managerIndex(agentsForRule);
+        /* WHOSE AGENT: the register's manager/branch derivation first, then what the stock
+           lists say beside that agent -- the rsm column on their own handsets. No answer from
+           either means the chain of custody CANNOT be checked, and a check that cannot be
+           made is a refusal that says why, never a pass: the RSM route always works. */
+        const rsmOf = async name => nameKey(mgrIdx.of(name)) || nameKey(await stockRsmOf(db, name));
+        const fromRsm = await rsmOf(fromName);
+        const toRsm = await rsmOf(to.name);
+        if (!fromRsm || !toRsm) {
+          const who = !fromRsm ? fromName : to.name;
+          bad('Haijulikani ' + who + ' ni wakala wa RSM gani -- weka RSM wake kwenye safu ya Chaneli '
+            + 'kwenye ukurasa wa Staff, au pitisha kwa RSM au Super Agent. / It is not known which RSM ' + who
+            + ' reports to -- set their RSM in the Chaneli column on the Staff pane, or route this '
+            + 'through an RSM or Super Agent.');
+        }
+        if (fromRsm !== toRsm) bad('Mawakala wawili wa RSM tofauti hawawezi '
+          + 'kuhamishiana moja kwa moja -- pitisha kwa RSM au Super Agent. / Two agents under '
+          + 'different RSMs cannot transfer directly to each other -- route this through an RSM '
+          + 'or Super Agent instead.');
+      }
     }
 
     /* POSSESSION. You send what is in your hands. The desk is exempt -- the warehouse's stock
        is written under SUPER AGENT and the desk is that name -- but even the desk's document
-       records where each serial was, so the printed copy says whose hands it left. */
-    const where = await locateStock(db, imeis);
+       records where each serial was, so the printed copy says whose hands it left.
+       ctx.located, when given, is transferCreateBulk's own ONE combined sweep across every
+       group's IMEIs for this phase (dry-run or real); a lone Send still does its own. */
+    const where = (ctx && ctx.located) || await locateStock(db, imeis);
     if (!desk) {
       const notMine = imeis.filter(i => {
         const w = where.get(i);
@@ -10722,7 +11250,13 @@ const FNS = {
       comma, name); the list is grouped by receiver and ONE document opened per person, every
       one carrying the sender's signature. ALL OR NOTHING: every group is dry-run through
       transferCreate first -- system user, possession, the hierarchy rule -- and a list with one
-      bad line opens no documents at all, naming the lines and the people that stopped it. */
+      bad line opens no documents at all, naming the lines and the people that stopped it.
+      Budget (postgres-war FIX 5): 1 access_codes read (transferParties) + 0-1 hoop_agents
+      reads for the whole paste (lazy, same cheap gate as transferCreate) + 2 locateStock
+      sweeps total across every group's IMEIs combined (one for the dry-run pass, one FRESH
+      for the real writes) -- not per group. Each group's own transferCreate call then adds
+      0 further transferParties/hoop_agents/locateStock trips (ctx supplies all three) plus
+      its own write(s) on the real pass. */
   async transferCreateBulk(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
@@ -10761,19 +11295,58 @@ const FNS = {
     }
     const shared = { item: a.item, price: a.price, note: a.note, signature: a.signature };
 
+    /* THREE READS SHARED ACROSS EVERY GROUP, instead of each group's dry run AND its real
+       write separately re-fetching all three -- a fifteen-receiver paste used to cost fifteen
+       transferParties reads, fifteen unconditional hoop_agents reads and thirty locateStock
+       sweeps for exactly the same three answers every time.
+       -----------------------------------------------------------------------------------
+       transferParties: once, for every group.
+       hoop_agents (the hierarchy rule): once, and only if some group's sender+receiver pair
+         could plausibly BOTH be field agents by their access-code role alone -- the cheap
+         check transferCreate itself now does per group (see there); if nothing here even
+         looks like two agents, hoop_agents is never read at all.
+       locateStock: once per PHASE across every group's IMEIs combined, not once per group --
+         one sweep for the whole dry-run pass, and a SECOND, FRESH sweep for the real writes,
+         because the possession check right before stock actually moves has to read NOW, not
+         whatever the dry run saw a moment (and, for group fourteen, several writes) ago. */
+    const parties = await transferParties(db);
+    const signedInRole = roleWord(user);
+    const needsHierarchy = signedInRole === 'AGENT'
+      && [...groups.values()].some(g => { const p = parties.get(nameKey(g.toName)); return p && K(p.role) === 'AGENT'; });
+    let agents = null;
+    if (needsHierarchy) {
+      agents = [];
+      try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
+      catch (e) {
+        if (/manager/i.test(String((e && e.message) || ''))) {
+          try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch')); }
+          catch (e2) { if (!tableMissing(e2)) throw e2; }
+        } else if (!tableMissing(e)) throw e;
+      }
+    }
+    const allImeis = [...new Set(rows.map(r => r.imei))];
+
     // EVERY GROUP IS CHECKED BEFORE ANY IS OPENED.
+    const dryLocated = await locateStock(db, allImeis);
     const problems = [];
     for (const g of groups.values()) {
-      try { await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis, dryRun: true })); }
+      try {
+        await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis, dryRun: true }),
+          { parties, agents, located: dryLocated });
+      }
       catch (e) { problems.push(g.toName + ': ' + String((e && e.message) || e).replace(/<[^>]+>/g, '')); }
     }
     if (problems.length) {
       bad('Orodha ina makosa — hakuna kilichotumwa. / The list has problems — nothing was sent. '
         + problems.slice(0, 6).join(' | ') + (problems.length > 6 ? ' | …' : ''));
     }
+    // A FRESH combined read for the real sweep: stock can move between the dry run and here
+    // (another desk, another tab), and the possession check on the actual write must see it.
+    const realLocated = await locateStock(db, allImeis);
     const created = [];
     for (const g of groups.values()) {
-      const r = await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis }));
+      const r = await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis }),
+        { parties, agents, located: realLocated });
       created.push({ toName: g.toName, id: r.id, ref: r.ref, count: g.imeis.length, unknown: r.unknown || 0 });
     }
     return { ok: true, documents: created.length, serials: rows.length, created };
@@ -10789,7 +11362,11 @@ const FNS = {
       transferCreate) it is the source RSM's OWN approval -- transferSign, the same "sign
       later" a normal sender already has -- that must also be in before anything moves; if it
       is not there yet, this call records the receiver's signature and waits, and whichever
-      of the two signs SECOND is the one that actually calls trMoveStock. */
+      of the two signs SECOND is the one that actually calls trMoveStock.
+      Budget: 1 keyed transfers read (trOne) + a THREE-WAY document still waiting on the
+      source RSM: 1 update, done. Otherwise: trMoveStock (1 keyed transfer_items read + 1
+      bounded locateStock sweep + up to 2 `.in()` updates, devices/old_stock + a
+      device_events insert) + 1-2 transfers updates (the flow-column fallback). */
   async transferAccept(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
@@ -10862,7 +11439,10 @@ const FNS = {
         + TR_FLOW_FILE + ' first — declining needs the status column it adds.');
       throw new Error(error.message);
     }
-    return { ok: true, id };
+    /* THE THREE FIELDS THE DRAWER NEEDS TO REDRAW ITSELF, already computed two lines up as
+       at/user.name/reason -- riding back on the write instead of leaving the client to fetch
+       the whole document again (transferGet) just to learn the outcome of the write it made. */
+    return { ok: true, id, declinedAt: at, declinedBy: user.name, reason: reason.slice(0, 400) };
   },
 
   /** The SENDER's own signature, once -- for a document sent without signing. The receiver
@@ -10878,7 +11458,10 @@ const FNS = {
       receiver has ALREADY accepted and was left waiting only on this approval (transferAccept
       recorded their signature but held the move), THIS signature is the one that actually
       moves the stock -- the same trMoveStock transferAccept itself calls, so it makes no
-      difference which of the two lands second. */
+      difference which of the two lands second.
+      Budget: 1 keyed transfers read (trOne) + 1 update (the ordinary case, or the three-way
+      case not yet completing). The completing three-way signature adds trMoveStock's own
+      cost (see transferAccept) + 1 more transfers update. */
   async transferSign(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};

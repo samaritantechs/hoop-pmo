@@ -96,9 +96,11 @@ function fill(text, brand, phone) {
      "remember some phones locked with previous apk have gone to field already
       so whenever we update keep in mind they should be able to be unlocked and everything"
 
-   Three separate reads of `settings` hang off every beat -- the lock screen's words, the offline
-   grace, and the boot window. Every one of them decorates the answer; NONE of them decides
-   whether a phone locks or unlocks, which is the only thing the beat exists to carry.
+   FOUR separate reads of `settings` used to hang off every beat -- the lock screen's words, the
+   offline grace, the boot window, and the FRP account list added after this note was first
+   written (see THE HEARTBEAT below for where they are now merged into one). Every one of them
+   decorates the answer; NONE of them decides whether a phone locks or unlocks, which is the
+   only thing the beat exists to carry.
 
    They were unguarded, so a settings table that was slow, migrating or briefly unreachable threw
    straight out of the beat. That is a 500 to the handset, and a handset that gets a 500 does
@@ -112,7 +114,17 @@ function fill(text, brand, phone) {
    NULL FOR "COULD NOT ASK", EMPTY FOR "ASKED, NOTHING SET" -- the same three-state care the
    rest of this system takes. Collapsing them was a bug the moment it was written: an unset
    DEVICE_BOOT_GRACE_MINUTES has to fall through to the default, and a settings table that is
-   unreachable must not, or a wobble would silently hand every handset a window. */
+   unreachable must not, or a wobble would silently hand every handset a window.
+
+   ONE READ FOR ALL FOUR, NOT ONE EACH (fixed 2026-09-21 in the postgres war). This used to be
+   four separate trips per beat -- lockWords, graceFor, bootGraceFor, frpFor each asking
+   `settings` on their own -- because each was written and reviewed alone, on top of whatever
+   the beat already cost, and nobody added the four up. beat() now asks ONCE for the union of
+   every key any of them might want (BEAT_SETTINGS_KEYS below) and hands the same rows to all
+   four; each still knows how to fetch its OWN slice when called on its own (hello() does,
+   for lockWords and frpFor), so nothing outside beat() has to change. The null/empty split
+   above is preserved exactly: a shared fetch that fails hands every helper `null`, the same
+   "could not ask" it would have gotten asking alone. */
 async function readSettings(db, keys) {
   try {
     return await fetchAll(() => db.from('settings').select('key, value').in('key', keys));
@@ -121,10 +133,14 @@ async function readSettings(db, keys) {
   }
 }
 
-async function lockWords(db) {
+/** `rows`, when passed, is a settings read the caller already made (beat()'s one shared trip)
+    -- `null` for "could not ask", an array (possibly not carrying this key at all) for "asked".
+    Omitted (`undefined`) means this call is on its own and must fetch its own slice, exactly
+    as it always has -- see hello(), which has no shared read to hand in. */
+async function lockWords(db, given) {
   // Unreadable settings read the same as unset ones here: the lock screen falls back to the
   // default brand and drops the help number rather than promising one it does not have.
-  const rows = (await readSettings(db, LOCK_SETTINGS)) || [];
+  const rows = given !== undefined ? (given || []) : ((await readSettings(db, LOCK_SETTINGS)) || []);
   const get = k => { const r = rows.find(x => S(x.key) === k); return r ? S(r.value) : ''; };
   const brand = get('DEVICE_LOCK_BRAND') || DEFAULT_BRAND;
   const phone = get('DEVICE_HELP_PHONE');
@@ -186,11 +202,14 @@ const BEAT_SECONDS = 60;
 const PENDING_BEAT_SECONDS = 25;
 
 const DEFAULT_GRACE_HOURS = 24 * 7;
-async function graceFor(db, dev) {
+async function graceFor(db, dev, given) {
   if (!S(dev.customer) && !S(dev.sold_ref)) return null;      // still stock: never
   // Same again: no answer means the standing default, which is what an unset key already gave.
-  const rows = (await readSettings(db, ['DEVICE_OFFLINE_GRACE_HOURS'])) || [];
-  const raw = rows.length ? Number(S(rows[0].value)) : NaN;
+  const rows = given !== undefined ? (given || []) : ((await readSettings(db, ['DEVICE_OFFLINE_GRACE_HOURS'])) || []);
+  // Matched BY KEY, not by position: `rows` may be beat()'s shared read, carrying every key
+  // a beat might need rather than only this one.
+  const hit = rows.find(r => S(r.key) === 'DEVICE_OFFLINE_GRACE_HOURS');
+  const raw = hit ? Number(S(hit.value)) : NaN;
   return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : DEFAULT_GRACE_HOURS;
 }
 
@@ -227,12 +246,13 @@ async function graceFor(db, dev) {
    never need a release to revisit, and must reach handsets already in pockets. */
 const DEFAULT_BOOT_GRACE_MINUTES = 5;
 const DEFAULT_BOOT_GRACE_EVERY_HOURS = 24;
-async function bootGraceFor(db) {
+async function bootGraceFor(db, given) {
   /* AND HERE THE FAILURE IS NOT THE DEFAULT. Every other read above degrades towards the
      phone staying exactly as locked as it already is; this one would degrade towards OPENING
      a door, so a settings table we could not reach means no window at all. An unset key is a
      different matter and still falls through to five minutes. */
-  const rows = await readSettings(db, ['DEVICE_BOOT_GRACE_MINUTES', 'DEVICE_BOOT_GRACE_EVERY_HOURS']);
+  const rows = given !== undefined ? given
+    : await readSettings(db, ['DEVICE_BOOT_GRACE_MINUTES', 'DEVICE_BOOT_GRACE_EVERY_HOURS']);
   if (rows === null) return { minutes: 0, everyHours: 24 };
   const pick = (key, dflt) => {
     const hit = rows.find(r => S(r.key) === key);
@@ -274,10 +294,12 @@ async function bootGraceFor(db) {
    protects it the ordinary way. What each handset made of it comes back on the beat as `frp`
    (set / cleared / unsupported / error), kept on the row so the register can say which phones
    are actually protected rather than assume all of them are. */
-async function frpFor(db) {
-  const rows = await readSettings(db, ['DEVICE_FRP_ACCOUNT_IDS']);
+async function frpFor(db, given) {
+  const rows = given !== undefined ? given : await readSettings(db, ['DEVICE_FRP_ACCOUNT_IDS']);
   if (rows === null) return undefined;                          // could not ask: say nothing
-  const raw = rows.length ? S(rows[0].value) : '';
+  // Matched BY KEY: `rows` may be beat()'s shared read, carrying keys beyond this one.
+  const hit = rows.find(r => S(r.key) === 'DEVICE_FRP_ACCOUNT_IDS');
+  const raw = hit ? S(hit.value) : '';
   const ids = raw.split(/[\s,;]+/).map(x => x.replace(/\D/g, '')).filter(x => x.length >= 6);
   return [...new Set(ids)].slice(0, 10);
 }
@@ -335,14 +357,34 @@ async function byToken(db, p) {
   return dev;
 }
 
+/* THE UNION OF EVERY KEY A BEAT MIGHT ASK FOR, so lockWords, graceFor, bootGraceFor and
+   frpFor can share ONE trip instead of paying for one each -- see the note above
+   readSettings. Whichever of these a given beat does not end up needing (a retiring phone
+   skips the lock words and the boot window; a still-in-stock phone skips the offline grace)
+   simply goes unused from the same rows; asking for the union up front is still cheaper
+   than a second trip for the one row that turns out to matter. */
+const BEAT_SETTINGS_KEYS = [...LOCK_SETTINGS, 'DEVICE_OFFLINE_GRACE_HOURS',
+  'DEVICE_BOOT_GRACE_MINUTES', 'DEVICE_BOOT_GRACE_EVERY_HOURS', 'DEVICE_FRP_ACCOUNT_IDS'];
+
 /* ---------------------------------------------------------------------------------------
    THE HEARTBEAT. One call does both directions: the phone says what it is, and is told
-   what it should be. Deliberately one round trip -- these run on cellular data in places
-   with one bar, and every extra request is another chance to not arrive.
-   --------------------------------------------------------------------------------------- */
+   what it should be. Deliberately one round trip FROM THE HANDSET -- these run on cellular
+   data in places with one bar, and every extra request is another chance to not arrive.
+
+   WHAT IT COSTS THE DATABASE, warm, for an ordinary settled phone: 2 reads (the device row
+   by token, and the one settings row for everything lockWords/graceFor/bootGraceFor/frpFor
+   might want) + 1 write (the devices update). A phone whose reported state just changed
+   pays one more write, for the transition history row -- see BEAT_COLS. Before the fix
+   below this was 6 trips: the same 2 reads plus 4, because each of those four helpers
+   asked `settings` on its own. */
 async function beat(db, [payload], nowMs) {
   const p = payload || {};
-  const dev = await byToken(db, p);
+  // Read together: neither depends on the other, and this is the trip that used to be paid
+  // four separate times over (once inside each of lockWords/graceFor/bootGraceFor/frpFor).
+  const [dev, settingsRows] = await Promise.all([
+    byToken(db, p),
+    readSettings(db, BEAT_SETTINGS_KEYS),
+  ]);
   const imei = S(dev.imei);
 
   const at = new Date(nowMs).toISOString();
@@ -432,16 +474,16 @@ async function beat(db, [payload], nowMs) {
      about to unharden, drop Device Owner and stop calling home, and leaving our lock
      message sitting in a former customer's storage is the opposite of releasing it. */
   const words = retire ? { brand: null, message: null, helpPhone: null }
-                       : await lockWords(db);
-  const grace = await graceFor(db, dev);
+                       : await lockWords(db, settingsRows);
+  const grace = await graceFor(db, dev, settingsRows);
   /* A retiring handset gets no boot window, and needs none: it is about to unharden and stop
      calling home, so there is no lock screen for a window to be a window INTO. Sending one
      would only leave a stale number in a former customer's storage. */
-  const boot = retire ? { minutes: 0, everyHours: 0 } : await bootGraceFor(db);
+  const boot = retire ? { minutes: 0, everyHours: 0 } : await bootGraceFor(db, settingsRows);
   /* THE RESET-PROTECTION ACCOUNTS ride on every beat like the words do, so a phone that was
      out before the office named them is fenced on its next beat -- no re-enrol, no cable. A
      retiring phone is sent an empty list: the fence comes off with the rest of ownership. */
-  const frpAccounts = retire ? [] : await frpFor(db);
+  const frpAccounts = retire ? [] : await frpFor(db, settingsRows);
   /* HAS THIS PHONE DONE WHAT IT WAS TOLD? Compare the order against what the handset just
      said it is doing -- `reported` from this very beat when it spoke, the stored value when
      it did not. A phone that has never reported at all counts as unlocked, which is true:

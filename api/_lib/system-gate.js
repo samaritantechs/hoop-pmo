@@ -32,6 +32,12 @@ const TTL_MS = 30000;
    which is how a suite passes while the door is standing open. */
 const cache = new WeakMap();                 // db -> { at, open }
 
+/** Called by settingSet (portal.js) right after a successful write of SYSTEM_OPEN.
+    THIS EXPORT USED TO SIT UNCALLED, and the comment above it claimed otherwise -- "settingSet
+    clears it outright" was written when this cache was built and never wired up when settingSet
+    was, so an admin closing the system could watch it stay open, for up to thirty seconds, on
+    every other screen but their own. Budget: no trip of its own -- an in-memory drop, same as
+    every other write here. */
 export function clearSystemOpenCache(db) { if (db) cache.delete(db); }
 
 /** True only for a value that plainly says yes. Anything else -- unset, blank, 'NO', junk

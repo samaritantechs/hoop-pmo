@@ -72,8 +72,19 @@ export async function authCode(code, db = supabase) {
      The exact match still runs first and still wins, so nothing about an existing code changes.
      This is only a second look for the same code typed in a different case. `code` is escaped
      for LIKE first: `%` and `_` are wildcards there, and a code containing one would otherwise
-     match more rows than itself. */
-  const found = await caseInsensitiveCode(code, db, first.tier);
+     match more rows than itself.
+
+     BUT ONLY WHEN THE EXACT MATCH FAILED. Three hundred officers type their code correctly
+     every morning, and until now every one of those correct logins paid for a SECOND
+     access_codes trip anyway -- the .ilike() above ran unconditionally, so the common case was
+     never actually the cheap one. `exact` already answers the only question the ilike() query
+     exists to ask, so once it has, there is nothing left for a second look to find. The
+     suspendKnown this database already proved (`first.tier`) is reused rather than re-asked --
+     a database that can answer the wide select once can answer it twice, so asking again would
+     only be paying for the same fact.
+     Budget: 1 access_codes trip on an exact match (was 2); 2 on a fallback (unchanged) --
+     one to learn the exact match missed, one for the case-insensitive retry. */
+  const found = exact ? { row: null, suspendKnown } : await caseInsensitiveCode(code, db, first.tier);
   const data = exact || found.row;
   if (!data) throw new AuthError('Invalid access code.', 'invalid');
   const knowSuspend = suspendKnown && found.suspendKnown;
@@ -251,8 +262,49 @@ export function resolveTabs(user, roleTabs, roleKnown) {
   return roleKnown ? [] : USER_TABS.slice();
 }
 
-/** Same as can_() -- checks the role's tab permissions. Extend ROLE_TABS as roles are migrated. */
-export async function can(user, tab) {
+/* THE ROLE READ, MEMOISED FOR THIRTY SECONDS -- same shape and the same reason as
+   system-gate.js's isSystemOpen cache, which this copies rather than reinvents. authCodeResolved
+   ran this read on EVERY SIGNED-IN REQUEST -- portal, upload, both -- for a row that changes
+   only when somebody visits Teams & Staff and saves a role. Three hundred officers and a
+   morning of portal screens were all re-asking a question the answer to which was, almost
+   always, thirty seconds old.
+
+   Kept against the DATABASE CLIENT, not one module-level Map, for the same reason
+   isSystemOpen's cache is: production holds a single long-lived client, so this behaves exactly
+   like one shared cache; a test hands a fresh fake per case, and a Map shared across tests
+   would hand one test's roles to the next -- which is how a suite passes while a stale grant
+   sits in production. */
+const ROLES_TTL_MS = 30000;
+const rolesCache = new WeakMap();          // db -> Map(role -> { at, tabs, roleKnown })
+
+/** Called after a write that can change what a role's tabs are -- saveRole and deleteRole in
+    portal.js, right after each one's own write succeeds -- so the admin who just ticked a box
+    sees it take effect on their very next request rather than waiting out the TTL. NOT called
+    from renameAccessCode: renaming a CODE never touches the roles table, and a clear the write
+    did not earn would be a comment here lying about why the line exists. */
+export function clearRolesCache(db) { if (db) rolesCache.delete(db); }
+
+/** The roles read itself, shared by can() and authCodeResolved() so the two callers of "what
+    does this role hold" can never disagree about it. A role with NO ROW is memoised exactly
+    like one that has a row: see resolveTabs for why "never configured" and "configured with
+    nothing ticked" are different answers, and both are worth not asking for twice inside the
+    same half minute. */
+async function roleTabsOf(db, role, nowMs = Date.now()) {
+  let byRole = rolesCache.get(db);
+  const hit = byRole && byRole.get(role);
+  if (hit && (nowMs - hit.at) < ROLES_TTL_MS) return hit;
+  const { data } = await db.from('roles').select('tabs').eq('role', role).maybeSingle();
+  const entry = { at: nowMs, tabs: (data && data.tabs) || null, roleKnown: !!data };
+  if (!byRole) { byRole = new Map(); rolesCache.set(db, byRole); }
+  byRole.set(role, entry);
+  return entry;
+}
+
+/** Same as can_() -- checks the role's tab permissions. Extend ROLE_TABS as roles are migrated.
+    Budget: 0 reads warm (ADMIN / user.tabs already holds it) or 1 roles read, memoised 30s via
+    roleTabsOf -- shared with authCodeResolved, so a request that already resolved its user
+    pays nothing extra here. */
+export async function can(user, tab, db = supabase) {
   // ADMIN holds every tab, same as resolveTabs and the live system's auth_(). Without this an
   // ADMIN whose TABS cell is blank was refused by /api/upload ("Upload permission is required
   // for your access code") even though the portal UI showed the tab -- the UI and the
@@ -261,20 +313,27 @@ export async function can(user, tab) {
   // A read-only code never holds upload, whatever its row or role says -- see resolveTabs.
   if (isReadOnly(user) && tab === 'upload') return false;
   if (user.tabs && user.tabs.includes(tab)) return true;
-  const { data } = await supabase.from('roles').select('tabs').eq('role', user.role).maybeSingle();
-  return !!(data && data.tabs && data.tabs.includes(tab));
+  const { tabs } = await roleTabsOf(db, user.role);
+  return !!(tabs && tabs.includes(tab));
 }
 
 /** authCode, then the role's tabs merged in -- the SAME two steps /api/me and /api/portal each
     used to spell out for themselves. It is the resolved list that every permission check reads
     (an ADMIN row with a blank TABS cell still holds every tab), so any route that asks "may
-    this person?" has to start here rather than from the raw row. */
-export async function authCodeResolved(code) {
-  const user = await authCode(code);
-  const { data } = await supabase.from('roles').select('tabs').eq('role', user.role).maybeSingle();
-  /* `!!data` -- the ROW's existence, not its contents. See resolveTabs: "configured and
+    this person?" has to start here rather than from the raw row.
+
+    `db` exists for the same reason authCode's does -- so the door and everything behind it can
+    be tested -- and it is threaded into BOTH reads below rather than left to default twice, so
+    a caller that hands in a fake never has half its request quietly reach for the real client.
+    Budget: 1 access_codes read warm (see authCode), plus 1 roles read the FIRST time in 30s for
+    this role on this db -- memoised by roleTabsOf, so a second call inside that window costs
+    nothing here at all. */
+export async function authCodeResolved(code, db = supabase) {
+  const user = await authCode(code, db);
+  const { tabs, roleKnown } = await roleTabsOf(db, user.role);
+  /* `roleKnown` -- the ROW's existence, not its contents. See resolveTabs: "configured and
      ticked nothing" is a different answer from "never configured". */
-  user.tabs = resolveTabs(user, data && data.tabs, !!data);
+  user.tabs = resolveTabs(user, tabs, roleKnown);
   // Carried on the user object so every enforcement point reads ONE fact, resolved once.
   user.readOnly = isReadOnly(user);
   return user;
@@ -282,10 +341,13 @@ export async function authCodeResolved(code) {
 
 /** Every door into the system side of this deployment: identity, then the admin's open/closed
     switch. Calls has its own door (api/call.js) and is deliberately NOT behind this one -- the
-    whole point of closing the system is that field officers carry on working. */
-export async function gatedUser(code) {
-  const user = await authCodeResolved(code);
-  await requireSystemOpen(supabase, user);
+    whole point of closing the system is that field officers carry on working.
+    Budget: authCodeResolved's cost, plus 1 settings read the first time in 30s for this db
+    (isSystemOpen's own cache, system-gate.js) -- warm, the door is 1 access_codes read with
+    everything else served from memory. */
+export async function gatedUser(code, db = supabase) {
+  const user = await authCodeResolved(code, db);
+  await requireSystemOpen(db, user);
   return user;
 }
 

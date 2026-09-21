@@ -12,23 +12,73 @@ import { noteSignin, outcomeOf } from './signin.js';
    it PRINTS. What changed underneath:
 
      the list      = the newest Watu deck (followup_status rows carrying the latest
-                     deck_date), scoped to the caller's team at the database
+                     deck_date) -- ONE company pool, never team-scoped (the team column is
+                     the selling branch, not a fence; see dealMap below) -- dealt to the
+                     caller, or fenced to their own pivot, IN MEMORY off one shared read
      the customer  = one phone, keyed on IMEI (rides in the `ref` field end to end)
      the urgency   = days offline / locked 4+ / locked 7+ / day N of the 45-day window
      no guarantors = the Watu feed has none (starter section 5); the row says so honestly
 
-   THE POSTGRES BUDGET (permanent rule), per handler, warm, on the second handset:
-     boot           4 reads  (teams 1-col, settings x7 in ONE `in` query, device row,
-                              today's own logs) + gate read (cached 30s)
-     list           3 reads  (device row, newest deck_date by index limit 1, deck rows
-                              team-scoped .in) + called-set (cached 30s company-wide)
-     sync           2 reads  (device, DATA_VERSION) + phone index (cached vs DATA_VERSION)
-                    + 2 writes (logs upsert, watermark update)
-     summary        cached 2 min per team-set; a miss = 2 counted reads + 1 small read
-     comments       2 keyed reads; addComment = 1 stub upsert + 1 insert + 1 update
-   Row bounds: every list read is bounded by the day's deck for the caller's teams; no
-   handler reads the whole snapshots history; nothing reads call_logs beyond one day
-   except the leader report, which is date-bounded and team-scoped at the database.
+   THE POSTGRES BUDGET (permanent rule), per handler -- FIRST handset on a cold instance,
+   then SECOND straight after on the SAME warm instance, no write between them. Measured on
+   the fixture in test/speed.test.mjs; test/pgwar-phone.test.mjs and that file's own PHONE
+   section hold every number here to a ceiling, x1.5 rounded up, and raising one is only ever
+   done in the SAME commit as the change that needs it (rewritten 2026-09-21, postgres war):
+
+     boot                4/79 -> 3/79           teams (1 col), settings x8 in ONE `in`
+                                                 query, device row, today's own logs + the
+                                                 open/closed gate (cached 30s, see
+                                                 system-gate.js)
+     list                12/10,575 -> 3/2       device row; the deck and the credit roster
+                                                 are now SHARED PER INSTANCE (sharedDeck,
+                                                 rosterFull -- both below), so the second
+                                                 handset pays only its own device lookup and
+                                                 each cache's own cheap freshness check, not
+                                                 the ~3,000-row deck or the roster again
+     list (AGENT/RSM)    12/10,575 -> 3/2       identical mechanism -- the fence is applied
+                                                 to the SAME shared deck in memory, never a
+                                                 second fetch of it
+     sync                10/9,473 -> 4/2        device, DATA_VERSION (one read, shared with
+                                                 agentIndex's own check when both are asked
+                                                 together -- see currentDataVersion) + the
+                                                 phone index (cached vs DATA_VERSION) + 2
+                                                 writes (logs upsert, watermark update)
+     dailySummary        12/21,824 -> 4/77      the deck read is the SAME shared one list()
+                                                 pays for; the figures on top of it are
+                                                 cached two minutes PER OFFICER, correctly --
+                                                 every one of them (their dealt share, their
+                                                 own calls, their own reach%) is that one
+                                                 person's, never a team's (see the note above
+                                                 summaryForOfficer -- the "per team-set"
+                                                 description used to sit here belonged to
+                                                 summaryFor/summaryCompute alone, below)
+     dailySummary (AGENT/RSM) 14/27,776 -> 4/2  the fenced strip: the same shared deck plus
+                                                 the shared agentIndex register, cached two
+                                                 minutes per fenced identity for the same
+                                                 reason -- their own subtree, never shared
+     comments            3/8 -> 3/9              2 keyed reads; addComment = 1 stub upsert +
+                                                 1 insert + 1 update, WRITE-THROUGH into the
+                                                 shared deck's cached row (noteDeckPatch) so
+                                                 the officer's own follow-up shows on their
+                                                 very next list() with no rebuild
+
+   THE SHARED CACHES BEHIND ALL OF THE ABOVE, per db, in memory only (gone on a redeploy;
+   correct independently on every instance since none of it is meant to cross one):
+     rosterFull    call_users + access_codes (who is on today's roster). A short 30s TTL
+                   rides alongside, but it is busted EXPLICITLY AND SYNCHRONOUSLY -- never
+                   TTL-only -- by register() the instant a new officer's row lands, and by
+                   officerActive/accessCodeSuspend/staffActive in portal.js.
+     sharedDeck    followup_status's newest deck, keyed on (deck_date, DATA_VERSION) exactly
+                   like agentIndex; an upload invalidates it, a comment write-throughs into
+                   the one row it changed instead (comments never bump DATA_VERSION).
+     agentIndex    watu_loans + hoop_agents + hoop_sales (who sold what, who reports to
+                   whom). Keyed on DATA_VERSION with an in-flight promise so concurrent
+                   callers on a cold cache -- customers() awaits it twice, the dashboard
+                   fires several tiles at once -- build it ONCE; busted explicitly by
+                   staffManager/staffActive/staffChannelSave/enrolSave/enrolUpdate.
+     phone index   unchanged by this pass: keyed on DATA_VERSION, see phoneIndex.
+   Row bounds: no handler reads the whole snapshots history; nothing reads call_logs beyond
+   one day except the leader report, which is date-bounded and team-scoped at the database.
    ===================================================================================== */
 
 /* ONE BRAND, AND IT IS OURS.
@@ -132,6 +182,33 @@ function eatTime(ms) { return new Date(ms + TZ_OFFSET_MS).toISOString().slice(11
 async function settingGet(db, key) {
   const { data } = await db.from('settings').select('value').eq('key', key).maybeSingle();
   return data ? data.value : null;
+}
+/* DATA_VERSION, READ ONCE PER BURST OF CONCURRENT ASKERS -- fixed 2026-09-21 in the
+   postgres war, the same day sharedDeck (below) started asking for it. agentIndex already
+   asked settingGet(db, 'DATA_VERSION') on every call to decide whether ITS OWN cache is
+   stale; giving sharedDeck the identical check for the identical reason -- exactly what item
+   2 of the audit asked for -- would have meant list() and summaryCompute/summaryForRole,
+   which fire agentIndex and sharedDeck in the SAME Promise.all, paying for that one setting
+   TWICE on every call. That is a read ADDED to the phone path, which the standing rule in
+   CLAUDE.md forbids outright ("none may add one") -- caught by re-measuring list()'s first
+   handset after the deck-sharing fix and finding it one trip WORSE, not better.
+
+   The fix is an in-flight de-dupe exactly like agentIndex's own build (see agentIdxInFlight
+   below), but shorter-lived on purpose: it is not a cache of the VALUE (a stale DATA_VERSION
+   is exactly the bug the whole audit exists to prevent), only of the ONE REQUEST for it,
+   shared by whichever callers ask inside the same synchronous burst. The entry is gone the
+   instant that request settles, so the very next ask -- even a millisecond later -- reads
+   fresh. Ordering matters not at all: whichever of sharedDeck/agentIndex asks FIRST within
+   one Promise.all starts the read; the other finds it already in flight and awaits it. */
+const dataVersionInFlight = new WeakMap();
+async function currentDataVersion(db) {
+  const already = dataVersionInFlight.get(db);
+  if (already) return already;
+  const p = settingGet(db, 'DATA_VERSION').finally(() => {
+    if (dataVersionInFlight.get(db) === p) dataVersionInFlight.delete(db);
+  });
+  dataVersionInFlight.set(db, p);
+  return p;
 }
 /** Several settings, ONE round trip (Hope's Monday-morning fix, kept). */
 async function settingsMany(db, keys) {
@@ -310,6 +387,11 @@ async function register(db, [dev, name, team, accessCode, phone, passcode, locat
   // must not be a way to re-enable a switched-off account).
   const { error } = await db.from('call_users').upsert(vals, { onConflict: 'user_id' });
   if (error) throw new Error(error.message);
+  /* A NEW (OR CHANGED) ROSTER ROW JUST LANDED -- the cached deal is stale THIS INSTANT, not
+     in thirty seconds. See the note above rosterFull: this is the bust the "registering
+     another credit user re-deals the pool automatically" test depends on, because a
+     TTL-only cache cannot tell the instant before this write from the instant after it. */
+  clearRosterCache(db);
   const { error: e2 } = await db.from('call_users').update({ device_id: null }).eq('device_id', dev).neq('user_id', uid);
   if (e2) throw new Error(e2.message);
   return { ok: true, userId: uid, name, team, leader, leaderTeams: leaderTeams ? leaderTeams.join(',') : (leader ? 'ALL' : '') };
@@ -518,10 +600,39 @@ function fenceSetOf(cu, agents) {
   const me = fenceKeyOf(cu, agents);
   return me ? new Set([me, ...(agents.tree || EMPTY_TREE).descendants(me)]) : new Set();
 }
-/** The deal's roster WITH NAMES -- same single read; names ride along so every list row
-    can say which credit person is chasing that customer (the third chip on the card).
-    Exported: the portal's Wateja shows the same dealt names -- one deal, two screens. */
+/* THE ROSTER'S OWN CACHE -- fixed 2026-09-21 in the postgres war.
+   =========================================================================================
+   rosterFull paid TWO full-table reads (call_users, and access_codes through
+   suspendedNamesOn) on EVERY list() and every summaryForOfficer -- once per handset, for a
+   roster that changes only when somebody registers, is switched on or off, or goes on or
+   off a suspension window. Three hundred officers opening the list within the same minute
+   were three hundred repeats of a read whose answer had not moved.
+
+   MEMOISED PER db, LIKE agentIndex AND calledTodaySet -- but never TTL-only. A TTL alone
+   would let 'registering another credit user re-deals the pool automatically' fail: that
+   test registers a second officer and expects the very next list() to see the new roster,
+   inside the SAME pinned instant a time-based cache cannot tell apart from the instant
+   before. So the cache is busted EXPLICITLY AND SYNCHRONOUSLY -- from register() the moment
+   a new call_users row lands, and from officerActive, accessCodeSuspend and staffActive in
+   portal.js, which are the only other writes that can move who counts as "on today's
+   roster" (active in call_users, or suspended in access_codes). The short TTL below exists
+   only to save the read between two busts that never come, not to stand in for one. */
+const ROSTER_TTL_MS = 30000;
+const rosterCache = new WeakMap();
+/** Called wherever a write can change who is on today's roster: register() here, and
+    officerActive / accessCodeSuspend / staffActive in portal.js. In-memory only -- there is
+    nothing to invalidate on another instance, exactly like agentIndex's own clear. */
+export function clearRosterCache(db) { rosterCache.delete(db); }
+/** The deal's roster WITH NAMES -- same single read (warm: none at all); names ride along
+    so every list row can say which credit person is chasing that customer (the third chip
+    on the card). Exported: the portal's Wateja shows the same dealt names -- one deal, two
+    screens.
+    KEYED ON (db, day) -- a day argument is a DIFFERENT question (recoveryWeek judges a past
+    day against the window as it stood then), so a cache hit requires the same day asked
+    before, not just the same database. */
 export async function rosterFull(db, day = todayKey()) {
+  const hit = rosterCache.get(db);
+  if (hit && hit.day === day && (Date.now() - hit.at) < ROSTER_TTL_MS) return hit.value;
   const rows = await fetchAll(() => db.from('call_users').select('user_id, name, role, active'));
   const away = await suspendedNamesOn(db, day);
   const on = rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role))
@@ -529,7 +640,9 @@ export async function rosterFull(db, day = todayKey()) {
     .sort((a, b) => (String(a.user_id) < String(b.user_id) ? -1 : 1));
   const names = {};
   for (const r of on) names[String(r.user_id)] = r.name || '';
-  return { ids: on.map(r => String(r.user_id)), names };
+  const value = { ids: on.map(r => String(r.user_id)), names };
+  rosterCache.set(db, { day, at: Date.now(), value });
+  return value;
 }
 
 /* WHO IS AWAY, ON A GIVEN DAY.
@@ -727,64 +840,101 @@ function shareOf(rows, roster, uid, day) {
    the tokens, uppercased, sorted, rejoined. */
 export const nameKey = s => K(s).split(/\s+/).filter(Boolean).sort().join(' ');
 const agentIdxCache = new WeakMap();
+/* THE RESOLVED CACHE HAD NO IN-FLIGHT DE-DUPE -- fixed 2026-09-21 in the postgres war.
+   =========================================================================================
+   Two calls into `agentIdxCache` a millisecond apart, on a database that has not built the
+   index yet, both see no hit and both start the SAME three-table build (watu_loans +
+   hoop_agents + hoop_sales, thousands of rows) -- and that "two calls a millisecond apart"
+   is not a rare accident. `customers()` awaits agentIndex twice in one Promise.all; the
+   dashboard fires notifications/recoveryWeek/salesWeek/boot together, each pulling its own
+   copy; dailySummary on the phone does it again on its own timer. A cold cache used to pay
+   for the register once PER CONCURRENT CALLER rather than once per instance.
+
+   `agentIdxInFlight` is the fix: the FIRST caller to find no hit starts the build and parks
+   its promise here; every caller that arrives before that promise settles awaits the SAME
+   one instead of starting its own. Deliberately keyed like agentIdxCache -- per db, in
+   memory only, gone the moment the build settles (success or failure) so a later call with
+   a moved DATA_VERSION starts its own build rather than ever reading a stale in-flight
+   entry. */
+const agentIdxInFlight = new WeakMap();
+/** In-memory only, like agentIndex's own cache -- there is nothing to invalidate on another
+    instance. Called from staffManager, staffActive, staffChannelSave, enrolSave and
+    enrolUpdate in portal.js the moment their OWN write to hoop_agents succeeds, so the very
+    next read on this instance sees the new manager, channel or active flag rather than
+    waiting up to fifteen minutes for the version-lapse fallback. Never bumps DATA_VERSION:
+    that is the upload's signal to every OTHER instance, and a staff edit is not an upload. */
+export function clearAgentIndex(db) { agentIdxCache.delete(db); }
 export async function agentIndex(db, nowMs) {
-  const version = (await settingGet(db, 'DATA_VERSION')) || '';
+  const version = (await currentDataVersion(db)) || '';
   const hit = agentIdxCache.get(db);
   if (hit && hit.version === version && (nowMs - hit.at) < 15 * 60000) return hit;
-  const byImei = {}, phoneByName = {}, byPhone = {};
-  let tree = EMPTY_TREE;
+  const already = agentIdxInFlight.get(db);
+  if (already) return already;
+  const build = (async () => {
+    const byImei = {}, phoneByName = {}, byPhone = {};
+    let tree = EMPTY_TREE;
+    try {
+      // Guarantors landed with the offline queue (2026-08-17). Until the migration has
+      // run, PostgREST refuses the WHOLE select for the unknown columns -- so fall back
+      // to the old shape rather than letting the agent fence and the card go dark.
+      const [reg, agents, sales] = await Promise.all([
+        fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id, branch, guarantor_name, guarantor_phone'))
+          .catch(() => fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id'))),
+        // `manager` rode in with the targets migration; a database that has not run it
+        // refuses the whole select for the unknown column, so a tree built without it is
+        // still built -- salesTree falls back to "nearest holder of the rung above, by
+        // branch" exactly as the targets roll-up and stockAllow already do.
+        fetchAll(() => db.from('hoop_agents').select('name, phone, branch, manager, role'))
+          .catch(e => { if (!/manager/i.test(String((e && e.message) || ''))) throw e;
+            return fetchAll(() => db.from('hoop_agents').select('name, phone, branch, role')); }),
+        // The sales report carries the agent's payout number per sale (the owner: "sales
+        // report of store keeper sipho has the agents numbers") -- a SECOND source of
+        // agent phones, so a card need not wait for the agent's register page to land.
+        fetchAll(() => db.from('hoop_sales').select('commission_agent, commission_phone')
+          .not('commission_phone', 'is', null)).catch(() => []),
+      ]);
+      for (const r of reg) if (r.agent || r.branch || r.guarantor_name || r.guarantor_phone)
+        byImei[String(r.imei)] = { name: r.agent || '', id: r.agent_id || '', branch: r.branch || '',
+          gName: r.guarantor_name || '', gPhone: r.guarantor_phone || '' };
+      for (const a of agents) if (a.name) {
+        phoneByName[nameKey(a.name)] = a.phone || '';
+        // The reverse map is the AGENT sign-in fence: their registered phone -> who they
+        // are. branch rides along because it IS the agent's location (the owner: "the
+        // agents location are the branch column" of Sipho's report).
+        const p = pnorm(a.phone);
+        if (p && !byPhone[p]) byPhone[p] = { name: a.name, key: nameKey(a.name), branch: a.branch || '' };
+      }
+      // Sipho's register wins on a clash; sales phones fill only the gaps.
+      for (const s of sales) if (s.commission_agent && s.commission_phone) {
+        const k = nameKey(s.commission_agent);
+        if (!phoneByName[k]) phoneByName[k] = s.commission_phone;
+      }
+      // THE RSM/TEAM LEADER FENCE'S OWN WALK -- see fenceSetOf. Built once here, alongside
+      // everything else this index already reads the register for, so extending the fence
+      // to a third role cost no new round trip.
+      tree = salesTree(agents);
+    } catch (e) { /* decoration for the card; the agent fence fails CLOSED on empty maps */ }
+    const value = { version, at: nowMs, byImei, phoneByName, byPhone, tree };
+    agentIdxCache.set(db, value);
+    return value;
+  })();
+  agentIdxInFlight.set(db, build);
   try {
-    // Guarantors landed with the offline queue (2026-08-17). Until the migration has
-    // run, PostgREST refuses the WHOLE select for the unknown columns -- so fall back
-    // to the old shape rather than letting the agent fence and the card go dark.
-    const [reg, agents, sales] = await Promise.all([
-      fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id, branch, guarantor_name, guarantor_phone'))
-        .catch(() => fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id'))),
-      // `manager` rode in with the targets migration; a database that has not run it
-      // refuses the whole select for the unknown column, so a tree built without it is
-      // still built -- salesTree falls back to "nearest holder of the rung above, by
-      // branch" exactly as the targets roll-up and stockAllow already do.
-      fetchAll(() => db.from('hoop_agents').select('name, phone, branch, manager, role'))
-        .catch(e => { if (!/manager/i.test(String((e && e.message) || ''))) throw e;
-          return fetchAll(() => db.from('hoop_agents').select('name, phone, branch, role')); }),
-      // The sales report carries the agent's payout number per sale (the owner: "sales
-      // report of store keeper sipho has the agents numbers") -- a SECOND source of
-      // agent phones, so a card need not wait for the agent's register page to land.
-      fetchAll(() => db.from('hoop_sales').select('commission_agent, commission_phone')
-        .not('commission_phone', 'is', null)).catch(() => []),
-    ]);
-    for (const r of reg) if (r.agent || r.branch || r.guarantor_name || r.guarantor_phone)
-      byImei[String(r.imei)] = { name: r.agent || '', id: r.agent_id || '', branch: r.branch || '',
-        gName: r.guarantor_name || '', gPhone: r.guarantor_phone || '' };
-    for (const a of agents) if (a.name) {
-      phoneByName[nameKey(a.name)] = a.phone || '';
-      // The reverse map is the AGENT sign-in fence: their registered phone -> who they
-      // are. branch rides along because it IS the agent's location (the owner: "the
-      // agents location are the branch column" of Sipho's report).
-      const p = pnorm(a.phone);
-      if (p && !byPhone[p]) byPhone[p] = { name: a.name, key: nameKey(a.name), branch: a.branch || '' };
-    }
-    // Sipho's register wins on a clash; sales phones fill only the gaps.
-    for (const s of sales) if (s.commission_agent && s.commission_phone) {
-      const k = nameKey(s.commission_agent);
-      if (!phoneByName[k]) phoneByName[k] = s.commission_phone;
-    }
-    // THE RSM/TEAM LEADER FENCE'S OWN WALK -- see fenceSetOf. Built once here, alongside
-    // everything else this index already reads the register for, so extending the fence
-    // to a third role cost no new round trip.
-    tree = salesTree(agents);
-  } catch (e) { /* decoration for the card; the agent fence fails CLOSED on empty maps */ }
-  const value = { version, at: nowMs, byImei, phoneByName, byPhone, tree };
-  agentIdxCache.set(db, value);
-  return value;
+    return await build;
+  } finally {
+    // Settled either way: a later caller must be free to start its OWN build rather than
+    // ever await one that has already resolved or rejected.
+    agentIdxInFlight.delete(db);
+  }
 }
 
 /* ---------- the list: the newest Watu deck ---------- */
 const DECK_COLS = 'imei, client_name, contact, team, model, price, disbursed_date, '
   + 'days_offline, locked4, locked7, has_ever_paid, fu_status, deck_date, updated_at';
 
-/** One tiny indexed read answers "which deck is newest"; the deck itself is one
-    team-scoped read. Nothing ever reads the whole register onto a handset. */
+/** One tiny indexed read answers "which deck is newest"; the deck rows themselves are the
+    company's WHOLE newest deck, never team-scoped here (the team column is the selling
+    branch, not a fence -- see the note above dealMap). */
 async function latestDeckDate(db) {
   const { data, error } = await db.from('followup_status')
     .select('deck_date').not('deck_date', 'is', null)
@@ -793,17 +943,87 @@ async function latestDeckDate(db) {
   return (data && data[0] && data[0].deck_date) ? String(data[0].deck_date).slice(0, 10) : null;
 }
 
+/* THE DECK, SHARED PER db -- fixed 2026-09-21 in the postgres war.
+   =========================================================================================
+     "an AGENT or RSM handset reads the identical 3,046 rows to show a handful"
+
+   list(), summaryCompute, summaryForOfficer and summaryForRole each fetched the newest
+   deck's rows on their own -- the identical ~3,000 rows, once per handset opening the list,
+   once per dashboard tile, every couple of minutes. Measured: list's SECOND handset alone
+   paid 6 trips / 3,046 rows for a deck that had not moved since the first.
+
+   MEMOISED EXACTLY AS agentIndex IS -- a resolved value per db, keyed on DATA_VERSION (an
+   upload bumps it in api/upload.js) AND the deck_date that resolved it, with an in-flight
+   promise so concurrent callers on a cold cache (three hundred officers opening the list in
+   the same minute) await ONE build rather than each starting their own. The four callers'
+   own column lists are all subsets of DECK_COLS, so one shared array serves them all; each
+   still applies its OWN team scope or AGENT/RSM/TEAM LEADER fence in memory off the same
+   rows -- see summaryCompute below for the team scope moving from the query into memory,
+   and list()/summaryForOfficer/summaryForRole, which never scoped the query to begin with.
+   WHO SEES WHAT does not change; only how many times the deck crosses the wire.
+
+   WRITE-THROUGH, NOT INVALIDATION, FOR A COMMENT. addComment() changes fu_status,
+   promise_date/amt and the last comment on ONE row, and deliberately never bumps
+   DATA_VERSION -- a follow-up does not move who is on today's list, an upload does. So the
+   cached row is patched in place instead, the same pattern noteCalledToday() already uses
+   for a synced call: an officer sees their own follow-up on their very next list() without
+   the deck ever being invalidated or re-fetched for it. See noteDeckPatch below. */
+const deckCache = new WeakMap();
+const deckInFlight = new WeakMap();
+/** The raw newest-deck rows (DECK_COLS), shared per db; `{ deckDate, version, rows }`.
+    Callers scope or fence `rows` in memory -- see the note above. */
+async function sharedDeck(db, nowMs) {
+  // currentDataVersion, NOT settingGet directly -- agentIndex asks for the identical setting
+  // for the identical reason, and list()/summaryCompute/summaryForRole fire the two of them
+  // in the SAME Promise.all. Asking separately would read `settings` twice for one value on
+  // every one of those calls -- a read ADDED to the phone path. See the note above it.
+  const [deckDate, version] = await Promise.all([latestDeckDate(db), currentDataVersion(db)]);
+  const ver = version || '';
+  const hit = deckCache.get(db);
+  if (hit && hit.deckDate === deckDate && hit.version === ver && (nowMs - hit.at) < 15 * 60000) return hit;
+  const already = deckInFlight.get(db);
+  if (already && already.deckDate === deckDate && already.version === ver) return already.promise;
+  const promise = (async () => {
+    const rows = deckDate
+      ? await fetchAll(() => db.from('followup_status').select(DECK_COLS).eq('deck_date', deckDate))
+      : [];
+    const value = { deckDate, version: ver, at: nowMs, rows };
+    deckCache.set(db, value);
+    return value;
+  })();
+  deckInFlight.set(db, { deckDate, version: ver, promise });
+  try {
+    return await promise;
+  } finally {
+    // Settled either way: a later call whose deckDate/version has moved must start fresh
+    // rather than ever await a promise that has already resolved.
+    deckInFlight.delete(db);
+  }
+}
+/** WRITE-THROUGH for one followup_status row changed outside an upload -- see addComment().
+    Best-effort, exactly like noteCalledToday(): a cache miss, or a row that is not part of
+    the CURRENTLY cached deck_date (a stub for a customer with no deck row at all, or one on
+    an older day), simply patches nothing, and the next sharedDeck() rebuild picks it up
+    fresh regardless. */
+function noteDeckPatch(db, imei, patch) {
+  const hit = deckCache.get(db);
+  if (!hit) return;
+  const row = hit.rows.find(r => String(r.imei) === String(imei));
+  if (row) Object.assign(row, patch);
+}
+
 async function list(db, [dev], nowMs) {
   const cu = await userByDeviceSoft(db, dev);
   if (!cu) return { ok: false, error: 'DEVICE_NOT_REGISTERED' };
-  const [called, deckDate, rosterAll, agents] = await Promise.all([
-    calledTodaySet(db, nowMs), latestDeckDate(db), rosterFull(db), agentIndex(db, nowMs)]);
+  const [called, sharedDeckVal, rosterAll, agents] = await Promise.all([
+    calledTodaySet(db, nowMs), sharedDeck(db, nowMs), rosterFull(db), agentIndex(db, nowMs)]);
   const roster = rosterAll.ids;
+  const deckDate = sharedDeckVal.deckDate;
   if (!deckDate) return { ok: true, rows: [], asOf: null, stale: false, narrowed: null, note: null };
   // The WHOLE deck -- no team fence (the team column is the selling branch) -- then this
-  // officer's dealt share of it. Budget: the deck read is the same one as before; the
-  // roster is one extra bounded read.
-  const fu = await fetchAll(() => db.from('followup_status').select(DECK_COLS).eq('deck_date', deckDate));
+  // officer's dealt share of it. Budget warm: this is SHARED across every handset now (see
+  // sharedDeck); the roster is one extra bounded read, itself shared the same way.
+  const fu = sharedDeckVal.rows;
   const today = todayKey(nowMs);
   let mine, note = null;
   if (isFenced(cu)) {
@@ -1023,11 +1243,16 @@ async function addComment(db, [dev, p], nowMs) {
     new_number: p.newNo ? pnorm(p.newNo) : null, created_by: cu.name, created_at: now,
   });
   if (cErr) throw new Error(cErr.message);
-  const { error: uErr } = await db.from('followup_status').update({
+  const patch = {
     fu_status: fu || null, promise_date: p.promiseDate || null, promise_amt: p.promiseAmt || null,
     last_comment: p.comment || null, comment_by: cu.name, comment_at: now, updated_at: now,
-  }).eq('imei', ref);
+  };
+  const { error: uErr } = await db.from('followup_status').update(patch).eq('imei', ref);
   if (uErr) throw new Error(uErr.message);
+  // WRITE-THROUGH: a comment never bumps DATA_VERSION (see the note above sharedDeck), so
+  // without this the officer's own follow-up would not show on their own list() until the
+  // deck cache's 15-minute lapse. Patched in place instead, exactly like noteCalledToday().
+  noteDeckPatch(db, ref, patch);
   return { ok: true, ref, savedAt: now };
 }
 
@@ -1134,16 +1359,23 @@ export async function summaryFor(db, user, nowMs) {
 }
 async function summaryCompute(db, user, nowMs) {
   const today = todayKey(nowMs);
-  const deckDate = await latestDeckDate(db);
+  // call_logs stays scoped AT THE DATABASE, exactly as before -- only the DECK moved to the
+  // shared cache below (it is the one table three-hundred-handset traffic actually hammers).
   const scope = q => (user.teams && user.teams.length) ? q.in('team', user.teams.map(K)) : q;
+  const teamSet = (user.teams && user.teams.length) ? new Set(user.teams.map(K)) : null;
   const fenced = isFenced(user);
-  const [deckRaw, logsRaw, dataVersion, agents] = await Promise.all([
-    deckDate ? fetchAll(() => scope(db.from('followup_status')
-      .select('imei, contact, disbursed_date, locked4, locked7, days_offline').eq('deck_date', deckDate))) : [],
+  const [sharedDeckVal, logsRaw, agents] = await Promise.all([
+    sharedDeck(db, nowMs),
     fetchAll(() => scope(db.from('call_logs').select('phone, ref, duration, portfolio').eq('call_date', today))),
-    settingGet(db, 'DATA_VERSION'),
     fenced ? agentIndex(db, nowMs) : null,
   ]);
+  const deckDate = sharedDeckVal.deckDate;
+  /* THE TEAM SCOPE, IN MEMORY NOW -- the deck is a SHARED array (see sharedDeck above), so
+     an RSM's `.in('team', ...)` can no longer be pushed into the query without fetching a
+     narrower copy per team-set and losing the whole point of sharing it. Scoped here off the
+     same shared rows instead, exactly as the AGENT/RSM/TEAM LEADER fence right below already
+     does. WHO SEES WHAT is unchanged -- only where the filter runs. */
+  const deckRaw = teamSet ? sharedDeckVal.rows.filter(r => teamSet.has(K(r.team))) : sharedDeckVal.rows;
   /* THE FENCE, ON TOP OF THE TEAM SCOPE -- an access-code sign-in is always the "leader"
      identity (their name IS who they are; there is no shared-code phone lookup on the
      portal side), so fenceSetOf is asked with is_leader forced true. mineFn feeds BOTH
@@ -1197,31 +1429,44 @@ async function summaryCompute(db, user, nowMs) {
     reached: reachedOn(hist.yDate, hist, null, [], mineFn) || { pct: null, num: 0, den: 0 },
     weekAvg: weekAvgFor(hist, null, [], mineFn),
     asOfReached: hist.yDate,
-    dataVersion: dataVersion || '',
+    // sharedDeck already paid for this exact read -- no reason to ask settings twice.
+    dataVersion: sharedDeckVal.version || '',
   };
 }
 
 /** The credit user's OWN strip: their dealt share of today's deck, their own calls
-    today, their own yesterday %, their own last-week average. Cached per user.
-    Budget on a cache miss: 1 deck read + 1 roster read + 1 own-logs-today read
-    (indexed user_id+date) + the day's shared history (memory after the first ask). */
+    today, their own yesterday %, their own last-week average.
+
+    CACHED PER OFFICER, NOT PER TEAM-SET -- READ THIS BEFORE "FIXING" IT (postgres-war
+    review, 2026-09-21). The module header used to describe every summary cache as "per
+    team-set", which is only true of summaryFor/summaryCompute below (the OTHER roles'
+    tile). It was never true here, and it cannot be made true without changing a figure:
+    every number this returns -- list.num, locked7.num, calls.num, reached, weekAvg -- is
+    this ONE officer's own dealt share of the company-wide deck (shareOf keys the deal on
+    cu.user_id) and their own logged calls. Credit officers are not team-scoped at all --
+    the whole pool is one company deck, round-robin dealt -- so there is no team-set two
+    officers could share a cache entry under without one of them seeing the OTHER's figures.
+    The per-officer key is the correct one; only the header was wrong, and is fixed there.
+
+    Budget on a cache miss: the deck read is SHARED (see sharedDeck) + 1 roster read (also
+    shared, see rosterFull) + 1 own-logs-today read (indexed user_id+date) + the day's
+    shared history (memory after the first ask). */
 async function summaryForOfficer(db, cu, nowMs) {
   const key = 'U:' + String(cu.user_id);
   const hit = summaryCache.get(key);
   if (hit && (nowMs - hit.at) < SUMMARY_TTL_MS && hit.at <= nowMs) return { ...hit.value, cached: true };
   const today = todayKey(nowMs);
-  const deckDate = await latestDeckDate(db);
-  const [deck, roster, myLogs, hist] = await Promise.all([
-    // deck_date rides along so the deal's shuffle keys on the DECK's date, not today --
-    // a stale deck must cut this tile the same share the officer's list actually shows.
-    deckDate ? fetchAll(() => db.from('followup_status')
-      .select('imei, contact, disbursed_date, locked4, locked7, days_offline, deck_date').eq('deck_date', deckDate)) : [],
+  const [sharedDeckVal, roster, myLogs, hist] = await Promise.all([
+    // deck_date rides along in DECK_COLS so the deal's shuffle keys on the DECK's date, not
+    // today -- a stale deck must cut this tile the same share the officer's list shows.
+    sharedDeck(db, nowMs),
     activeRoster(db),
     fetchAll(() => db.from('call_logs').select('id, duration')
       .eq('call_date', today).eq('user_id', String(cu.user_id))),
     histFor(db, nowMs),
   ]);
-  const mine = shareOf(deck, roster, cu.user_id, today);
+  const deckDate = sharedDeckVal.deckDate;
+  const mine = shareOf(sharedDeckVal.rows, roster, cu.user_id, today);
   const inWinOf = r => inWindowOf(r, today);
   const value = {
     ok: true,
@@ -1233,34 +1478,40 @@ async function summaryForOfficer(db, cu, nowMs) {
     reached: reachedOn(hist.yDate, hist, cu.user_id, roster) || { pct: null, num: 0, den: 0 },
     weekAvg: weekAvgFor(hist, cu.user_id, roster),
     asOfReached: hist.yDate,
-    dataVersion: (await settingGet(db, 'DATA_VERSION')) || '',
+    // sharedDeck already paid for this exact read -- no reason to ask settings twice.
+    dataVersion: sharedDeckVal.version || '',
   };
   summaryCache.set(key, { at: nowMs, value });
   return { ...value, cached: false };
 }
 /** THE FENCED STRIP -- shared by AGENT, RSM and TEAM LEADER (see isFenced/fenceSetOf
     above): only the customers their own name or somebody beneath them in the register
-    sold -- counted with the same yesterday and last-week rules as everyone else. Cached
-    per user like the officer strip.
-    Budget on a cache miss: 1 deck read + 1 own-logs-today read (indexed user_id+date)
-    + the day's shared history + the agent index (both memory after the first ask). */
+    sold -- counted with the same yesterday and last-week rules as everyone else.
+
+    CACHED PER USER, FOR THE SAME REASON summaryForOfficer IS -- see the note there. Two
+    RSMs never hold the same subtree of the register (fenceSetOf keys on THIS cu's own
+    name), so a shared key would show one RSM the other's book. Correct, not a bug; only
+    the module header's "per team-set" claim needed fixing.
+
+    Budget on a cache miss: the deck read is SHARED (see sharedDeck) + 1 own-logs-today read
+    (indexed user_id+date) + the day's shared history + the agent index (both memory after
+    the first ask). */
 async function summaryForRole(db, cu, nowMs) {
   const key = 'U:' + String(cu.user_id);
   const hit = summaryCache.get(key);
   if (hit && (nowMs - hit.at) < SUMMARY_TTL_MS && hit.at <= nowMs) return { ...hit.value, cached: true };
   const today = todayKey(nowMs);
-  const deckDate = await latestDeckDate(db);
-  const [deck, myLogs, hist, agents] = await Promise.all([
-    deckDate ? fetchAll(() => db.from('followup_status')
-      .select('imei, contact, disbursed_date, locked4, locked7, days_offline').eq('deck_date', deckDate)) : [],
+  const [sharedDeckVal, myLogs, hist, agents] = await Promise.all([
+    sharedDeck(db, nowMs),
     fetchAll(() => db.from('call_logs').select('id, duration')
       .eq('call_date', today).eq('user_id', String(cu.user_id))),
     histFor(db, nowMs),
     agentIndex(db, nowMs),
   ]);
+  const deckDate = sharedDeckVal.deckDate;
   const mineSet = fenceSetOf(cu, agents);
   const mineFn = r => { const ag = agents.byImei[String(r.imei)]; return !!(ag && mineSet.has(nameKey(ag.name))); };
-  const mine = mineSet.size ? deck.filter(mineFn) : [];
+  const mine = mineSet.size ? sharedDeckVal.rows.filter(mineFn) : [];
   const inWinOf = r => inWindowOf(r, today);
   const value = {
     ok: true,
@@ -1273,7 +1524,8 @@ async function summaryForRole(db, cu, nowMs) {
     weekAvg: weekAvgFor(hist, cu.user_id, [], mineFn),
     asOfReached: hist.yDate,
     onRegister: mineSet.size > 0,
-    dataVersion: (await settingGet(db, 'DATA_VERSION')) || '',
+    // sharedDeck already paid for this exact read -- no reason to ask settings twice.
+    dataVersion: sharedDeckVal.version || '',
   };
   summaryCache.set(key, { at: nowMs, value });
   return { ...value, cached: false };

@@ -815,7 +815,9 @@ test('the pane draws a select, and its options include every role that already h
      ROLE. So a rate row for a role since deleted must still be in the list. */
   assert.match(draw, /roles\.forEach\(function\(r\)\{ if\(opts\.indexOf\(r\.role\)<0\) opts\.push\(r\.role\); \}\);/);
   assert.match(draw, /var opts=allRoles\.slice\(\)/);
-  assert.match(draw, /allRoles=a\[1\]\.all\|\|\[\]/, 'read off the same answer the table came from');
+  // drawImpAppr fetches (and holds, so a queue chip need not ask again); impApprRender --
+  // still inside this same slice, between drawImpAppr and impDecideDrawer -- draws from it.
+  assert.match(draw, /allRoles=rolesResp\.all\|\|\[\]/, 'read off the same answer the table came from');
 
   // A dropdown with no escape is where somebody gives up and pays by hand.
   assert.match(draw, /Create it under <b>Access codes<\/b> first/);

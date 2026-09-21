@@ -7,6 +7,7 @@ import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
   looksLikeHeader, lifetimeDay } from './_lib/importers.js';
 import { WINDOW_DAYS } from './_lib/call-core.js';
 import { noteSignin, outcomeOf, ipOf, uaOf } from './_lib/signin.js';
+import { clearStockIndex } from './_lib/stock-index.js';
 
 /* =====================================================================================
    POST /api/upload -- the daily Watu list, AND the hoopltd.shop sales export. The header
@@ -22,6 +23,14 @@ import { noteSignin, outcomeOf, ipOf, uaOf } from './_lib/signin.js';
    each chunked at 1000 rows/statement. Last slice adds 1 settings upsert (DATA_VERSION)
    and, for a Watu deck, 3 HEAD counts over followup_status (deckStats) -- head:true, so
    they transfer no rows at all and run once per upload rather than once per slice.
+   THIS LINE USED TO BE WRONG. gatedUser(code) also read the roles table fresh on every single
+   slice of every upload -- an un-cached third read this comment never counted -- because
+   THE DOOR itself paid for a second access_codes trip on every ordinary, correctly-typed sign
+   in (caseInsensitiveCode ran unconditionally after the exact match already answered). Both
+   are fixed in auth.js: the exact match is skipped past when it already won, and the roles
+   read is memoised 30s the same way system-gate.js's system-open read already was -- so "1
+   auth read + 1 gate read (cached 30s)" is now the true cost of every slice after the first
+   one in a batch, not a rounding-down of it.
    Row bounds: every write is bounded by the file's own row count; nothing here reads the
    register's ROWS back. No read is repeated across slices; nothing is fetched to be
    merged -- the header-presence upsert IS the merge.
@@ -143,6 +152,7 @@ async function deleteDay(user, day) {
   const { error } = await supabase.from('settings')
     .upsert({ key: 'DATA_VERSION', value: randomUUID() }, { onConflict: 'key' });
   if (error) throw new Error('settings: ' + error.message);
+  clearStockIndex(supabase);   // watu_loans just lost a day: the stock memos read it
   await logUpload(user, 'upload:delete-day', day + ' · deck ' + gone.deck + ' · reg ' + gone.register + ' · hist ' + gone.snapshots);
   return { ok: true, deleted: gone, date: day };
 }
@@ -223,6 +233,11 @@ export default withApi(async (req) => {
     }
     await writeChunks(supabase, 'hoop_agents',
       ag.records.map(r => ({ ...r, updated_at: new Date().toISOString() })), 'phone');
+    /* Zero cost to this request (an in-memory WeakMap delete, no trip of its own) and every
+       slice, not just the last: the stock-index memo (api/_lib/stock-index.js) must not go
+       on answering OLD STOCK / NEW STOCK with yesterday's register while THIS upload is
+       still landing its later slices. */
+    clearStockIndex(supabase);
     if (isLast) await logUpload(user, 'upload:agents', 'rows ' + ag.records.length);
     return { kind: 'agents', inserted: ag.records.length, batch,
       dropped: ag.dropped.length, droppedRows: ag.dropped.slice(0, 50),
@@ -240,6 +255,8 @@ export default withApi(async (req) => {
     // One row per phone PER REPORT DATE -- movement is the diff between two dates.
     await writeChunks(supabase, 'hoop_aged_stock',
       st.records.map(r => ({ ...r, as_of: snapshotDate, updated_at: new Date().toISOString() })), 'serial,as_of');
+    // See the identical note on the agents import above -- zero-cost, every slice.
+    clearStockIndex(supabase);
     if (isLast) await logUpload(user, 'upload:agedstock', snapshotDate + ' · rows ' + st.records.length);
     return { kind: 'agedstock', inserted: st.records.length, date: snapshotDate, batch,
       dropped: st.dropped.length, droppedRows: st.dropped.slice(0, 50),
@@ -298,6 +315,7 @@ export default withApi(async (req) => {
       const { error } = await supabase.from('settings')
         .upsert({ key: 'DATA_VERSION', value: batch }, { onConflict: 'key' });
       if (error) throw new Error('settings: ' + error.message);
+      clearStockIndex(supabase);   // the merge wrote watu_loans, which the stock memos read
       await logUpload(user, 'upload:offline-queue', 'rows ' + oq.records.length + ' · notes ' + notesIn);
     }
     return { kind: 'offline', inserted: oq.records.length, notes: notesIn, batch,
@@ -326,6 +344,8 @@ export default withApi(async (req) => {
       if (!/uploaded_by|recorded_by/i.test(String(err && err.message))) throw err;
       await writeChunks(supabase, 'hoop_sales', sales.records.map(bare), 'sale_key');
     }
+    // See the identical note on the agents import above -- zero-cost, every slice.
+    clearStockIndex(supabase);
     if (isLast) await logUpload(user, 'upload:sales', snapshotDate + ' · rows ' + sales.records.length);
     return {
       kind: 'sales',
@@ -403,6 +423,10 @@ export default withApi(async (req) => {
     const { error } = await supabase.from('settings')
       .upsert({ key: 'DATA_VERSION', value: batch }, { onConflict: 'key' });
     if (error) throw new Error('settings: ' + error.message);
+    /* The deck upsert above rewrote watu_loans, one of the tables the stock memos
+       (api/_lib/stock-index.js) are built from. The other imports bust it where they
+       write; this one busts it here, once per upload, on the slice that moves the version. */
+    clearStockIndex(supabase);
     /* The read-back is a REPORT, never a gate. Every row above is already committed by
        this point, so a hiccup counting them must not turn a finished upload into a failed
        one -- the page simply shows the file's own numbers without the deck's. */
