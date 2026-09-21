@@ -9,6 +9,7 @@ import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signi
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList,
   TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree } from './_lib/call-core.js';
+import { memoByDataVersion } from './_lib/memo.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -35,7 +36,8 @@ import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
      salesAudit / agentScore   3 parallel bounded reads each (sales by date range,
                 register imei+agent columns / scoped register, agents ~1k) -- see the
                 fns' own headers; both are reads, nothing audited
-     staffDirectory  1 bounded read (~1k agents);  stockView  2 parallel bounded reads
+     staffDirectory  1 bounded register read + the loan-book branch list (memoised against
+                DATA_VERSION, 15-min TTL -- see loanBranches);  stockView  2 parallel bounded reads
      navsFor / requireNav  ZERO reads -- pure functions over the already-resolved tabs
                 (the permanent postgres rule: a permission check must never buy a trip)
    Row bounds: recovery reads two DAYS of snapshots, team-scoped; nothing reads the whole
@@ -1169,6 +1171,11 @@ const TOPUP_NOT_READY = 'Jedwali la top-up halijatengenezwa bado. Endesha '
   + 'db/migrations/RUN-ME-2026-09-09-topups.sql kwenye Supabase. '
   + '/ The top-up table has not been created yet — run that migration first.';
 const TOPUP_STATES = ['requested', 'verified', 'paid', 'unlocked', 'rejected'];
+/* STILL MOVING THROUGH THE PIPELINE -- the whole vocabulary minus the two finished states.
+   This is exactly what the desk's default view has always SHOWN (see topupQueue's own
+   `shown` filter, unchanged below), so scoping the default READ to the same three statuses
+   costs nothing the screen was not already throwing away. */
+const TOPUP_LIVE = ['requested', 'verified', 'paid'];
 const TOPUP_COLS = 'id, requested_at, staff_code, staff_name, staff_role, imei, customer, '
   + 'customer_phone, payer_name, paid_amount, proof_ref, price, balance, status, comment, '
   + 'verified_by, verified_at, paid_by, paid_at, payment_ref, unlocked_by, unlocked_at, '
@@ -2797,6 +2804,78 @@ async function weekOf(db, user, args, table, col) {
   // forward into a week that has not happened.
   const from = (latest && mondayOf(latest) < thisMon) ? mondayOf(latest) : thisMon;
   return { from, to: dayShift(from, 6), thisWeek: from === thisMon, fellBack: from !== thisMon };
+}
+
+/* THE COMMISSION FORM'S TWO DROPDOWNS -- every role a rate can be set against, every model
+   a phone can be. Both are read off the whole staff register and the whole loan book, which
+   the postgres-war audit measured at 4,073 rows to fill two <select>s that do not change
+   between one open of the pane and the next. Memoised per database against DATA_VERSION
+   (an upload moves it) with a 15-minute ceiling on top, exactly as call-core.js's own
+   agentIndex is -- so the register and the loan book are scanned once per version or per
+   quarter hour, not once per commission-pane open. */
+const commRolesItemsMemo = memoByDataVersion(15 * 60000);
+async function commRolesItems(db) {
+  return commRolesItemsMemo(db, async () => {
+    let roles = [], items = [];
+    try {
+      const agents = await fetchAll(() => db.from('hoop_agents').select('role'));
+      roles = [...new Set(agents.map(a => K(a.role || '').replace(/\s+/g, '_')).filter(Boolean))].sort();
+    } catch (e) { roles = []; }
+    try {
+      const models = await fetchAll(() => db.from('watu_loans').select('model'));
+      items = [...new Set(models.map(m => K(m.model || '')).filter(Boolean))].sort();
+    } catch (e) { items = []; }
+    return { roles, items };
+  });
+}
+
+/* WHO AN ISSUE CAN BE SENT TO -- every role, and the people holding it, off access_codes.
+   The raise form and the desk BOTH read this, once per sub-tab switch, and access_codes is
+   scanned whole to build it: the postgres-war audit measured 373 rows for a form that is
+   the same list at 09:03 as it was at 09:00. Memoised per database against DATA_VERSION
+   with a 5-minute ceiling -- shorter than commRolesItems' fifteen, because a person hired
+   or given a new access code this morning should show up on the raise form within the same
+   coffee break, not the same quarter hour. */
+const issueTargetsMemo = memoByDataVersion(5 * 60000);
+async function issueRoleIndex(db) {
+  return issueTargetsMemo(db, async () => {
+    let codes = [];
+    try {
+      codes = await fetchAll(() => db.from('access_codes').select('name, role'));
+    } catch (e) { codes = []; }
+    const by = new Map();
+    for (const c of codes) {
+      const role = K(c.role).replace(/[\s-]+/g, '_');
+      const name = String(c.name || '').trim();
+      if (!role) continue;
+      if (!by.has(role)) by.set(role, new Set());
+      if (name) by.get(role).add(name);
+    }
+    /* A role somebody holds but that no code names is still offerable -- and so are the
+       departments this log was born with, so an office mid-way through moving from one
+       vocabulary to the other can address an issue either way. */
+    for (const d of ISSUE_DEPTS) if (!by.has(d)) by.set(d, new Set());
+    return [...by.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1))
+      .map(([role, people]) => ({ role, people: [...people].sort() }));
+  });
+}
+
+/* EVERY BRANCH SPELLING THE LOAN BOOK KNOWS, for the staff directory's "branches that already
+   exist" list. The whole of watu_loans (3,000+ rows in the audit's fixture) used to be read
+   down to one column on every open of a pane that is a staff list first and a place-name
+   picker second. Memoised per database against DATA_VERSION -- an upload is exactly the event
+   that can add a new branch spelling to the loan book -- with the same 15-minute ceiling as
+   commRolesItems, for the same reason: this list changes only as fast as the deck does. */
+const loanBranchesMemo = memoByDataVersion(15 * 60000);
+async function loanBranches(db) {
+  return loanBranchesMemo(db, async () => {
+    const places = new Set();
+    for (const l of await fetchAll(() => db.from('watu_loans').select('branch'))) {
+      const b = String(l.branch == null ? '' : l.branch).trim();
+      if (b) places.add(b);
+    }
+    return [...places];
+  });
 }
 
 const FNS = {
@@ -5250,13 +5329,17 @@ const FNS = {
        migration, so a failed insert is retried without them rather than refusing the request:
        an office that cannot ask for an advance because a rule column is missing is worse off
        than one whose lateness is not yet being recorded. */
-    const policy = await advPolicy(db);
     /* ONE A MONTH, AND THIS ONE *IS* A REFUSAL -- unlike G.4's deadline, which only flags.
        The difference is who the rule is for: a late request is a judgement the approver is
        entitled to make, and a second advance against one month's salary is a thing the office
        has decided does not happen. A decline erases the month, so the way out of a mistake is
-       the one the owner already used. */
-    const live = await advSameMonth(db, user.code, applyDate);
+       the one the owner already used.
+       THE POLICY AND THE MONTH ARE INDEPENDENT QUESTIONS -- neither reads the other -- so they
+       are asked of the database AT THE SAME TIME rather than one after the other. A refusal
+       here must still cost exactly these two round trips and nothing more: salaryOf is asked
+       for ONLY after this check passes, never before, so a declined request never pays for a
+       salary lookup nobody needed. */
+    const [policy, live] = await Promise.all([advPolicy(db), advSameMonth(db, user.code, applyDate)]);
     if (live.length >= policy.maxPerMonth) {
       const other = live.sort((x, y) => String(x.apply_date || '').localeCompare(String(y.apply_date || '')))[0];
       const what = other
@@ -5290,14 +5373,26 @@ const FNS = {
 
   /** A requester's own history, and only their own: this pane grants the right to ASK, which
       is not the right to read what anybody else earns or owes. Keyed on the access code they
-      signed in with rather than their name, because two people can share a name. */
+      signed in with rather than their name, because two people can share a name.
+      THREE INDEPENDENT READS, FIRED TOGETHER. advPolicy, salaryOf and this person's own
+      advances used to be awaited one after another though none of them reads the others'
+      answer -- three round trips of latency for what is really the slowest of the three.
+      Each is CALLED before any of them is awaited, so all three are in flight at once; policy
+      is awaited on its own because the notReady branch below needs it even when the advances
+      read is the one that fails. Budget: 3 round trips, unchanged -- concurrent instead of a
+      waterfall. */
   async advMine(db, user) {
     requireNav(user, 'advreq');
-    const policy = await advPolicy(db);
-    let rows;
+    const policyP = advPolicy(db);
+    const salaryP = salaryOf(db, user.code);
+    const selectP = advSelect(db, cols => db.from('staff_advances').select(cols)
+      .eq('staff_code', user.code || '~none~'), ADV_COLS_RULES, ADV_COLS);
+    const policy = await policyP;
+    let rows, salary;
     try {
-      rows = (await advSelect(db, cols => db.from('staff_advances').select(cols)
-        .eq('staff_code', user.code || '~none~'), ADV_COLS_RULES, ADV_COLS)).rows;
+      const got = await selectP;
+      rows = got.rows;
+      salary = await salaryP;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, amounts: ADV_AMOUNTS,
@@ -5306,7 +5401,6 @@ const FNS = {
     /* THE DEADLINE AND THE CEILING TRAVEL WITH THE FORM (Finance SOP G.4, G.5), so the page can
        say what will happen before somebody presses the button rather than after. The salary
        itself never goes out: the person is told their ceiling, not what anybody earns. */
-    const salary = await salaryOf(db, user.code);
     const out = rows.map(r => advRow(r, user.code)).sort((x, y) => (y.at || 0) - (x.at || 0));
     /* WHICH MONTHS ARE ALREADY SPOKEN FOR, so the form can say it before the button rather
        than after -- the same courtesy the G.4 deadline line already gets. Computed from the
@@ -5453,34 +5547,44 @@ const FNS = {
     return { ok: true, id, status: patch.status, granted };
   },
 
-  /** HR'S PANE: the filing copy and the bank payment run, in the owner's column order. */
+  /** HR'S PANE: the filing copy and the bank payment run, in the owner's column order.
+      FILTERED ON THE APPLICATION DATE, not on when the row was created. HR files and pays
+      against the period the advance is FOR, and those two dates can fall either side of a
+      month end -- which is exactly the row that goes missing from a payment run otherwise.
+      THE BOUND IS THE QUERY NOW, not a JS re-filter of a full-table read: `apply_date` is a
+      date column, so `.gte`/`.lte` on it is exactly what the old `r.applyDate >= from`/`<= to`
+      meant, asked of Postgres instead of asked of every row after the whole table arrived.
+      A default open (no from/to, HR's own first click) is unchanged -- still the whole table
+      -- because there is no period yet to hand the database. Budget: 1 round trip either way;
+      a bounded week reads that week, not the quarter behind it. */
   async advReport(db, user, args) {
     requireNav(user, 'advrep');
     const a = args || {};
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? String(a.from) : null;
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? String(a.to) : null;
+    const want = String(a.status || '').trim();
     let rows, hasRules = false;
     try {
-      const got = await advSelect(db, cols => db.from('staff_advances').select(cols), ADV_COLS_RULES, ADV_COLS);
+      const build = cols => {
+        let q = db.from('staff_advances').select(cols);
+        if (from) q = q.gte('apply_date', from);
+        if (to) q = q.lte('apply_date', to);
+        return q;
+      };
+      const got = await advSelect(db, build, ADV_COLS_RULES, ADV_COLS);
       rows = got.rows; hasRules = got.rules;
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, totals: { approved: 0, count: 0 } };
     }
-    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || '')) ? String(a.from) : null;
-    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(a.to || '')) ? String(a.to) : null;
-    const want = String(a.status || '').trim();
-    /* FILTERED ON THE APPLICATION DATE, not on when the row was created. HR files and pays
-       against the period the advance is FOR, and those two dates can fall either side of a
-       month end -- which is exactly the row that goes missing from a payment run otherwise. */
-    /* THE PERIOD IS THE DATE RANGE. THE STATUS IS A LENS ON IT.
-       Both filters used to be applied before the totals were counted, so the tiles moved every
-       time somebody narrowed the view -- and since the tiles ARE the status control, ticking
-       "Za kulipa" made the tile beside it report the approved count under the words "kwenye
-       kipindi hiki" (in this period). The period had not changed; only what was on screen had.
-       So the totals are counted over the DATE-filtered set and stay put, and only the table
-       below responds to the status lens. */
-    const inPeriod = rows.map(r => advRow(r, user.code))
-      .filter(r => !from || (r.applyDate && r.applyDate >= from))
-      .filter(r => !to || (r.applyDate && r.applyDate <= to));
+    /* THE PERIOD IS THE QUERY. THE STATUS IS A LENS ON IT.
+       Both filters used to be applied in JS before the totals were counted, so the tiles moved
+       every time somebody narrowed the view -- and since the tiles ARE the status control,
+       ticking "Za kulipa" made the tile beside it report the approved count under the words
+       "kwenye kipindi hiki" (in this period). The period had not changed; only what was on
+       screen had. So the totals are counted over the date-bounded read and stay put, and only
+       the table below responds to the status lens. */
+    const inPeriod = rows.map(r => advRow(r, user.code));
     const out = inPeriod
       .filter(r => !['pending', 'approved', 'declined'].includes(want) || r.status === want)
       .sort((x, y) => (y.at || 0) - (x.at || 0));
@@ -6036,27 +6140,37 @@ const FNS = {
   /** THE CEO'S REVIEW COPY: every request in a period, with its retirement beside it, and the
       widgets -- what is waiting, what was paid, what is out with no receipts back, and the net
       balance the company is owed or owes. Filtered on TRAVEL DATE, like the advance is filtered
-      on its application date: a review reads by the trip, not by the click. */
+      on its application date: a review reads by the trip, not by the click.
+      THE BOUND IS THE QUERY, not a JS re-filter of a full read: `travel_date` is a date column,
+      so `.gte`/`.lte` on it asks Postgres for the trip, not the company's whole history of them.
+      The retirements read stays whole -- it is keyed by request id, not by date, and a request
+      that travelled inside the period may have been retired well after it, so there is no date
+      column on THIS table to bound by that would not risk dropping a real match. Budget: 2
+      round trips either way (unchanged), a bounded week reading that week's requests rather
+      than the quarter behind it. */
   async impReport(db, user, args) {
     requireNav(user, 'imprep');
     const a = args || {};
+    const from = isDay(a.from) ? String(a.from) : null;
+    const to = isDay(a.to) ? String(a.to) : null;
+    const want = String(a.status || '').trim();
     let rows, rets;
     try {
       [rows, rets] = await Promise.all([
-        fetchAll(() => db.from('imprest_requests').select(IMP_COLS)),
+        fetchAll(() => {
+          let q = db.from('imprest_requests').select(IMP_COLS);
+          if (from) q = q.gte('travel_date', from);
+          if (to) q = q.lte('travel_date', to);
+          return q;
+        }),
         fetchAll(() => db.from('imprest_retirements').select(IMP_RET_COLS)),
       ]);
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true, totals: {} };
     }
-    const from = isDay(a.from) ? String(a.from) : null;
-    const to = isDay(a.to) ? String(a.to) : null;
-    const want = String(a.status || '').trim();
     const retBy = new Map(rets.map(r => [String(r.request_id), r]));
     const inPeriod = rows.map(r => impRow(r, user.code))
-      .filter(r => !from || (r.travelDate && r.travelDate >= from))
-      .filter(r => !to || (r.travelDate && r.travelDate <= to))
       .map(r => {
         // Only a FINISHED retirement is shown beside its trip -- retiredAt, see impRow.
         const t = r.retiredAt ? retBy.get(r.id) : null;
@@ -6226,28 +6340,41 @@ const FNS = {
       imprest reports read by the thing they are about rather than by the click.
         "REPORTS are seen by CEO, Admin, HR and Finance ... so for leaves we should have
          requests, approval and reports"
-      "Away today" is counted over the whole table, not the period: somebody whose leave began
-      last month is still away this morning, and that is the question being asked. */
+      "Away today" is a DIFFERENT QUESTION FROM THE PERIOD and gets its OWN small read rather
+      than riding on the bounded one: somebody whose leave began last month, or next month's
+      request that starts today, is still away this morning regardless of what week HR typed
+      into the report, so folding it into the period-bounded query would answer it wrong the
+      moment the two ranges disagree. It is bounded on its own terms instead -- approved,
+      and today falls inside it -- which is always a handful of rows, never the table.
+      Budget: 2 round trips (the period read, the today read) where this used to be 1 that
+      read the whole table; a bounded week now reads that week plus a few rows for "today"
+      rather than the quarter behind it. */
   async leaveReport(db, user, args) {
     requireNav(user, 'leaverep');
     const a = args || {};
-    let rows;
-    try {
-      rows = await fetchAll(() => db.from('leave_requests').select(LEAVE_COLS));
-    } catch (e) {
-      if (!tableMissing(e)) throw e;
-      return { ok: true, rows: [], notReady: true, totals: {} };
-    }
     const from = isDay(a.from) ? String(a.from) : null;
     const to = isDay(a.to) ? String(a.to) : null;
     const want = String(a.status || '').trim();
     const today = todayKey();
-    const all = rows.map(r => leaveRow(r, user.code));
-    const away = r => r.status === 'approved' && r.from <= today && r.to >= today;
-    const inPeriod = all
-      .filter(r => !from || (r.from && r.from >= from))
-      .filter(r => !to || (r.from && r.from <= to));
-    const shown = (want === 'today' ? all.filter(away)
+    let rows, todayRows;
+    try {
+      [rows, todayRows] = await Promise.all([
+        fetchAll(() => {
+          let q = db.from('leave_requests').select(LEAVE_COLS);
+          if (from) q = q.gte('from_date', from);
+          if (to) q = q.lte('from_date', to);
+          return q;
+        }),
+        fetchAll(() => db.from('leave_requests').select(LEAVE_COLS)
+          .eq('status', 'approved').lte('from_date', today).gte('to_date', today)),
+      ]);
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, totals: {} };
+    }
+    const inPeriod = rows.map(r => leaveRow(r, user.code));
+    const onLeave = todayRows.map(r => leaveRow(r, user.code));
+    const shown = (want === 'today' ? onLeave
       : want === 'shortNotice' ? inPeriod.filter(r => r.shortNotice)
       : inPeriod.filter(r => !['pending', 'approved', 'rejected'].includes(want) || r.status === want))
       .sort((x, y) => (y.at || 0) - (x.at || 0));
@@ -6261,7 +6388,7 @@ const FNS = {
         // Working days actually granted -- the figure payroll and cover planning start from.
         approvedDays: approved.reduce((s, r) => s + (r.workingDays || 0), 0),
         shortNotice: inPeriod.filter(r => r.shortNotice).length,
-        onLeaveToday: all.filter(away).length,
+        onLeaveToday: onLeave.length,
       } };
   },
 
@@ -6379,28 +6506,15 @@ const FNS = {
       raise form needs a person's NAME to address an issue to them, and that is all it gets.
 
       Behind either issue nav rather than behind Settings: the person filing an issue is the
-      one who has to choose where it goes, and they will not hold the codes pane. */
+      one who has to choose where it goes, and they will not hold the codes pane.
+      MEMOISED -- see issueRoleIndex above. Every sub-tab (raise, desk, report) opens onto
+      this same list, and used to re-scan access_codes to build it every single time.
+      Budget: 1 round trip (the memo's own DATA_VERSION check), warm; a version change or
+      5-minute lapse costs 1 more (the access_codes scan) -- unchanged from before, just paid
+      once per window instead of once per sub-tab switch. */
   async issueTargets(db, user) {
     requireAnyNav(user, ['issuereq', 'issues']);
-    let codes = [];
-    try {
-      codes = await fetchAll(() => db.from('access_codes').select('name, role'));
-    } catch (e) { codes = []; }
-    const by = new Map();
-    for (const c of codes) {
-      const role = K(c.role).replace(/[\s-]+/g, '_');
-      const name = String(c.name || '').trim();
-      if (!role) continue;
-      if (!by.has(role)) by.set(role, new Set());
-      if (name) by.get(role).add(name);
-    }
-    /* A role somebody holds but that no code names is still offerable -- and so are the
-       departments this log was born with, so an office mid-way through moving from one
-       vocabulary to the other can address an issue either way. */
-    for (const d of ISSUE_DEPTS) if (!by.has(d)) by.set(d, new Set());
-    return { ok: true,
-      roles: [...by.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1))
-        .map(([role, people]) => ({ role, people: [...people].sort() })) };
+    return { ok: true, roles: await issueRoleIndex(db) };
   },
 
   async issueMine(db, user) {
@@ -6587,27 +6701,37 @@ const FNS = {
 
   /** THE LOG BOOK. A period by the date raised, every department, with the widgets the CEO
       and a department head ask across a desk: how many, how many still open, how long they
-      take, and where the oldest open one sits. */
+      take, and where the oldest open one sits.
+      THE PERIOD IS THE QUERY. `raised_at` is a timestamp, not a date, so the upper bound
+      needs the end of that day the same way auditList (api/_lib/audit.js) already does it --
+      `to + 'T23:59:59.999Z'` -- or a request raised at 14:00 on the last day of the period
+      would compare as greater than the bare date and be dropped. Department and status stay
+      as JS filters on the (now much smaller) result: they are lenses on the period, not the
+      period itself, and pushing every combination into the query would be a filter per click
+      for a saving the date bound already delivers. Budget: 1 round trip either way; a bounded
+      week reads that week, not the quarter behind it. */
   async issueReport(db, user, args) {
     requireNav(user, 'issuerep');
     const a = args || {};
-    let rows;
-    try {
-      rows = (await issueSelect(db, cols => db.from('issues').select(cols))).rows;
-    } catch (e) {
-      if (!tableMissing(e)) throw e;
-      return { ok: true, rows: [], notReady: true, totals: {}, departments: ISSUE_DEPTS };
-    }
     const from = isDay(a.from) ? String(a.from) : null;
     const to = isDay(a.to) ? String(a.to) : null;
     const dept = K(a.department).replace(/ /g, '_');
     const want = String(a.status || '').trim();
+    let rows;
+    try {
+      const build = cols => {
+        let q = db.from('issues').select(cols);
+        if (from) q = q.gte('raised_at', from);
+        if (to) q = q.lte('raised_at', to + 'T23:59:59.999Z');
+        return q;
+      };
+      rows = (await issueSelect(db, build)).rows;
+    } catch (e) {
+      if (!tableMissing(e)) throw e;
+      return { ok: true, rows: [], notReady: true, totals: {}, departments: ISSUE_DEPTS };
+    }
     const all = rows.map(r => issueRow(r, user.code));
-    const day = ms => new Date(ms).toISOString().slice(0, 10);
-    const inPeriod = all
-      .filter(r => !from || (r.at && day(r.at) >= from))
-      .filter(r => !to || (r.at && day(r.at) <= to))
-      .filter(r => !dept || r.department === dept);
+    const inPeriod = all.filter(r => !dept || r.department === dept);
     const shown = inPeriod.filter(r => !ISSUE_STATES.includes(want) || r.status === want)
       .sort((x, y) => (y.at || 0) - (x.at || 0));
     const resolved = inPeriod.filter(r => r.status === 'resolved');
@@ -6723,13 +6847,33 @@ const FNS = {
   },
 
   /** THE DESK. Waiting first, longest-waiting first among those, because that is the only
-      order a rule that says "must never be delayed" can be served by. */
+      order a rule that says "must never be delayed" can be served by.
+      THE DEFAULT OPEN READS ONLY THE LIVE QUEUE. This is what three hundred officers'
+      "Zinaendelea / Live" tab shows all day, and it used to cost the whole history of every
+      top-up ever finished to answer it. `unlocked`/`rejected` are done business -- B.5's
+      whole point is what is STILL waiting -- so the default read now asks Postgres for
+      TOPUP_LIVE directly rather than the table. The one thing the default view still shows
+      from outside that set is the "Zimefunguliwa" tile's running total (public/portal.html
+      draws it on every open, not only when that tile is picked), so that ONE number is a
+      HEAD count -- no rows, one indexed count -- rather than a second full read.
+      `state: 'all'` keeps the old, unfiltered read: something that already asked for
+      everything is not the case this fix is for. A single named state (a tile drill-down,
+      e.g. 'unlocked') also keeps the old full read, because the tiles beside that list must
+      keep showing an honest count of every OTHER status too, which only a full read can
+      answer without a trip per status. Budget: 2 round trips for the default open (the live
+      rows, the one head count) where this used to be 1 that read the whole table; unchanged
+      for 'all' and for a single named state. */
   async topupQueue(db, user, args) {
     requireNav(user, 'topups');
     const a = args || {};
+    const want = String(a.state || '').trim();
     let rows;
     try {
-      rows = await fetchAll(() => db.from('topups').select(TOPUP_COLS));
+      if (!want) {
+        rows = await fetchAll(() => db.from('topups').select(TOPUP_COLS).in('status', TOPUP_LIVE));
+      } else {
+        rows = await fetchAll(() => db.from('topups').select(TOPUP_COLS));
+      }
     } catch (e) {
       if (!tableMissing(e)) throw e;
       return { ok: true, rows: [], notReady: true,
@@ -6738,19 +6882,27 @@ const FNS = {
     }
     const now = Date.now();
     const all = rows.map(r => topupRow(r, user.code, now));
-    const want = String(a.state || '').trim();
     const shown = all
       .filter(r => want === 'all' ? true : want ? r.status === want
         : (r.status !== 'unlocked' && r.status !== 'rejected'))
       .sort(topupWaitFirst);
     const waiting = all.filter(r => r.status === 'requested' || r.status === 'verified');
+    /* The default read never carries an unlocked row, so the tile beside "Live" that still
+       shows how many have EVER been unlocked needs its own tiny count -- 0 rows, 1 trip. */
+    let unlocked;
+    if (!want) {
+      const { count } = await db.from('topups').select('id', { count: 'exact', head: true }).eq('status', 'unlocked');
+      unlocked = num(count);
+    } else {
+      unlocked = all.filter(r => r.status === 'unlocked').length;
+    }
     return { ok: true, rows: shown,
       checks: TOPUP_CHECKS.map(([js, , label]) => ({ key: js, label })),
       counts: {
         requested: all.filter(r => r.status === 'requested').length,
         verified: all.filter(r => r.status === 'verified').length,
         paid: all.filter(r => r.status === 'paid').length,
-        unlocked: all.filter(r => r.status === 'unlocked').length,
+        unlocked,
         waiting: waiting.length,
         // The number B.5 exists to keep at zero: the longest anybody is currently waiting.
         longestWaitMins: waiting.reduce((mx, r) => Math.max(mx, r.waitedMins || 0), 0),
@@ -7904,7 +8056,15 @@ const FNS = {
      Two navs: `commission` builds, pays and clears (Finance); `commappr` signs off (the
      Administration approval group). Nobody can do both halves unless the owner ticks both. */
 
-  /** The rate table, and the words the form offers for it. */
+  /** The rate table, and the words the form offers for it. Only the rate table itself is
+      read fresh every time -- it is what the form is FOR, and it is a handful of rows. The
+      two dropdowns beside it (every role, every model) used to cost the whole staff register
+      and the whole loan book on every open, which is 4,071 rows to fill two <select>s that
+      almost never change between one open and the next; see commRolesItems below.
+      Budget: warm = 2 round trips (the rates read, the memo's own DATA_VERSION check); a
+      version change or 15-minute lapse costs 2 more (the register, the loan book), same as
+      the unmemoised cost -- wider only in wall-clock time saved across the panes and clicks
+      that share it, not in what any single call pays when it must actually rebuild. */
   async commRates(db, user) {
     requireAnyNav(user, ['commission', 'commappr']);
     let rows = [];
@@ -7915,15 +8075,7 @@ const FNS = {
       if (!tableMissing(e)) throw e;
       notReady = true;
     }
-    let roles = [], items = [];
-    try {
-      const agents = await fetchAll(() => db.from('hoop_agents').select('role'));
-      roles = [...new Set(agents.map(a => K(a.role || '').replace(/\s+/g, '_')).filter(Boolean))].sort();
-    } catch (e) { roles = []; }
-    try {
-      const models = await fetchAll(() => db.from('watu_loans').select('model'));
-      items = [...new Set(models.map(m => K(m.model || '')).filter(Boolean))].sort();
-    } catch (e) { items = []; }
+    const { roles, items } = await commRolesItems(db);
     return { ok: true, notReady, roles: ['ANY'].concat(roles), items: ['ANY'].concat(items),
       rates: rows.map(r => ({ role: r.role, item: r.item, amount: num(r.amount),
         updatedBy: r.updated_by || '', updatedAt: r.updated_at ? Date.parse(r.updated_at) : null }))
@@ -9222,7 +9374,10 @@ const FNS = {
   /** THE OFFICE, not the logins: everyone on Sipho's register -- agents, team leaders,
       RSMs, the CSM -- ranked seniority-first. System logins (portal codes, app users)
       live under Access codes. Next of kin shows only to settings holders / ADMIN.
-      Budget: 1 bounded read (~1k rows). */
+      Budget: warm = 2 round trips (the register, the branch memo's own DATA_VERSION check);
+      a version change or 15-minute lapse costs 1 more (the loan book's branch column) -- see
+      loanBranches below. The register itself (~1k rows) is always read fresh; only the
+      3,000-row scan for "every branch spelling in the loan book" is memoised. */
   async staffDirectory(db, user) {
     requireNav(user, 'staff');
     /* `manager` post-dates this table (the targets migration adds it). A directory that 500s
@@ -9257,10 +9412,7 @@ const FNS = {
        register and the loan book, because the office already talks in the deck's names. */
     const places = new Set(staff.map(r => r.branch).filter(Boolean));
     try {
-      for (const l of await fetchAll(() => db.from('watu_loans').select('branch'))) {
-        const b = String(l.branch == null ? '' : l.branch).trim();
-        if (b) places.add(b);
-      }
+      for (const b of await loanBranches(db)) places.add(b);
     } catch (ignored) { /* no deck, or no branch column: the register's own list will do */ }
     return { ok: true, total: staff.length, byRole, staff: staff.slice(0, 1500),
       branches: [...places].sort() };
@@ -9923,15 +10075,19 @@ const FNS = {
     const fromISO = from + 'T00:00:00.000Z';
     const toISO = to + 'T23:59:59.999Z';
 
-    /* ---- 1. SYSTEM PERFORMANCE (SOP C.2's three modules, and the door) ---- */
-    const feeds = [];
-    for (const [key, table, col, label] of ITREP_FEEDS) {
-      const byDay = [];
-      for (const d of days) byDay.push({ day: d, rows: await feedDay(db, table, col, d) });
-      feeds.push({ key, label, byDay,
+    /* ---- 1. SYSTEM PERFORMANCE (SOP C.2's three modules, and the door) ----
+       THREE FILES x SEVEN DAYS OF THESE, and every one is an independent HEAD count that
+       does not read from any other -- so all 21 are fired at once rather than waited on
+       one after another. A sequential waterfall of 21 round trips is 21x whatever one of
+       them costs in latency; run together, it is roughly the cost of the slowest one. The
+       COUNT of trips does not change -- still 21 HEAD requests, no rows -- only whether the
+       report waits for them one at a time or all together. */
+    const feeds = await Promise.all(ITREP_FEEDS.map(async ([key, table, col, label]) => {
+      const byDay = await Promise.all(days.map(async d => ({ day: d, rows: await feedDay(db, table, col, d) })));
+      return { key, label, byDay,
         arrived: byDay.filter(x => x.rows > 0).length,
-        missing: byDay.filter(x => x.rows === 0).map(x => x.day) });
-    }
+        missing: byDay.filter(x => x.rows === 0).map(x => x.day) };
+    }));
     const door = await signinWindow(db, from, to);
     const doorGroups = signinGroups(door.rows);
     const alertFails = await signinAlertFails(db);
