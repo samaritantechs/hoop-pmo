@@ -9661,6 +9661,12 @@ const FNS = {
     const { error } = await db.from('settings')
       .upsert({ key, value: String((args && args.value) || '') }, { onConflict: 'key' });
     if (error) throw new Error(error.message);
+    /* THE COMMENT THIS USED TO BE WRONG UNDER: system-gate.js's isSystemOpen cache said, in its
+       own header, that "settingSet clears it outright" -- and nothing here ever called
+       clearSystemOpenCache. An admin flipping SYSTEM_OPEN off saw the switch move on their own
+       screen and had no way to know the portal stayed reachable for up to thirty more seconds
+       for everybody else, on the one setting whose whole job is "not reachable, right now". */
+    if (key === 'SYSTEM_OPEN') clearSystemOpenCache(db);
     return { ok: true, key };
   },
 

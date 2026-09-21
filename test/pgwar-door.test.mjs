@@ -150,3 +150,38 @@ test('door: renameAccessCode does NOT clear the roles memo -- it never touches r
   const fn = src.slice(src.indexOf('async renameAccessCode('), src.indexOf('\n  async changeMyCode('));
   assert.ok(!/clearRolesCache/.test(fn), 'renameAccessCode changes a CODE, never a ROLE');
 });
+
+/* =========================================================================================
+   3. SYSTEM-GATE -- settingSet(SYSTEM_OPEN) now actually clears the cache it always claimed
+      to. clearSystemOpenCache was exported and never called; the switch stayed open, on every
+      OTHER request, for up to thirty seconds after an admin closed it on their own screen.
+   ========================================================================================= */
+const { requireSystemOpen } = await import('../api/_lib/system-gate.js');
+
+test('gate: settingSet(SYSTEM_OPEN=NO) closes the door immediately, not after 30s', async () => {
+  const OWNER = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
+  const OFFICER = { code: 'C1', name: 'Juma', role: 'OFFICER', teams: null, tabs: ['dashboard'], readOnly: false };
+  const db = fakeDb({ settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }] });
+
+  // Populate the 30s cache with "open", exactly as the first portal request of the morning would.
+  assert.equal(await requireSystemOpen(db, OFFICER), true);
+
+  await _FNS.settingSet(db, OWNER, { key: 'SYSTEM_OPEN', value: 'NO' });
+
+  // Without the fix this reads the still-cached "open" for up to another 30 seconds.
+  await assert.rejects(() => requireSystemOpen(db, OFFICER), /closed|imefungwa/i,
+    'the admin who just closed it must see it closed, on the very next request, everywhere');
+  // ADMIN is never gated, whatever the switch says -- untouched by this fix.
+  await requireSystemOpen(db, OWNER);
+});
+
+test('gate: a setting other than SYSTEM_OPEN does not touch the cache', async () => {
+  const OWNER = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
+  const OFFICER = { code: 'C1', name: 'Juma', role: 'OFFICER', teams: null, tabs: ['dashboard'], readOnly: false };
+  const db = fakeDb({ settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'GM_EMAIL', value: 'old@hoop.co.tz' }] });
+  await requireSystemOpen(db, OFFICER);       // caches "open"
+  await _FNS.settingSet(db, OWNER, { key: 'GM_EMAIL', value: 'new@hoop.co.tz' });
+  // Still open -- an unrelated setting must not force a fresh read either way, but it certainly
+  // must not have accidentally closed anything.
+  await requireSystemOpen(db, OFFICER);
+});
