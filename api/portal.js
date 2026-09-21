@@ -4788,7 +4788,13 @@ const FNS = {
      enrolment station can scan a box or paste a column straight out of Sipho's report;
      the stock report itself fills in model and holder where it knows them.
      Idempotent: re-enrolling a phone already on the registry is a no-op that reports
-     itself, never a duplicate and never a silent state reset. */
+     itself, never a duplicate and never a silent state reset.
+     Budget: 2 parallel bounded reads (devices, hoop_aged_stock, both .in()) + a bounded
+     device_tokens read for IMEIs new to the register + up to 4 chunked writes (devices
+     insert, device_events insert, a rejoin update, a revive update+insert) -- each only when
+     that group of IMEIs is non-empty. Busts the stock-index memo (clearStockIndex) only when
+     it actually inserted a device: a rejoin or revive touches no IMEI the memo did not
+     already know existed. */
   async deviceEnrol(db, user, args) {
     /* PROVISIONING IS THE BENCH'S OWN WORK: the store keeper puts the app on the phone,
        so enrolling belongs with locking. */
@@ -5009,7 +5015,11 @@ const FNS = {
      than this function reaching across automatically: these are two separate companies'
      deployments with no standing trust between their backends. The only channel this uses
      is the one that already exists and is already narrow -- the handset itself, proving its
-     own IMEI against a batch, exactly like a bench enrolment. */
+     own IMEI against a batch, exactly like a bench enrolment.
+     Budget: 1 bounded devices read (.in) + an optional cross-office HTTP call for the batch
+     (no batch pasted) + up to 2 writes (devices update, device_events insert) when at least
+     one IMEI is eligible. Not a stock-index buster: it writes shift_server/shift_batch/
+     shift_at, never the row's existence. */
   async deviceShift(db, user, args) {
     requireWrite(user); requireNav(user, 'devlock');
     const a = args || {};
@@ -5069,7 +5079,11 @@ const FNS = {
      setting to fall back to any more, and no REASON line on the lock screen at all, ordered
      lock or write-off alike -- see LockActivity.java. A reason typed here still lands in
      state_reason and the portal's own history (deviceHistory), it just never travels onto
-     glass a customer or an agent can read. */
+     glass a customer or an agent can read.
+     Budget: 1 bounded devices read (.in) + up to 2 writes (devices update, device_events
+     insert) when at least one IMEI actually changes state + nudge()'s own push, not a DB
+     trip. Not a stock-index buster (postgres-war FIX 1): it changes devices.state on rows
+     that already exist, never which IMEIs exist -- the memo's only fact about this table. */
   async deviceSetState(db, user, args) {
     requireWrite(user);
     const a = args || {};
@@ -5215,7 +5229,8 @@ const FNS = {
 
   /* ONE PHONE'S WHOLE STORY -- its current row and every state change ever ordered against
      it. This is what somebody opens when a customer is standing in front of them asking
-     why their phone is locked. */
+     why their phone is locked.
+     Budget: 2 parallel keyed reads (devices, device_events -- both .eq('imei', ...)). */
   async deviceHistory(db, user, args) {
     /* BOTH PANES SEE EVERY PHONE. A store keeper who cannot tell whether the handset in
        their hand is locked cannot do the one job they have. */
@@ -5282,7 +5297,9 @@ const FNS = {
      anything -- those are decisions taken in this portal by a signed-in person and merely
      RELAYED to whoever presents the token. The worst it buys is a lie about one phone's
      battery, position or screen state. Stranding the handset to close that is the more
-     expensive mistake, and it is the one that would be made in a hurry. */
+     expensive mistake, and it is the one that would be made in a hurry.
+     Budget: 1 keyed devices read; a device the register no longer lists costs one more,
+     keyed, against device_tokens. */
   async deviceToken(db, user, args) {
     /* A token is the credential that lets a handset be provisioned at all -- bench work. */
     requireWrite(user); requireNav(user, 'devlock');
@@ -5336,7 +5353,10 @@ const FNS = {
 
      A LOCKED PHONE IS REFUSED. Deleting the row of a phone that is currently locked would
      strand it: locked forever, with nothing on the register to unlock it from. Unlock it
-     first, watch it confirm, then delete. */
+     first, watch it confirm, then delete.
+     Budget: 1 keyed devices read + 1 device_tokens upsert (when the row carried a token) +
+     2 keyed deletes (device_events, devices). Busts the stock-index memo: this removes an
+     IMEI the memo's `devices` Set said existed. */
   async deviceDelete(db, user, args) {
     /* An eraser on the register the bench keeps. */
     requireWrite(user); requireNav(user, 'devlock');
@@ -7152,6 +7172,18 @@ const FNS = {
      cases under every lock ordered today. So a row is only SUSPECT once the silence has
      outlasted the order that caused it. */
 
+  /* Budget: 1 devices read (full operational columns: state, reported, last_seen, state_at,
+     released_at) + 1 hoop_aged_stock read + syncAlertDays' own settings read.
+     NOT MEMOISED (postgres-war FIX 6 -- considered and declined): its answer is not a pure
+     function of what stock-index.js's memo holds. That memo's ONLY `devices` fact is a Set of
+     which IMEIs exist (oldStockIndex's own need); this reads five live/operational columns
+     off every row, so reusing the memo would mean widening it to carry those columns for the
+     other eight callers that never asked for them, or maintaining two different `devices`
+     shapes under one cache key. hoop_aged_stock's columns DO match getAgingAux's, but pairing
+     a memoised hoop_aged_stock with a fresh devices read buys nothing here -- devices is the
+     bigger of the two reads and stays live regardless. Already cheap (4 trips / 2,300 rows
+     measured, ceiling 6 / 3,450): leave, and ask again if a real deployment measures it
+     costing more than that. */
   async syncAging(db, user, args) {
     /* Three desks need this and it is a read: the store keeper who will chase the handset,
        the desk issuing stock against it, and whoever reads the tracker. */
@@ -7504,7 +7536,11 @@ const FNS = {
      IT READS THE SAME INDEX THE BOARD WAS COUNTED FROM, so the list can never disagree with
      the number that opened it -- and it ignores the pane's own filter for the same reason:
      the board is not filtered either, and a drawer that quietly dropped rows would be a count
-     of five opening a list of two. */
+     of five opening a list of two.
+     Budget: 1 fresh old_stock read + the shared aux memo behind oldStockIndex (0 trips warm
+     within its 20-30s TTL, ~5 on a miss) + its own standalone hoop_agents read for stockAllow
+     (no `agents` param threaded here -- only oldStock/newStock do that, FIX 2). Measured
+     cold: 8 trips / 10,071 rows (ADMIN), 9 / 11,142 (RSM). */
   async oldStockHolder(db, user, args) {
     requireNav(user, 'oldstock');
     const a = args || {};
@@ -7565,7 +7601,10 @@ const FNS = {
      UNFILTERED, like the board it belongs to. The pane's filter narrows the table underneath;
      the round has always described the whole outstanding list, and an export that quietly
      obeyed a filter the card ignores would be a file that disagrees with the number that
-     produced it. */
+     produced it.
+     Budget: same shape as oldStockHolder -- 1 fresh old_stock read + the shared aux memo
+     (0 trips warm, ~5 on a miss) + its own standalone hoop_agents read for stockAllow.
+     Measured cold: 8 trips / 10,071 rows (ADMIN), 9 / 11,142 (RSM). */
   async oldStockRound(db, user, args) {
     requireNav(user, 'oldstock');
     const idx = await oldStockIndex(db);
@@ -7709,7 +7748,10 @@ const FNS = {
      it moves -- and a price change next month must not re-price a debt somebody has already
      signed for. Two navs: `lossreq` opens and reads own, `loss` is Finance's desk. */
 
-  /** The current price list (SOP H.2). Read by both navs; written only by the desk. */
+  /** The current price list (SOP H.2). Read by both navs; written only by the desk.
+      Budget: 1 device_prices read + 1 watu_loans read (model column only, for the item
+      list). Measured 2 trips / 3,004 rows -- almost all of it the 3,000-loan model scan for
+      four prices; see priceSave/priceDelete for the actual writes this pane makes. */
   async priceList(db, user) {
     requireAnyNav(user, ['loss', 'lossreq']);
     let rows = [];
@@ -7731,6 +7773,7 @@ const FNS = {
         .sort((x, y) => (x.item < y.item ? -1 : 1)) };
   },
 
+  // Budget: 1 keyed upsert.
   async priceSave(db, user, args) {
     requireNav(user, 'loss');
     requireWrite(user);
@@ -7750,6 +7793,7 @@ const FNS = {
     return { ok: true, item, amount };
   },
 
+  // Budget: 1 keyed delete.
   async priceDelete(db, user, args) {
     requireNav(user, 'loss');
     requireWrite(user);
@@ -7765,7 +7809,9 @@ const FNS = {
 
   /** OPEN A CASE (Store SOP C.7). The store keeper who finds the shortage opens it; so does
       anybody else who holds the nav. Valued straight away from the price list where the model
-      is on it, because a case with no number attached is a conversation, not a liability. */
+      is on it, because a case with no number attached is a conversation, not a liability.
+      Budget: 1 keyed device_prices read (only when a model was given) + 1 insert + the
+      notification email (not a DB trip). */
   async lossRaise(db, user, args) {
     requireAnyNav(user, ['loss', 'lossreq']);
     requireWrite(user);
@@ -7819,7 +7865,9 @@ const FNS = {
     return { ok: true, id, value, status: row.status, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
   },
 
-  /** The desk sees every case; a raiser sees only their own. */
+  /** The desk sees every case; a raiser sees only their own.
+      Budget: 1 bounded loss_cases read (desk: every case; a raiser: .eq('staff_code', ...)).
+      Measured 1 trip / 200 rows. */
   async lossList(db, user, args) {
     requireAnyNav(user, ['loss', 'lossreq']);
     const a = args || {};
@@ -7859,6 +7907,8 @@ const FNS = {
       } };
   },
 
+  // Budget: 1 keyed loss_case_notes read; a raiser (not the desk) pays 1 more, keyed against
+  // loss_cases, to check the case is theirs. Measured 1 trip / 1 row (desk).
   async lossNotes(db, user, args) {
     requireAnyNav(user, ['loss', 'lossreq']);
     const id = String((args && args.id) || '').trim();
@@ -7884,7 +7934,9 @@ const FNS = {
 
   /** MOVE A CASE (SOP H.2-H.5). Valuing, agreeing the recovery, taking the custodian's
       acknowledgement, recording money in, and settling. The desk's grant; a raiser may only
-      add a note to their own case. */
+      add a note to their own case.
+      Budget: 1 keyed loss_cases read + 1 guarded update + 1 loss_case_notes insert (only
+      when there is a note or a status change to record). */
   async lossUpdate(db, user, args) {
     requireAnyNav(user, ['loss', 'lossreq']);
     requireWrite(user);
@@ -8769,7 +8821,10 @@ const FNS = {
      Three navs, granted the ordinary way: stockreq asks, stockappr decides and hands over,
      stockrep reads the tracker and the distribution report. */
 
-  /** Anybody who may ask, and the desk (which files on an RSM's behalf when they phone in). */
+  /** Anybody who may ask, and the desk (which files on an RSM's behalf when they phone in).
+      Budget: the shared stockAgingIndex (0 trips warm within its 20-30s TTL, ~7 on a miss --
+      the memo's own aux reads plus its hoop_aged_stock/policy pair) + 1 stock_requests
+      insert + the notification email (not a DB trip). */
   async stockRequest(db, user, args) {
     requireAnyNav(user, ['stockreq', 'stockappr']);
     requireWrite(user);
@@ -8815,7 +8870,10 @@ const FNS = {
     return { ok: true, id, aging: gate, emailed: mail.sent, emailNote: mail.sent ? '' : mail.reason };
   },
 
-  /** The asker's own requests, and the gate as it stands for them right now. */
+  /** The asker's own requests, and the gate as it stands for them right now.
+      Budget: 1 bounded stock_requests read (.eq('staff_code', ...)) + the shared
+      stockAgingIndex (0 trips warm, ~7 on a miss). Two back-to-back calls on the same
+      request now cost the aux reads once, not twice. */
   async stockMine(db, user) {
     requireNav(user, 'stockreq');
     let rows;
@@ -8831,7 +8889,9 @@ const FNS = {
   },
 
   /** THE STORE DESK. Every request, work first, each carrying the gate as it stands NOW --
-      a request filed on Monday is a different question by Wednesday. */
+      a request filed on Monday is a different question by Wednesday.
+      Budget: 1 stock_requests read + the shared stockAgingIndex (0 trips warm, ~7 on a
+      miss). Measured 11 trips / 10,671 rows cold. */
   async stockQueue(db, user, args) {
     requireNav(user, 'stockappr');
     const a = args || {};
@@ -8866,7 +8926,9 @@ const FNS = {
   },
 
   /** THE DECISION, AND THE GATE (SOP B.2, E). Approving somebody who is holding aging stock
-      takes an explicit override and a reason; rejecting never does. */
+      takes an explicit override and a reason; rejecting never does.
+      Budget: 1 keyed stock_requests read +, on approval, a FRESH stockAgingIndex (always a
+      real read, `{ fresh: true }` -- see there for why) + 1 guarded update. */
   async stockDecide(db, user, args) {
     requireNav(user, 'stockappr');
     requireWrite(user);
@@ -8927,7 +8989,11 @@ const FNS = {
   /** THE HANDOVER (SOP B.5-B.9). Only on an approved request, once: the note number, the joint
       count, who signed, the courier's papers, the IMEIs and up to three photographs. Any IMEI
       the phone registry already knows has its holder moved, so "who has it" stops being two
-      different answers in two different panes. */
+      different answers in two different panes.
+      Budget: 1 keyed stock_requests read + 1 guarded claim update + 1 stock_handovers insert
+      + up to 2 more inserts (items, photos, only when either is non-empty) + 1 devices
+      `.in()` update per 200-IMEI chunk of the note (FIX 4 of the postgres-war audit -- was
+      one per IMEI). */
   async stockIssue(db, user, args) {
     requireNav(user, 'stockappr');
     requireWrite(user);
@@ -9030,7 +9096,11 @@ const FNS = {
   },
 
   /** One handover note, with its IMEIs. The desk and the report see any; an asker sees only
-      the note for their own request. */
+      the note for their own request.
+      Budget: 1 keyed stock_handovers read + 1 keyed stock_handover_items read + 1 keyed
+      stock_handover_photos read (count only); an asker (not the desk/report) pays 1 more,
+      keyed against stock_requests, to check the request is theirs. Measured 3 trips / 6 rows
+      (desk). */
   async stockHandover(db, user, args) {
     requireAnyNav(user, ['stockreq', 'stockappr', 'stockrep']);
     const id = String((args && args.id) || '').trim();
@@ -9072,7 +9142,9 @@ const FNS = {
       items: items.map(i => ({ imei: String(i.imei), condition: i.condition || '' })).sort((x, y) => (x.imei < y.imei ? -1 : 1)) };
   },
 
-  /** The photographs of one handover (SOP B.7), fetched only when somebody asks to see them. */
+  /** The photographs of one handover (SOP B.7), fetched only when somebody asks to see them.
+      Budget: 1 keyed stock_handovers read + 1 keyed stock_handover_photos read; an asker
+      pays 1 more, keyed against stock_requests. Measured 2 trips / 1 row (desk). */
   async stockPhotos(db, user, args) {
     requireAnyNav(user, ['stockreq', 'stockappr', 'stockrep']);
     const id = String((args && args.id) || '').trim();
@@ -9107,7 +9179,9 @@ const FNS = {
 
   /** THE AGING STOCK TRACKER (SOP E.3) and the distribution report (B.11), on one pane: who is
       holding what and for how long, the low-stock alert (SOP G), and every request in a period
-      with what was released against it. */
+      with what was released against it.
+      Budget: the shared stockAgingIndex (0 trips warm, ~7 on a miss) + 1 stock_requests
+      read. Measured 11 trips / 10,671 rows cold. */
   async stockReqReport(db, user, args) {
     requireNav(user, 'stockrep');
     const a = args || {};
@@ -9150,6 +9224,9 @@ const FNS = {
       } };
   },
 
+  /** STOCK MOVEMENT -- what got away after every upload, on BOTH books, checkable by date.
+      Budget: 2 tiny ordered date lookups per source + up to 4 date-keyed bounded reads.
+      Measured 7 trips / 6,023 rows -- same for ADMIN and an RSM (KNOWN_UNSCOPED). */
   async stockMovement(db, user, args) {
     requireNav(user, 'movement');
     const a = args || {};
@@ -10471,7 +10548,10 @@ const FNS = {
      RUN-ME-2026-09-17-transfers-flow.sql (sent / accepted / declined, and who is who). */
 
   /** The Send form's vocabulary: everybody a transfer can be sent to, grouped by role on the
-      page; every model the stock has ever named; and who is sending, which is always you. */
+      page; every model the stock has ever named; and who is sending, which is always you.
+      Budget: 1 access_codes read (transferParties) + 3 best-effort bounded reads
+      (stockModels: devices, old_stock, stock_audit). Measured 5 trips / 4,373 rows -- same
+      for ADMIN and an RSM (KNOWN_UNSCOPED). */
   async transferUsers(db, user, args) {
     requireNav(user, 'transfers');
     const q = K((args || {}).q);
@@ -10488,7 +10568,10 @@ const FNS = {
 
   /** THE STOCK WINDOW: what this person is holding right now -- exactly what they can send.
       A locked or enrolled handset that has not gone out on a sale, plus anything on the
-      old-stock list that is still open. The store desk and ADMIN see everybody's. */
+      old-stock list that is still open. The store desk and ADMIN see everybody's.
+      Budget: 1 devices read + the shared aux memo behind oldStockIndex (0 trips warm, ~5 on
+      a miss) + 1 fresh old_stock read. Measured 10 trips / 12,071 rows cold -- "what YOU
+      hold" still reads everybody's (KNOWN_UNSCOPED). */
   async transferStock(db, user, args) {
     requireNav(user, 'transfers');
     const a = args || {};
@@ -10526,7 +10609,8 @@ const FNS = {
       rows: shown.slice(0, 3000), truncated: Math.max(0, shown.length - 3000) };
   },
 
-  /** THE RECEIVE WINDOW: waiting for me, sent by me, and what was settled. */
+  /** THE RECEIVE WINDOW: waiting for me, sent by me, and what was settled.
+      Budget: 1 transfers read (trReadAll). Measured 1 trip / 200 rows. */
   async transferInbox(db, user, args) {
     requireNav(user, 'transfers');
     const r = await trReadAll(db);
@@ -10542,7 +10626,8 @@ const FNS = {
   },
 
   /** The register. The desk and ADMIN see every document; everybody else only the ones they
-      are a party to -- narrow columns, the signature images never travel here. */
+      are a party to -- narrow columns, the signature images never travel here.
+      Budget: 1 transfers read (trReadAll). Measured 1 trip / 200 rows. */
   async transferList(db, user, args) {
     requireNav(user, 'transfers');
     const a = args || {};
@@ -10565,7 +10650,8 @@ const FNS = {
       counts: { total: all.length, sent: n('sent'), accepted: n('accepted'), declined: n('declined') } };
   },
 
-  /** One document, in full -- the only read that ever names the signature columns. */
+  /** One document, in full -- the only read that ever names the signature columns.
+      Budget: 1 keyed transfers read (trOne). Measured 2 trips / 2 rows. */
   async transferGet(db, user, args) {
     requireNav(user, 'transfers');
     const a = args || {};
@@ -10603,7 +10689,13 @@ const FNS = {
   /* `ctx` (optional): { parties, agents, located } -- transferCreateBulk's way of sharing one
      transferParties/hoop_agents read and one locateStock sweep across every receiver in a
      paste, instead of each group's dry run and real write re-fetching all three on its own.
-     A lone Send (no ctx) is unaffected: every one of the three keeps its standalone fetch. */
+     A lone Send (no ctx) is unaffected: every one of the three keeps its standalone fetch.
+     Budget (a lone Send, no ctx): 1 access_codes read (transferParties) + 0-1 hoop_agents
+     reads (only when the pairing might be two field agents -- FIX 5) + up to 2 more,
+     keyed, when that check needs an RSM off the stock lists (stockRsmOf) + 1 bounded
+     locateStock sweep (old_stock/devices/stock_audit, per 200-IMEI chunk) + a dry run stops
+     here; a real send adds 1-2 transfers inserts (the flow/three-way fallback) + 1
+     transfer_items insert. */
   async transferCreate(db, user, args, ctx) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
@@ -10857,7 +10949,13 @@ const FNS = {
       comma, name); the list is grouped by receiver and ONE document opened per person, every
       one carrying the sender's signature. ALL OR NOTHING: every group is dry-run through
       transferCreate first -- system user, possession, the hierarchy rule -- and a list with one
-      bad line opens no documents at all, naming the lines and the people that stopped it. */
+      bad line opens no documents at all, naming the lines and the people that stopped it.
+      Budget (postgres-war FIX 5): 1 access_codes read (transferParties) + 0-1 hoop_agents
+      reads for the whole paste (lazy, same cheap gate as transferCreate) + 2 locateStock
+      sweeps total across every group's IMEIs combined (one for the dry-run pass, one FRESH
+      for the real writes) -- not per group. Each group's own transferCreate call then adds
+      0 further transferParties/hoop_agents/locateStock trips (ctx supplies all three) plus
+      its own write(s) on the real pass. */
   async transferCreateBulk(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
@@ -10963,7 +11061,11 @@ const FNS = {
       transferCreate) it is the source RSM's OWN approval -- transferSign, the same "sign
       later" a normal sender already has -- that must also be in before anything moves; if it
       is not there yet, this call records the receiver's signature and waits, and whichever
-      of the two signs SECOND is the one that actually calls trMoveStock. */
+      of the two signs SECOND is the one that actually calls trMoveStock.
+      Budget: 1 keyed transfers read (trOne) + a THREE-WAY document still waiting on the
+      source RSM: 1 update, done. Otherwise: trMoveStock (1 keyed transfer_items read + 1
+      bounded locateStock sweep + up to 2 `.in()` updates, devices/old_stock + a
+      device_events insert) + 1-2 transfers updates (the flow-column fallback). */
   async transferAccept(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
@@ -11052,7 +11154,10 @@ const FNS = {
       receiver has ALREADY accepted and was left waiting only on this approval (transferAccept
       recorded their signature but held the move), THIS signature is the one that actually
       moves the stock -- the same trMoveStock transferAccept itself calls, so it makes no
-      difference which of the two lands second. */
+      difference which of the two lands second.
+      Budget: 1 keyed transfers read (trOne) + 1 update (the ordinary case, or the three-way
+      case not yet completing). The completing three-way signature adds trMoveStock's own
+      cost (see transferAccept) + 1 more transfers update. */
   async transferSign(db, user, args) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
