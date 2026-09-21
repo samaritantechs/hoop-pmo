@@ -10600,11 +10600,15 @@ const FNS = {
       receives (a system user), a model and a price for the batch -- the price pulled off NEW
       STOCK per handset when the box is left blank -- and the sender's signature. The sender is
       the signed-in account, full stop. */
-  async transferCreate(db, user, args) {
+  /* `ctx` (optional): { parties, agents, located } -- transferCreateBulk's way of sharing one
+     transferParties/hoop_agents read and one locateStock sweep across every receiver in a
+     paste, instead of each group's dry run and real write re-fetching all three on its own.
+     A lone Send (no ctx) is unaffected: every one of the three keeps its standalone fetch. */
+  async transferCreate(db, user, args, ctx) {
     requireWrite(user); requireNav(user, 'transfers');
     const a = args || {};
     const desk = isStoreDesk(user);
-    const parties = await transferParties(db);
+    const parties = (ctx && ctx.parties) || await transferParties(db);
 
     /* WHO IS HANDING OVER: you. "sender must be current account settings" -- a typed sender
        is refused, with ONE exception: the desk naming a different SENDER *and* that sender is
@@ -10679,53 +10683,72 @@ const FNS = {
        register and the same manager-derivation the targets roll-up already uses
        (managerIndex, see "WHICH RSM AN AGENT BELONGS TO" above), so a name not in that
        roster at all (the store desk, "SUPER AGENT") is never restricted by this rule, and
-       neither is anybody who IS an RSM/country manager on either side. */
-    let agentsForRule = [];
-    try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
-    catch (e) {
-      /* Before the targets migration there is no `manager` column, and before the register
-         exists at all there is no table: the rule then reads the code's role and the stock
-         lists (below) rather than refusing every hand-off in the company with a column error. */
-      if (/manager/i.test(String((e && e.message) || ''))) {
-        try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch')); }
-        catch (e2) { if (!tableMissing(e2)) throw e2; }
-      } else if (!tableMissing(e)) throw e;
-    }
-    const mgrIdx = managerIndex(agentsForRule);
+       neither is anybody who IS an RSM/country manager on either side.
+
+       FETCHED LAZILY -- ctx.agents when transferCreateBulk already has it for every group in
+       a paste; otherwise ONLY once the cheap check below (off the access-code roles alone,
+       no read at all) says this pairing might actually be two field agents, which is the one
+       case the rule exists for. A lone Send between an RSM and an agent, or two RSMs, or
+       anybody and the desk, never touches hoop_agents at all any more. */
+    let agentsForRule = (ctx && ctx.agents) || null;
     /* WHO IS AN AGENT: the register's word where it has a row, otherwise the ACCESS CODE's role.
        The register is keyed by phone, and a name the stock lists without one holds a code
        (syncStaffFromStock) but no row -- and "no row" used to read as "not an agent", which let
        exactly those agents hand off across regions with nobody checking. */
     const tierOf = (name, codeRole) => {
-      const row = agentsForRule.find(r => nameKey(r.name) === nameKey(name));
+      const row = (agentsForRule || []).find(r => nameKey(r.name) === nameKey(name));
       if (row) return /REGIONAL|COUNTRY_SALES/.test(K(row.role).replace(/\s+/g, '_')) ? 'other' : 'agent';
       return codeRole === 'AGENT' ? 'agent' : 'other';
     };
     if (tierOf(fromName, fromRole) === 'agent' && tierOf(to.name, to.role) === 'agent') {
-      /* WHOSE AGENT: the register's manager/branch derivation first, then what the stock lists
-         say beside that agent -- the rsm column on their own handsets. No answer from either
-         means the chain of custody CANNOT be checked, and a check that cannot be made is a
-         refusal that says why, never a pass: the RSM route always works. */
-      const rsmOf = async name => nameKey(mgrIdx.of(name)) || nameKey(await stockRsmOf(db, name));
-      const fromRsm = await rsmOf(fromName);
-      const toRsm = await rsmOf(to.name);
-      if (!fromRsm || !toRsm) {
-        const who = !fromRsm ? fromName : to.name;
-        bad('Haijulikani ' + who + ' ni wakala wa RSM gani -- weka RSM wake kwenye safu ya Chaneli '
-          + 'kwenye ukurasa wa Staff, au pitisha kwa RSM au Super Agent. / It is not known which RSM ' + who
-          + ' reports to -- set their RSM in the Chaneli column on the Staff pane, or route this '
-          + 'through an RSM or Super Agent.');
+      if (agentsForRule == null) {
+        agentsForRule = [];
+        try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
+        catch (e) {
+          /* Before the targets migration there is no `manager` column, and before the register
+             exists at all there is no table: the rule then reads the code's role and the stock
+             lists (below) rather than refusing every hand-off in the company with a column error. */
+          if (/manager/i.test(String((e && e.message) || ''))) {
+            try { agentsForRule = await fetchAll(() => db.from('hoop_agents').select('name, role, branch')); }
+            catch (e2) { if (!tableMissing(e2)) throw e2; }
+          } else if (!tableMissing(e)) throw e;
+        }
       }
-      if (fromRsm !== toRsm) bad('Mawakala wawili wa RSM tofauti hawawezi '
-        + 'kuhamishiana moja kwa moja -- pitisha kwa RSM au Super Agent. / Two agents under '
-        + 'different RSMs cannot transfer directly to each other -- route this through an RSM '
-        + 'or Super Agent instead.');
+      /* RE-SETTLED now the register (if any) is actually in hand: a row can push a pairing
+         OUT of 'agent' tier just as easily as the cheap code-role check can push one IN --
+         this only ever widens the gate the cheap check opened, never the other way round, so
+         a pairing the cheap check ruled out is never re-examined here (and never needs to be:
+         nothing a fetch could show would turn "not two agents by their own codes" into "two
+         agents" for the rule's purposes). */
+      if (tierOf(fromName, fromRole) === 'agent' && tierOf(to.name, to.role) === 'agent') {
+        const mgrIdx = managerIndex(agentsForRule);
+        /* WHOSE AGENT: the register's manager/branch derivation first, then what the stock
+           lists say beside that agent -- the rsm column on their own handsets. No answer from
+           either means the chain of custody CANNOT be checked, and a check that cannot be
+           made is a refusal that says why, never a pass: the RSM route always works. */
+        const rsmOf = async name => nameKey(mgrIdx.of(name)) || nameKey(await stockRsmOf(db, name));
+        const fromRsm = await rsmOf(fromName);
+        const toRsm = await rsmOf(to.name);
+        if (!fromRsm || !toRsm) {
+          const who = !fromRsm ? fromName : to.name;
+          bad('Haijulikani ' + who + ' ni wakala wa RSM gani -- weka RSM wake kwenye safu ya Chaneli '
+            + 'kwenye ukurasa wa Staff, au pitisha kwa RSM au Super Agent. / It is not known which RSM ' + who
+            + ' reports to -- set their RSM in the Chaneli column on the Staff pane, or route this '
+            + 'through an RSM or Super Agent.');
+        }
+        if (fromRsm !== toRsm) bad('Mawakala wawili wa RSM tofauti hawawezi '
+          + 'kuhamishiana moja kwa moja -- pitisha kwa RSM au Super Agent. / Two agents under '
+          + 'different RSMs cannot transfer directly to each other -- route this through an RSM '
+          + 'or Super Agent instead.');
+      }
     }
 
     /* POSSESSION. You send what is in your hands. The desk is exempt -- the warehouse's stock
        is written under SUPER AGENT and the desk is that name -- but even the desk's document
-       records where each serial was, so the printed copy says whose hands it left. */
-    const where = await locateStock(db, imeis);
+       records where each serial was, so the printed copy says whose hands it left.
+       ctx.located, when given, is transferCreateBulk's own ONE combined sweep across every
+       group's IMEIs for this phase (dry-run or real); a lone Send still does its own. */
+    const where = (ctx && ctx.located) || await locateStock(db, imeis);
     if (!desk) {
       const notMine = imeis.filter(i => {
         const w = where.get(i);
@@ -10873,19 +10896,58 @@ const FNS = {
     }
     const shared = { item: a.item, price: a.price, note: a.note, signature: a.signature };
 
+    /* THREE READS SHARED ACROSS EVERY GROUP, instead of each group's dry run AND its real
+       write separately re-fetching all three -- a fifteen-receiver paste used to cost fifteen
+       transferParties reads, fifteen unconditional hoop_agents reads and thirty locateStock
+       sweeps for exactly the same three answers every time.
+       -----------------------------------------------------------------------------------
+       transferParties: once, for every group.
+       hoop_agents (the hierarchy rule): once, and only if some group's sender+receiver pair
+         could plausibly BOTH be field agents by their access-code role alone -- the cheap
+         check transferCreate itself now does per group (see there); if nothing here even
+         looks like two agents, hoop_agents is never read at all.
+       locateStock: once per PHASE across every group's IMEIs combined, not once per group --
+         one sweep for the whole dry-run pass, and a SECOND, FRESH sweep for the real writes,
+         because the possession check right before stock actually moves has to read NOW, not
+         whatever the dry run saw a moment (and, for group fourteen, several writes) ago. */
+    const parties = await transferParties(db);
+    const signedInRole = roleWord(user);
+    const needsHierarchy = signedInRole === 'AGENT'
+      && [...groups.values()].some(g => { const p = parties.get(nameKey(g.toName)); return p && K(p.role) === 'AGENT'; });
+    let agents = null;
+    if (needsHierarchy) {
+      agents = [];
+      try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch, manager')); }
+      catch (e) {
+        if (/manager/i.test(String((e && e.message) || ''))) {
+          try { agents = await fetchAll(() => db.from('hoop_agents').select('name, role, branch')); }
+          catch (e2) { if (!tableMissing(e2)) throw e2; }
+        } else if (!tableMissing(e)) throw e;
+      }
+    }
+    const allImeis = [...new Set(rows.map(r => r.imei))];
+
     // EVERY GROUP IS CHECKED BEFORE ANY IS OPENED.
+    const dryLocated = await locateStock(db, allImeis);
     const problems = [];
     for (const g of groups.values()) {
-      try { await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis, dryRun: true })); }
+      try {
+        await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis, dryRun: true }),
+          { parties, agents, located: dryLocated });
+      }
       catch (e) { problems.push(g.toName + ': ' + String((e && e.message) || e).replace(/<[^>]+>/g, '')); }
     }
     if (problems.length) {
       bad('Orodha ina makosa — hakuna kilichotumwa. / The list has problems — nothing was sent. '
         + problems.slice(0, 6).join(' | ') + (problems.length > 6 ? ' | …' : ''));
     }
+    // A FRESH combined read for the real sweep: stock can move between the dry run and here
+    // (another desk, another tab), and the possession check on the actual write must see it.
+    const realLocated = await locateStock(db, allImeis);
     const created = [];
     for (const g of groups.values()) {
-      const r = await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis }));
+      const r = await FNS.transferCreate(db, user, Object.assign({}, shared, { toName: g.toName, imeis: g.imeis }),
+        { parties, agents, located: realLocated });
       created.push({ toName: g.toName, id: r.id, ref: r.ref, count: g.imeis.length, unknown: r.unknown || 0 });
     }
     return { ok: true, documents: created.length, serials: rows.length, created };

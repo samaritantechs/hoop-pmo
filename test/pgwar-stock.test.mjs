@@ -239,6 +239,50 @@ test('fix4: a handover of more than 200 IMEIs moves them in ceil(N/200) trips', 
 });
 
 /* =====================================================================================
+   FIX 5 -- transferCreateBulk shares transferParties, hoop_agents and locateStock across
+   every receiver in a paste, instead of each group's dry run and real write re-fetching all
+   three on their own.
+   ===================================================================================== */
+
+test('fix5: a bulk send to 15 receivers costs O(1) transferParties/hoop_agents reads and 2 locateStock sweeps', async () => {
+  const N = 15;
+  const imei = i => '3520010' + String(1000000 + i).slice(-9);
+  // Fifteen agents, all under RSM ONE -- so the hierarchy rule's chain-of-custody check
+  // passes for every one of them, and hoop_agents genuinely gets read (proving it costs
+  // ONE trip, not fifteen), rather than the check finding nothing to do.
+  const agents = Array.from({ length: N }, (_, i) => ({
+    phone: '07110000' + String(i).padStart(2, '0'), name: 'BULK AGENT ' + String(i + 1).padStart(2, '0'),
+    role: 'Field_Officer', branch: 'BRANCH01', manager: 'RSM ONE' }));
+  const codes = agents.map((a, i) => ({ code: 'B' + i, name: a.name, role: 'AGENT' }));
+  const devices = Array.from({ length: N }, (_, i) => ({ imei: imei(i), item: 'A07', holder: 'AGENT ONE', state: 'enrolled' }));
+  const lines = Array.from({ length: N }, (_, i) => imei(i) + '\t' + agents[i].name).join('\n');
+  const c = counting(book({
+    devices,
+    hoop_agents: [
+      { phone: '0700000001', name: 'RSM ONE', role: 'Regional_Manager', branch: 'BRANCH01', manager: null },
+      { phone: '0700000011', name: 'AGENT ONE', role: 'Field_Officer', branch: 'BRANCH01', manager: 'RSM ONE' },
+      ...agents,
+    ],
+    access_codes: [
+      { code: 'R1', name: 'RSM ONE', role: 'RSM' }, { code: 'S1', name: 'SIPHO', role: 'STORE' },
+      { code: 'A1', name: 'PETER ADMIN', role: 'ADMIN' }, { code: 'AG1', name: 'AGENT ONE', role: 'AGENT' },
+      ...codes,
+    ],
+  }));
+  const AGENT_ONE = { code: 'AG1', name: 'AGENT ONE', role: 'AGENT', teams: null, tabs: ['transfers'], readOnly: false };
+  const r = await _FNS.transferCreateBulk(c.db, AGENT_ONE, { text: lines });
+  assert.equal(r.documents, N, 'one document per receiver');
+  assert.equal(r.serials, N);
+  assert.equal(c.tableTrips('access_codes'), 1, `transferParties read access_codes ${c.tableTrips('access_codes')} times (want 1)`);
+  assert.equal(c.tableTrips('hoop_agents'), 1, `the hierarchy rule read hoop_agents ${c.tableTrips('hoop_agents')} times (want 1)`);
+  // Two combined sweeps across every group's IMEIs: one for the dry-run pass, one FRESH one
+  // for the real writes -- never one per group (30 for 15 groups, as it cost before).
+  // locateStock itself reads old_stock, devices and stock_audit per 200-IMEI slice; with 15
+  // IMEIs that is one slice, so 3 trips per sweep, 6 total, not 3 x 15 x 2 = 90.
+  assert.equal(c.tableTrips('old_stock'), 2, `locateStock's old_stock read ran ${c.tableTrips('old_stock')} times (want 2 -- one per phase)`);
+});
+
+/* =====================================================================================
    test/old-stock.test.mjs, test/stock-requests.test.mjs, test/new-stock.test.mjs are the
    regression net for these three fixes and are run unmodified (bar the three explicit
    cache-bust calls new-stock.test.mjs now needs -- see its own header note there); nothing
