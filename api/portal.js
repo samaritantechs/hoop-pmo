@@ -2912,6 +2912,8 @@ async function loanBranches(db) {
     }
     return [...places];
   });
+}
+
 /** THE FEEDS BEHIND newStock's join, memoised 5 minutes (postgres-war FIX 3; trendCache-style,
     see stockAccount ~4046): watu_loans, hoop_sales, hoop_agents, hoop_aged_stock and old_stock
     are Sipho's and Watu's own books, and none of them holds a LIVE fact -- they change on an
