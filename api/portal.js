@@ -3730,7 +3730,14 @@ const FNS = {
       last_comment: a.comment || null, comment_by: user.name, comment_at: now, updated_at: now,
     }).eq('imei', ref);
     if (uErr) throw new Error(uErr.message);
-    return { ok: true, imei: ref, savedAt: now };
+    /* THE NEW ROW RIDES BACK ON THE WRITE. The drawer used to follow this with its own
+       srv('customerComments') just to learn the one row it had itself just inserted --
+       exactly the shape customerComments already returns per item, so the client can
+       prepend it to the history it is already holding instead of asking the server to
+       read the whole list back. */
+    return { ok: true, imei: ref, savedAt: now,
+      comment: a.comment || null, fu_status: a.fu || null, promise_date: a.promiseDate || null,
+      created_by: user.name, created_at: now };
   },
 
   async customerComments(db, user, args) {

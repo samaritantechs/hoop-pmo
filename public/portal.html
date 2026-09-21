@@ -8984,18 +8984,32 @@ function openCust(c){
       +'<div class="row hide" id="cmPromRow"><input class="inp" type="date" id="cmDate"><input class="inp" type="text" id="cmAmt" placeholder="Kiasi / amount (TZS)" inputmode="numeric"></div>'
       +'<div class="fld"><label>Maoni / comment</label><textarea id="cmTxt" rows="3"></textarea></div>'
       +'<button class="btn w" id="cmSave">Hifadhi maoni / Save</button>':''));
+  /* PULLED OUT so a freshly-saved comment can be drawn the SAME way as one hist() fetched --
+     one row shape, one place it is built, whichever of the two handed it the row. */
+  function custHistRow_(r){
+    return '<div style="background:var(--b50);border-radius:9px;padding:8px 11px;font-size:13px">'
+      +(r.fu_status?'<span class="chip">'+esc(r.fu_status)+'</span> ':'')
+      +(r.promise_date?'<span class="chip ok">ahadi '+esc(String(r.promise_date).slice(0,10))+'</span> ':'')
+      +esc(r.comment||'')
+      +'<div class="mut" style="font-size:10.5px;margin-top:3px">'+esc(r.created_by||'')+' · '+esc(String(r.created_at||'').slice(0,16).replace('T',' '))+'</div></div>';
+  }
   function hist(){
     srv('customerComments',{imei:c.imei}).then(function(x){
       var it=x.items||[];
       $('#custHist').innerHTML=!it.length?'<div class="mut">Hakuna maoni bado — wa kwanza kuandika.</div>'
-        :'<div style="display:flex;flex-direction:column;gap:8px">'+it.map(function(r){
-          return '<div style="background:var(--b50);border-radius:9px;padding:8px 11px;font-size:13px">'
-            +(r.fu_status?'<span class="chip">'+esc(r.fu_status)+'</span> ':'')
-            +(r.promise_date?'<span class="chip ok">ahadi '+esc(String(r.promise_date).slice(0,10))+'</span> ':'')
-            +esc(r.comment||'')
-            +'<div class="mut" style="font-size:10.5px;margin-top:3px">'+esc(r.created_by||'')+' · '+esc(String(r.created_at||'').slice(0,16).replace('T',' '))+'</div></div>';
-        }).join('')+'</div>';
+        :'<div id="custHistList" style="display:flex;flex-direction:column;gap:8px">'+it.map(custHistRow_).join('')+'</div>';
     }).catch(function(e){ $('#custHist').innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
+  }
+  /* SAVING PREPENDS, IT DOES NOT RE-FETCH. portalAddComment now hands back exactly the row
+     customerComments would have -- comment, fu_status, promise_date, created_by, created_at
+     -- so the save's own response is enough to draw the new line, newest first, without a
+     second srv('customerComments') trip for a list the client already has in front of it. */
+  function histPrepend_(item){
+    var list=$('#custHistList');
+    if(list){ list.insertAdjacentHTML('afterbegin',custHistRow_(item)); return; }
+    // The panel was showing "Hakuna maoni bado" (or failed to load) -- this save is the
+    // first row either way, so the list starts fresh rather than trying to prepend into it.
+    var box=$('#custHist'); if(box) box.innerHTML='<div id="custHistList" style="display:flex;flex-direction:column;gap:8px">'+custHistRow_(item)+'</div>';
   }
   hist();
   if(!canW) return;
@@ -9014,10 +9028,10 @@ function openCust(c){
       promiseDate:needP?($('#cmDate').value||null):null,
       promiseAmt:needP?(Number(String($('#cmAmt').value).replace(/\D/g,''))||null):null,
       comment:txt||null})
-      .then(function(){
+      .then(function(item){
         toast('Imehifadhiwa.');
         c.fu=fu||c.fu; $('#cmTxt').value='';
-        hist();
+        histPrepend_(item);
       })
       .catch(function(e){ toast(String(e.message||e),true); })
       .then(function(){ var b=$('#cmSave'); if(b) b.disabled=false; });

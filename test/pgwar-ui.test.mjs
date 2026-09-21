@@ -105,3 +105,27 @@ test('dashboardWeek itself requires the dashboard nav', async () => {
   const NONE = { code: 'Z', name: 'Nobody', role: 'MANAGER', teams: null, tabs: ['fraud'], readOnly: false };
   await assert.rejects(() => _FNS.dashboardWeek(dashboardBook(), NONE, {}), /dashboard/);
 });
+
+/* =========================================================================================
+   FIX 3 -- portalAddComment hands back the row it just wrote, exactly as customerComments
+   would have, so the customer drawer can prepend it instead of re-fetching the whole history
+   for the one line it already knows it just saved.
+   ========================================================================================= */
+test('portalAddComment returns the new comment\'s own fields, not just ok/imei', async () => {
+  const d = fakeDb({ followup_status: [], followup_comments: [] });
+  const r = await _FNS.portalAddComment(d, ADMIN, { imei: '123', team: null, name: 'A Customer',
+    fu: 'Ameahidi', promiseDate: '2026-09-25', comment: 'Atalipa Ijumaa' });
+  assert.equal(r.ok, true);
+  assert.equal(r.comment, 'Atalipa Ijumaa');
+  assert.equal(r.fu_status, 'Ameahidi');
+  assert.equal(r.promise_date, '2026-09-25');
+  assert.equal(r.created_by, 'Peter', 'the actor is the access code\'s own name');
+  assert.ok(r.created_at, 'a timestamp the row markup can print, same as customerComments rows carry');
+
+  // And it is exactly what customerComments itself would say the row now looks like.
+  const list = await _FNS.customerComments(d, ADMIN, { imei: '123' });
+  assert.equal(list.items.length, 1);
+  assert.equal(list.items[0].comment, r.comment);
+  assert.equal(list.items[0].fu_status, r.fu_status);
+  assert.equal(list.items[0].created_by, r.created_by);
+});
