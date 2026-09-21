@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { supabase, fetchAll } from './_lib/supabase.js';
-import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole, USER_TABS, EXTRA_TABS } from './_lib/auth.js';
+import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole, USER_TABS, EXTRA_TABS,
+  clearRolesCache } from './_lib/auth.js';
+import { clearSystemOpenCache } from './_lib/system-gate.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey, addDaysKey, weekMondayKey, TZ_OFFSET_MS } from './_lib/time.js';
 import { sendMail, noticeHtml } from './_lib/mail.js';
@@ -18,6 +20,10 @@ import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
    payload. A read-only code (AUDITOR) sees everything and changes nothing.
 
    THE POSTGRES BUDGET, warm, per fn:
+     door       every fn below sits behind gatedUser(code): 1 access_codes read (exact match,
+                THE DOOR part 1 in auth.js), the roles read memoised 30s (roleTabsOf), the
+                system-open read memoised 30s (system-gate.js) -- so a request arriving inside
+                both windows costs this pane exactly the one access_codes trip, not three.
      boot       auth+gate (cached) + summary (2-min cache; miss = 3 scoped reads)
                 + 1 teams read
      report     3 reads, date-bounded + team-scoped at the database (call-core's own)
@@ -9391,7 +9397,9 @@ const FNS = {
   /** A role leaves only when NOBODY holds it -- reassign the codes first. A deleted
       suggested-set name also lands on ROLES_HIDDEN (a settings row this fn alone writes;
       it sits outside settingSet's whitelist) or the next read would resurrect it.
-      Budget: 1 bounded codes read + 1 keyed delete + 1 keyed read + 1 keyed write. */
+      Budget: 1 bounded codes read + 1 keyed delete + 1 keyed read + 1 keyed write, plus
+      clearRolesCache(db) -- no trip of its own, an in-memory drop so the next signed-in
+      request sees this role gone rather than waiting out the 30s memo (auth.js). */
   async deleteRole(db, user, args) {
     requireWrite(user); requireNav(user, 'codes');
     const role = K(args && args.role);
@@ -9405,6 +9413,11 @@ const FNS = {
     }
     const { error } = await db.from('roles').delete().eq('role', role);
     if (error) throw new Error(error.message);
+    /* THE READ EVERY OTHER REQUEST TRUSTS FOR THIRTY SECONDS (auth.js's roleTabsOf) now knows
+       something that just became false: this role no longer has a row at all. Left uncleared,
+       whoever is still holding it would keep their OLD tabs for up to half a minute after the
+       delete -- not wrong forever, but wrong right when an admin is watching to confirm it. */
+    clearRolesCache(db);
     const { data } = await db.from('settings').select('value').eq('key', 'ROLES_HIDDEN').maybeSingle();
     let hidden = [];
     try { hidden = JSON.parse((data && data.value) || '[]') || []; } catch (e) { hidden = []; }
@@ -9416,7 +9429,10 @@ const FNS = {
   },
 
   /** A role is a name plus the doors it opens. Tabs come from a fixed vocabulary; every
-      code carrying the role inherits them at sign-in (auth.js resolveTabs). */
+      code carrying the role inherits them at sign-in (auth.js resolveTabs).
+      Budget: 1 keyed upsert, plus clearRolesCache(db) -- no trip of its own, an in-memory
+      drop so the admin who just ticked a box sees it take on their very next request rather
+      than waiting out the roles memo's 30s TTL (auth.js). */
   async saveRole(db, user, args) {
     requireWrite(user); requireNav(user, 'codes');
     const role = K(args && args.role);
@@ -9431,6 +9447,10 @@ const FNS = {
       .map(t => String(t).toLowerCase()).filter(t => ALLOWED.has(t));
     const { error } = await db.from('roles').upsert({ role, tabs }, { onConflict: 'role' });
     if (error) throw new Error(error.message);
+    /* Same reason deleteRole clears it: the roles memo (auth.js's roleTabsOf) is trusted for
+       thirty seconds by every request that resolves a user, and the admin who just ticked a
+       box is usually the next person to look -- they should see it take, not wait out a TTL. */
+    clearRolesCache(db);
     return { ok: true, role, tabs };
   },
 
@@ -9629,6 +9649,9 @@ const FNS = {
       settings: EDITABLE_SETTINGS.map(k => ({ key: k, value: by[k] == null ? '' : by[k] })) };
   },
 
+  /** Budget: 1 keyed upsert, plus, only when key is SYSTEM_OPEN, clearSystemOpenCache(db) --
+      no trip of its own, an in-memory drop so the admin who just closed the system sees it
+      take effect immediately rather than waiting out isSystemOpen's 30s TTL. */
   async settingSet(db, user, args) {
     requireWrite(user); requireSettings(user);
     const key = K(args && args.key);

@@ -22,6 +22,14 @@ import { noteSignin, outcomeOf, ipOf, uaOf } from './_lib/signin.js';
    each chunked at 1000 rows/statement. Last slice adds 1 settings upsert (DATA_VERSION)
    and, for a Watu deck, 3 HEAD counts over followup_status (deckStats) -- head:true, so
    they transfer no rows at all and run once per upload rather than once per slice.
+   THIS LINE USED TO BE WRONG. gatedUser(code) also read the roles table fresh on every single
+   slice of every upload -- an un-cached third read this comment never counted -- because
+   THE DOOR itself paid for a second access_codes trip on every ordinary, correctly-typed sign
+   in (caseInsensitiveCode ran unconditionally after the exact match already answered). Both
+   are fixed in auth.js: the exact match is skipped past when it already won, and the roles
+   read is memoised 30s the same way system-gate.js's system-open read already was -- so "1
+   auth read + 1 gate read (cached 30s)" is now the true cost of every slice after the first
+   one in a batch, not a rounding-down of it.
    Row bounds: every write is bounded by the file's own row count; nothing here reads the
    register's ROWS back. No read is repeated across slices; nothing is fetched to be
    merged -- the header-presence upsert IS the merge.
