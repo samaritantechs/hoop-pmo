@@ -3431,6 +3431,48 @@ const FNS = {
     return { ...value, cached: false };
   },
 
+  /* =====================================================================================
+     ONE WEEK CHANGE, ONE TRIP -- the dashboard used to be four.
+
+       landing fired lockedTrend + recoveryWeek + (salesWeek if scorecards) + (stockAccount
+       if stock) as four separate POSTs, every one of them paying the door (auth + gate
+       reads) before its own read even starts; the week arrows then refired all four; and
+       recoveryWeek was fetched TWICE more, once each by drawCreditRecovery and
+       drawRecoveryTrend, for the identical week.
+
+     This does not recompute anything -- it calls the four existing FNS the way the client
+     used to, under the SAME nav gates each one already enforces, and hands back whatever
+     they returned. ONE DEFINITION of each figure stays true: lockedTrend, recoveryWeek,
+     salesWeek and stockAccount are the only place any of these numbers is computed, this
+     just stops asking for them four separate times. Each still rides its own five-minute
+     trendCache entry, so a second dashboardWeek call in that window is nearly free.
+
+     scorecards and stock are gated here rather than left to throw, because a code holding
+     only `dashboard` is meant to see a card missing, not an error string where it should
+     be -- the exact reason salesWeek/stockAccount are never called for a nav the code does
+     not hold. Reads navsFor(user), the one list requireNav itself reads, so this can never
+     drift into granting a pane requireNav would refuse.
+
+     NOT folded into boot: boot's summary is a one-day snapshot and boot is also called from
+     the team-code mint/rotate chain, which has nothing to do with a week of dashboard
+     charts. */
+  async dashboardWeek(db, user, args) {
+    requireNav(user, 'dashboard');
+    const have = navsFor(user);
+    const week = String((args && args.week) || '').slice(0, 10);
+    // The same arithmetic drawDashStock used to do on the client (mondayOf_ + addDays_(…,6))
+    // -- "the book as it stood at the end of that week" -- so an explicit week asks
+    // stockAccount for the same day it always did, and an empty one still means "latest".
+    const stockArgs = /^\d{4}-\d{2}-\d{2}$/.test(week) ? { asOf: dayShift(mondayOf(week), 6) } : {};
+    const [trend, recovery, sales, stock] = await Promise.all([
+      FNS.lockedTrend(db, user, args),
+      FNS.recoveryWeek(db, user, args),
+      have.includes('scorecards') ? FNS.salesWeek(db, user, args) : Promise.resolve(null),
+      have.includes('stock') ? FNS.stockAccount(db, user, stockArgs) : Promise.resolve(null),
+    ]);
+    return { ok: true, trend, recovery, sales, stock };
+  },
+
   /* RECOVERY -- who came back after our calls. The newest two uploads, diffed per IMEI:
      paid for the first time, reconnected (days_offline fell), or sank deeper. */
   async recovery(db, user) {

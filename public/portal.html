@@ -2028,46 +2028,44 @@ function hasNav(k){ return (BOOT.navs||[]).indexOf(k)>=0; }
    Each is the headline plus the ONE number that means somebody has to do something: the
    week against its target, and how much stock nobody can account for. Everything else
    stays in the pane, one click away, where there is room to pivot it four ways. */
-function drawDashSales(){
-  var box=$('#dashSalesBox'); if(!box) return;
-  // The week the board is standing on -- not "whatever week has sales", which is what an
-  // empty argument asked for and is how this card used to disagree with the two beside it.
-  srv('salesWeek',{week:RECWEEK}).then(function(d){
-    var b=$('#dashSalesBox'); if(!b) return;
-    var c=d.company||{}, n=c.count||0, amt=c.amount||0;
-    var tgt=d.weekTarget||null;
-    /* AGAINST THE AMOUNT, NOT THE COUNT. weekTarget is TZS (SALES_DAILY_TARGET x 7) and
-       `n` is a number of handsets, so subtracting one from the other compared shillings to
-       phones: fourteen sold against a 21,000,000 target read as "20,999,986 pungufu" and
-       painted red every single week, whatever the team did. drawSalesPerf compares amounts
-       throughout; this is the same comparison. */
-    var over=tgt?(amt-tgt):null;
-    var pctOfTarget=tgt?Math.round(100*amt/tgt):null;
-    // All three open Mauzo, where the day-by-day board and the per-agent pivots live.
-    var toSales=function(){ goTab('sales'); };
-    b.innerHTML='<div class="tiles" style="margin-bottom:8px">'
-      +tile('Simu zimeuzwa',money(n),esc(d.from||'')+' → '+esc(d.to||''),
-        { go:toSales, cta:'mauzo ›' })
-      +tile('Thamani',money(amt),'TZS',{ go:toSales, cta:'mauzo ›' })
-      /* THE PERFORMANCE IS THE HEADLINE, not the goal. Printing the target big and the
-         delta small put the number nobody can act on where the eye lands first. */
-      +(tgt
-        ? tile('Dhidi ya lengo',pctOfTarget+'%',
-            (over>=0?'+'+money(over):'−'+money(Math.abs(over)))+' / lengo '+money(tgt),
-            { color:(over>=0?'ok':'bad'), go:toSales, cta:'mauzo ›' })
-        /* No target set is a SETTINGS problem, so this one door leads there instead --
-           telling somebody to "weka SALES_DAILY_TARGET" without saying where is half an
-           instruction. Only for a code that can actually open Settings. */
-        : tile('Dhidi ya lengo','—','weka SALES_DAILY_TARGET',
-            hasNav('settings')?{ go:function(){ goTab('settings'); }, cta:'settings ›' }:{}))
-      +'</div>'
-      // Said plainly rather than shown as "this week" -- see the Monday problem.
-      +(d.fellBack?'<div class="note">Wiki hii bado haina mauzo — hii ni wiki iliyopita. '
-        +'/ Nothing uploaded for this week yet; showing the last week that has sales.</div>':'')
-      +salesWeekChart_(d)
-      +'<button class="btn sm ghost" onclick="goTab(\'sales\')">Fungua Mauzo / Open sales</button>';
-    wireTiles(b);
-  }).catch(function(e){ var b=$('#dashSalesBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
+/* Fed the `sales` half of dashWeekRedraw's one dashboardWeek trip -- no fetch of its own.
+   Only ever called for a code holding 'scorecards' (dashWeekRedraw's own gate mirrors the
+   server's), so `d` is null exactly when the card is not drawn at all. */
+function drawDashSales(d){
+  var b=$('#dashSalesBox'); if(!b||!d) return;
+  var c=d.company||{}, n=c.count||0, amt=c.amount||0;
+  var tgt=d.weekTarget||null;
+  /* AGAINST THE AMOUNT, NOT THE COUNT. weekTarget is TZS (SALES_DAILY_TARGET x 7) and
+     `n` is a number of handsets, so subtracting one from the other compared shillings to
+     phones: fourteen sold against a 21,000,000 target read as "20,999,986 pungufu" and
+     painted red every single week, whatever the team did. drawSalesPerf compares amounts
+     throughout; this is the same comparison. */
+  var over=tgt?(amt-tgt):null;
+  var pctOfTarget=tgt?Math.round(100*amt/tgt):null;
+  // All three open Mauzo, where the day-by-day board and the per-agent pivots live.
+  var toSales=function(){ goTab('sales'); };
+  b.innerHTML='<div class="tiles" style="margin-bottom:8px">'
+    +tile('Simu zimeuzwa',money(n),esc(d.from||'')+' → '+esc(d.to||''),
+      { go:toSales, cta:'mauzo ›' })
+    +tile('Thamani',money(amt),'TZS',{ go:toSales, cta:'mauzo ›' })
+    /* THE PERFORMANCE IS THE HEADLINE, not the goal. Printing the target big and the
+       delta small put the number nobody can act on where the eye lands first. */
+    +(tgt
+      ? tile('Dhidi ya lengo',pctOfTarget+'%',
+          (over>=0?'+'+money(over):'−'+money(Math.abs(over)))+' / lengo '+money(tgt),
+          { color:(over>=0?'ok':'bad'), go:toSales, cta:'mauzo ›' })
+      /* No target set is a SETTINGS problem, so this one door leads there instead --
+         telling somebody to "weka SALES_DAILY_TARGET" without saying where is half an
+         instruction. Only for a code that can actually open Settings. */
+      : tile('Dhidi ya lengo','—','weka SALES_DAILY_TARGET',
+          hasNav('settings')?{ go:function(){ goTab('settings'); }, cta:'settings ›' }:{}))
+    +'</div>'
+    // Said plainly rather than shown as "this week" -- see the Monday problem.
+    +(d.fellBack?'<div class="note">Wiki hii bado haina mauzo — hii ni wiki iliyopita. '
+      +'/ Nothing uploaded for this week yet; showing the last week that has sales.</div>':'')
+    +salesWeekChart_(d)
+    +'<button class="btn sm ghost" onclick="goTab(\'sales\')">Fungua Mauzo / Open sales</button>';
+  wireTiles(b);
 }
 /** TZS at a glance. A week's takings run to eight digits, and eight digits above a bar is a
     label nobody reads and every neighbour collides with. */
@@ -2228,39 +2226,37 @@ function stockSplitBars_(d,t){
   return '<div style="margin:2px 0 8px">'+out+'</div>';
 }
 
-function drawDashStock(){
-  var box=$('#dashStockBox'); if(!box) return;
-  /* The stock book as it stood at the END of the week on screen. Stock has no series to
-     trend -- it is counted whenever Sipho's report is uploaded, not daily -- so following
-     the week means answering "how did the book stand then", which stockAccount resolves
-     backward to the newest report at or before that date. */
-  srv('stockAccount', RECWEEK?{asOf:addDays_(mondayOf_(RECWEEK),6)}:{}).then(function(d){
-    var b=$('#dashStockBox'); if(!b) return;
-    var t=(d.company&&d.company.totals)||{};
-    if(!d.asOf){
-      b.innerHTML='<div class="mut">Hakuna ripoti ya stock bado. / No stock report uploaded yet.</div>';
-      return;
-    }
-    var un=t.unaccounted||0;
-    /* Each opens Stock accountability with its own column brought to the top, so the tile
-       lands on WHO rather than on the same total again one screen further down. */
-    var toAcct=function(col){ return function(){ goWith('acct',function(){ STOCKACCT.sort=col; }); }; };
-    b.innerHTML='<div class="tiles" style="margin-bottom:8px">'
-      +tile('Zilizopo',money(t.held||0),esc(String(d.asOf).slice(0,10)),
-        { go:toAcct('held'), cta:'nani anazo ›' })
-      +tile('Hazijulikani',money(un),'zimeondoka bila maelezo',
-        { color:(un?'bad':''), go:toAcct('unaccounted'), cta:'nani anazo ›' })
-      +tile('Zimekaa muda',money(t.stale||0),'zaidi ya siku '+money(d.staleDays||0),
-        { go:toAcct('stale'), cta:'nani anazo ›' })
-      +'</div>'
-      +stockSplitBars_(d,t)
-      /* Not the same as zero unaccounted, and it must not read like it: a departure nobody
-         could check is an open question, not a clean book. */
-      +(d.notChecked?'<div class="note">'+money(d.notChecked)+' hazikuweza kukaguliwa. '
-        +'/ could not be checked against the sales book or Watu.</div>':'')
-      +'<button class="btn sm ghost" onclick="goTab(\'acct\')">Fungua uwajibikaji / Open accountability</button>';
-    wireTiles(b);
-  }).catch(function(e){ var b=$('#dashStockBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
+/* Fed the `stock` half of dashWeekRedraw's one dashboardWeek trip -- no fetch of its own.
+   dashboardWeek asks stockAccount for the book as it stood at the END of the week on
+   screen (Stock has no daily series to trend, only whenever Sipho's report lands, so
+   "follow the week" means "how did the book stand then"), the same asOf this card used to
+   compute itself. Only ever called for a code holding 'stock'; `d` is null otherwise. */
+function drawDashStock(d){
+  var b=$('#dashStockBox'); if(!b||!d) return;
+  var t=(d.company&&d.company.totals)||{};
+  if(!d.asOf){
+    b.innerHTML='<div class="mut">Hakuna ripoti ya stock bado. / No stock report uploaded yet.</div>';
+    return;
+  }
+  var un=t.unaccounted||0;
+  /* Each opens Stock accountability with its own column brought to the top, so the tile
+     lands on WHO rather than on the same total again one screen further down. */
+  var toAcct=function(col){ return function(){ goWith('acct',function(){ STOCKACCT.sort=col; }); }; };
+  b.innerHTML='<div class="tiles" style="margin-bottom:8px">'
+    +tile('Zilizopo',money(t.held||0),esc(String(d.asOf).slice(0,10)),
+      { go:toAcct('held'), cta:'nani anazo ›' })
+    +tile('Hazijulikani',money(un),'zimeondoka bila maelezo',
+      { color:(un?'bad':''), go:toAcct('unaccounted'), cta:'nani anazo ›' })
+    +tile('Zimekaa muda',money(t.stale||0),'zaidi ya siku '+money(d.staleDays||0),
+      { go:toAcct('stale'), cta:'nani anazo ›' })
+    +'</div>'
+    +stockSplitBars_(d,t)
+    /* Not the same as zero unaccounted, and it must not read like it: a departure nobody
+       could check is an open question, not a clean book. */
+    +(d.notChecked?'<div class="note">'+money(d.notChecked)+' hazikuweza kukaguliwa. '
+      +'/ could not be checked against the sales book or Watu.</div>':'')
+    +'<button class="btn sm ghost" onclick="goTab(\'acct\')">Fungua uwajibikaji / Open accountability</button>';
+  wireTiles(b);
 }
 
 /* ===================================================================================
@@ -2306,17 +2302,35 @@ function addDays_(iso,n){
   return d.toISOString().slice(0,10);
 }
 /** Redraw every card the week governs -- in ONE place, so a card added later cannot quietly
-    go on showing a different week from the rest of the board. */
+    go on showing a different week from the rest of the board.
+
+    ONE TRIP, not five. This used to fire lockedTrend, recoveryWeek, salesWeek and
+    stockAccount as four separate srv() calls -- every one of them paying the door (auth +
+    gate reads) before its own read even started -- and recoveryWeek a FIFTH time, because
+    drawCreditRecovery and drawRecoveryTrend each fetched their own copy of it. dashboardWeek
+    runs the same four FNS this page used to call directly, under their own nav gates, in
+    one Promise.all on the server, and hands back the same shapes each of those calls would
+    have -- so a week change is one round trip however many cards are on screen for it. */
 function dashWeekRedraw(){
-  /* Every one of these guards on its own container and returns quietly when it is not on
-     screen, so this is also the Recovery pane's redraw -- ONE path for the whole week,
-     rather than two lists that drift until half the screen is showing a different week. */
+  /* The bar itself is drawn from client arithmetic, before anything comes back -- see its
+     own comment -- so it never waits on the network. */
   drawDashWeekBar();
-  drawTrend();
-  drawCreditRecovery();
-  drawRecoveryTrend();
-  if(hasNav('scorecards')) drawDashSales();
-  if(hasNav('stock')) drawDashStock();
+  srv('dashboardWeek',{week:RECWEEK}).then(function(d){
+    /* Every one of these guards on its own container and returns quietly when it is not on
+       screen, so this is also the Recovery pane's redraw -- ONE path for the whole week,
+       rather than two lists that drift until half the screen is showing a different week.
+       drawCreditRecovery and drawRecoveryTrend both render from this SAME recovery object:
+       one fetch serving both charts, exactly as recoveryWeek's own comment always meant. */
+    drawTrend(d.trend);
+    drawCreditRecovery(d.recovery);
+    drawRecoveryTrend(d.recovery);
+    if(hasNav('scorecards')) drawDashSales(d.sales);
+    if(hasNav('stock')) drawDashStock(d.stock);
+  }).catch(function(e){
+    ['trendBox','credRecBox','recTrendBox','dashSalesBox','dashStockBox'].forEach(function(id){
+      var b=$('#'+id); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';
+    });
+  });
 }
 function dashWeekSet(iso){ RECWEEK=iso||''; dashWeekRedraw(); }
 /* Drawn from the client's own arithmetic rather than from a response, because it heads a
@@ -2393,121 +2407,118 @@ function credTint_(ratio){
   return ' style="background:rgba(6,118,71,'+a.toFixed(2)+');color:'
     +(ratio>=0.55?'#fff':'var(--ink)')+'"';
 }
-function drawCreditRecovery(){
-  var box=$('#credRecBox'); if(!box) return;
-  srv('recoveryWeek',{week:RECWEEK}).then(function(d){
-    var b=$('#credRecBox'); if(!b) return;
-    var pts=d.points||[], people=(d.credits||[]);
-    // Only the people who were actually dealt something this week -- a roster member with
-    // an empty week is a blank row that pushes the real ones off the screen.
-    var live=people.filter(function(p){
-      return Object.keys(p.days||{}).some(function(k){ return p.days[k].assigned>0; });
-    });
-    if(!pts.length||!live.length){
-      /* The bar stays even on an empty week -- it is the way back OUT of one, and this is
-         the message the owner actually meets on a MONDAY: a fresh Mon-Sun week holds one
-         upload at most, and recovery needs the NEXT upload before it can show anything.
-         So the empty state names the reason and points at the button rather than reading
-         as "the chart is broken". */
-      b.innerHTML=
-        '<div class="mut">Hakuna mgao wa 7+ kwa wiki hii bado'
-        +(d.thisWeek?' — wiki huanza Jumatatu, na recovery huonekana baada ya upload ya siku inayofuata. Bonyeza ◀ kuona wiki iliyopita.':' — hakuna upload wa wiki hiyo.')
-        +' / No 7+ pool for this week yet'+(d.thisWeek?' — a week starts Monday and recovery only shows after the NEXT day\'s upload. Press ◀ for last week.':'.')
+/* Renders from the recovery object dashWeekRedraw already fetched (dashboardWeek's one
+   trip covers this card too) -- see the note on drawTrend just above. */
+function drawCreditRecovery(d){
+  var b=$('#credRecBox'); if(!b||!d) return;
+  var pts=d.points||[], people=(d.credits||[]);
+  // Only the people who were actually dealt something this week -- a roster member with
+  // an empty week is a blank row that pushes the real ones off the screen.
+  var live=people.filter(function(p){
+    return Object.keys(p.days||{}).some(function(k){ return p.days[k].assigned>0; });
+  });
+  if(!pts.length||!live.length){
+    /* The bar stays even on an empty week -- it is the way back OUT of one, and this is
+       the message the owner actually meets on a MONDAY: a fresh Mon-Sun week holds one
+       upload at most, and recovery needs the NEXT upload before it can show anything.
+       So the empty state names the reason and points at the button rather than reading
+       as "the chart is broken". */
+    b.innerHTML=
+      '<div class="mut">Hakuna mgao wa 7+ kwa wiki hii bado'
+      +(d.thisWeek?' — wiki huanza Jumatatu, na recovery huonekana baada ya upload ya siku inayofuata. Bonyeza ◀ kuona wiki iliyopita.':' — hakuna upload wa wiki hiyo.')
+      +' / No 7+ pool for this week yet'+(d.thisWeek?' — a week starts Monday and recovery only shows after the NEXT day\'s upload. Press ◀ for last week.':'.')
+      +'</div>';
+    return;
+  }
+  var today=(new Date(Date.now()+3*3600*1000)).toISOString().slice(0,10);
+  /* SHORT, and now it has to be. These are CSS-px labels in a grid column, not SVG text
+     that scales: "Wednesday" at 10.5px is an unbreakable ~58px token, and a grid track's
+     automatic minimum is its content, so seven of them plus the name column gave the row
+     a min-content of roughly 526px. Inside half a .pair that is wider than the track, so
+     the grid pushed its column out, the two halves stopped being equal, and the page grew
+     a horizontal scrollbar. Three letters is ~24px and the row fits its column again.
+     (The full Swahili names were already declared here and never used.) */
+  var dayShort=function(iso){
+    var sw=['Jpi','Jtt','Jnn','Jtn','Alh','Iju','Jms'];
+    return sw[new Date(iso+'T00:00:00').getDay()];
+  };
+  /* AN EYE PER DAY, at the end of each day's name -- each day opened on its own, because
+     "who were they" is asked about one day at a time. Drawn only where that day actually
+     had a pool; an eye over a day nobody uploaded would open an empty panel and look
+     broken. The list itself is fetched on the tap, never with the chart. */
+  /* A REAL HEADER ROW, not seven loose labels floating over the bars. It is banded and
+     ruled like a table head, the first cell is named rather than left blank, each day
+     carries its date under the name, and TODAY's column is tinted the whole way across so
+     the eye finds "where are we now" without counting along. */
+  var head='<div style="display:grid;grid-template-columns:minmax(76px,108px) repeat(7,1fr);gap:4px;'
+    +'align-items:end;background:var(--b50);border:1px solid var(--line);'
+    +'border-radius:9px 9px 0 0;padding:7px 6px;margin-bottom:0">'
+    +'<div style="font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;'
+    +'letter-spacing:.03em">'+DEPT.PCO+'</div>'
+    +pts.map(function(pt){
+      var any=pt.offJana, isToday=(pt.date===today);
+      return '<div style="text-align:center;'
+        +(isToday?'background:var(--b100);border-radius:6px;':'')+'padding:2px 0">'
+        +'<div style="font-size:10.5px;color:'+(isToday?'var(--ink)':'var(--mut)')+';'
+        +'font-weight:'+(isToday?'700':'600')+'">'+esc(dayShort(pt.date))
+        +(any?' <span class="credEye" data-date="'+esc(pt.date)+'" role="button" tabindex="0" '
+            +'title="Ona wateja wa siku hii / see this day\'s customers" '
+            +'style="cursor:pointer;opacity:.75;font-size:12px">\u{1F441}</span>':'')
+        +'</div>'
+        +'<div style="font-size:9px;color:var(--soft)">'+esc(String(pt.date).slice(5))+'</div>'
         +'</div>';
-      return;
-    }
-    var today=(new Date(Date.now()+3*3600*1000)).toISOString().slice(0,10);
-    /* SHORT, and now it has to be. These are CSS-px labels in a grid column, not SVG text
-       that scales: "Wednesday" at 10.5px is an unbreakable ~58px token, and a grid track's
-       automatic minimum is its content, so seven of them plus the name column gave the row
-       a min-content of roughly 526px. Inside half a .pair that is wider than the track, so
-       the grid pushed its column out, the two halves stopped being equal, and the page grew
-       a horizontal scrollbar. Three letters is ~24px and the row fits its column again.
-       (The full Swahili names were already declared here and never used.) */
-    var dayShort=function(iso){
-      var sw=['Jpi','Jtt','Jnn','Jtn','Alh','Iju','Jms'];
-      return sw[new Date(iso+'T00:00:00').getDay()];
-    };
-    /* AN EYE PER DAY, at the end of each day's name -- each day opened on its own, because
-       "who were they" is asked about one day at a time. Drawn only where that day actually
-       had a pool; an eye over a day nobody uploaded would open an empty panel and look
-       broken. The list itself is fetched on the tap, never with the chart. */
-    /* A REAL HEADER ROW, not seven loose labels floating over the bars. It is banded and
-       ruled like a table head, the first cell is named rather than left blank, each day
-       carries its date under the name, and TODAY's column is tinted the whole way across so
-       the eye finds "where are we now" without counting along. */
-    var head='<div style="display:grid;grid-template-columns:minmax(76px,108px) repeat(7,1fr);gap:4px;'
-      +'align-items:end;background:var(--b50);border:1px solid var(--line);'
-      +'border-radius:9px 9px 0 0;padding:7px 6px;margin-bottom:0">'
-      +'<div style="font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;'
-      +'letter-spacing:.03em">'+DEPT.PCO+'</div>'
-      +pts.map(function(pt){
-        var any=pt.offJana, isToday=(pt.date===today);
-        return '<div style="text-align:center;'
-          +(isToday?'background:var(--b100);border-radius:6px;':'')+'padding:2px 0">'
-          +'<div style="font-size:10.5px;color:'+(isToday?'var(--ink)':'var(--mut)')+';'
-          +'font-weight:'+(isToday?'700':'600')+'">'+esc(dayShort(pt.date))
-          +(any?' <span class="credEye" data-date="'+esc(pt.date)+'" role="button" tabindex="0" '
-              +'title="Ona wateja wa siku hii / see this day\'s customers" '
-              +'style="cursor:pointer;opacity:.75;font-size:12px">\u{1F441}</span>':'')
-          +'</div>'
-          +'<div style="font-size:9px;color:var(--soft)">'+esc(String(pt.date).slice(5))+'</div>'
-          +'</div>';
-      }).join('')+'</div>';
+    }).join('')+'</div>';
 
-    var rows=live.map(function(p){
-      var wkA=0,wkR=0;
-      var cells=pts.map(function(pt){
-        var c=p.days[pt.date];
-        if(!c||!c.assigned){
-          return '<div class="credCell" style="color:var(--soft)">—</div>';
-        }
-        wkA+=c.assigned; if(!c.pending) wkR+=c.recovered;
-        /* THE NUMBER IS THE CELL, and the colour is the graph.
-             "I intended to see graphs but the bars are killing it better use numbers
-              within b/se the variance of the lenghts makes them ugly"
+  var rows=live.map(function(p){
+    var wkA=0,wkR=0;
+    var cells=pts.map(function(pt){
+      var c=p.days[pt.date];
+      if(!c||!c.assigned){
+        return '<div class="credCell" style="color:var(--soft)">—</div>';
+      }
+      wkA+=c.assigned; if(!c.pending) wkR+=c.recovered;
+      /* THE NUMBER IS THE CELL, and the colour is the graph.
+           "I intended to see graphs but the bars are killing it better use numbers
+            within b/se the variance of the lenghts makes them ugly"
 
-           The bars encoded recovery as LENGTH, scaled against the busiest officer of the
-           week. One person dealt 40 and another dealt 2 put a full-height block beside a
-           3px stub on the same row, and neither told you the thing that matters -- 1 of 2
-           came back is a better day than 12 of 40, and the tall bar was the worse one.
+         The bars encoded recovery as LENGTH, scaled against the busiest officer of the
+         week. One person dealt 40 and another dealt 2 put a full-height block beside a
+         3px stub on the same row, and neither told you the thing that matters -- 1 of 2
+         came back is a better day than 12 of 40, and the tall bar was the worse one.
 
-           Colour carries it instead. The tint is the RATIO recovered, so every cell is the
-           same size and the eye reads the week as a wash of light and dark: the pale ones
-           are where the chasing did not land. No length, so no raggedness, and 4/15 is
-           sitting right there to be read rather than inferred from a stub. */
-        var ratio=c.pending?null:(c.assigned?c.recovered/c.assigned:0);
-        return '<div class="credCell"'+credTint_(ratio)+'>'
-          +(c.pending
-            ? '<b>'+money(c.assigned)+'</b><span class="credSub">kesho</span>'
-            : '<b>'+money(c.recovered)+'/'+money(c.assigned)+'</b>'
-              +'<span class="credSub">'+Math.round(100*ratio)+'%</span>')
-          +'</div>';
-      }).join('');
-      return '<div style="display:grid;grid-template-columns:minmax(76px,108px) repeat(7,1fr);gap:4px;align-items:center;'
-        +'padding:8px 6px;border:1px solid var(--line);border-top:0">'
-        +'<div style="font-size:12.5px"><b>'+esc(p.name||p.userId)+'</b>'
-        +'<div class="mut" style="font-size:10.5px">wiki: '+money(wkR)+'/'+money(wkA)
-        +(wkA?' · '+Math.round(100*wkR/wkA)+'%':'')+'</div></div>'
-        +cells+'</div>';
+         Colour carries it instead. The tint is the RATIO recovered, so every cell is the
+         same size and the eye reads the week as a wash of light and dark: the pale ones
+         are where the chasing did not land. No length, so no raggedness, and 4/15 is
+         sitting right there to be read rather than inferred from a stub. */
+      var ratio=c.pending?null:(c.assigned?c.recovered/c.assigned:0);
+      return '<div class="credCell"'+credTint_(ratio)+'>'
+        +(c.pending
+          ? '<b>'+money(c.assigned)+'</b><span class="credSub">kesho</span>'
+          : '<b>'+money(c.recovered)+'/'+money(c.assigned)+'</b>'
+            +'<span class="credSub">'+Math.round(100*ratio)+'%</span>')
+        +'</div>';
     }).join('');
+    return '<div style="display:grid;grid-template-columns:minmax(76px,108px) repeat(7,1fr);gap:4px;align-items:center;'
+      +'padding:8px 6px;border:1px solid var(--line);border-top:0">'
+      +'<div style="font-size:12.5px"><b>'+esc(p.name||p.userId)+'</b>'
+      +'<div class="mut" style="font-size:10.5px">wiki: '+money(wkR)+'/'+money(wkA)
+      +(wkA?' · '+Math.round(100*wkR/wkA)+'%':'')+'</div></div>'
+      +cells+'</div>';
+  }).join('');
 
-    b.innerHTML=head+rows
-      +'<div class="mut" style="font-size:10.5px;margin-top:8px">'
-      +'Kila kisanduku: <b>waliopungua / waliopewa</b> · kijani zaidi = walirudi zaidi · '
-      +'“kesho” = mgao wa leo, matokeo huonekana kwenye upload ijayo · “—” = hakukuwa na mgao siku hiyo. '
-      +'Bonyeza \u{1F441} juu ya siku kuona wateja wenyewe.</div>'
-      +'<div id="credDayBox" style="margin-top:10px"></div>';
+  b.innerHTML=head+rows
+    +'<div class="mut" style="font-size:10.5px;margin-top:8px">'
+    +'Kila kisanduku: <b>waliopungua / waliopewa</b> · kijani zaidi = walirudi zaidi · '
+    +'“kesho” = mgao wa leo, matokeo huonekana kwenye upload ijayo · “—” = hakukuwa na mgao siku hiyo. '
+    +'Bonyeza \u{1F441} juu ya siku kuona wateja wenyewe.</div>'
+    +'<div id="credDayBox" style="margin-top:10px"></div>';
 
-    // One handler per eye. Each day opens on its own and replaces whatever was open, so the
-    // panel never becomes a stack of days nobody closed.
-    Array.prototype.forEach.call(b.querySelectorAll('.credEye'), function(el){
-      var open=function(){ credDayOpen(el.getAttribute('data-date'), dayShort); };
-      el.onclick=open;
-      el.onkeydown=function(ev){ if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); open(); } };
-    });
-  }).catch(function(e){
-    var b=$('#credRecBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';
+  // One handler per eye. Each day opens on its own and replaces whatever was open, so the
+  // panel never becomes a stack of days nobody closed.
+  Array.prototype.forEach.call(b.querySelectorAll('.credEye'), function(el){
+    var open=function(){ credDayOpen(el.getAttribute('data-date'), dayShort); };
+    el.onclick=open;
+    el.onkeydown=function(ev){ if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); open(); } };
   });
 }
 
@@ -2517,72 +2528,72 @@ function drawCreditRecovery(){
    A day with no upload is drawn as a gap and SAID so, never as a zero -- "nobody
    uploaded" and "nobody was locked" are different facts. The table under it is the
    same numbers for anyone who wants to read (or export) them. */
-function drawTrend(){
-  var box=$('#trendBox'); if(!box) return;
-  srv('lockedTrend',{week:RECWEEK}).then(function(d){
-    var pts=d.points||[];
-    var box2=$('#trendBox'); if(!box2) return;
-    var vals=pts.filter(function(p){return p.num!=null;}).map(function(p){return p.num;});
-    if(!vals.length){
-      box2.innerHTML='<div class="mut">Hakuna upload bado — chati itajaa baada ya upload za kila siku.</div>';
+/* Takes the payload dashWeekRedraw already fetched via dashboardWeek -- no fetch of its
+   own. It has no other caller (see dashWeekRedraw), so there is nothing left to hold in
+   a module variable here; the one place that changes the week is the one place that asks
+   the server for it. */
+function drawTrend(d){
+  var box=$('#trendBox'); if(!box||!d) return;
+  var pts=d.points||[];
+  var box2=$('#trendBox'); if(!box2) return;
+  var vals=pts.filter(function(p){return p.num!=null;}).map(function(p){return p.num;});
+  if(!vals.length){
+    box2.innerHTML='<div class="mut">Hakuna upload bado — chati itajaa baada ya upload za kila siku.</div>';
+    return;
+  }
+  /* WHICH WEEK AM I LOOKING AT. Shown whenever the chart has fallen back off the current
+     week -- a Monday-morning dashboard quietly drawing LAST week under a heading that says
+     "wiki hii" would be worse than the blank card it replaced. */
+  var wkNote=d.fellBack
+    ? '<div class="chip warn" style="margin-bottom:6px">Wiki ya '+esc(d.from||'')+' → '+esc(d.to||'')
+      +' — bado hakuna upload wa wiki hii. / showing the latest week with uploads, not this one.</div>'
+    : '';
+  var max=Math.max.apply(null,vals), n=pts.length;
+  /* Sized for HALF a row, not the whole page. At 720 the chart had to be scaled down
+     hard to fit beside its neighbour, which shrank every label with it; 560 is close
+     to 1:1 in the column it now occupies, so the text reads at the size it was set. */
+  var W=560,H=190,padL=42,padB=26,padT=16,padR=8;
+  var innerW=W-padL-padR, innerH=H-padT-padB;
+  var slot=innerW/n, bw=Math.min(56,slot*0.62);
+  var yOf=function(v){ return padT+innerH-(max?(v/max)*innerH:0); };
+  var lastIdx=-1; pts.forEach(function(p,i){ if(p.num!=null) lastIdx=i; });
+  // Full English names, Monday first -- the week the server sends, unshifted.
+  var dayName=function(iso){
+    var wd=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    return wd[new Date(iso+'T00:00:00').getDay()];
+  };
+  var grid='',bars='',labels='';
+  [0,0.5,1].forEach(function(f){
+    var y=padT+innerH-f*innerH, v=Math.round(max*f);
+    grid+='<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="var(--line)" stroke-width="1"/>'
+      +'<text x="'+(padL-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="var(--mut)">'+money(v)+'</text>';
+  });
+  pts.forEach(function(p,i){
+    var cx=padL+slot*i+slot/2;
+    labels+='<text x="'+cx+'" y="'+(H-padB+17)+'" text-anchor="middle" font-size="11" '
+      +'font-weight="'+(i===lastIdx?'700':'400')+'" fill="var(--mut)">'+esc(dayName(p.date))+'</text>';
+    if(p.num==null){
+      labels+='<text x="'+cx+'" y="'+(padT+innerH-6)+'" text-anchor="middle" font-size="10" fill="var(--soft)">—</text>';
       return;
     }
-    /* WHICH WEEK AM I LOOKING AT. Shown whenever the chart has fallen back off the current
-       week -- a Monday-morning dashboard quietly drawing LAST week under a heading that says
-       "wiki hii" would be worse than the blank card it replaced. */
-    var wkNote=d.fellBack
-      ? '<div class="chip warn" style="margin-bottom:6px">Wiki ya '+esc(d.from||'')+' → '+esc(d.to||'')
-        +' — bado hakuna upload wa wiki hii. / showing the latest week with uploads, not this one.</div>'
-      : '';
-    var max=Math.max.apply(null,vals), n=pts.length;
-    /* Sized for HALF a row, not the whole page. At 720 the chart had to be scaled down
-       hard to fit beside its neighbour, which shrank every label with it; 560 is close
-       to 1:1 in the column it now occupies, so the text reads at the size it was set. */
-    var W=560,H=190,padL=42,padB=26,padT=16,padR=8;
-    var innerW=W-padL-padR, innerH=H-padT-padB;
-    var slot=innerW/n, bw=Math.min(56,slot*0.62);
-    var yOf=function(v){ return padT+innerH-(max?(v/max)*innerH:0); };
-    var lastIdx=-1; pts.forEach(function(p,i){ if(p.num!=null) lastIdx=i; });
-    // Full English names, Monday first -- the week the server sends, unshifted.
-    var dayName=function(iso){
-      var wd=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-      return wd[new Date(iso+'T00:00:00').getDay()];
-    };
-    var grid='',bars='',labels='';
-    [0,0.5,1].forEach(function(f){
-      var y=padT+innerH-f*innerH, v=Math.round(max*f);
-      grid+='<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="var(--line)" stroke-width="1"/>'
-        +'<text x="'+(padL-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="var(--mut)">'+money(v)+'</text>';
-    });
-    pts.forEach(function(p,i){
-      var cx=padL+slot*i+slot/2;
-      labels+='<text x="'+cx+'" y="'+(H-padB+17)+'" text-anchor="middle" font-size="11" '
-        +'font-weight="'+(i===lastIdx?'700':'400')+'" fill="var(--mut)">'+esc(dayName(p.date))+'</text>';
-      if(p.num==null){
-        labels+='<text x="'+cx+'" y="'+(padT+innerH-6)+'" text-anchor="middle" font-size="10" fill="var(--soft)">—</text>';
-        return;
-      }
-      var y=yOf(p.num), h=Math.max(2,padT+innerH-y), on=(i===lastIdx);
-      bars+='<rect x="'+(cx-bw/2)+'" y="'+y+'" width="'+bw+'" height="'+h+'" rx="4" '
-        +'fill="var(--bad)" opacity="'+(on?'1':'0.42')+'"><title>'+esc(p.date)+': '+money(p.num)+' locked 7+</title></rect>'
-        +'<text x="'+cx+'" y="'+(y-5)+'" text-anchor="middle" font-size="11.5" font-weight="700" fill="'+(on?'var(--bad)':'var(--mut)')+'">'+money(p.num)+'</text>';
-    });
-    var first=vals[0], last=vals[vals.length-1], diff=last-first;
-    box2.innerHTML=wkNote
-      /* .chartwrap is the ceiling: width:100% inside it, but never wider than the chart's
-         own natural size, so it shrinks on a phone and stops growing on a monitor. */
-      +'<div class="chartwrap"><svg viewBox="0 0 '+W+' '+H+'" role="img" '
-      +'aria-label="Locked 7+ per day this week">'
-      +'<line x1="'+padL+'" y1="'+(padT+innerH)+'" x2="'+(W-padR)+'" y2="'+(padT+innerH)+'" stroke="var(--line)" stroke-width="1.5"/>'
-      +grid+bars+labels+'</svg></div>'
-      +'<div class="mut" style="margin-top:6px">'
-      +(vals.length>1
-        ? (diff===0?'Sawa na siku ya kwanza yenye upload.':(diff>0?'⬆ ':'⬇ ')+money(Math.abs(diff))+' kuliko siku ya kwanza yenye upload wiki hii.')
-        : 'Siku moja tu ya upload wiki hii.')
-      +' Kilele: '+money(max)+'. Siku zenye — hazina upload.</div>';
-  }).catch(function(e){
-    var b=$('#trendBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';
+    var y=yOf(p.num), h=Math.max(2,padT+innerH-y), on=(i===lastIdx);
+    bars+='<rect x="'+(cx-bw/2)+'" y="'+y+'" width="'+bw+'" height="'+h+'" rx="4" '
+      +'fill="var(--bad)" opacity="'+(on?'1':'0.42')+'"><title>'+esc(p.date)+': '+money(p.num)+' locked 7+</title></rect>'
+      +'<text x="'+cx+'" y="'+(y-5)+'" text-anchor="middle" font-size="11.5" font-weight="700" fill="'+(on?'var(--bad)':'var(--mut)')+'">'+money(p.num)+'</text>';
   });
+  var first=vals[0], last=vals[vals.length-1], diff=last-first;
+  box2.innerHTML=wkNote
+    /* .chartwrap is the ceiling: width:100% inside it, but never wider than the chart's
+       own natural size, so it shrinks on a phone and stops growing on a monitor. */
+    +'<div class="chartwrap"><svg viewBox="0 0 '+W+' '+H+'" role="img" '
+    +'aria-label="Locked 7+ per day this week">'
+    +'<line x1="'+padL+'" y1="'+(padT+innerH)+'" x2="'+(W-padR)+'" y2="'+(padT+innerH)+'" stroke="var(--line)" stroke-width="1.5"/>'
+    +grid+bars+labels+'</svg></div>'
+    +'<div class="mut" style="margin-top:6px">'
+    +(vals.length>1
+      ? (diff===0?'Sawa na siku ya kwanza yenye upload.':(diff>0?'⬆ ':'⬇ ')+money(Math.abs(diff))+' kuliko siku ya kwanza yenye upload wiki hii.')
+      : 'Siku moja tu ya upload wiki hii.')
+    +' Kilele: '+money(max)+'. Siku zenye — hazina upload.</div>';
 }
 
 /* ---------- ripoti ---------- */
@@ -3006,29 +3017,36 @@ function credDayOpen(date, dayShort){
   });
 }
 
-function drawRecoveryTrend(){
+/* TWO CALLERS, ONE FETCH BETWEEN THEM. Opening the Recovery pane calls this with nothing
+   in hand, so it fetches its own copy exactly as before; a week change afterwards goes
+   through dashWeekRedraw, which fetches dashboardWeek ONCE for every card the week governs
+   (including drawCreditRecovery, above) and hands the same recovery object here -- so a
+   week arrow no longer costs this chart a recoveryWeek trip of its own on top of that one. */
+function drawRecoveryTrend(d){
   var box=$('#recTrendBox'); if(!box) return;
+  if(d){ recoveryTrendRender(d); return; }
   // The SAME chosen week as the per-person grid -- the two charts slide together.
-  srv('recoveryWeek',{week:RECWEEK}).then(function(d){
-    var b=$('#recTrendBox'); if(!b) return;
-    /* This pane's own copy of the week control. Same RECWEEK and the same redraw path as
-       the dashboard's bar -- it is the one screen the dashboard head is not on, and a pane
-       that inherits a week with no control is a pane you cannot get out of last Tuesday from. */
-    var wkBox=$('#recWkBox');
-    if(wkBox){ wkBox.innerHTML=recWeekBar(d); wireRecWeekBar(d); }
-    var wk=d.thisWeek?'wiki hii':(esc(d.from||'')+' → '+esc(d.to||''));
-    var svg=svgRecoveryBars(d.points||[]);
-    if(!svg){
-      b.innerHTML='<div class="mut">Hakuna upload wa wiki hii ('+wk+') — chati hujaa pale upload zilipo.</div>';
-      return;
-    }
-    b.innerHTML='<div style="font-weight:700;margin-bottom:2px">7+ waliopungua / 7+ reduced · '+wk+'</div>'
-      +'<div class="mut" style="margin-bottom:8px">Waliowekwa Locked 7+ kwenye faili la Watu, ndani ya siku 45. '
-      +'Urefu wote = OFF JANA (7+ siku kwenye upload ya jana). Kijani = walipungua siku husika.</div>'
-      +svg;
-  }).catch(function(e){
+  srv('recoveryWeek',{week:RECWEEK}).then(recoveryTrendRender).catch(function(e){
     var b=$('#recTrendBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';
   });
+}
+function recoveryTrendRender(d){
+  var b=$('#recTrendBox'); if(!b) return;
+  /* This pane's own copy of the week control. Same RECWEEK and the same redraw path as
+     the dashboard's bar -- it is the one screen the dashboard head is not on, and a pane
+     that inherits a week with no control is a pane you cannot get out of last Tuesday from. */
+  var wkBox=$('#recWkBox');
+  if(wkBox){ wkBox.innerHTML=recWeekBar(d); wireRecWeekBar(d); }
+  var wk=d.thisWeek?'wiki hii':(esc(d.from||'')+' → '+esc(d.to||''));
+  var svg=svgRecoveryBars(d.points||[]);
+  if(!svg){
+    b.innerHTML='<div class="mut">Hakuna upload wa wiki hii ('+wk+') — chati hujaa pale upload zilipo.</div>';
+    return;
+  }
+  b.innerHTML='<div style="font-weight:700;margin-bottom:2px">7+ waliopungua / 7+ reduced · '+wk+'</div>'
+    +'<div class="mut" style="margin-bottom:8px">Waliowekwa Locked 7+ kwenye faili la Watu, ndani ya siku 45. '
+    +'Urefu wote = OFF JANA (7+ siku kwenye upload ya jana). Kijani = walipungua siku husika.</div>'
+    +svg;
 }
 
 /* ---------- devices: the phone-locking registry ----------

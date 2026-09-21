@@ -91,7 +91,7 @@ test('portal.html: the dashboard sales card compares money with money', () => {
 
      Pinned as source text because there is no browser here to render the card in. */
   const css = read('portal.html');
-  const fn = css.match(/function drawDashSales\(\)\{[\s\S]*?\n\}/);
+  const fn = css.match(/function drawDashSales\(d\)\{[\s\S]*?\n\}/);
   assert.ok(fn, 'drawDashSales not found');
   assert.match(fn[0], /var over\s*=\s*tgt\s*\?\s*\(\s*amt\s*-\s*tgt\s*\)/,
     'the target delta must be amount minus target -- never the handset count');
@@ -233,10 +233,16 @@ test('portal.html: the sign-in panel can be shrunk and moved by the keyboard fit
    why every draw goes through ONE function and this checks that function rather than the
    call sites.
    ========================================================================================= */
-test('portal.html: one week governs every card on the dashboard', () => {
+test('portal.html: one week governs every card on the dashboard, in one trip', () => {
   const src = read('portal.html');
   const fn = src.match(/function dashWeekRedraw\(\)\{[\s\S]*?\n\}/);
   assert.ok(fn, 'dashWeekRedraw not found -- the single redraw path is the whole design');
+  /* ONE FETCH FOR ALL FIVE CARDS. lockedTrend, recoveryWeek (twice over), salesWeek and
+     stockAccount used to be five separate srv() calls from this one function; dashboardWeek
+     folds them into one server-side Promise.all, so the week-change path is one round trip
+     however many cards are on screen for it. */
+  assert.match(fn[0], /srv\('dashboardWeek',\{week:RECWEEK\}\)/,
+    'dashWeekRedraw must fetch every card\'s data in one dashboardWeek call, not one per card');
   for (const card of ['drawTrend', 'drawCreditRecovery', 'drawRecoveryTrend',
                       'drawDashSales', 'drawDashStock']) {
     assert.match(fn[0], new RegExp('\\b' + card + '\\('),
@@ -245,11 +251,28 @@ test('portal.html: one week governs every card on the dashboard', () => {
   // The bar itself must be at the head of the board, not inside a card it appears to belong to.
   assert.match(src, /id="dashWeekBar"[\s\S]{0,400}?<div class="tiles">/,
     'the week bar must sit above the tiles, or it reads as belonging to whatever is beside it');
-  // And the two cards that used to ignore it must now ask for it.
-  assert.match(src, /srv\('salesWeek',\{week:RECWEEK\}\)/,
-    'the sales card must ask for the week the board is standing on');
-  assert.match(src, /srv\('stockAccount', RECWEEK\?\{asOf:/,
-    'the stock card must ask for the book as it stood at the end of that week');
+  // Neither card may keep a fetch of its own now that dashboardWeek supplies both.
+  assert.doesNotMatch(src, /srv\('salesWeek',\{week:RECWEEK\}\)/,
+    'the dashboard sales card must not fetch on its own now that dashboardWeek carries it');
+  assert.doesNotMatch(src, /srv\('stockAccount', RECWEEK\?\{asOf:/,
+    'the dashboard stock card must not fetch on its own now that dashboardWeek carries it');
+});
+
+test('api/portal.js: dashboardWeek runs the four existing dashboard fns under their own gates', () => {
+  const src = fs.readFileSync(new URL('../api/portal.js', import.meta.url), 'utf8');
+  const fn = src.match(/async dashboardWeek\(db, user, args\) \{[\s\S]*?\n  \},/);
+  assert.ok(fn, 'dashboardWeek(db, user, args) not found on FNS, right after salesWeek');
+  assert.match(fn[0], /requireNav\(user, 'dashboard'\)/,
+    'dashboardWeek must itself require the dashboard nav -- FNS has no other gate');
+  for (const inner of ['FNS.lockedTrend(db, user, args)', 'FNS.recoveryWeek(db, user, args)',
+                       'FNS.salesWeek(db, user, args)', 'FNS.stockAccount(db, user, stockArgs)']) {
+    assert.ok(fn[0].includes(inner),
+      `dashboardWeek must call the existing ${inner.split('(')[0]} rather than reimplement it`);
+  }
+  // scorecards/stock are checked here, not left to throw, so a dashboard-only code gets a
+  // missing card rather than an error string where a card should be.
+  assert.match(fn[0], /have\.includes\('scorecards'\)/);
+  assert.match(fn[0], /have\.includes\('stock'\)/);
 });
 
 test('portal.html: a Swahili day axis names seven different days', () => {
