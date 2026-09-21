@@ -63,9 +63,11 @@ const uid = tag => {
 const aRequest = o => ({
   id: o.id, requested_at: o.at || TODAY + 'T06:00:00Z',
   staff_code: o.code || 'R1', staff_name: o.name || 'RSM ONE', staff_role: 'RSM',
-  holder: o.holder || 'RSM ONE', destination: 'Depot', item: 'A07', qty: 10, reason: 'x',
+  holder: o.holder || 'RSM ONE', destination: 'Depot', item: 'A07',
+  qty: o.qty == null ? 10 : o.qty, reason: 'x',
   aging_count: 0, aging_oldest_days: null, aging_as_of: TODAY,
-  status: o.status || 'pending', approved_qty: null, comment: null, decided_by: null, decided_at: null,
+  status: o.status || 'pending', approved_qty: o.approvedQty == null ? null : o.approvedQty,
+  comment: null, decided_by: null, decided_at: null,
   aging_override: false, aging_override_reason: null, issued_at: null, issued_by: null,
   updated_by: 'RSM ONE', updated_at: o.at || TODAY + 'T06:00:00Z',
 });
@@ -210,6 +212,30 @@ test('fix3: a deviceEnrol between two newStock calls is visible on the second', 
   const row = after.rows.find(r => r.imei === '861000000000001');
   assert.ok(row, 'the freshly-enrolled handset must appear');
   assert.equal(row.status, 'unlocked');
+});
+
+/* =====================================================================================
+   FIX 4 -- stockIssue moves a handover's holders in 200-IMEI chunks, not one trip per phone.
+   ===================================================================================== */
+
+test('fix4: a handover of more than 200 IMEIs moves them in ceil(N/200) trips', async () => {
+  const N = 350;
+  const imei = i => '3510010' + String(1000000 + i).slice(-9);
+  const imeis = Array.from({ length: N }, (_, i) => imei(i));
+  const devices = imeis.map(im => ({ imei: im, item: 'A07', holder: 'SIPHO', state: 'enrolled' }));
+  const c = counting(book({
+    devices,
+    stock_requests: [aRequest({ id: uid('big'), status: 'approved', approvedQty: N, holder: 'AGENT ONE' })],
+  }));
+  const r = await _FNS.stockIssue(c.db, STORE, {
+    id: uid('big'), receivedBy: 'Agent One', countedJointly: true, imeis,
+  });
+  assert.equal(r.imeis, N);
+  assert.equal(r.holdersMoved, N, 'every one of them is on the registry');
+  // stockIssue's only reads/writes against 'devices' are the holder-move updates themselves
+  // (nothing else in this call touches that table), so every trip counted here is one of them.
+  assert.equal(c.tableTrips('devices'), Math.ceil(N / 200),
+    `moved ${N} IMEIs in ${c.tableTrips('devices')} trips to devices (want ${Math.ceil(N / 200)})`);
 });
 
 /* =====================================================================================

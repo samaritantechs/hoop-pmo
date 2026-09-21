@@ -9012,14 +9012,18 @@ const FNS = {
         .insert(sized.map((p, i) => ({ handover_id: hid, seq: i + 1, data: p.data, bytes: p.bytes })));
       if (pErr) throw new Error(pErr.message);
     }
-    /* WHO HAS IT, in the one place that locks phones. Allowed to fail quietly per IMEI: a
-       device not in the registry is normal (only enrolled phones are there), and a registry
-       hiccup must never undo a handover the store has physically made. */
+    /* WHO HAS IT, in the one place that locks phones. Allowed to fail quietly PER CHUNK: a
+       device not in the registry is normal (only enrolled phones are there -- `.in()` simply
+       does not match it, no error at all), and a registry hiccup must never undo a handover
+       the store has physically made. One `.in()` update per 200 IMEIs, not one round trip per
+       handset: a note for five hundred phones used to be five hundred awaited updates, and
+       `moved` is counted off the rows PostgREST actually reports changed, exactly as before. */
     let moved = 0;
-    for (const imei of imeis) {
+    for (let i = 0; i < imeis.length; i += 200) {
+      const slice = imeis.slice(i, i + 200);
       try {
-        const { data: up } = await db.from('devices').update({ holder: row.holder }).eq('imei', imei).select('imei');
-        if (up && up.length) moved++;
+        const { data: up } = await db.from('devices').update({ holder: row.holder }).in('imei', slice).select('imei');
+        if (up) moved += up.length;
       } catch (e) { /* the note is the record either way */ }
     }
     return { ok: true, id, handoverId: hid, imeis: imeis.length, photos: sized.length, holdersMoved: moved };
