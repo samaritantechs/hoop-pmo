@@ -1814,16 +1814,21 @@ test('portal.html: the desk is one queue with a department chip, and the report 
    ========================================================================================= */
 test('portal.html: the follow-up report draws the server\'s own buckets and each tile filters the table', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawFuRep', html);
-  assert.match(fn, /srv\('fuOutcomes',\{from:FUR\.from,to:FUR\.to,team:FUR\.team\}\)/);
+  /* FETCH/RENDER SPLIT: drawFuRep only fetches (and renders straight from FUR.last when a
+     kind tile or "Vikapu vyote" changed nothing the server was asked); fuRepRender draws
+     the tiles and the table. See the postgres-round-trip-audit fix -- every kind tile used
+     to re-fetch srv('fuOutcomes') for the identical period. */
+  const fetchFn = IMP_SRC('drawFuRep', html);
+  assert.match(fetchFn, /srv\('fuOutcomes',args\)/);
+  assert.match(fetchFn, /FUR\.from=isoToday\(0\); FUR\.to=isoToday\(0\);/, 'today by default: this is a daily report');
+  const fn = IMP_SRC('fuRepRender', html);
   // The tiles are built from d.kinds, so a bucket added on the server appears here with no
   // second edit -- the failure mode this replaces is a screen quietly missing a category.
   assert.match(fn, /kinds\.map\(function\(k\)\{/);
   assert.match(fn, /labels\[k\]\|\|k/, 'and labelled with the server\'s own words');
   assert.match(fn, /FUR\.kind\?rows\.filter\(function\(r\)\{ return r\.kind===FUR\.kind; \}\):rows/,
     'tapping a tile filters the table under it');
-  assert.match(html, /var FUR=\{from:'',to:'',team:'',kind:''\};/);
-  assert.match(fn, /FUR\.from=isoToday\(0\); FUR\.to=isoToday\(0\);/, 'today by default: this is a daily report');
+  assert.match(html, /var FUR=\{from:'',to:'',team:'',kind:'',last:null\};/);
   assert.match(fn, /go\(isoToday\(-6\),isoToday\(0\)\)/, 'and a week back is a NEGATIVE offset');
   // Sending the GM his copy: a write, so not offered to a view-only code, and never re-sent.
   assert.match(fn, /BOOT\.readOnly\?'':'<button class="btn sm" id="furSend"/);
@@ -1841,7 +1846,9 @@ test('portal.html: the KPI card names its own proxy and only shouts when it is o
   assert.match(fn, /pct>k\.target/, 'red is measured against the setting, not a hard-coded 5');
   assert.match(fn, /closest proxy for the WATU default rate, not WATU/, 'the card says what it is and what it is not');
   // Drawn on the recovery pane in BOTH states: with two decks, and on the very first upload.
-  const rec = IMP_SRC('drawRecovery', html);
+  // recoveryRender is the render half of the fetch/render split (drawRecovery only fetches,
+  // or renders a held answer straight back for a REC.kind-only tile click).
+  const rec = IMP_SRC('recoveryRender', html);
   assert.equal((rec.match(/kpiCard\(d\.kpi\)/g) || []).length, 2,
     'the first upload has no recovery to show and still has a KPI');
   assert.match(html, /<b>KPI_DEFAULT_RATE<\/b>/, 'and Settings explains the key');

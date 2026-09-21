@@ -2597,7 +2597,24 @@ function drawTrend(d){
 }
 
 /* ---------- ripoti ---------- */
-var RIP={from:isoToday(-7),to:isoToday(0),team:'',sort:''};
+/* FETCH/RENDER SPLIT -- the pattern drawSalesPerf/salesRender set: the payload is held in a
+   module variable (RIP.last), and the draw function renders straight from it when nothing
+   that changes the ANSWER has changed. Before this, every sort tile (ripBy) called
+   drawRipoti() again, which re-ran srv('report', {from,to,team}) for the SAME from/to/team
+   just to re-order rows already sitting in the browser [measured 10 trips / 10,343 rows for
+   nothing]. Sorting is client-only -- ripSorted() already reorders in memory -- so it never
+   needed the network at all.
+
+   `last` carries the ARGS a fetch answered, not just the data: RIP.sort changing calls
+   drawRipoti() again exactly as before, but now it is the SAME from/to/team, so this renders
+   the held payload instead of asking again. A date field or the branch picker changes the
+   args, which is a real question the server has not answered yet, so that still fetches.
+   The 5-minute hold (matching drawSalesPerf's own) is so a tab left open all morning does
+   not keep showing a stale report -- it is a HOLD, not a promise the browser can act alone
+   forever. */
+var RIP={from:isoToday(-7),to:isoToday(0),team:'',sort:'',last:null};
+function ripArgs_(){ return {from:RIP.from,to:RIP.to,team:RIP.team}; }
+function ripArgsSame_(a,b){ return !!a&&!!b&&a.from===b.from&&a.to===b.to&&a.team===b.team; }
 /** Tile options for "sort the officers by this column". Clicking the live one clears it. */
 function ripBy(key,cta){
   return { on:RIP.sort===key, cta:cta,
@@ -2617,52 +2634,70 @@ function ripSorted(users){
   });
 }
 function drawRipoti(m){
+  var args=ripArgs_();
+  // Held from a fetch within the last 5 minutes, for the SAME from/to/team: render straight
+  // from it -- this is what turns a sort tile back into a client-only redraw.
+  if(RIP.last&&ripArgsSame_(RIP.last.args,args)&&(Date.now()-RIP.last.at)<5*60000){
+    ripotiRender(m,RIP.last.data); return;
+  }
   m.innerHTML='<div class="card"><h2>Call reports — simu za '+DEPT.PCO+'</h2><div class="sk"></div></div>';
-  srv('report',{from:RIP.from,to:RIP.to,team:RIP.team}).then(function(d){
-    var t=d.totals||{};
-    m.innerHTML=
-      '<div class="card"><h2>Call reports — simu za '+DEPT.PCO+'</h2>'
-      +'<div class="row"><input class="inp" type="date" id="rF" value="'+RIP.from+'"><input class="inp" type="date" id="rT" value="'+RIP.to+'">'
-      +'<select class="inp" id="rTeam"><option value="">Matawi yote / all branches</option>'
-      /* teamChoices are the STAFF register's branches -- "the branches I always say such as of
-         navtab STAFF, not default KINONDONI" -- and picking one narrows to the officers in it.
-         `teams` (grouped by the CUSTOMER's branch) is a different thing and is not offered.
-         See the note on report() in api/portal.js. */
-      +(d.teamChoices||[]).map(function(x){return '<option'+(x===RIP.team?' selected':'')+'>'+esc(x)+'</option>';}).join('')
-      +'</select></div>'
-      /* EVERY TILE IS A COLUMN OF THE TABLE BELOW, so each one answers "who" by bringing
-         that column to the top rather than by opening a second copy of the same table.
-         % PF sorts WORST first: a tile you click because it looks low should not hand you
-         the people who are already doing well. */
-      +'<div class="tiles">'
-      +tile('Simu',money(t.calls),'',ripBy('calls','nani amepiga ›'))
-      +tile('Muda',fmtDur(t.duration),'',ripBy('duration','nani ametumia ›'))
-      +tile('Portfolio',money(t.portfolio),'',
-        Object.assign({color:'ok'},ripBy('portfolio','nani amefuata ›')))
-      +tile('% pf',(t.calls?pct(t.ratio):'—'),'',ripBy('ratio','wa chini kwanza ›'))
-      +'</div>'
-      +'<div class="scroll"><table><thead><tr><th>Afisa</th><th class="r">Simu</th><th class="r">Muda</th><th class="r">Wateja</th><th class="r">PF</th><th class="r">Non-PF</th><th class="r">% PF</th><th></th></tr></thead><tbody>'
-      +ripSorted(d.users||[]).map(function(u){
-        var h=telHref(u.phone);
-        return '<tr><td>'+esc(u.name)+'<div class="mut" style="font-size:10.5px">'+esc(u.team||'')+' '+esc(u.position||'')+'</div></td>'
-          +'<td class="r">'+money(u.calls)+'</td><td class="r">'+fmtDur(u.duration)+'</td>'
-          +'<td class="r">'+money(u.uniqCustomers)+'</td>'
-          +'<td class="r" style="color:var(--ok)">'+money(u.portfolio)+'</td>'
-          +'<td class="r" style="color:var(--soft)">'+money(u.nonPortfolio)+'</td>'
-          +'<td class="r"'+(u.calls&&u.ratio<0.5?' style="color:var(--bad)"':'')+'>'+(u.calls?pct(u.ratio):'—')+'</td>'
-          +'<td class="r">'+(h!=='#'?'<a href="tel:'+h+'" title="'+esc(u.phone)+'">📞</a>':'')+'</td></tr>';
-      }).join('')+'</tbody></table></div></div>';
-    wireTiles(m);
-    $('#rF').onchange=function(){RIP.from=this.value;drawRipoti(m);};
-    $('#rT').onchange=function(){RIP.to=this.value;drawRipoti(m);};
-    $('#rTeam').onchange=function(){RIP.team=this.value;drawRipoti(m);};
+  srv('report',args).then(function(d){
+    RIP.last={args:args,data:d,at:Date.now()};
+    ripotiRender(m,d);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function ripotiRender(m,d){
+  var t=d.totals||{};
+  m.innerHTML=
+    '<div class="card"><h2>Call reports — simu za '+DEPT.PCO+'</h2>'
+    +'<div class="row"><input class="inp" type="date" id="rF" value="'+RIP.from+'"><input class="inp" type="date" id="rT" value="'+RIP.to+'">'
+    +'<select class="inp" id="rTeam"><option value="">Matawi yote / all branches</option>'
+    /* teamChoices are the STAFF register's branches -- "the branches I always say such as of
+       navtab STAFF, not default KINONDONI" -- and picking one narrows to the officers in it.
+       `teams` (grouped by the CUSTOMER's branch) is a different thing and is not offered.
+       See the note on report() in api/portal.js. */
+    +(d.teamChoices||[]).map(function(x){return '<option'+(x===RIP.team?' selected':'')+'>'+esc(x)+'</option>';}).join('')
+    +'</select></div>'
+    /* EVERY TILE IS A COLUMN OF THE TABLE BELOW, so each one answers "who" by bringing
+       that column to the top rather than by opening a second copy of the same table.
+       % PF sorts WORST first: a tile you click because it looks low should not hand you
+       the people who are already doing well. */
+    +'<div class="tiles">'
+    +tile('Simu',money(t.calls),'',ripBy('calls','nani amepiga ›'))
+    +tile('Muda',fmtDur(t.duration),'',ripBy('duration','nani ametumia ›'))
+    +tile('Portfolio',money(t.portfolio),'',
+      Object.assign({color:'ok'},ripBy('portfolio','nani amefuata ›')))
+    +tile('% pf',(t.calls?pct(t.ratio):'—'),'',ripBy('ratio','wa chini kwanza ›'))
+    +'</div>'
+    +'<div class="scroll"><table><thead><tr><th>Afisa</th><th class="r">Simu</th><th class="r">Muda</th><th class="r">Wateja</th><th class="r">PF</th><th class="r">Non-PF</th><th class="r">% PF</th><th></th></tr></thead><tbody>'
+    +ripSorted(d.users||[]).map(function(u){
+      var h=telHref(u.phone);
+      return '<tr><td>'+esc(u.name)+'<div class="mut" style="font-size:10.5px">'+esc(u.team||'')+' '+esc(u.position||'')+'</div></td>'
+        +'<td class="r">'+money(u.calls)+'</td><td class="r">'+fmtDur(u.duration)+'</td>'
+        +'<td class="r">'+money(u.uniqCustomers)+'</td>'
+        +'<td class="r" style="color:var(--ok)">'+money(u.portfolio)+'</td>'
+        +'<td class="r" style="color:var(--soft)">'+money(u.nonPortfolio)+'</td>'
+        +'<td class="r"'+(u.calls&&u.ratio<0.5?' style="color:var(--bad)"':'')+'>'+(u.calls?pct(u.ratio):'—')+'</td>'
+        +'<td class="r">'+(h!=='#'?'<a href="tel:'+h+'" title="'+esc(u.phone)+'">📞</a>':'')+'</td></tr>';
+    }).join('')+'</tbody></table></div></div>';
+  wireTiles(m);
+  // A date field or the branch picker is a real question, not a redraw: it changes RIP's
+  // own args, so the next drawRipoti() call will see them differ from RIP.last.args and fetch.
+  $('#rF').onchange=function(){RIP.from=this.value;drawRipoti(m);};
+  $('#rT').onchange=function(){RIP.to=this.value;drawRipoti(m);};
+  $('#rTeam').onchange=function(){RIP.team=this.value;drawRipoti(m);};
 }
 
 /* ---------- recovery ---------- */
 /* kind: which slice of the comparison is on screen. '' = all of it. Set from the dashboard
-   too, so "Locked 7+" over there lands on the people who are sinking over here. */
-var REC={kind:''};
+   too, so "Locked 7+" over there lands on the people who are sinking over here.
+
+   FETCH/RENDER SPLIT, same pattern as Ripoti above. srv('recovery') takes no arguments at
+   all -- REC.kind only reorders/filters rows already in the browser (recRows) -- so every
+   one of the five tiles calling drawRecovery() again was a full re-fetch for an answer that
+   could not possibly have changed [measured 10 trips / 11,793 rows]. `last` holds what the
+   one fetch returned; a REC.kind change renders it again rather than asking for it twice. */
+var REC={kind:'',last:null};
 function recBy(k,cta){
   return { on:REC.kind===k, cta:cta||'orodha ›',
     go:function(){ REC.kind=(REC.kind===k?'':k); drawRecovery($('#main')); } };
@@ -2690,7 +2725,16 @@ function recChip(r){
    buckets that partition, so the tiles add up to the book and a tile can be tapped to filter
    the table under it. Today by default, because this is a daily report.
    =================================================================================== */
-var FUR={from:'',to:'',team:'',kind:''};
+/* FETCH/RENDER SPLIT, same pattern as Ripoti and Recovery above. Every kind tile (pick) and
+   "Vikapu vyote" only set FUR.kind, which filters `rows` already in the browser -- the six
+   tiles' OWN totals (t[k]) are unaffected by it too, they are the whole period's totals --
+   yet each one called drawFuRep() again, re-running srv('fuOutcomes', {from,to,team}) for
+   the exact same period [measured 3,001 rows for a filter that changes nothing the server
+   was asked]. `last` holds what a fetch answered, keyed to the args it answered for; only
+   furGo / furToday / furWeek (a real period change) invalidates it. */
+var FUR={from:'',to:'',team:'',kind:'',last:null};
+function furArgs_(){ return {from:FUR.from,to:FUR.to,team:FUR.team}; }
+function furArgsSame_(a,b){ return !!a&&!!b&&a.from===b.from&&a.to===b.to&&a.team===b.team; }
 var FU_KIND_COLOR={paid:'ok',unpaid:'warn',notAvailable:'',stolen:'bad',maintenance:'',unresponded:'bad',notCalled:'warn'};
 var FU_KIND_SUB={
   paid:'wamelipa au wanalipa leo', unpaid:'wamefikiwa, hakuna malipo — ahadi ni deni',
@@ -2705,75 +2749,87 @@ function fuChip(kind,labels){
 }
 function drawFuRep(m){
   if(!FUR.from&&!FUR.to&&!FUR.explicit){ FUR.from=isoToday(0); FUR.to=isoToday(0); }
+  var args=furArgs_();
+  // Held from a fetch within the last 5 minutes, for the SAME from/to/team: a kind tile or
+  // "Vikapu vyote" renders straight from it instead of asking the server again.
+  if(FUR.last&&furArgsSame_(FUR.last.args,args)&&(Date.now()-FUR.last.at)<5*60000){
+    fuRepRender(m,FUR.last.data); return;
+  }
   m.innerHTML='<div class="sk"></div>';
-  srv('fuOutcomes',{from:FUR.from,to:FUR.to,team:FUR.team}).then(function(d){
-    var t=d.totals||{}, labels=d.labels||{}, kinds=d.kinds||[], rows=d.rows||[];
-    var pick=function(k){ return function(){ FUR.kind=(FUR.kind===k?'':k); if(TAB==='furep') drawFuRep(m); }; };
-    var shown=FUR.kind?rows.filter(function(r){ return r.kind===FUR.kind; }):rows;
-    var pct=function(n){ return t.customers?Math.round((n/t.customers)*100)+'%':'—'; };
-    m.innerHTML='<div class="card" style="padding:12px 14px">'
-      +'<h2 style="margin:0 0 2px">Ripoti ya ufuatiliaji / Follow-up report</h2>'
-      +'<div class="mut" style="font-size:12px">Mteja mmoja, kikapu kimoja — hivyo namba zinajumlisha kitabu. '
-      +'Ahadi ni "hawajalipa" mpaka deki iseme vinginevyo. / One customer, one bucket, so the numbers add to the book.</div></div>'
-      +'<div class="tiles">'
-      +kinds.map(function(k){
-        return tile(String(labels[k]||k).split(' / ')[0],money(t[k]||0),(FU_KIND_SUB[k]||'')+' · '+pct(t[k]||0),
-          {color:(t[k]?FU_KIND_COLOR[k]:''),on:FUR.kind===k,cta:'chuja ›',go:pick(k)});
-      }).join('')
-      +'</div>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
-      +'<span class="mut" style="font-size:12px">Kipindi:</span>'
-      +'<input id="furFrom" class="inp" type="date" style="width:auto" value="'+esc(FUR.from||'')+'">'
-      +'<input id="furTo" class="inp" type="date" style="width:auto" value="'+esc(FUR.to||'')+'">'
-      +'<button class="btn sm" id="furGo">Chuja / Filter</button>'
-      +'<button class="btn sm ghost" id="furToday">Leo / Today</button>'
-      +'<button class="btn sm ghost" id="furWeek">Siku 7 / Last 7 days</button>'
-      +(FUR.kind?'<button class="btn sm ghost" id="furAllK">Vikapu vyote / All buckets</button>':'')
-      +'<span style="flex:1"></span>'
-      +(BOOT.readOnly?'':'<button class="btn sm" id="furSend">Tuma kwa GM / Send to the GM</button>')
-      +'</div>'
-      +'<div class="mut" style="font-size:12px;margin-bottom:8px">Wateja '+money(t.customers||0)
-      +' · wamefuatiliwa '+money(t.logged||0)+' · simu zilizopigwa '+money(t.calls||0)
-      +(d.deckDate?' · deki ya '+esc(d.deckDate):'')+'</div>'
-      +((d.byOfficer||[]).length?'<div class="scroll" style="margin-bottom:12px"><table><thead><tr><th>AFISA</th><th class="r">WAMEFUATILIWA</th>'
-        +'<th class="r">WALIOPIGIWA</th><th class="r">PAID</th><th class="r">UNPAID</th><th class="r">N/A</th><th class="r">STOLEN</th><th class="r">MAINT.</th></tr></thead><tbody>'
-        +d.byOfficer.map(function(o){
-          return '<tr><td>'+esc(o.officer||'—')+'</td><td class="r">'+money(o.logged||0)+'</td><td class="r">'+money(o.dialled||0)+'</td>'
-            +'<td class="r">'+money(o.paid||0)+'</td><td class="r">'+money(o.unpaid||0)+'</td><td class="r">'+money(o.notAvailable||0)+'</td>'
-            +'<td class="r">'+money(o.stolen||0)+'</td><td class="r">'+money(o.maintenance||0)+'</td></tr>';
-        }).join('')+'</tbody></table></div>':'')
-      +(d.notListed?'<div class="note">'+money(d.notListed)+' hawakuorodheshwa hapa (orodha ni ndefu mno). '
-        +'/ rows beyond the listing cap — the tiles above are complete, this table is not.</div>':'')
-      +(shown.length?'<div class="scroll"><table><thead><tr><th>MTEJA</th><th>IMEI</th><th>KIKAPU</th><th>HALI ILIYOANDIKWA</th>'
-        +'<th>MAELEZO</th><th>AFISA</th><th class="r">SIMU</th><th class="r">OFF</th><th>LINI</th></tr></thead><tbody>'
-        +shown.map(function(r){
-          return '<tr><td>'+esc(r.name||'—')+(r.contact?'<div class="mut" style="font-size:10px">'+esc(r.contact)+'</div>':'')+'</td>'
-            +'<td style="font-size:11px">'+esc(r.imei)+'</td>'
-            +'<td>'+fuChip(r.kind,labels)+'</td>'
-            +'<td style="font-size:11px">'+esc(r.status||'—')+'</td>'
-            +'<td style="font-size:11px">'+esc(r.comment||'')+'</td>'
-            +'<td style="font-size:11px">'+esc(r.by||'—')+'</td>'
-            +'<td class="r">'+money(r.callsMade||0)+'</td>'
-            +'<td class="r">'+(r.daysOffline==null?'—':money(r.daysOffline))+'</td>'
-            +'<td style="font-size:11px">'+esc(r.at?advWhen(r.at):'')+'</td></tr>';
-        }).join('')+'</tbody></table></div>'
-        :'<div class="mut">Hakuna mstari wa aina hii kwenye kipindi hiki. / Nothing in this slice.</div>');
-    wireTiles(m);
-    var go=function(from,to){ FUR={from:from,to:to,team:FUR.team,kind:FUR.kind,explicit:true}; if(TAB==='furep') drawFuRep(m); };
-    $('#furGo').onclick=function(){ go($('#furFrom').value,$('#furTo').value); };
-    $('#furToday').onclick=function(){ go(isoToday(0),isoToday(0)); };
-    // isoToday() counts FORWARD, so a week back is a negative offset -- today included makes 7.
-    $('#furWeek').onclick=function(){ go(isoToday(-6),isoToday(0)); };
-    var ak=$('#furAllK'); if(ak) ak.onclick=function(){ FUR.kind=''; if(TAB==='furep') drawFuRep(m); };
-    var sb=$('#furSend');
-    if(sb) sb.onclick=function(){
-      var b=this; b.disabled=true;
-      srv('fuOutcomesSend',{from:FUR.from,to:FUR.to,team:FUR.team}).then(function(r){
-        toast(r.emailed?'Ripoti imetumwa kwa GM / Sent to the GM':'Email haikutumwa: '+(r.emailNote||''), !r.emailed);
-        b.disabled=false;
-      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
-    };
+  srv('fuOutcomes',args).then(function(d){
+    FUR.last={args:args,data:d,at:Date.now()};
+    fuRepRender(m,d);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function fuRepRender(m,d){
+  var t=d.totals||{}, labels=d.labels||{}, kinds=d.kinds||[], rows=d.rows||[];
+  var pick=function(k){ return function(){ FUR.kind=(FUR.kind===k?'':k); if(TAB==='furep') drawFuRep(m); }; };
+  var shown=FUR.kind?rows.filter(function(r){ return r.kind===FUR.kind; }):rows;
+  var pct=function(n){ return t.customers?Math.round((n/t.customers)*100)+'%':'—'; };
+  m.innerHTML='<div class="card" style="padding:12px 14px">'
+    +'<h2 style="margin:0 0 2px">Ripoti ya ufuatiliaji / Follow-up report</h2>'
+    +'<div class="mut" style="font-size:12px">Mteja mmoja, kikapu kimoja — hivyo namba zinajumlisha kitabu. '
+    +'Ahadi ni "hawajalipa" mpaka deki iseme vinginevyo. / One customer, one bucket, so the numbers add to the book.</div></div>'
+    +'<div class="tiles">'
+    +kinds.map(function(k){
+      return tile(String(labels[k]||k).split(' / ')[0],money(t[k]||0),(FU_KIND_SUB[k]||'')+' · '+pct(t[k]||0),
+        {color:(t[k]?FU_KIND_COLOR[k]:''),on:FUR.kind===k,cta:'chuja ›',go:pick(k)});
+    }).join('')
+    +'</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+    +'<span class="mut" style="font-size:12px">Kipindi:</span>'
+    +'<input id="furFrom" class="inp" type="date" style="width:auto" value="'+esc(FUR.from||'')+'">'
+    +'<input id="furTo" class="inp" type="date" style="width:auto" value="'+esc(FUR.to||'')+'">'
+    +'<button class="btn sm" id="furGo">Chuja / Filter</button>'
+    +'<button class="btn sm ghost" id="furToday">Leo / Today</button>'
+    +'<button class="btn sm ghost" id="furWeek">Siku 7 / Last 7 days</button>'
+    +(FUR.kind?'<button class="btn sm ghost" id="furAllK">Vikapu vyote / All buckets</button>':'')
+    +'<span style="flex:1"></span>'
+    +(BOOT.readOnly?'':'<button class="btn sm" id="furSend">Tuma kwa GM / Send to the GM</button>')
+    +'</div>'
+    +'<div class="mut" style="font-size:12px;margin-bottom:8px">Wateja '+money(t.customers||0)
+    +' · wamefuatiliwa '+money(t.logged||0)+' · simu zilizopigwa '+money(t.calls||0)
+    +(d.deckDate?' · deki ya '+esc(d.deckDate):'')+'</div>'
+    +((d.byOfficer||[]).length?'<div class="scroll" style="margin-bottom:12px"><table><thead><tr><th>AFISA</th><th class="r">WAMEFUATILIWA</th>'
+      +'<th class="r">WALIOPIGIWA</th><th class="r">PAID</th><th class="r">UNPAID</th><th class="r">N/A</th><th class="r">STOLEN</th><th class="r">MAINT.</th></tr></thead><tbody>'
+      +d.byOfficer.map(function(o){
+        return '<tr><td>'+esc(o.officer||'—')+'</td><td class="r">'+money(o.logged||0)+'</td><td class="r">'+money(o.dialled||0)+'</td>'
+          +'<td class="r">'+money(o.paid||0)+'</td><td class="r">'+money(o.unpaid||0)+'</td><td class="r">'+money(o.notAvailable||0)+'</td>'
+          +'<td class="r">'+money(o.stolen||0)+'</td><td class="r">'+money(o.maintenance||0)+'</td></tr>';
+      }).join('')+'</tbody></table></div>':'')
+    +(d.notListed?'<div class="note">'+money(d.notListed)+' hawakuorodheshwa hapa (orodha ni ndefu mno). '
+      +'/ rows beyond the listing cap — the tiles above are complete, this table is not.</div>':'')
+    +(shown.length?'<div class="scroll"><table><thead><tr><th>MTEJA</th><th>IMEI</th><th>KIKAPU</th><th>HALI ILIYOANDIKWA</th>'
+      +'<th>MAELEZO</th><th>AFISA</th><th class="r">SIMU</th><th class="r">OFF</th><th>LINI</th></tr></thead><tbody>'
+      +shown.map(function(r){
+        return '<tr><td>'+esc(r.name||'—')+(r.contact?'<div class="mut" style="font-size:10px">'+esc(r.contact)+'</div>':'')+'</td>'
+          +'<td style="font-size:11px">'+esc(r.imei)+'</td>'
+          +'<td>'+fuChip(r.kind,labels)+'</td>'
+          +'<td style="font-size:11px">'+esc(r.status||'—')+'</td>'
+          +'<td style="font-size:11px">'+esc(r.comment||'')+'</td>'
+          +'<td style="font-size:11px">'+esc(r.by||'—')+'</td>'
+          +'<td class="r">'+money(r.callsMade||0)+'</td>'
+          +'<td class="r">'+(r.daysOffline==null?'—':money(r.daysOffline))+'</td>'
+          +'<td style="font-size:11px">'+esc(r.at?advWhen(r.at):'')+'</td></tr>';
+      }).join('')+'</tbody></table></div>'
+      :'<div class="mut">Hakuna mstari wa aina hii kwenye kipindi hiki. / Nothing in this slice.</div>');
+  wireTiles(m);
+  // A real period change: a fresh FUR (no `last`) means the next drawFuRep() call always
+  // fetches, whatever args it lands on.
+  var go=function(from,to){ FUR={from:from,to:to,team:FUR.team,kind:FUR.kind,explicit:true}; if(TAB==='furep') drawFuRep(m); };
+  $('#furGo').onclick=function(){ go($('#furFrom').value,$('#furTo').value); };
+  $('#furToday').onclick=function(){ go(isoToday(0),isoToday(0)); };
+  // isoToday() counts FORWARD, so a week back is a negative offset -- today included makes 7.
+  $('#furWeek').onclick=function(){ go(isoToday(-6),isoToday(0)); };
+  var ak=$('#furAllK'); if(ak) ak.onclick=function(){ FUR.kind=''; if(TAB==='furep') drawFuRep(m); };
+  var sb=$('#furSend');
+  if(sb) sb.onclick=function(){
+    var b=this; b.disabled=true;
+    srv('fuOutcomesSend',{from:FUR.from,to:FUR.to,team:FUR.team}).then(function(r){
+      toast(r.emailed?'Ripoti imetumwa kwa GM / Sent to the GM':'Email haikutumwa: '+(r.emailNote||''), !r.emailed);
+      b.disabled=false;
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
 }
 
 /* THE DEPARTMENT'S ONE KPI, drawn where the recovery work is done.
@@ -2798,60 +2854,75 @@ function kpiCard(k){
     +'</div>';
 }
 function drawRecovery(m){
+  // Held from a fetch within the last 5 minutes: REC.kind changing calls drawRecovery()
+  // again exactly as before, but srv('recovery') takes no arguments, so a held answer is
+  // never stale in a way a new call would fix -- it renders straight from it.
+  if(REC.last&&(Date.now()-REC.last.at)<5*60000){ recoveryRender(m,REC.last.data); return; }
   m.innerHTML='<div class="card"><h2>Recovery</h2><div class="sk"></div></div>';
   srv('recovery').then(function(d){
-    if(!d.prev){
-      m.innerHTML=kpiCard(d.kpi)
-        +'<div class="card"><h2>Recovery</h2><div class="mut">'+esc(d.note||'Hakuna data bado — pakia orodha ya kwanza.')+'</div></div>';
-      return;
-    }
-    var c=d.counts||{};
-    m.innerHTML=
-      kpiCard(d.kpi)
-      +'<div class="card"><h2>Recovery — '+esc(d.prev)+' → '+esc(d.latest)+'</h2>'
-      +'<div class="mut" style="margin-bottom:10px">Nani amerudi baada ya simu zetu: tunalinganisha upload mbili za mwisho, mteja kwa mteja (IMEI).</div>'
-      /* Four of the five filter the table below; "wamelinganishwa" is the denominator --
-         everybody on both decks -- which is the whole book, and the whole book already has
-         a pane of its own. Sending somebody to a fifth copy of Wateja would be worse than
-         the door they already have. */
-      +'<div class="tiles">'
-      +tile('Wamelinganishwa',money(c.compared),'wapo kwenye deki zote mbili',
-        { go:function(){ goWith('cust',function(){ CUST.list='leo45'; }); }, cta:'wateja ›' })
-      +tile('Wamelipa mara ya kwanza',money(c.paidNew),'',
-        Object.assign({color:'ok'},recBy('paid')))
-      +tile('Siku-offline zimepungua',money(c.reconnected),'',
-        Object.assign({color:'ok'},recBy('better')))
-      +tile('Wamezidi kuzama',money(c.deeper),'wanahitaji simu leo',
-        Object.assign({color:'bad'},recBy('worse')))
-      +tile('Wametoka kwenye orodha',money(c.leftList),'hawakuwepo leo',recBy('left'))
-      +'</div>'
-      /* The same week the dashboard is standing on, and its own way to move it -- the
-         dashboard's bar is not on this screen, and a pane that inherits a week with no
-         control is a pane you cannot get out of last Tuesday from. */
-      +'<div id="recWkBox" style="margin:10px 0 0"></div>'
-      +'<div id="recTrendBox" style="margin:14px 0"><div class="mut">Inapakia chati…</div></div>'
-      /* BRANCH, not the shop-derived team. watu_snapshots only ever carries KINONDONI for
-         this dealer (teamFromShop turns "Hoop Limited, Kinondoni" into one team name), so
-         this column read the same word on every row. The server now overlays the offline
-         queue's real branch per IMEI; the deck's team stays as the fallback. */
-      +(d.notListed?'<div class="note">'+money(d.notListed)+' hawakuorodheshwa hapa (orodha ni ndefu mno). '
-        +'/ rows beyond the listing cap — the counts above are complete, this table is not.</div>':'')
-      +'<div class="scroll"><table><thead><tr><th>Mteja</th><th>Branch</th><th class="r">OFF jana</th><th class="r">OFF leo</th><th></th></tr></thead><tbody>'
-      +recRows(d.rows||[]).map(function(r){
-        /* OFF leo is green only when it actually fell. Painting a rising number green --
-           which it was, for every row -- is the one thing this column must never do. */
-        var down=(r.now!=null&&Number(r.now)<Number(r.was));
-        return '<tr><td>'+esc(r.name)+'<div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td><td>'+esc(r.branch||r.team||'')+'</td>'
-          +'<td class="r">'+money(r.was)+'</td>'
-          +'<td class="r"'+(down?' style="color:var(--ok)"':(r.now==null?'':' style="color:var(--bad)"'))+'>'
-          +(r.now==null?'<span class="mut">hayupo</span>':money(r.now))+'</td>'
-          +'<td>'+recChip(r)+'</td></tr>';
-      }).join('')
-      +(recRows(d.rows||[]).length?'':'<tr><td colspan="5" class="mut">Hakuna mstari wa aina hii. / Nothing in this slice — tap the tile again for all of them.</td></tr>')
-      +'</tbody></table></div></div>';
-    wireTiles(m);
-    drawRecoveryTrend();
+    REC.last={data:d,at:Date.now()};
+    recoveryRender(m,d);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function recoveryRender(m,d){
+  if(!d.prev){
+    m.innerHTML=kpiCard(d.kpi)
+      +'<div class="card"><h2>Recovery</h2><div class="mut">'+esc(d.note||'Hakuna data bado — pakia orodha ya kwanza.')+'</div></div>';
+    return;
+  }
+  var c=d.counts||{};
+  m.innerHTML=
+    kpiCard(d.kpi)
+    +'<div class="card"><h2>Recovery — '+esc(d.prev)+' → '+esc(d.latest)+'</h2>'
+    +'<div class="mut" style="margin-bottom:10px">Nani amerudi baada ya simu zetu: tunalinganisha upload mbili za mwisho, mteja kwa mteja (IMEI).</div>'
+    /* Four of the five filter the table below; "wamelinganishwa" is the denominator --
+       everybody on both decks -- which is the whole book, and the whole book already has
+       a pane of its own. Sending somebody to a fifth copy of Wateja would be worse than
+       the door they already have. */
+    +'<div class="tiles">'
+    +tile('Wamelinganishwa',money(c.compared),'wapo kwenye deki zote mbili',
+      { go:function(){ goWith('cust',function(){ CUST.list='leo45'; }); }, cta:'wateja ›' })
+    +tile('Wamelipa mara ya kwanza',money(c.paidNew),'',
+      Object.assign({color:'ok'},recBy('paid')))
+    +tile('Siku-offline zimepungua',money(c.reconnected),'',
+      Object.assign({color:'ok'},recBy('better')))
+    +tile('Wamezidi kuzama',money(c.deeper),'wanahitaji simu leo',
+      Object.assign({color:'bad'},recBy('worse')))
+    +tile('Wametoka kwenye orodha',money(c.leftList),'hawakuwepo leo',recBy('left'))
+    +'</div>'
+    /* The same week the dashboard is standing on, and its own way to move it -- the
+       dashboard's bar is not on this screen, and a pane that inherits a week with no
+       control is a pane you cannot get out of last Tuesday from. */
+    +'<div id="recWkBox" style="margin:10px 0 0"></div>'
+    +'<div id="recTrendBox" style="margin:14px 0"><div class="mut">Inapakia chati…</div></div>'
+    /* BRANCH, not the shop-derived team. watu_snapshots only ever carries KINONDONI for
+       this dealer (teamFromShop turns "Hoop Limited, Kinondoni" into one team name), so
+       this column read the same word on every row. The server now overlays the offline
+       queue's real branch per IMEI; the deck's team stays as the fallback. */
+    +(d.notListed?'<div class="note">'+money(d.notListed)+' hawakuorodheshwa hapa (orodha ni ndefu mno). '
+      +'/ rows beyond the listing cap — the counts above are complete, this table is not.</div>':'')
+    +'<div class="scroll"><table><thead><tr><th>Mteja</th><th>Branch</th><th class="r">OFF jana</th><th class="r">OFF leo</th><th></th></tr></thead><tbody>'
+    +recRows(d.rows||[]).map(function(r){
+      /* OFF leo is green only when it actually fell. Painting a rising number green --
+         which it was, for every row -- is the one thing this column must never do. */
+      var down=(r.now!=null&&Number(r.now)<Number(r.was));
+      return '<tr><td>'+esc(r.name)+'<div class="mut" style="font-size:10px">'+esc(r.imei)+'</div></td><td>'+esc(r.branch||r.team||'')+'</td>'
+        +'<td class="r">'+money(r.was)+'</td>'
+        +'<td class="r"'+(down?' style="color:var(--ok)"':(r.now==null?'':' style="color:var(--bad)"'))+'>'
+        +(r.now==null?'<span class="mut">hayupo</span>':money(r.now))+'</td>'
+        +'<td>'+recChip(r)+'</td></tr>';
+    }).join('')
+    +(recRows(d.rows||[]).length?'':'<tr><td colspan="5" class="mut">Hakuna mstari wa aina hii. / Nothing in this slice — tap the tile again for all of them.</td></tr>')
+    +'</tbody></table></div></div>';
+  wireTiles(m);
+  /* A REC.kind toggle rebuilds this whole card -- #recTrendBox included -- so without its
+     own hold, every tile click would ALSO cost a fresh recoveryWeek trip on top of the
+     srv('recovery') one just avoided above. drawRecoveryTrend already renders straight from
+     a payload when it is handed one (dashWeekRedraw's own case); it hands it one here too
+     whenever a recent fetch is still good, and only asks the server when it is not. */
+  var trendFresh=RECTREND.data&&(Date.now()-RECTREND.at)<5*60000;
+  if(trendFresh) drawRecoveryTrend(RECTREND.data);
+  else drawRecoveryTrend();
 }
 
 /* ===================================================================================
@@ -3017,6 +3088,11 @@ function credDayOpen(date, dayShort){
   });
 }
 
+/* Held so a REC.kind toggle on the Recovery pane -- which rebuilds #recTrendBox along with
+   the rest of the card -- does not cost this chart a recoveryWeek trip of its own each time;
+   see recoveryRender's own note. Written from EITHER caller below, so whichever pane asked
+   first leaves it warm for the other. */
+var RECTREND={data:null,at:0};
 /* TWO CALLERS, ONE FETCH BETWEEN THEM. Opening the Recovery pane calls this with nothing
    in hand, so it fetches its own copy exactly as before; a week change afterwards goes
    through dashWeekRedraw, which fetches dashboardWeek ONCE for every card the week governs
@@ -3024,9 +3100,12 @@ function credDayOpen(date, dayShort){
    week arrow no longer costs this chart a recoveryWeek trip of its own on top of that one. */
 function drawRecoveryTrend(d){
   var box=$('#recTrendBox'); if(!box) return;
-  if(d){ recoveryTrendRender(d); return; }
+  if(d){ RECTREND={data:d,at:Date.now()}; recoveryTrendRender(d); return; }
   // The SAME chosen week as the per-person grid -- the two charts slide together.
-  srv('recoveryWeek',{week:RECWEEK}).then(recoveryTrendRender).catch(function(e){
+  srv('recoveryWeek',{week:RECWEEK}).then(function(dd){
+    RECTREND={data:dd,at:Date.now()};
+    recoveryTrendRender(dd);
+  }).catch(function(e){
     var b=$('#recTrendBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>';
   });
 }
