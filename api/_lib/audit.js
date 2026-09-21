@@ -281,10 +281,16 @@ export function auditWrite(db, row) {
     it already found: `args.__auditCtx = { before, afterPatch }`, filled in by the handler right
     after its own keyed read and right before its own `.update()`. audited() then builds the
     diff from that -- `before` as read, `after` as `{ ...before, ...afterPatch }` -- and never
-    issues either read of its own. A spec with no selfCtx (or a selfCtx handler whose ctx never
-    got filled, because it threw before reaching its own read) falls back to exactly the two
-    reads this always did; there is no cheaper way to know a value from before a write that
-    already happened. */
+    issues either read of its own. A spec with no selfCtx falls back to exactly the two reads
+    this always did.
+
+    THE HAND-OVER HAPPENS BEFORE ANY GUARD. Each flagged handler sets ctx.before the moment its
+    own keyed read lands -- before "already decided", "already paid", "not approved" can throw
+    -- because a REFUSED attempt is the one this log is most worth reading for, and what the
+    row looked like when somebody tried is half of it. test/pgwar-door-invariant.test.mjs holds
+    that ordering. If a handler still throws with ctx.before empty (it refused before it ever
+    read: no id, not yours, the migration not run), the refusal path below reads the row then:
+    nothing has been written, so a read after the throw is still the row as it stood. */
 export async function audited(db, user, fn, args, run, where) {
   if (!AUDITED.has(fn)) return run();
   const started = Date.now();
@@ -323,9 +329,12 @@ export async function audited(db, user, fn, args, run, where) {
   } catch (e) {
     /* A REFUSED ATTEMPT CHANGED NOTHING, so there is no "after" -- and saying so is the point.
        `before` still rides along: what somebody tried to overwrite is half of what a refused
-       attempt is worth reading for. Read off ctx when the handler got far enough to fill it,
-       off the eager read otherwise -- one of the two is always null. */
-    const beforeRow = selfServed ? (args.__auditCtx && args.__auditCtx.before) : before;
+       attempt is worth reading for. Read off ctx when the handler got far enough to fill it;
+       off the eager read for a spec that never hands over; and when a flagged handler refused
+       before it ever read the row, read it NOW -- nothing was written, so the row after the
+       throw is still the row as it stood. One keyed read, only on that rarest refusal. */
+    const handed = selfServed ? (args.__auditCtx && args.__auditCtx.before) : null;
+    const beforeRow = selfServed ? (handed || (spec ? await auditRowOf(db, spec, args) : null)) : before;
     await auditWrite(db, { ...base, ok: false, error: short(e && e.message) || 'failed',
       ms: Date.now() - started,
       before: beforeRow && spec ? pick_(beforeRow, spec.fields) : null, after: null });
