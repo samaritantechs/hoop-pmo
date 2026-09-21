@@ -12,23 +12,73 @@ import { noteSignin, outcomeOf } from './signin.js';
    it PRINTS. What changed underneath:
 
      the list      = the newest Watu deck (followup_status rows carrying the latest
-                     deck_date), scoped to the caller's team at the database
+                     deck_date) -- ONE company pool, never team-scoped (the team column is
+                     the selling branch, not a fence; see dealMap below) -- dealt to the
+                     caller, or fenced to their own pivot, IN MEMORY off one shared read
      the customer  = one phone, keyed on IMEI (rides in the `ref` field end to end)
      the urgency   = days offline / locked 4+ / locked 7+ / day N of the 45-day window
      no guarantors = the Watu feed has none (starter section 5); the row says so honestly
 
-   THE POSTGRES BUDGET (permanent rule), per handler, warm, on the second handset:
-     boot           4 reads  (teams 1-col, settings x7 in ONE `in` query, device row,
-                              today's own logs) + gate read (cached 30s)
-     list           3 reads  (device row, newest deck_date by index limit 1, deck rows
-                              team-scoped .in) + called-set (cached 30s company-wide)
-     sync           2 reads  (device, DATA_VERSION) + phone index (cached vs DATA_VERSION)
-                    + 2 writes (logs upsert, watermark update)
-     summary        cached 2 min per team-set; a miss = 2 counted reads + 1 small read
-     comments       2 keyed reads; addComment = 1 stub upsert + 1 insert + 1 update
-   Row bounds: every list read is bounded by the day's deck for the caller's teams; no
-   handler reads the whole snapshots history; nothing reads call_logs beyond one day
-   except the leader report, which is date-bounded and team-scoped at the database.
+   THE POSTGRES BUDGET (permanent rule), per handler -- FIRST handset on a cold instance,
+   then SECOND straight after on the SAME warm instance, no write between them. Measured on
+   the fixture in test/speed.test.mjs; test/pgwar-phone.test.mjs and that file's own PHONE
+   section hold every number here to a ceiling, x1.5 rounded up, and raising one is only ever
+   done in the SAME commit as the change that needs it (rewritten 2026-09-21, postgres war):
+
+     boot                4/79 -> 3/79           teams (1 col), settings x8 in ONE `in`
+                                                 query, device row, today's own logs + the
+                                                 open/closed gate (cached 30s, see
+                                                 system-gate.js)
+     list                12/10,575 -> 3/2       device row; the deck and the credit roster
+                                                 are now SHARED PER INSTANCE (sharedDeck,
+                                                 rosterFull -- both below), so the second
+                                                 handset pays only its own device lookup and
+                                                 each cache's own cheap freshness check, not
+                                                 the ~3,000-row deck or the roster again
+     list (AGENT/RSM)    12/10,575 -> 3/2       identical mechanism -- the fence is applied
+                                                 to the SAME shared deck in memory, never a
+                                                 second fetch of it
+     sync                10/9,473 -> 4/2        device, DATA_VERSION (one read, shared with
+                                                 agentIndex's own check when both are asked
+                                                 together -- see currentDataVersion) + the
+                                                 phone index (cached vs DATA_VERSION) + 2
+                                                 writes (logs upsert, watermark update)
+     dailySummary        12/21,824 -> 4/77      the deck read is the SAME shared one list()
+                                                 pays for; the figures on top of it are
+                                                 cached two minutes PER OFFICER, correctly --
+                                                 every one of them (their dealt share, their
+                                                 own calls, their own reach%) is that one
+                                                 person's, never a team's (see the note above
+                                                 summaryForOfficer -- the "per team-set"
+                                                 description used to sit here belonged to
+                                                 summaryFor/summaryCompute alone, below)
+     dailySummary (AGENT/RSM) 14/27,776 -> 4/2  the fenced strip: the same shared deck plus
+                                                 the shared agentIndex register, cached two
+                                                 minutes per fenced identity for the same
+                                                 reason -- their own subtree, never shared
+     comments            3/8 -> 3/9              2 keyed reads; addComment = 1 stub upsert +
+                                                 1 insert + 1 update, WRITE-THROUGH into the
+                                                 shared deck's cached row (noteDeckPatch) so
+                                                 the officer's own follow-up shows on their
+                                                 very next list() with no rebuild
+
+   THE SHARED CACHES BEHIND ALL OF THE ABOVE, per db, in memory only (gone on a redeploy;
+   correct independently on every instance since none of it is meant to cross one):
+     rosterFull    call_users + access_codes (who is on today's roster). A short 30s TTL
+                   rides alongside, but it is busted EXPLICITLY AND SYNCHRONOUSLY -- never
+                   TTL-only -- by register() the instant a new officer's row lands, and by
+                   officerActive/accessCodeSuspend/staffActive in portal.js.
+     sharedDeck    followup_status's newest deck, keyed on (deck_date, DATA_VERSION) exactly
+                   like agentIndex; an upload invalidates it, a comment write-throughs into
+                   the one row it changed instead (comments never bump DATA_VERSION).
+     agentIndex    watu_loans + hoop_agents + hoop_sales (who sold what, who reports to
+                   whom). Keyed on DATA_VERSION with an in-flight promise so concurrent
+                   callers on a cold cache -- customers() awaits it twice, the dashboard
+                   fires several tiles at once -- build it ONCE; busted explicitly by
+                   staffManager/staffActive/staffChannelSave/enrolSave/enrolUpdate.
+     phone index   unchanged by this pass: keyed on DATA_VERSION, see phoneIndex.
+   Row bounds: no handler reads the whole snapshots history; nothing reads call_logs beyond
+   one day except the leader report, which is date-bounded and team-scoped at the database.
    ===================================================================================== */
 
 /* ONE BRAND, AND IT IS OURS.
