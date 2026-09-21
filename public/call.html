@@ -723,7 +723,16 @@ function startSyncLoop(){
   S.syncTimer = setInterval(function(){
     if (document.hidden) return;
     doSync();
-    loadDaySummary(true);
+    /* NOT force=true. Passing true here forced a recompute on every single tick -- as often
+       as every sixty seconds, since S.syncEverySec can be set that low -- which defeated both
+       the 2-minute server cache (see call-core.js's SUMMARY_TTL_MS) and the 15-minute client
+       cooldown this function itself documents at loadDaySummary above. doSync(), the line
+       right above this one, already calls summaryVersionCheck_(r.dataVersion) when it
+       succeeds, and THAT forces a reload the moment an upload actually moved the figures --
+       which is the only event that can change the strip. Passing false here just lets the
+       cooldown govern the ordinary tick, as a backstop for whenever doSync missed the version
+       move (a failed sync, a slow connection) rather than as the usual way the strip updates. */
+    loadDaySummary(false);
     if (!S.entered) return;
     var src = LIST_SOURCE[S.view];
     if (src && !sourceFresh_(src)) fetchSource_(src, false);
