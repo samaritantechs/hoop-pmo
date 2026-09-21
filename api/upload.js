@@ -152,6 +152,7 @@ async function deleteDay(user, day) {
   const { error } = await supabase.from('settings')
     .upsert({ key: 'DATA_VERSION', value: randomUUID() }, { onConflict: 'key' });
   if (error) throw new Error('settings: ' + error.message);
+  clearStockIndex(supabase);   // watu_loans just lost a day: the stock memos read it
   await logUpload(user, 'upload:delete-day', day + ' · deck ' + gone.deck + ' · reg ' + gone.register + ' · hist ' + gone.snapshots);
   return { ok: true, deleted: gone, date: day };
 }
@@ -314,6 +315,7 @@ export default withApi(async (req) => {
       const { error } = await supabase.from('settings')
         .upsert({ key: 'DATA_VERSION', value: batch }, { onConflict: 'key' });
       if (error) throw new Error('settings: ' + error.message);
+      clearStockIndex(supabase);   // the merge wrote watu_loans, which the stock memos read
       await logUpload(user, 'upload:offline-queue', 'rows ' + oq.records.length + ' · notes ' + notesIn);
     }
     return { kind: 'offline', inserted: oq.records.length, notes: notesIn, batch,
@@ -421,6 +423,10 @@ export default withApi(async (req) => {
     const { error } = await supabase.from('settings')
       .upsert({ key: 'DATA_VERSION', value: batch }, { onConflict: 'key' });
     if (error) throw new Error('settings: ' + error.message);
+    /* The deck upsert above rewrote watu_loans, one of the tables the stock memos
+       (api/_lib/stock-index.js) are built from. The other imports bust it where they
+       write; this one busts it here, once per upload, on the slice that moves the version. */
+    clearStockIndex(supabase);
     /* The read-back is a REPORT, never a gate. Every row above is already committed by
        this point, so a hiccup counting them must not turn a finished upload into a failed
        one -- the page simply shows the file's own numbers without the deck's. */
