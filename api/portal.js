@@ -8,7 +8,8 @@ import { nudge } from './_lib/push.js';
 import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signin.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList,
-  TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree } from './_lib/call-core.js';
+  TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree,
+  clearRosterCache } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -8621,6 +8622,9 @@ const FNS = {
       if (!tableMissing(e)) throw e;
       doorKnown = false;
     }
+    // access_codes.suspend_from/to just moved (where the door matched a code) --
+    // rosterFull's away set must see it this instant, not in thirty seconds.
+    clearRosterCache(db);
     return { ok: true, phone, name, active,
       /* What actually happened at the door, in the caller's hands rather than assumed. */
       doorKnown,
@@ -9317,6 +9321,7 @@ const FNS = {
     const active = !!(args && args.active);
     const { error } = await db.from('call_users').update({ active }).eq('user_id', uid);
     if (error) throw new Error(error.message);
+    clearRosterCache(db);   // active just moved -- today's deal must not go on skipping/dealing them
     return { ok: true, userId: uid, active };
   },
 
@@ -9604,6 +9609,7 @@ const FNS = {
       throw new Error(error.message);
     }
     if (!data || !data.length) throw new Error('Unknown code: ' + code);
+    clearRosterCache(db);   // the suspension window just moved -- today's deal must see it now
     return { ok: true, code, from, to };
   },
 

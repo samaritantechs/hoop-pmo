@@ -310,6 +310,11 @@ async function register(db, [dev, name, team, accessCode, phone, passcode, locat
   // must not be a way to re-enable a switched-off account).
   const { error } = await db.from('call_users').upsert(vals, { onConflict: 'user_id' });
   if (error) throw new Error(error.message);
+  /* A NEW (OR CHANGED) ROSTER ROW JUST LANDED -- the cached deal is stale THIS INSTANT, not
+     in thirty seconds. See the note above rosterFull: this is the bust the "registering
+     another credit user re-deals the pool automatically" test depends on, because a
+     TTL-only cache cannot tell the instant before this write from the instant after it. */
+  clearRosterCache(db);
   const { error: e2 } = await db.from('call_users').update({ device_id: null }).eq('device_id', dev).neq('user_id', uid);
   if (e2) throw new Error(e2.message);
   return { ok: true, userId: uid, name, team, leader, leaderTeams: leaderTeams ? leaderTeams.join(',') : (leader ? 'ALL' : '') };
@@ -518,10 +523,39 @@ function fenceSetOf(cu, agents) {
   const me = fenceKeyOf(cu, agents);
   return me ? new Set([me, ...(agents.tree || EMPTY_TREE).descendants(me)]) : new Set();
 }
-/** The deal's roster WITH NAMES -- same single read; names ride along so every list row
-    can say which credit person is chasing that customer (the third chip on the card).
-    Exported: the portal's Wateja shows the same dealt names -- one deal, two screens. */
+/* THE ROSTER'S OWN CACHE -- fixed 2026-09-21 in the postgres war.
+   =========================================================================================
+   rosterFull paid TWO full-table reads (call_users, and access_codes through
+   suspendedNamesOn) on EVERY list() and every summaryForOfficer -- once per handset, for a
+   roster that changes only when somebody registers, is switched on or off, or goes on or
+   off a suspension window. Three hundred officers opening the list within the same minute
+   were three hundred repeats of a read whose answer had not moved.
+
+   MEMOISED PER db, LIKE agentIndex AND calledTodaySet -- but never TTL-only. A TTL alone
+   would let 'registering another credit user re-deals the pool automatically' fail: that
+   test registers a second officer and expects the very next list() to see the new roster,
+   inside the SAME pinned instant a time-based cache cannot tell apart from the instant
+   before. So the cache is busted EXPLICITLY AND SYNCHRONOUSLY -- from register() the moment
+   a new call_users row lands, and from officerActive, accessCodeSuspend and staffActive in
+   portal.js, which are the only other writes that can move who counts as "on today's
+   roster" (active in call_users, or suspended in access_codes). The short TTL below exists
+   only to save the read between two busts that never come, not to stand in for one. */
+const ROSTER_TTL_MS = 30000;
+const rosterCache = new WeakMap();
+/** Called wherever a write can change who is on today's roster: register() here, and
+    officerActive / accessCodeSuspend / staffActive in portal.js. In-memory only -- there is
+    nothing to invalidate on another instance, exactly like agentIndex's own clear. */
+export function clearRosterCache(db) { rosterCache.delete(db); }
+/** The deal's roster WITH NAMES -- same single read (warm: none at all); names ride along
+    so every list row can say which credit person is chasing that customer (the third chip
+    on the card). Exported: the portal's Wateja shows the same dealt names -- one deal, two
+    screens.
+    KEYED ON (db, day) -- a day argument is a DIFFERENT question (recoveryWeek judges a past
+    day against the window as it stood then), so a cache hit requires the same day asked
+    before, not just the same database. */
 export async function rosterFull(db, day = todayKey()) {
+  const hit = rosterCache.get(db);
+  if (hit && hit.day === day && (Date.now() - hit.at) < ROSTER_TTL_MS) return hit.value;
   const rows = await fetchAll(() => db.from('call_users').select('user_id, name, role, active'));
   const away = await suspendedNamesOn(db, day);
   const on = rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role))
@@ -529,7 +563,9 @@ export async function rosterFull(db, day = todayKey()) {
     .sort((a, b) => (String(a.user_id) < String(b.user_id) ? -1 : 1));
   const names = {};
   for (const r of on) names[String(r.user_id)] = r.name || '';
-  return { ids: on.map(r => String(r.user_id)), names };
+  const value = { ids: on.map(r => String(r.user_id)), names };
+  rosterCache.set(db, { day, at: Date.now(), value });
+  return value;
 }
 
 /* WHO IS AWAY, ON A GIVEN DAY.
