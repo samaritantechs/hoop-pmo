@@ -7,6 +7,7 @@ import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
   looksLikeHeader, lifetimeDay } from './_lib/importers.js';
 import { WINDOW_DAYS } from './_lib/call-core.js';
 import { noteSignin, outcomeOf, ipOf, uaOf } from './_lib/signin.js';
+import { clearStockIndex } from './_lib/stock-index.js';
 
 /* =====================================================================================
    POST /api/upload -- the daily Watu list, AND the hoopltd.shop sales export. The header
@@ -231,6 +232,11 @@ export default withApi(async (req) => {
     }
     await writeChunks(supabase, 'hoop_agents',
       ag.records.map(r => ({ ...r, updated_at: new Date().toISOString() })), 'phone');
+    /* Zero cost to this request (an in-memory WeakMap delete, no trip of its own) and every
+       slice, not just the last: the stock-index memo (api/_lib/stock-index.js) must not go
+       on answering OLD STOCK / NEW STOCK with yesterday's register while THIS upload is
+       still landing its later slices. */
+    clearStockIndex(supabase);
     if (isLast) await logUpload(user, 'upload:agents', 'rows ' + ag.records.length);
     return { kind: 'agents', inserted: ag.records.length, batch,
       dropped: ag.dropped.length, droppedRows: ag.dropped.slice(0, 50),
@@ -248,6 +254,8 @@ export default withApi(async (req) => {
     // One row per phone PER REPORT DATE -- movement is the diff between two dates.
     await writeChunks(supabase, 'hoop_aged_stock',
       st.records.map(r => ({ ...r, as_of: snapshotDate, updated_at: new Date().toISOString() })), 'serial,as_of');
+    // See the identical note on the agents import above -- zero-cost, every slice.
+    clearStockIndex(supabase);
     if (isLast) await logUpload(user, 'upload:agedstock', snapshotDate + ' · rows ' + st.records.length);
     return { kind: 'agedstock', inserted: st.records.length, date: snapshotDate, batch,
       dropped: st.dropped.length, droppedRows: st.dropped.slice(0, 50),
@@ -334,6 +342,8 @@ export default withApi(async (req) => {
       if (!/uploaded_by|recorded_by/i.test(String(err && err.message))) throw err;
       await writeChunks(supabase, 'hoop_sales', sales.records.map(bare), 'sale_key');
     }
+    // See the identical note on the agents import above -- zero-cost, every slice.
+    clearStockIndex(supabase);
     if (isLast) await logUpload(user, 'upload:sales', snapshotDate + ' · rows ' + sales.records.length);
     return {
       kind: 'sales',
