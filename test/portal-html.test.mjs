@@ -1965,10 +1965,16 @@ test('portal.html: the stock report is the aging tracker and the distribution bo
    ========================================================================================= */
 test('portal.html: the targets pane draws four scopes and never invents a percentage', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawTargets', html);
-  assert.match(fn, /srv\('targetsView',\{period:TGT\.period\}\)/);
-  assert.match(html, /var TGT=\{period:'',scope:'agent'\};/);
-  assert.match(fn, /TGT\.period=thisMonth_\(\)/, 'this month by default');
+  /* FETCH/RENDER SPLIT: drawTargets only fetches (or renders TGT.data straight back when a
+     scope tab changed nothing the server was asked); targetsRender draws the tiles, the
+     scope tabs and the table. See the postgres-round-trip-audit fix -- every scope tab used
+     to re-fetch srv('targetsView') for the identical period even though it already returns
+     every scope in one payload. */
+  const fetchFn = IMP_SRC('drawTargets', html);
+  assert.match(fetchFn, /srv\('targetsView',\{period:TGT\.period\}\)/);
+  assert.match(html, /var TGT=\{period:'',scope:'agent',data:null\};/);
+  assert.match(fetchFn, /TGT\.period=thisMonth_\(\)/, 'this month by default');
+  const fn = IMP_SRC('targetsRender', html);
   // The scope buttons come from the server's list, so a scope added there appears here.
   assert.match(fn, /\(d\.scopes\|\|\['agent','rsm','branch','company'\]\)\.map/);
   assert.match(fn, /rows=\(d\.rows&&d\.rows\[TGT\.scope\]\)\|\|\[\]/);
@@ -2559,7 +2565,7 @@ test('portal.html: every target on the board says where it came from', () => {
   assert.match(src, /wadhifa: /, 'a role target names the role');
   assert.match(src, /sehemu ya /, 'a share names whose it was before it was divided');
   assert.match(src, /r\.shareOf\?' \\u00F7'\+money\(r\.shareOf\)/, 'and how many ways it went');
-  const fn = IMP_SRC('drawTargets', html);
+  const fn = IMP_SRC('targetsRender', html);
   assert.match(fn, /tgtSource\(r\)/, 'the row carries it');
   assert.match(fn, /r\.rolledQty!=null&&r\.under\?/,
     '"it increases to the higher leadership tiers" -- what everybody beneath adds up to');
@@ -2568,7 +2574,7 @@ test('portal.html: every target on the board says where it came from', () => {
 
 test('portal.html: the role scope is a source, not a scoreboard', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawTargets', html);
+  const fn = IMP_SRC('targetsRender', html);
   assert.match(fn, /TGT\.scope==='role'/);
   assert.match(fn, /<th>WADHIFA<\/th><th class="r">WANAOSHIKA<\/th>/,
     'a role has no sales of its own, so it gets its own columns');
