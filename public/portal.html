@@ -9444,7 +9444,9 @@ function drawTransfers(m){
     +'</div><div id="trBody"><div class="sk"></div></div></div>';
   $all('[data-trw]',m).forEach(function(b){ b.onclick=function(){ TRW=b.getAttribute('data-trw'); drawTransfers(m); }; });
   var body=$('#trBody');
-  if(TRW==='send') trSendWin(m, body);
+  // A fresh open of the Send window: whatever transferUsers answered last time may be
+  // stale (a code minted since, a model added), so this is the one place that drops it.
+  if(TRW==='send'){ TRSEND.data=null; trSendWin(m, body); }
   else if(TRW==='receive') trReceiveWin(m, body);
   else if(TRW==='docs') trDocsWin(m, body);
   else trStockWin(m, body);
@@ -9519,134 +9521,146 @@ function trParseBulkPreview_(text){
   });
   return {rows:rows, bad:bad, who:who};
 }
+/* FETCH ONCE PER WINDOW OPEN. The data-trmode buttons (One receiver / Bulk list / RSM to
+   RSM) only choose which FORM SHAPE to draw over the same users/models transferUsers
+   already answered -- they called trSendWin() again, which re-fetched it every time
+   [measured 5 trips / 4,373 rows per mode switch]. TRSEND.data holds that answer for as
+   long as the Send window stays open; drawTransfers() clears it the moment the window is
+   opened again, so a stale roster never outlives the visit that fetched it. */
+var TRSEND={data:null};
 function trSendWin(m, body){
+  if(TRSEND.data){ trSendRender(m, body, TRSEND.data); return; }
   srv('transferUsers',{}).then(function(d){
-    var users=d.users||[], models=d.models||[], canW=!BOOT.readOnly, me=d.sender||{name:BOOT.name||'',role:BOOT.role||''};
-    if(!canW){ body.innerHTML='<div class="mut">Msimbo huu ni wa kuangalia tu. / This is a view-only code.</div>'; return; }
-    var rsmrsm=TRMODE==='rsmrsm', bulk=TRMODE==='bulk';
-    var pre=Object.keys(TRSEL).join('\n');
-    var roles=[]; users.forEach(function(u){ if(roles.indexOf(u.role)<0) roles.push(u.role); });
-    var ROLE_ORDER=['RSM','AGENT','STORE','ADMIN'];
-    roles.sort(function(a,b){ var ia=ROLE_ORDER.indexOf(a), ib=ROLE_ORDER.indexOf(b); return (ia<0?9:ia)-(ib<0?9:ib)||a.localeCompare(b); });
-    /* KWA NIABA YA RSM WAWILI -- the desk (STORE/ADMIN) filing between two named RSMs,
-       neither of them the one signed in. "sipho wants to transfer stock from RSM to RSM
-       then the 2 rsm must sign approval and this is to be applicable with the 3
-       signatories": the desk's own signature below is the third, mandatory, and the
-       document then waits for BOTH RSMs to sign -- one accepting in Pokea, the other
-       approving here later under their own code -- before the stock actually moves. Only
-       offered to the desk, and only when at least two RSM codes exist to pick between. */
-    var rsms=users.filter(function(u){ return u.role==='RSM'; });
-    body.innerHTML='<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">'
-      +'<button class="btn sm'+(bulk||rsmrsm?' ghost':'')+'" data-trmode="one">Mpokeaji mmoja / One receiver</button>'
-      +'<button class="btn sm'+(bulk?'':' ghost')+'" data-trmode="bulk">Orodha ya wingi / Bulk list</button>'
-      +(d.desk?'<button class="btn sm'+(rsmrsm?'':' ghost')+'" data-trmode="rsmrsm">RSM kwa RSM (kwa niaba) / RSM to RSM (on their behalf)</button>':'')
-      +'</div>'
-      +'<div class="sub">'+(rsmrsm
-        ?'Wewe (stoo) unafungua uhamisho kati ya RSM wawili, bila ya mmoja wao kuingia. Sahihi yako hapa chini ni ya tatu, ya lazima -- uhamisho hausogei mpaka RSM wa kutoa akubali (Uhamisho wake mwenyewe) na RSM wa kupokea akubali (Pokea), kwa mpangilio wowote. / You (the desk) open this between two RSMs, neither of them signed in. Your signature below is the third, mandatory one -- nothing moves until the source RSM approves (their own Transfers login) and the destination RSM accepts (Receive), in either order.'
-        :bulk
-        ?'Bandika orodha kutoka Excel: <b>IMEI</b> kisha <b>jina la anayepokea</b>, mstari mmoja kwa simu. Mfumo utafungua hati moja kwa kila mpokeaji, zote zikiwa na sahihi yako; mstari mmoja ukiwa na kosa hakuna kinachotumwa. / Paste a list from Excel: <b>IMEI</b> then the <b>receiver\'s name</b>, one line per phone. One document opens per receiver, each with your signature; one bad line and nothing is sent.'
-        :'Bandika au chagua IMEI kutoka Stoo, chagua nafasi kisha jina la anayepokea, saini, tuma. Mpokeaji atakubali kwenye Pokea kwa msimbo wake. / Paste or tick IMEIs in Stock, pick the receiver\'s role then name, sign, send. They accept under their own code, in Receive.')+'</div>'
-      +(rsmrsm
-        ?'<div class="fld"><label>Kutoka / From (RSM)</label>'
-          +'<select id="trFromRsm" class="inp"><option value="">— chagua RSM / pick an RSM —</option>'
-          +rsms.map(function(u){ return '<option value="'+esc(u.name)+'">'+esc(u.name)+(u.away?' · amesimamishwa / suspended':'')+'</option>'; }).join('')+'</select></div>'
-          +'<div class="fld"><label>Kwenda / To (RSM)</label>'
-          +'<select id="trToRsm" class="inp"><option value="">— chagua RSM / pick an RSM —</option>'
-          +rsms.map(function(u){ return '<option value="'+esc(u.name)+'">'+esc(u.name)+(u.away?' · amesimamishwa / suspended':'')+'</option>'; }).join('')+'</select></div>'
-          +(rsms.length<2?'<div class="mut" style="font-size:11.5px;margin-top:-4px">Wahitajika angalau RSM wawili wenye msimbo. / Needs at least two RSM codes to exist first.</div>':'')
-        :'<div class="fld"><label>Anayetoa / Sender</label><div style="padding:8px 10px;border:1.5px solid var(--line);border-radius:9px;background:var(--b50,#EFF6FF)"><b>'+esc(me.name)+'</b>'+(me.role?' · '+esc(TR_ROLE_LABEL[me.role]||me.role):'')+' <span class="mut" style="font-size:11px">— akaunti uliyoingia nayo / the account you signed in with</span></div></div>')
-      +(bulk
-        ?'<div class="fld"><label>Orodha: IMEI kisha jina / List: IMEI then name</label>'
-          +'<textarea id="trBulk" rows="10" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123&#9;ANORD SAWE&#10;351234567890124&#9;ANORD SAWE&#10;861234567890125&#9;AISHA BARAZA"></textarea></div>'
-          +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
-        :rsmrsm
-        ?'<div class="fld"><label>IMEI (moja kwa mstari au comma)</label>'
-          +'<textarea id="trImeis" rows="7" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123">'+esc(pre)+'</textarea></div>'
-          +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
-        :'<div class="fld"><label>IMEI (moja kwa mstari au comma)</label>'
-          +'<textarea id="trImeis" rows="7" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123">'+esc(pre)+'</textarea></div>'
-          +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
-          +'<div class="fld"><label>Anayepokea / Receiver</label>'
-          +'<div class="row" style="gap:6px;flex-wrap:wrap">'
-          +'<select id="trToRole" class="inp" style="max-width:220px"><option value="">— nafasi / role —</option>'
-          +roles.map(function(r){ return '<option value="'+esc(r)+'">'+esc(TR_ROLE_LABEL[r]||r)+' ('+users.filter(function(u){return u.role===r;}).length+')</option>'; }).join('')+'</select>'
-          +'<select id="trTo" class="inp" style="flex:1;min-width:220px" disabled><option value="">— chagua nafasi kwanza / pick a role first —</option></select>'
-          +'</div>'+(users.length?'':'<div class="mut" style="font-size:11.5px;margin-top:4px">Hakuna mtumiaji wa mfumo wa RSM/AGENT/STORE bado — fungua NEW STOCK au OLD STOCK mara moja ili misimbo itengenezwe, au endesha db/migrations/RUN-ME-2026-09-18-staff-from-stock.sql. / No RSM/AGENT/STORE system users yet — open NEW STOCK or OLD STOCK once so codes are minted, or run that migration.</div>')+'</div>')
-      +'<div class="fld"><label>Modeli / Item</label><input id="trItem" class="inp" list="trModels" placeholder="chagua au andika / pick or type">'
-      +'<datalist id="trModels">'+models.map(function(x){ return '<option value="'+esc(x)+'">'; }).join('')+'</datalist></div>'
-      +'<div class="fld"><label>Bei kwa kila simu / Unit price</label><input id="trPrice" class="inp" type="number" min="0" step="1000" placeholder="acha wazi = bei ya NEW STOCK / blank = from NEW STOCK"></div>'
-      +'<div class="fld"><label>Maelezo / Note (optional)</label><textarea id="trNote" rows="2" style="width:100%"></textarea></div>'
-      +'<div class="fld" id="trPadWrap"><label>Sahihi yangu / My signature</label>'+trPadHtml_('trPadN')+'</div>'
-      +'<button class="btn w" id="trGo">'+(bulk?'Tuma orodha / Send the list':'Tuma / Send')+'</button>';
-    $all('[data-trmode]',body).forEach(function(b){ b.onclick=function(){ TRMODE=b.getAttribute('data-trmode'); trSendWin(m, body); }; });
-    var out=$('#trCount');
-    var ta=$('#trImeis'), tb=$('#trBulk');
-    var recount=function(){
-      if(bulk){
-        var p=trParseBulkPreview_(tb.value);
-        var names=Object.keys(p.who);
-        out.innerHTML=!p.rows.length&&!p.bad.length?'Bado hakuna mistari. / No lines yet.'
-          :'<b>'+money(p.rows.length)+'</b> simu kwa <b>'+money(names.length)+'</b> wapokeaji / phones for receivers'
-            +(names.length?': '+names.map(function(n){ return esc(n)+' ('+p.who[n]+')'; }).join(', '):'')
-            +(p.bad.length?' · <span style="color:var(--bad)">mistari '+p.bad.slice(0,8).join(', ')+' haisomeki / unreadable</span>':'');
-      } else {
-        var q=devParseImeis_(ta.value);
-        out.innerHTML=!q.list.length?'Bado hakuna IMEI. / No IMEIs yet.'
-          :'<b>'+money(q.list.length)+'</b> simu'+(q.dupes?' · '+money(q.dupes)+' zimerudiwa / repeated':'');
-      }
-    };
-    (bulk?tb:ta).oninput=recount; recount();
-    // Role first, then the people in it -- the list will be long once every RSM and agent holds a code.
-    var roleSel=$('#trToRole'), toSel=$('#trTo');
-    if(roleSel) roleSel.onchange=function(){
-      var r=roleSel.value;
-      var list=users.filter(function(u){ return u.role===r; });
-      toSel.disabled=!r;
-      toSel.innerHTML='<option value="">'+(r?'— chagua jina / pick a name —':'— chagua nafasi kwanza / pick a role first —')+'</option>'
-        +list.map(function(u){ return '<option value="'+esc(u.name)+'">'+esc(u.name)+(u.away?' · amesimamishwa / suspended':'')+'</option>'; }).join('');
-    };
-    var pad=trWirePad_('trPadN');
-    var cl=$('#trPadNClear'); if(cl) cl.onclick=function(){ pad.clear(); };
-    $('#trGo').onclick=function(){
-      if(!pad.isDirty()){ toast('Weka sahihi yako kwanza. / Sign first.', true); return; }
-      var shared={ item:$('#trItem').value, price:$('#trPrice').value, note:$('#trNote').value, signature:pad.dataUrl() };
-      var b=$('#trGo');
-      if(bulk){
-        var p=trParseBulkPreview_(tb.value);
-        if(!p.rows.length){ toast('Bandika orodha kwanza. / Paste the list first.', true); return; }
-        if(p.bad.length){ toast('Mistari '+p.bad.slice(0,5).join(', ')+' haisomeki — IMEI kisha jina. / Lines '+p.bad.slice(0,5).join(', ')+' are unreadable — IMEI then name.', true); return; }
-        b.disabled=true;
-        srv('transferCreateBulk',Object.assign({text:tb.value},shared)).then(function(r){
-          TRSEL={};
-          toast('Nyaraka '+money(r.documents)+' zimefunguliwa kwa simu '+money(r.serials)+' / '+money(r.documents)+' documents opened for '+money(r.serials)+' phones');
-          TRW='docs'; drawTransfers(m);
-        }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
-        return;
-      }
-      var q=devParseImeis_(ta.value);
-      if(!q.list.length){ toast('Chagua au bandika angalau IMEI moja. / Pick or paste at least one IMEI.', true); return; }
-      var payload={ imeis:q.list };
-      if(rsmrsm){
-        var fromRsm=($('#trFromRsm')||{}).value||'', toRsm=($('#trToRsm')||{}).value||'';
-        if(!fromRsm||!toRsm){ toast('Chagua RSM wa kutoa na wa kupokea. / Pick both the source and destination RSM.', true); return; }
-        if(fromRsm===toRsm){ toast('RSM wa kutoa na wa kupokea hawawezi kuwa mtu mmoja. / The source and destination RSM cannot be the same person.', true); return; }
-        payload.fromName=fromRsm; payload.toName=toRsm;
-      } else {
-        var to=toSel?toSel.value.trim():'';
-        if(!to){ toast('Chagua nafasi kisha jina la anayepokea. / Pick the receiver\'s role, then their name.', true); return; }
-        payload.toName=to;
-      }
-      b.disabled=true;
-      srv('transferCreate',Object.assign(payload,shared)).then(function(r){
-        TRSEL={};
-        toast(r.threeWay
-          ?('Uhamisho umefunguliwa: '+r.ref+' · sahihi yako imekamilika, inasubiri '+r.fromName+' na mpokeaji. '
-            +'/ Filed: '+r.ref+' · your signature is in, waiting on '+r.fromName+' and the receiver.')
-          :('Imetumwa: '+r.ref+(r.priced?' · bei ya NEW STOCK kwa simu '+money(r.priced):'')+(r.unknown?' · '+money(r.unknown)+' IMEI hazijulikani kwenye mfumo / unknown to the system':'')));
-        TRW='docs'; drawTransfers(m); trView(m, r.id);
-      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
-    };
+    TRSEND.data=d;
+    trSendRender(m, body, d);
   }).catch(function(e){ paneFailed(body,e); });
+}
+function trSendRender(m, body, d){
+  var users=d.users||[], models=d.models||[], canW=!BOOT.readOnly, me=d.sender||{name:BOOT.name||'',role:BOOT.role||''};
+  if(!canW){ body.innerHTML='<div class="mut">Msimbo huu ni wa kuangalia tu. / This is a view-only code.</div>'; return; }
+  var rsmrsm=TRMODE==='rsmrsm', bulk=TRMODE==='bulk';
+  var pre=Object.keys(TRSEL).join('\n');
+  var roles=[]; users.forEach(function(u){ if(roles.indexOf(u.role)<0) roles.push(u.role); });
+  var ROLE_ORDER=['RSM','AGENT','STORE','ADMIN'];
+  roles.sort(function(a,b){ var ia=ROLE_ORDER.indexOf(a), ib=ROLE_ORDER.indexOf(b); return (ia<0?9:ia)-(ib<0?9:ib)||a.localeCompare(b); });
+  /* KWA NIABA YA RSM WAWILI -- the desk (STORE/ADMIN) filing between two named RSMs,
+     neither of them the one signed in. "sipho wants to transfer stock from RSM to RSM
+     then the 2 rsm must sign approval and this is to be applicable with the 3
+     signatories": the desk's own signature below is the third, mandatory, and the
+     document then waits for BOTH RSMs to sign -- one accepting in Pokea, the other
+     approving here later under their own code -- before the stock actually moves. Only
+     offered to the desk, and only when at least two RSM codes exist to pick between. */
+  var rsms=users.filter(function(u){ return u.role==='RSM'; });
+  body.innerHTML='<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">'
+    +'<button class="btn sm'+(bulk||rsmrsm?' ghost':'')+'" data-trmode="one">Mpokeaji mmoja / One receiver</button>'
+    +'<button class="btn sm'+(bulk?'':' ghost')+'" data-trmode="bulk">Orodha ya wingi / Bulk list</button>'
+    +(d.desk?'<button class="btn sm'+(rsmrsm?'':' ghost')+'" data-trmode="rsmrsm">RSM kwa RSM (kwa niaba) / RSM to RSM (on their behalf)</button>':'')
+    +'</div>'
+    +'<div class="sub">'+(rsmrsm
+      ?'Wewe (stoo) unafungua uhamisho kati ya RSM wawili, bila ya mmoja wao kuingia. Sahihi yako hapa chini ni ya tatu, ya lazima -- uhamisho hausogei mpaka RSM wa kutoa akubali (Uhamisho wake mwenyewe) na RSM wa kupokea akubali (Pokea), kwa mpangilio wowote. / You (the desk) open this between two RSMs, neither of them signed in. Your signature below is the third, mandatory one -- nothing moves until the source RSM approves (their own Transfers login) and the destination RSM accepts (Receive), in either order.'
+      :bulk
+      ?'Bandika orodha kutoka Excel: <b>IMEI</b> kisha <b>jina la anayepokea</b>, mstari mmoja kwa simu. Mfumo utafungua hati moja kwa kila mpokeaji, zote zikiwa na sahihi yako; mstari mmoja ukiwa na kosa hakuna kinachotumwa. / Paste a list from Excel: <b>IMEI</b> then the <b>receiver\'s name</b>, one line per phone. One document opens per receiver, each with your signature; one bad line and nothing is sent.'
+      :'Bandika au chagua IMEI kutoka Stoo, chagua nafasi kisha jina la anayepokea, saini, tuma. Mpokeaji atakubali kwenye Pokea kwa msimbo wake. / Paste or tick IMEIs in Stock, pick the receiver\'s role then name, sign, send. They accept under their own code, in Receive.')+'</div>'
+    +(rsmrsm
+      ?'<div class="fld"><label>Kutoka / From (RSM)</label>'
+        +'<select id="trFromRsm" class="inp"><option value="">— chagua RSM / pick an RSM —</option>'
+        +rsms.map(function(u){ return '<option value="'+esc(u.name)+'">'+esc(u.name)+(u.away?' · amesimamishwa / suspended':'')+'</option>'; }).join('')+'</select></div>'
+        +'<div class="fld"><label>Kwenda / To (RSM)</label>'
+        +'<select id="trToRsm" class="inp"><option value="">— chagua RSM / pick an RSM —</option>'
+        +rsms.map(function(u){ return '<option value="'+esc(u.name)+'">'+esc(u.name)+(u.away?' · amesimamishwa / suspended':'')+'</option>'; }).join('')+'</select></div>'
+        +(rsms.length<2?'<div class="mut" style="font-size:11.5px;margin-top:-4px">Wahitajika angalau RSM wawili wenye msimbo. / Needs at least two RSM codes to exist first.</div>':'')
+      :'<div class="fld"><label>Anayetoa / Sender</label><div style="padding:8px 10px;border:1.5px solid var(--line);border-radius:9px;background:var(--b50,#EFF6FF)"><b>'+esc(me.name)+'</b>'+(me.role?' · '+esc(TR_ROLE_LABEL[me.role]||me.role):'')+' <span class="mut" style="font-size:11px">— akaunti uliyoingia nayo / the account you signed in with</span></div></div>')
+    +(bulk
+      ?'<div class="fld"><label>Orodha: IMEI kisha jina / List: IMEI then name</label>'
+        +'<textarea id="trBulk" rows="10" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123&#9;ANORD SAWE&#10;351234567890124&#9;ANORD SAWE&#10;861234567890125&#9;AISHA BARAZA"></textarea></div>'
+        +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+      :rsmrsm
+      ?'<div class="fld"><label>IMEI (moja kwa mstari au comma)</label>'
+        +'<textarea id="trImeis" rows="7" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123">'+esc(pre)+'</textarea></div>'
+        +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+      :'<div class="fld"><label>IMEI (moja kwa mstari au comma)</label>'
+        +'<textarea id="trImeis" rows="7" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder="351234567890123">'+esc(pre)+'</textarea></div>'
+        +'<div id="trCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
+        +'<div class="fld"><label>Anayepokea / Receiver</label>'
+        +'<div class="row" style="gap:6px;flex-wrap:wrap">'
+        +'<select id="trToRole" class="inp" style="max-width:220px"><option value="">— nafasi / role —</option>'
+        +roles.map(function(r){ return '<option value="'+esc(r)+'">'+esc(TR_ROLE_LABEL[r]||r)+' ('+users.filter(function(u){return u.role===r;}).length+')</option>'; }).join('')+'</select>'
+        +'<select id="trTo" class="inp" style="flex:1;min-width:220px" disabled><option value="">— chagua nafasi kwanza / pick a role first —</option></select>'
+        +'</div>'+(users.length?'':'<div class="mut" style="font-size:11.5px;margin-top:4px">Hakuna mtumiaji wa mfumo wa RSM/AGENT/STORE bado — fungua NEW STOCK au OLD STOCK mara moja ili misimbo itengenezwe, au endesha db/migrations/RUN-ME-2026-09-18-staff-from-stock.sql. / No RSM/AGENT/STORE system users yet — open NEW STOCK or OLD STOCK once so codes are minted, or run that migration.</div>')+'</div>')
+    +'<div class="fld"><label>Modeli / Item</label><input id="trItem" class="inp" list="trModels" placeholder="chagua au andika / pick or type">'
+    +'<datalist id="trModels">'+models.map(function(x){ return '<option value="'+esc(x)+'">'; }).join('')+'</datalist></div>'
+    +'<div class="fld"><label>Bei kwa kila simu / Unit price</label><input id="trPrice" class="inp" type="number" min="0" step="1000" placeholder="acha wazi = bei ya NEW STOCK / blank = from NEW STOCK"></div>'
+    +'<div class="fld"><label>Maelezo / Note (optional)</label><textarea id="trNote" rows="2" style="width:100%"></textarea></div>'
+    +'<div class="fld" id="trPadWrap"><label>Sahihi yangu / My signature</label>'+trPadHtml_('trPadN')+'</div>'
+    +'<button class="btn w" id="trGo">'+(bulk?'Tuma orodha / Send the list':'Tuma / Send')+'</button>';
+  $all('[data-trmode]',body).forEach(function(b){ b.onclick=function(){ TRMODE=b.getAttribute('data-trmode'); trSendWin(m, body); }; });
+  var out=$('#trCount');
+  var ta=$('#trImeis'), tb=$('#trBulk');
+  var recount=function(){
+    if(bulk){
+      var p=trParseBulkPreview_(tb.value);
+      var names=Object.keys(p.who);
+      out.innerHTML=!p.rows.length&&!p.bad.length?'Bado hakuna mistari. / No lines yet.'
+        :'<b>'+money(p.rows.length)+'</b> simu kwa <b>'+money(names.length)+'</b> wapokeaji / phones for receivers'
+          +(names.length?': '+names.map(function(n){ return esc(n)+' ('+p.who[n]+')'; }).join(', '):'')
+          +(p.bad.length?' · <span style="color:var(--bad)">mistari '+p.bad.slice(0,8).join(', ')+' haisomeki / unreadable</span>':'');
+    } else {
+      var q=devParseImeis_(ta.value);
+      out.innerHTML=!q.list.length?'Bado hakuna IMEI. / No IMEIs yet.'
+        :'<b>'+money(q.list.length)+'</b> simu'+(q.dupes?' · '+money(q.dupes)+' zimerudiwa / repeated':'');
+    }
+  };
+  (bulk?tb:ta).oninput=recount; recount();
+  // Role first, then the people in it -- the list will be long once every RSM and agent holds a code.
+  var roleSel=$('#trToRole'), toSel=$('#trTo');
+  if(roleSel) roleSel.onchange=function(){
+    var r=roleSel.value;
+    var list=users.filter(function(u){ return u.role===r; });
+    toSel.disabled=!r;
+    toSel.innerHTML='<option value="">'+(r?'— chagua jina / pick a name —':'— chagua nafasi kwanza / pick a role first —')+'</option>'
+      +list.map(function(u){ return '<option value="'+esc(u.name)+'">'+esc(u.name)+(u.away?' · amesimamishwa / suspended':'')+'</option>'; }).join('');
+  };
+  var pad=trWirePad_('trPadN');
+  var cl=$('#trPadNClear'); if(cl) cl.onclick=function(){ pad.clear(); };
+  $('#trGo').onclick=function(){
+    if(!pad.isDirty()){ toast('Weka sahihi yako kwanza. / Sign first.', true); return; }
+    var shared={ item:$('#trItem').value, price:$('#trPrice').value, note:$('#trNote').value, signature:pad.dataUrl() };
+    var b=$('#trGo');
+    if(bulk){
+      var p=trParseBulkPreview_(tb.value);
+      if(!p.rows.length){ toast('Bandika orodha kwanza. / Paste the list first.', true); return; }
+      if(p.bad.length){ toast('Mistari '+p.bad.slice(0,5).join(', ')+' haisomeki — IMEI kisha jina. / Lines '+p.bad.slice(0,5).join(', ')+' are unreadable — IMEI then name.', true); return; }
+      b.disabled=true;
+      srv('transferCreateBulk',Object.assign({text:tb.value},shared)).then(function(r){
+        TRSEL={};
+        toast('Nyaraka '+money(r.documents)+' zimefunguliwa kwa simu '+money(r.serials)+' / '+money(r.documents)+' documents opened for '+money(r.serials)+' phones');
+        TRW='docs'; drawTransfers(m);
+      }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+      return;
+    }
+    var q=devParseImeis_(ta.value);
+    if(!q.list.length){ toast('Chagua au bandika angalau IMEI moja. / Pick or paste at least one IMEI.', true); return; }
+    var payload={ imeis:q.list };
+    if(rsmrsm){
+      var fromRsm=($('#trFromRsm')||{}).value||'', toRsm=($('#trToRsm')||{}).value||'';
+      if(!fromRsm||!toRsm){ toast('Chagua RSM wa kutoa na wa kupokea. / Pick both the source and destination RSM.', true); return; }
+      if(fromRsm===toRsm){ toast('RSM wa kutoa na wa kupokea hawawezi kuwa mtu mmoja. / The source and destination RSM cannot be the same person.', true); return; }
+      payload.fromName=fromRsm; payload.toName=toRsm;
+    } else {
+      var to=toSel?toSel.value.trim():'';
+      if(!to){ toast('Chagua nafasi kisha jina la anayepokea. / Pick the receiver\'s role, then their name.', true); return; }
+      payload.toName=to;
+    }
+    b.disabled=true;
+    srv('transferCreate',Object.assign(payload,shared)).then(function(r){
+      TRSEL={};
+      toast(r.threeWay
+        ?('Uhamisho umefunguliwa: '+r.ref+' · sahihi yako imekamilika, inasubiri '+r.fromName+' na mpokeaji. '
+          +'/ Filed: '+r.ref+' · your signature is in, waiting on '+r.fromName+' and the receiver.')
+        :('Imetumwa: '+r.ref+(r.priced?' · bei ya NEW STOCK kwa simu '+money(r.priced):'')+(r.unknown?' · '+money(r.unknown)+' IMEI hazijulikani kwenye mfumo / unknown to the system':'')));
+      TRW='docs'; drawTransfers(m); trView(m, r.id);
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
 }
 
 /* POKEA: waiting for me -- open, read the serials, sign to accept or decline in words. Below
