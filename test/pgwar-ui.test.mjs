@@ -129,3 +129,42 @@ test('portalAddComment returns the new comment\'s own fields, not just ok/imei',
   assert.equal(list.items[0].fu_status, r.fu_status);
   assert.equal(list.items[0].created_by, r.created_by);
 });
+
+/* =========================================================================================
+   FIX 8 -- transferDecline hands back declinedAt/declinedBy/reason, so the transfer drawer
+   can merge them onto the document it is already showing instead of calling transferGet
+   again to learn the outcome of the decline it just made.
+   ========================================================================================= */
+function oneTransfer(over) {
+  const now = new Date().toISOString();
+  return Object.assign({
+    id: 'T1', ref: 'TR-1', created_at: now, created_by: 'AGENT ONE',
+    from_name: 'AGENT ONE', from_phone: null, from_role: 'AGENT',
+    to_name: 'RSM DAR', to_phone: null, to_role: 'RSM',
+    note: null, item_count: 1, total_qty: 1, total_amount: 100000,
+    sender_signature: 'sig', sender_signed_by: 'AGENT ONE', sender_signed_at: now,
+    receiver_signature: null, receiver_signed_by: null, receiver_signed_at: null,
+    status: 'sent', accepted_at: null, accepted_by: null,
+    declined_at: null, declined_by: null, decline_reason: null,
+    moved: null, three_way: false, desk_signature: null, desk_signed_by: null, desk_signed_at: null,
+    updated_at: now,
+  }, over || {});
+}
+const RSM_DAR_ = { code: 'R1', name: 'RSM DAR', role: 'RSM', teams: null, tabs: ['transfers'], readOnly: false };
+
+test('transferDecline returns declinedAt/declinedBy/reason, not just ok/id', async () => {
+  const d = fakeDb({ transfers: [oneTransfer()] });
+  const r = await _FNS.transferDecline(d, RSM_DAR_, { id: 'T1', reason: 'Wrong model' });
+  assert.equal(r.ok, true);
+  assert.equal(r.declinedBy, 'RSM DAR');
+  assert.equal(r.reason, 'Wrong model');
+  assert.ok(r.declinedAt, 'a timestamp the drawer can print with clock(), same as transferGet carries');
+
+  // And it matches the row transferGet would show afterwards -- the client's own merge
+  // (trMergeDecline_) has nothing to disagree with.
+  const row = d._dump('transfers').find(t => t.id === 'T1');
+  assert.equal(row.status, 'declined');
+  assert.equal(row.declined_by, r.declinedBy);
+  assert.equal(row.decline_reason, r.reason);
+  assert.equal(Date.parse(row.declined_at), Date.parse(r.declinedAt));
+});

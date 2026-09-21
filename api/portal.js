@@ -10911,7 +10911,10 @@ const FNS = {
         + TR_FLOW_FILE + ' first — declining needs the status column it adds.');
       throw new Error(error.message);
     }
-    return { ok: true, id };
+    /* THE THREE FIELDS THE DRAWER NEEDS TO REDRAW ITSELF, already computed two lines up as
+       at/user.name/reason -- riding back on the write instead of leaving the client to fetch
+       the whole document again (transferGet) just to learn the outcome of the write it made. */
+    return { ok: true, id, declinedAt: at, declinedBy: user.name, reason: reason.slice(0, 400) };
   },
 
   /** The SENDER's own signature, once -- for a document sent without signing. The receiver

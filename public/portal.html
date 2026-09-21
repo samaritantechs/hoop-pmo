@@ -10005,133 +10005,171 @@ function trSaveDoc_(t){
     })
     .catch(function(e){ toast(safeErr(e), true); });
 }
+/* THE THREE MERGES -- one per write, each mirroring EXACTLY what that FNS does to the row
+   server-side (see transferSign/transferAccept/transferDecline's own comments), so the
+   merged object reads the same as a fresh transferGet would have. Kept OUTSIDE trViewRender
+   because they describe the SERVER's rule, not this screen's -- the one place either would
+   need to change if that rule ever does. */
+function trMergeSign_(t, r){
+  t.senderSignedBy=r.signedBy; t.senderSignedAt=Date.now();
+  // readyToMove in transferSign: true only on a three-way document whose receiver had
+  // already signed -- this signature is then the one that finishes it and moves the stock.
+  if(r.moved){
+    t.status='accepted'; t.moved=r.moved;
+    t.acceptedAt=Date.now(); t.acceptedBy=t.receiverSignedBy||r.signedBy;
+  }
+}
+function trMergeAccept_(t, r){
+  t.receiverSignedBy=BOOT.name||''; t.receiverSignedAt=Date.now();
+  if(r.pending) return;   // three-way, still waiting on the source RSM -- status stays 'sent'
+  t.status='accepted'; t.moved=r.moved; t.acceptedAt=Date.now(); t.acceptedBy=BOOT.name||'';
+}
+function trMergeDecline_(t, r){
+  t.status='declined'; t.declinedAt=Date.parse(r.declinedAt)||Date.now();
+  t.declinedBy=r.declinedBy; t.declineReason=r.reason;
+}
+/* FETCH ONCE, THEN MERGE. Signing, accepting or declining used to call trView(m,id) again on
+   success -- a fresh srv('transferGet') for a document the drawer had just finished writing
+   to, on top of the list's own re-fetch (drawTransfers, which stays: the list genuinely needs
+   its own updated read). Each write already returns what changed; trViewRender folds those
+   fields onto the SAME `t` object rather than asking the server to say them again. */
 function trView(m, id){
   drawer('<div class="sk"></div>');
   srv('transferGet',{id:id}).then(function(d){
-    var t=d.transfer, mine=t.mine||{}, canW=!BOOT.readOnly;
-    var waiting=t.status==='sent';
-    var docHtml='<div class="printDoc">'
-      +'<h2 style="margin:0 0 2px">HOOPLOAN</h2>'
-      +'<div class="mut" style="margin-bottom:10px">Hati ya uhamisho wa stoo / Stock transfer document</div>'
-      +'<div class="row" style="gap:24px;flex-wrap:wrap;margin-bottom:10px">'
-      +'<div><b>Namba / Ref:</b> '+esc(t.ref)+'<br><b>Tarehe / Date:</b> '+esc(clock(t.at))
-      +'<br><b>Iliyofunguliwa na / Opened by:</b> '+esc(t.createdBy)+'<br><b>Hali / Status:</b> '+trStatusChip(t)+'</div>'
-      +'<div><b>Kutoka / From:</b> '+esc(t.fromName)+(t.fromRole?' ('+esc(t.fromRole)+')':'')+(t.fromPhone?' · '+esc(t.fromPhone):'')+'<br>'
-      +'<b>Kwenda / To:</b> '+esc(t.toName)+(t.toRole?' ('+esc(t.toRole)+')':'')+(t.toPhone?' · '+esc(t.toPhone):'')
-      +(t.status==='accepted'?'<br><b>Imekubaliwa / Accepted:</b> '+esc(clock(t.acceptedAt))+(t.moved!=null?' · simu '+money(t.moved)+' zimehama / moved':''):'')
-      +(t.status==='declined'?'<br><b>Imekataliwa / Declined:</b> '+esc(clock(t.declinedAt))+' — '+esc(t.declineReason||''):'')
-      +'</div></div>'
-      +(t.threeWay&&t.status==='sent'?'<div class="mut" style="margin-bottom:10px">Uhamisho kwa niaba -- unahitaji sahihi tatu: stoo (imekwisha), '
-        +esc(t.fromName)+' na '+esc(t.toName)+'. Bado inasubiri: '
-        +[!t.senderSignedBy?esc(t.fromName):null, !t.receiverSignedBy?esc(t.toName):null].filter(Boolean).join(', ')
-        +'. / On-behalf transfer -- needs three signatures: the desk (done), '+esc(t.fromName)+' and '+esc(t.toName)+'. Still waiting on: '
-        +[!t.senderSignedBy?esc(t.fromName):null, !t.receiverSignedBy?esc(t.toName):null].filter(Boolean).join(', ')+'.</div>':'')
-      +(t.note?'<div class="mut" style="margin-bottom:10px">'+esc(t.note)+'</div>':'')
-      /* S/N ON THE LEFT -- "add S/N column on left": a printed list of forty serials is counted
-         and ticked off against the box by that number, so it is the first thing on the row. */
-      /* "remove bei na jumla on sending summary columns since idadi is enough": Sipho's
-         summary is a count of handsets moving, not their value -- the price columns stay
-         stamped on the item (NEW STOCK, commission) but are no longer printed here. */
-      +'<div class="scroll"><table><thead><tr><th class="r">S/N</th><th>IMEI</th><th>MODELI</th><th>ILIKUWA KWA</th><th>WAPI</th>'
-      +'<th class="r">IDADI</th></tr></thead><tbody>'
-      +t.items.map(function(x,i){
-        return '<tr><td class="r mut">'+(i+1)+'</td><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(x.imei)+'</td>'
-          +'<td>'+esc(x.item||'—')+'</td><td>'+esc(x.prevHolder||'—')+'</td><td>'+trSrc(x.source)+'</td>'
-          +'<td class="r">'+money(x.qty)+'</td></tr>';
-      }).join('')
-      +'</tbody><tfoot><tr class="totrow"><td colspan="5"><b>Jumla / Total</b> · simu '+money(t.items.length)+'</td>'
-      +'<td class="r"><b>'+money(t.totalQty)+'</b></td></tr></tfoot></table></div>'
-      +'<div class="row" style="gap:20px;flex-wrap:wrap;margin-top:16px;align-items:flex-start">'
-      +(t.threeWay?trSigBlock_('Sahihi ya stoo / Desk signature','desk',t):'')
-      +trSigBlock_('Sahihi ya anayetoa / Sender signature','sender',t)
-      +trSigBlock_('Sahihi ya anayepokea / Receiver signature','receiver',t)
-      +'</div></div>';
-    var html=docHtml;
-    var canSignS = canW && !t.senderSignedBy && t.status!=='declined' && mine.sender;
-    if(canSignS) html+='<div class="noprint card" style="margin-top:12px;padding:12px">'
-      +'<b>Saini upande wako / Sign your side</b>'
-      +trPadHtml_('trPadS')+'<div style="margin-top:6px"><button class="btn sm" id="trGoS">Saini / Sign</button> '
-      // A three-way document is the ONE case where the SENDER may also decline -- an ordinary
-      // sender opened the document themselves, so there is nothing for them to refuse.
-      +(t.threeWay?'<button class="btn sm ghost" id="trDeclineS">✖ Kataa / Decline</button>':'')+'</div></div>';
-    var canAct = canW && waiting && !t.receiverSignedBy && mine.receiver;
-    if(canAct) html+='<div class="noprint card" style="margin-top:12px;padding:12px"><b>Kubali au kataa / Accept or decline</b>'
-      +'<div class="mut" style="font-size:11.5px;margin:4px 0 8px">Kukubali = kusaini, na simu zote hapa zinakuwa mkononi mwako kwenye kila orodha'
-      +(t.threeWay?' -- mara tu '+esc(t.fromName)+' naye akubali':'')+'. '
-      +'/ Accepting signs, and every handset here becomes yours on every list'+(t.threeWay?' -- once '+esc(t.fromName)+' approves too':'')+'.</div>'
-      +trPadHtml_('trPadR')
-      +'<div style="margin-top:6px"><button class="btn sm" id="trAccept">✔ Kubali na saini / Accept &amp; sign</button> '
-      +'<button class="btn sm ghost" id="trDecline">✖ Kataa / Decline</button></div></div>';
-    // The DESK is a real party only on a three-way document, and only while it is still
-    // waiting: their own signature is already in from filing it, so there is nothing left to
-    // sign here -- only the option to call the whole thing off before both RSMs finish.
-    var canDeclineDesk = canW && t.threeWay && waiting && mine.desk && !mine.sender && !mine.receiver;
-    if(canDeclineDesk) html+='<div class="noprint card" style="margin-top:12px;padding:12px">'
-      +'<div class="mut" style="font-size:11.5px;margin-bottom:6px">Umeshasaini kama stoo ulipofungua hii. Bado inasubiri '
-      +[!t.senderSignedBy?esc(t.fromName):null, !t.receiverSignedBy?esc(t.toName):null].filter(Boolean).join(' na ')+'. '
-      +'/ Your own signature is already in, from filing this. Still waiting on '
-      +[!t.senderSignedBy?esc(t.fromName):null, !t.receiverSignedBy?esc(t.toName):null].filter(Boolean).join(' and ')+'.</div>'
-      +'<button class="btn sm ghost" id="trDeclineDesk">✖ Ghairi uhamisho / Cancel this transfer</button></div>';
-    /* TWO WAYS OUT, because a phone has only one of them. Inside the app Chapisha saves the
-       PDF instead of pressing a print dialog that is not there -- and says so -- while Hifadhi
-       PDF is on both, for the copy that gets sent rather than carried. */
-    html+='<div class="noprint row" style="margin-top:12px;gap:8px">'
-      +'<button class="btn" id="trPrint" style="flex:1">🖨 Chapisha / Print</button>'
-      +'<button class="btn ghost" id="trPdf" style="flex:1">⤓ Hifadhi PDF / Save PDF</button></div>'
-      +'<div class="noprint mut" style="font-size:11.5px;margin-top:4px">Kwenye simu: PDF huhifadhiwa kwenye <b>Downloads</b>. '
-      +'/ On a phone the PDF is saved to Downloads.</div>';
-    drawer('<h3>Uhamisho / Transfer '+esc(t.ref)+'</h3>'+html);
-    var padS=canSignS?trWirePad_('trPadS'):null, padR=canAct?trWirePad_('trPadR'):null;
-    var cs=$('#trPadSClear'); if(cs&&padS) cs.onclick=function(){ padS.clear(); };
-    var cr=$('#trPadRClear'); if(cr&&padR) cr.onclick=function(){ padR.clear(); };
-    var refresh=function(){ trView(m, id); if(TAB==='transfers') drawTransfers(m); };
-    var gs=$('#trGoS');
-    if(gs) gs.onclick=function(){
-      if(!padS||!padS.isDirty()){ toast('Weka sahihi kwanza. / Draw a signature first.', true); return; }
-      gs.disabled=true;
-      srv('transferSign',{id:id, role:'sender', signature:padS.dataUrl()})
-        .then(function(){ toast('Imesainiwa / Signed'); refresh(); })
-        .catch(function(e){ gs.disabled=false; toast(safeErr(e), true); });
-    };
-    var ga=$('#trAccept');
-    if(ga) ga.onclick=function(){
-      if(!padR||!padR.isDirty()){ toast('Weka sahihi kwanza. / Draw a signature first.', true); return; }
-      ga.disabled=true;
-      srv('transferAccept',{id:id, signature:padR.dataUrl()}).then(function(r){
-        // A three-way document still waiting on the source RSM signs but does not move yet --
-        // the server says so in r.note rather than a moved count.
-        toast(r.pending?r.note
-          :('Imekubaliwa: simu '+money(r.moved)+' zimehama'+(r.unknown?' · '+money(r.unknown)+' hazikujulikana kwenye mfumo':'')
-            +' / Accepted: '+money(r.moved)+' moved'));
-        refresh();
-      }).catch(function(e){ ga.disabled=false; toast(safeErr(e), true); });
-    };
-    var declineAs=function(btn){
-      if(!btn) return;
-      btn.onclick=function(){
-        var why=prompt('Sababu ya kukataa / Reason for declining:');
-        if(why==null) return;
-        if(!why.trim()){ toast('Andika sababu. / A reason is required.', true); return; }
-        btn.disabled=true;
-        srv('transferDecline',{id:id, reason:why}).then(function(){ toast('Imekataliwa / Declined'); refresh(); })
-          .catch(function(e){ btn.disabled=false; toast(safeErr(e), true); });
-      };
-    };
-    declineAs($('#trDecline'));    // the receiver, in Kubali/Accept-or-decline
-    declineAs($('#trDeclineS'));   // the source RSM, on a three-way document, alongside signing
-    declineAs($('#trDeclineDesk')); // the filing desk, on a three-way document, before both RSMs finish
-    /* THE WRAPPER HAS NO PRINT DIALOG. window.print() in that WebView does nothing at all, so
-       on a phone Chapisha hands over the file the officer actually wanted; everywhere else it
-       prints the document from its own page (printDoc_). */
-    var inApp=!!(window.HoopLoan||window.HopeCalls);
-    var pr=$('#trPrint');
-    if(pr) pr.onclick=function(){
-      if(inApp){ toast('Simu haina printa — inahifadhi PDF kwenye Downloads. / No print dialog on a phone: saving the PDF to Downloads.'); trSaveDoc_(t); return; }
-      printDoc_(docHtml, 'Uhamisho / Transfer '+t.ref);
-    };
-    var pd=$('#trPdf');
-    if(pd) pd.onclick=function(){ pd.disabled=true; trSaveDoc_(t).then(function(){ pd.disabled=false; }); };
+    trViewRender(m, id, d.transfer);
   }).catch(function(e){ closeDrawer(); toast(safeErr(e), true); });
+}
+function trViewRender(m, id, t){
+  var mine=t.mine||{}, canW=!BOOT.readOnly;
+  var waiting=t.status==='sent';
+  var docHtml='<div class="printDoc">'
+    +'<h2 style="margin:0 0 2px">HOOPLOAN</h2>'
+    +'<div class="mut" style="margin-bottom:10px">Hati ya uhamisho wa stoo / Stock transfer document</div>'
+    +'<div class="row" style="gap:24px;flex-wrap:wrap;margin-bottom:10px">'
+    +'<div><b>Namba / Ref:</b> '+esc(t.ref)+'<br><b>Tarehe / Date:</b> '+esc(clock(t.at))
+    +'<br><b>Iliyofunguliwa na / Opened by:</b> '+esc(t.createdBy)+'<br><b>Hali / Status:</b> '+trStatusChip(t)+'</div>'
+    +'<div><b>Kutoka / From:</b> '+esc(t.fromName)+(t.fromRole?' ('+esc(t.fromRole)+')':'')+(t.fromPhone?' · '+esc(t.fromPhone):'')+'<br>'
+    +'<b>Kwenda / To:</b> '+esc(t.toName)+(t.toRole?' ('+esc(t.toRole)+')':'')+(t.toPhone?' · '+esc(t.toPhone):'')
+    +(t.status==='accepted'?'<br><b>Imekubaliwa / Accepted:</b> '+esc(clock(t.acceptedAt))+(t.moved!=null?' · simu '+money(t.moved)+' zimehama / moved':''):'')
+    +(t.status==='declined'?'<br><b>Imekataliwa / Declined:</b> '+esc(clock(t.declinedAt))+' — '+esc(t.declineReason||''):'')
+    +'</div></div>'
+    +(t.threeWay&&t.status==='sent'?'<div class="mut" style="margin-bottom:10px">Uhamisho kwa niaba -- unahitaji sahihi tatu: stoo (imekwisha), '
+      +esc(t.fromName)+' na '+esc(t.toName)+'. Bado inasubiri: '
+      +[!t.senderSignedBy?esc(t.fromName):null, !t.receiverSignedBy?esc(t.toName):null].filter(Boolean).join(', ')
+      +'. / On-behalf transfer -- needs three signatures: the desk (done), '+esc(t.fromName)+' and '+esc(t.toName)+'. Still waiting on: '
+      +[!t.senderSignedBy?esc(t.fromName):null, !t.receiverSignedBy?esc(t.toName):null].filter(Boolean).join(', ')+'.</div>':'')
+    +(t.note?'<div class="mut" style="margin-bottom:10px">'+esc(t.note)+'</div>':'')
+    /* S/N ON THE LEFT -- "add S/N column on left": a printed list of forty serials is counted
+       and ticked off against the box by that number, so it is the first thing on the row. */
+    /* "remove bei na jumla on sending summary columns since idadi is enough": Sipho's
+       summary is a count of handsets moving, not their value -- the price columns stay
+       stamped on the item (NEW STOCK, commission) but are no longer printed here. */
+    +'<div class="scroll"><table><thead><tr><th class="r">S/N</th><th>IMEI</th><th>MODELI</th><th>ILIKUWA KWA</th><th>WAPI</th>'
+    +'<th class="r">IDADI</th></tr></thead><tbody>'
+    +t.items.map(function(x,i){
+      return '<tr><td class="r mut">'+(i+1)+'</td><td style="font-family:ui-monospace,monospace;font-size:11px">'+esc(x.imei)+'</td>'
+        +'<td>'+esc(x.item||'—')+'</td><td>'+esc(x.prevHolder||'—')+'</td><td>'+trSrc(x.source)+'</td>'
+        +'<td class="r">'+money(x.qty)+'</td></tr>';
+    }).join('')
+    +'</tbody><tfoot><tr class="totrow"><td colspan="5"><b>Jumla / Total</b> · simu '+money(t.items.length)+'</td>'
+    +'<td class="r"><b>'+money(t.totalQty)+'</b></td></tr></tfoot></table></div>'
+    +'<div class="row" style="gap:20px;flex-wrap:wrap;margin-top:16px;align-items:flex-start">'
+    +(t.threeWay?trSigBlock_('Sahihi ya stoo / Desk signature','desk',t):'')
+    +trSigBlock_('Sahihi ya anayetoa / Sender signature','sender',t)
+    +trSigBlock_('Sahihi ya anayepokea / Receiver signature','receiver',t)
+    +'</div></div>';
+  var html=docHtml;
+  var canSignS = canW && !t.senderSignedBy && t.status!=='declined' && mine.sender;
+  if(canSignS) html+='<div class="noprint card" style="margin-top:12px;padding:12px">'
+    +'<b>Saini upande wako / Sign your side</b>'
+    +trPadHtml_('trPadS')+'<div style="margin-top:6px"><button class="btn sm" id="trGoS">Saini / Sign</button> '
+    // A three-way document is the ONE case where the SENDER may also decline -- an ordinary
+    // sender opened the document themselves, so there is nothing for them to refuse.
+    +(t.threeWay?'<button class="btn sm ghost" id="trDeclineS">✖ Kataa / Decline</button>':'')+'</div></div>';
+  var canAct = canW && waiting && !t.receiverSignedBy && mine.receiver;
+  if(canAct) html+='<div class="noprint card" style="margin-top:12px;padding:12px"><b>Kubali au kataa / Accept or decline</b>'
+    +'<div class="mut" style="font-size:11.5px;margin:4px 0 8px">Kukubali = kusaini, na simu zote hapa zinakuwa mkononi mwako kwenye kila orodha'
+    +(t.threeWay?' -- mara tu '+esc(t.fromName)+' naye akubali':'')+'. '
+    +'/ Accepting signs, and every handset here becomes yours on every list'+(t.threeWay?' -- once '+esc(t.fromName)+' approves too':'')+'.</div>'
+    +trPadHtml_('trPadR')
+    +'<div style="margin-top:6px"><button class="btn sm" id="trAccept">✔ Kubali na saini / Accept &amp; sign</button> '
+    +'<button class="btn sm ghost" id="trDecline">✖ Kataa / Decline</button></div></div>';
+  // The DESK is a real party only on a three-way document, and only while it is still
+  // waiting: their own signature is already in from filing it, so there is nothing left to
+  // sign here -- only the option to call the whole thing off before both RSMs finish.
+  var canDeclineDesk = canW && t.threeWay && waiting && mine.desk && !mine.sender && !mine.receiver;
+  if(canDeclineDesk) html+='<div class="noprint card" style="margin-top:12px;padding:12px">'
+    +'<div class="mut" style="font-size:11.5px;margin-bottom:6px">Umeshasaini kama stoo ulipofungua hii. Bado inasubiri '
+    +[!t.senderSignedBy?esc(t.fromName):null, !t.receiverSignedBy?esc(t.toName):null].filter(Boolean).join(' na ')+'. '
+    +'/ Your own signature is already in, from filing this. Still waiting on '
+    +[!t.senderSignedBy?esc(t.fromName):null, !t.receiverSignedBy?esc(t.toName):null].filter(Boolean).join(' and ')+'.</div>'
+    +'<button class="btn sm ghost" id="trDeclineDesk">✖ Ghairi uhamisho / Cancel this transfer</button></div>';
+  /* TWO WAYS OUT, because a phone has only one of them. Inside the app Chapisha saves the
+     PDF instead of pressing a print dialog that is not there -- and says so -- while Hifadhi
+     PDF is on both, for the copy that gets sent rather than carried. */
+  html+='<div class="noprint row" style="margin-top:12px;gap:8px">'
+    +'<button class="btn" id="trPrint" style="flex:1">🖨 Chapisha / Print</button>'
+    +'<button class="btn ghost" id="trPdf" style="flex:1">⤓ Hifadhi PDF / Save PDF</button></div>'
+    +'<div class="noprint mut" style="font-size:11.5px;margin-top:4px">Kwenye simu: PDF huhifadhiwa kwenye <b>Downloads</b>. '
+    +'/ On a phone the PDF is saved to Downloads.</div>';
+  drawer('<h3>Uhamisho / Transfer '+esc(t.ref)+'</h3>'+html);
+  var padS=canSignS?trWirePad_('trPadS'):null, padR=canAct?trWirePad_('trPadR'):null;
+  var cs=$('#trPadSClear'); if(cs&&padS) cs.onclick=function(){ padS.clear(); };
+  var cr=$('#trPadRClear'); if(cr&&padR) cr.onclick=function(){ padR.clear(); };
+  /* Re-renders the SAME `t` a merge just updated -- no transferGet -- and still refreshes
+     the list, which is a different, still-necessary read (drawTransfers shows other rows
+     too, not just this one). */
+  var refresh=function(mergeFn, r){
+    mergeFn(t, r);
+    trViewRender(m, id, t);
+    if(TAB==='transfers') drawTransfers(m);
+  };
+  var gs=$('#trGoS');
+  if(gs) gs.onclick=function(){
+    if(!padS||!padS.isDirty()){ toast('Weka sahihi kwanza. / Draw a signature first.', true); return; }
+    gs.disabled=true;
+    srv('transferSign',{id:id, role:'sender', signature:padS.dataUrl()})
+      .then(function(r){ toast('Imesainiwa / Signed'); refresh(trMergeSign_, r); })
+      .catch(function(e){ gs.disabled=false; toast(safeErr(e), true); });
+  };
+  var ga=$('#trAccept');
+  if(ga) ga.onclick=function(){
+    if(!padR||!padR.isDirty()){ toast('Weka sahihi kwanza. / Draw a signature first.', true); return; }
+    ga.disabled=true;
+    srv('transferAccept',{id:id, signature:padR.dataUrl()}).then(function(r){
+      // A three-way document still waiting on the source RSM signs but does not move yet --
+      // the server says so in r.note rather than a moved count.
+      toast(r.pending?r.note
+        :('Imekubaliwa: simu '+money(r.moved)+' zimehama'+(r.unknown?' · '+money(r.unknown)+' hazikujulikana kwenye mfumo':'')
+          +' / Accepted: '+money(r.moved)+' moved'));
+      refresh(trMergeAccept_, r);
+    }).catch(function(e){ ga.disabled=false; toast(safeErr(e), true); });
+  };
+  var declineAs=function(btn){
+    if(!btn) return;
+    btn.onclick=function(){
+      var why=prompt('Sababu ya kukataa / Reason for declining:');
+      if(why==null) return;
+      if(!why.trim()){ toast('Andika sababu. / A reason is required.', true); return; }
+      btn.disabled=true;
+      srv('transferDecline',{id:id, reason:why}).then(function(r){ toast('Imekataliwa / Declined'); refresh(trMergeDecline_, r); })
+        .catch(function(e){ btn.disabled=false; toast(safeErr(e), true); });
+    };
+  };
+  declineAs($('#trDecline'));    // the receiver, in Kubali/Accept-or-decline
+  declineAs($('#trDeclineS'));   // the source RSM, on a three-way document, alongside signing
+  declineAs($('#trDeclineDesk')); // the filing desk, on a three-way document, before both RSMs finish
+  /* THE WRAPPER HAS NO PRINT DIALOG. window.print() in that WebView does nothing at all, so
+     on a phone Chapisha hands over the file the officer actually wanted; everywhere else it
+     prints the document from its own page (printDoc_). */
+  var inApp=!!(window.HoopLoan||window.HopeCalls);
+  var pr=$('#trPrint');
+  if(pr) pr.onclick=function(){
+    if(inApp){ toast('Simu haina printa — inahifadhi PDF kwenye Downloads. / No print dialog on a phone: saving the PDF to Downloads.'); trSaveDoc_(t); return; }
+    printDoc_(docHtml, 'Uhamisho / Transfer '+t.ref);
+  };
+  var pd=$('#trPdf');
+  if(pd) pd.onclick=function(){ pd.disabled=true; trSaveDoc_(t).then(function(){ pd.disabled=false; }); };
 }
 /* PRINTING THE WHOLE DOCUMENT, NOT THE FIRST SCREEN OF IT.
    =====================================================================================
