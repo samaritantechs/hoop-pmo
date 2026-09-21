@@ -8573,7 +8573,14 @@ function drawIssueRep(m){
    they are answerable for: held now, held too long, and what LEFT their hands. A departure
    is judged three ways -- sold (in our sales book), kwa Watu (financed but no sale record),
    or UNACCOUNTED, which is the line that matters and is deliberately not called theft. */
-var STOCKACCT={pivot:'company',open:null,moved:null,sort:''};
+/* FETCH/RENDER SPLIT -- the drawSalesPerf/salesRender pattern. stockAccount returns every
+   pivot in one payload (company/store/rsm/agent are the same rows, cut four ways in one
+   pass), yet the pivot tabs, every sort tile and the two IMEI/transfer toggles all called
+   drawStockAccount() again, each re-issuing srv('stockAccount',{}) for an answer that had
+   not changed [measured 4 trips / 1,372 rows per click]. STOCKACCT.data holds what the one
+   fetch returned; every control below now calls stockAccountRender(m), which draws from it,
+   and nothing re-fetches. */
+var STOCKACCT={pivot:'company',open:null,moved:null,sort:'',data:null,at:0};
 /* The default order already puts the worst first -- most unaccounted, then most stale. A
    tile only overrides it, and only on the one column the tile is about; the tie-breakers
    below it stay, so two holders level on the sorted column still read worst-first. */
@@ -8586,109 +8593,118 @@ function saSorted(rows){
   });
 }
 function drawStockAccount(m){
+  // Held for five minutes -- there is no argument here that can go stale sooner; this pane
+  // always asks for the newest report pair, so a held answer is only ever as old as its age.
+  var fresh=STOCKACCT.data&&(Date.now()-STOCKACCT.at)<5*60000;
+  if(fresh) return stockAccountRender(m);
   m.innerHTML='<div class="card"><h2>Stock accountability</h2><div class="sk"></div></div>';
   srv('stockAccount',{}).then(function(d){
-    var pivots=[['company','Company'],['store','Store (Sipho)'],['rsm','RSMs'],['agent','Agents']];
-    var sec=d[STOCKACCT.pivot]||{rows:[],totals:{}};
-    var t=sec.totals||{};
-    if(!d.asOf){
-      m.innerHTML='<div class="card"><h2>Stock accountability</h2>'
-        +'<div class="mut">Hakuna ripoti ya stock bado — pakia ripoti ya SyscoPos ya Sipho kwenye /upload. '
-        +'/ No stock report uploaded yet.</div></div>';
-      return;
-    }
-    var tabs='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
-      +pivots.map(function(p){
-        return '<button class="btn sm'+(STOCKACCT.pivot===p[0]?'':' ghost')+'" data-sa="'+p[0]+'">'+p[1]+'</button>';
-      }).join('')+'</div>';
-    /* EVERY TILE IS A COLUMN OF THE TABLE BELOW, so clicking one answers "who" by bringing
-       the worst to the top -- never by hiding anybody, which on an accountability screen
-       would be the wrong instinct entirely. Clicking the live one puts the default order
-       back. */
-    var by=function(col,cta){ return { on:STOCKACCT.sort===col, cta:cta||'nani ›',
-      go:function(){ STOCKACCT.sort=(STOCKACCT.sort===col?'':col); STOCKACCT.open=null;
-        drawStockAccount(m); } }; };
-    var head='<div class="tiles">'
-      +tile('Zilizopo / held now',money(t.held||0),
-        money(t.holders||0)+' holders · ripoti '+esc(d.asOf),by('held'))
-      +tile('Zimekaa sana / stale',money(t.stale||0),money(d.staleDays)+'+ siku mkononi',
-        Object.assign({color:((t.stale||0)?'bad':'')},by('stale')))
-      +tile('Zilizotoka / left stock',money(t.gone||0),'tangu ripoti ya '+esc(d.prevAsOf||'—'),by('gone'))
-      +tile('Zimehamishwa / transferred',money(t.moved||0),'zipo kwa mtu mwingine, si zimepotea',
-        by('moved','nani kapewa ›'))
-      +tile('Zimeuzwa / sold',money(t.sold||0),'zipo kwenye kitabu cha mauzo',
-        Object.assign({color:'ok'},by('sold')))
-      +tile('HAZIJULIKANI / unaccounted',money(t.unaccounted||0),'hazipo mauzoni wala Watu',
-        Object.assign({color:((t.unaccounted||0)?'bad':'')},by('unaccounted','IMEI ›')))
-      +'</div>';
-    var note='<div class="mut" style="margin:8px 0">Simu iliyohamishiwa mwenzake haipotei: ikiwa bado ipo kwenye ripoti ya leo kwa jina lingine, '
-      +'inasomeka <b>imehamishwa</b>, si haijulikani. Na kila IMEI isiyojulikana tunaitafuta kwenye ripoti ZOTE — '
-      +'kama mtu mwingine aliwahi kuwa nayo, jina lake linaonekana kwenye orodha ya IMEI (ni <b>dalili</b>, si uthibitisho — '
-      +'simu bado haijulikani). / A transfer still on the report reads as transferred; every unaccounted IMEI is searched '
-      +'across all reports and names anyone else who held it, as a lead, not a clearance.<br>'
-      +'Simu iliyotoka kwenye stock ina njia tatu za kweli: '
-      +'<b>imeuzwa</b> (ipo kwenye kitabu cha mauzo), <b>kwa Watu</b> (imefadhiliwa lakini haipo mauzoni — hilo ni kosa la karatasi, si wizi), '
-      +'au <b>haijulikani</b> — haipo popote. Safu ya mwisho ndiyo ya kuulizia, na inaonyesha aliyekuwa nayo mwisho. '
-      +'/ Unaccounted = left stock and appears in neither the sales book nor the Watu register.'
-      +(d.notChecked?' <b style="color:var(--bad)">'+money(d.notChecked)+' departures were not judged this run (cap reached) — they are NOT counted above.</b>':'')
-      +'</div>';
-    var rows=saSorted(sec.rows||[]);
-    var hd=function(col,label){ return '<th class="r"'+(STOCKACCT.sort===col?' style="color:var(--b600)"':'')+'>'+label+'</th>'; };
-    var table=rows.length
-      ? '<div class="scroll"><table><thead><tr><th>Holder</th><th>Role</th>'
-        +hd('held','Held')+hd('stale','Stale')+hd('gone','Left')+hd('moved','Moved')
-        +hd('sold','Sold')+'<th class="r">Kwa Watu</th>'+hd('unaccounted','Unaccounted')
-        +'<th></th></tr></thead><tbody>'
-        +rows.map(function(r,i){
-          return '<tr><td><b>'+esc(r.holder)+'</b>'+(r.branch?'<div class="mut" style="font-size:10px">'+esc(r.branch)+'</div>':'')+'</td>'
-            +'<td>'+esc(r.role||'—')+'</td>'
-            +'<td class="r">'+money(r.held)+'</td>'
-            +'<td class="r"'+(r.stale?' style="color:var(--bad)"':'')+'>'+money(r.stale)+'</td>'
-            +'<td class="r">'+money(r.gone)+'</td>'
-            +'<td class="r">'+((r.moved||0)?'<button class="btn sm ghost" data-sam="'+i+'">'+money(r.moved)+'</button>':'0')+'</td>'
-            +'<td class="r" style="color:var(--ok)">'+money(r.sold)+'</td>'
-            +'<td class="r">'+money(r.watu)+'</td>'
-            +'<td class="r"'+(r.unaccounted?' style="color:var(--bad);font-weight:700"':'')+'>'+money(r.unaccounted)+'</td>'
-            +'<td class="r">'+(r.unaccounted?'<button class="btn sm ghost" data-sax="'+i+'">IMEI</button>':'')+'</td></tr>'
-            +(STOCKACCT.moved===i&&(r.movedList||[]).length
-              ? '<tr><td colspan="10" style="background:var(--b50)"><b style="font-size:12px">Zimehamishwa kutoka '+esc(r.holder)+' — nani kazipata</b>'
-                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th>Sasa yupo kwa</th><th>Ripoti</th></tr></thead><tbody>'
-                +r.movedList.map(function(x){
-                  /* Same name = it never actually changed hands; it just missed the newest
-                     report. Saying that plainly stops somebody going to ask a colleague
-                     about a phone that never left them. */
-                  return '<tr><td style="font-size:11px">'+esc(x.serial)+'</td><td>'+esc(x.item||'—')+'</td>'
-                    +'<td>'+(x.same?'<span class="mut">bado kwake / still theirs</span>':'<b>'+esc(x.to)+'</b>')+'</td>'
-                    +'<td class="mut" style="font-size:11px">'+esc(x.asOf||'—')+'</td></tr>';
-                }).join('')+'</tbody></table></div></td></tr>'
-              : '')
-            +(STOCKACCT.open===i&&r.unaccountedList.length
-              ? '<tr><td colspan="10" style="background:var(--b50)"><b style="font-size:12px">Hazijulikani — '+esc(r.holder)+'</b>'
-                +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th class="r">Age</th><th>Nani mwingine aliwahi kuwa nayo</th></tr></thead><tbody>'
-                +r.unaccountedList.map(function(s){
-                  /* A LEAD, NOT AN ACCUSATION -- the phone is still unaccounted for, this is
-                     just who to ask first instead of starting from nothing. */
-                  return '<tr><td style="font-size:11px">'+esc(s.serial)+'</td><td>'+esc(s.item||'—')+'</td>'
-                    +'<td class="r">'+(s.age!=null?money(s.age):'—')+'</td>'
-                    +'<td>'+(s.alsoHeldBy?'<b>'+esc(s.alsoHeldBy)+'</b> <span class="mut" style="font-size:10px">'+esc(s.alsoHeldOn||'')+'</span>'
-                                          :'<span class="mut">—</span>')+'</td></tr>';
-                }).join('')+'</tbody></table></div></td></tr>'
-              : '');
-        }).join('')+'</tbody></table></div>'
-      : '<div class="mut">Hakuna mwenye stock kwenye kundi hili. / Nobody in this pivot holds stock.</div>';
-    m.innerHTML='<div class="card"><h2>Stock accountability</h2>'
-      +'<div class="mut" style="margin-bottom:8px">Ripoti ya '+esc(d.asOf)+' ikilinganishwa na ya '+esc(d.prevAsOf||'—')
-      +'. / Newest stock report against the one before it.</div>'
-      +tabs+head+note+table+'</div>';
-    $all('[data-sa]').forEach(function(b){ b.onclick=function(){ STOCKACCT.pivot=b.getAttribute('data-sa'); STOCKACCT.open=null; drawStockAccount(m); }; });
-    wireTiles(m);
-    $all('[data-sax]').forEach(function(b){ b.onclick=function(){
-      var i=Number(b.getAttribute('data-sax')); STOCKACCT.open=(STOCKACCT.open===i?null:i);
-      STOCKACCT.moved=null; drawStockAccount(m); }; });
-    $all('[data-sam]').forEach(function(b){ b.onclick=function(){
-      var i=Number(b.getAttribute('data-sam')); STOCKACCT.moved=(STOCKACCT.moved===i?null:i);
-      STOCKACCT.open=null; drawStockAccount(m); }; });
+    STOCKACCT.data=d; STOCKACCT.at=Date.now();
+    stockAccountRender(m);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function stockAccountRender(m){
+  var d=STOCKACCT.data; if(!d) return;
+  var pivots=[['company','Company'],['store','Store (Sipho)'],['rsm','RSMs'],['agent','Agents']];
+  var sec=d[STOCKACCT.pivot]||{rows:[],totals:{}};
+  var t=sec.totals||{};
+  if(!d.asOf){
+    m.innerHTML='<div class="card"><h2>Stock accountability</h2>'
+      +'<div class="mut">Hakuna ripoti ya stock bado — pakia ripoti ya SyscoPos ya Sipho kwenye /upload. '
+      +'/ No stock report uploaded yet.</div></div>';
+    return;
+  }
+  var tabs='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+    +pivots.map(function(p){
+      return '<button class="btn sm'+(STOCKACCT.pivot===p[0]?'':' ghost')+'" data-sa="'+p[0]+'">'+p[1]+'</button>';
+    }).join('')+'</div>';
+  /* EVERY TILE IS A COLUMN OF THE TABLE BELOW, so clicking one answers "who" by bringing
+     the worst to the top -- never by hiding anybody, which on an accountability screen
+     would be the wrong instinct entirely. Clicking the live one puts the default order
+     back. */
+  var by=function(col,cta){ return { on:STOCKACCT.sort===col, cta:cta||'nani ›',
+    go:function(){ STOCKACCT.sort=(STOCKACCT.sort===col?'':col); STOCKACCT.open=null;
+      stockAccountRender(m); } }; };
+  var head='<div class="tiles">'
+    +tile('Zilizopo / held now',money(t.held||0),
+      money(t.holders||0)+' holders · ripoti '+esc(d.asOf),by('held'))
+    +tile('Zimekaa sana / stale',money(t.stale||0),money(d.staleDays)+'+ siku mkononi',
+      Object.assign({color:((t.stale||0)?'bad':'')},by('stale')))
+    +tile('Zilizotoka / left stock',money(t.gone||0),'tangu ripoti ya '+esc(d.prevAsOf||'—'),by('gone'))
+    +tile('Zimehamishwa / transferred',money(t.moved||0),'zipo kwa mtu mwingine, si zimepotea',
+      by('moved','nani kapewa ›'))
+    +tile('Zimeuzwa / sold',money(t.sold||0),'zipo kwenye kitabu cha mauzo',
+      Object.assign({color:'ok'},by('sold')))
+    +tile('HAZIJULIKANI / unaccounted',money(t.unaccounted||0),'hazipo mauzoni wala Watu',
+      Object.assign({color:((t.unaccounted||0)?'bad':'')},by('unaccounted','IMEI ›')))
+    +'</div>';
+  var note='<div class="mut" style="margin:8px 0">Simu iliyohamishiwa mwenzake haipotei: ikiwa bado ipo kwenye ripoti ya leo kwa jina lingine, '
+    +'inasomeka <b>imehamishwa</b>, si haijulikani. Na kila IMEI isiyojulikana tunaitafuta kwenye ripoti ZOTE — '
+    +'kama mtu mwingine aliwahi kuwa nayo, jina lake linaonekana kwenye orodha ya IMEI (ni <b>dalili</b>, si uthibitisho — '
+    +'simu bado haijulikani). / A transfer still on the report reads as transferred; every unaccounted IMEI is searched '
+    +'across all reports and names anyone else who held it, as a lead, not a clearance.<br>'
+    +'Simu iliyotoka kwenye stock ina njia tatu za kweli: '
+    +'<b>imeuzwa</b> (ipo kwenye kitabu cha mauzo), <b>kwa Watu</b> (imefadhiliwa lakini haipo mauzoni — hilo ni kosa la karatasi, si wizi), '
+    +'au <b>haijulikani</b> — haipo popote. Safu ya mwisho ndiyo ya kuulizia, na inaonyesha aliyekuwa nayo mwisho. '
+    +'/ Unaccounted = left stock and appears in neither the sales book nor the Watu register.'
+    +(d.notChecked?' <b style="color:var(--bad)">'+money(d.notChecked)+' departures were not judged this run (cap reached) — they are NOT counted above.</b>':'')
+    +'</div>';
+  var rows=saSorted(sec.rows||[]);
+  var hd=function(col,label){ return '<th class="r"'+(STOCKACCT.sort===col?' style="color:var(--b600)"':'')+'>'+label+'</th>'; };
+  var table=rows.length
+    ? '<div class="scroll"><table><thead><tr><th>Holder</th><th>Role</th>'
+      +hd('held','Held')+hd('stale','Stale')+hd('gone','Left')+hd('moved','Moved')
+      +hd('sold','Sold')+'<th class="r">Kwa Watu</th>'+hd('unaccounted','Unaccounted')
+      +'<th></th></tr></thead><tbody>'
+      +rows.map(function(r,i){
+        return '<tr><td><b>'+esc(r.holder)+'</b>'+(r.branch?'<div class="mut" style="font-size:10px">'+esc(r.branch)+'</div>':'')+'</td>'
+          +'<td>'+esc(r.role||'—')+'</td>'
+          +'<td class="r">'+money(r.held)+'</td>'
+          +'<td class="r"'+(r.stale?' style="color:var(--bad)"':'')+'>'+money(r.stale)+'</td>'
+          +'<td class="r">'+money(r.gone)+'</td>'
+          +'<td class="r">'+((r.moved||0)?'<button class="btn sm ghost" data-sam="'+i+'">'+money(r.moved)+'</button>':'0')+'</td>'
+          +'<td class="r" style="color:var(--ok)">'+money(r.sold)+'</td>'
+          +'<td class="r">'+money(r.watu)+'</td>'
+          +'<td class="r"'+(r.unaccounted?' style="color:var(--bad);font-weight:700"':'')+'>'+money(r.unaccounted)+'</td>'
+          +'<td class="r">'+(r.unaccounted?'<button class="btn sm ghost" data-sax="'+i+'">IMEI</button>':'')+'</td></tr>'
+          +(STOCKACCT.moved===i&&(r.movedList||[]).length
+            ? '<tr><td colspan="10" style="background:var(--b50)"><b style="font-size:12px">Zimehamishwa kutoka '+esc(r.holder)+' — nani kazipata</b>'
+              +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th>Sasa yupo kwa</th><th>Ripoti</th></tr></thead><tbody>'
+              +r.movedList.map(function(x){
+                /* Same name = it never actually changed hands; it just missed the newest
+                   report. Saying that plainly stops somebody going to ask a colleague
+                   about a phone that never left them. */
+                return '<tr><td style="font-size:11px">'+esc(x.serial)+'</td><td>'+esc(x.item||'—')+'</td>'
+                  +'<td>'+(x.same?'<span class="mut">bado kwake / still theirs</span>':'<b>'+esc(x.to)+'</b>')+'</td>'
+                  +'<td class="mut" style="font-size:11px">'+esc(x.asOf||'—')+'</td></tr>';
+              }).join('')+'</tbody></table></div></td></tr>'
+            : '')
+          +(STOCKACCT.open===i&&r.unaccountedList.length
+            ? '<tr><td colspan="10" style="background:var(--b50)"><b style="font-size:12px">Hazijulikani — '+esc(r.holder)+'</b>'
+              +'<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Serial / IMEI</th><th>Item</th><th class="r">Age</th><th>Nani mwingine aliwahi kuwa nayo</th></tr></thead><tbody>'
+              +r.unaccountedList.map(function(s){
+                /* A LEAD, NOT AN ACCUSATION -- the phone is still unaccounted for, this is
+                   just who to ask first instead of starting from nothing. */
+                return '<tr><td style="font-size:11px">'+esc(s.serial)+'</td><td>'+esc(s.item||'—')+'</td>'
+                  +'<td class="r">'+(s.age!=null?money(s.age):'—')+'</td>'
+                  +'<td>'+(s.alsoHeldBy?'<b>'+esc(s.alsoHeldBy)+'</b> <span class="mut" style="font-size:10px">'+esc(s.alsoHeldOn||'')+'</span>'
+                                        :'<span class="mut">—</span>')+'</td></tr>';
+              }).join('')+'</tbody></table></div></td></tr>'
+            : '');
+      }).join('')+'</tbody></table></div>'
+    : '<div class="mut">Hakuna mwenye stock kwenye kundi hili. / Nobody in this pivot holds stock.</div>';
+  m.innerHTML='<div class="card"><h2>Stock accountability</h2>'
+    +'<div class="mut" style="margin-bottom:8px">Ripoti ya '+esc(d.asOf)+' ikilinganishwa na ya '+esc(d.prevAsOf||'—')
+    +'. / Newest stock report against the one before it.</div>'
+    +tabs+head+note+table+'</div>';
+  $all('[data-sa]').forEach(function(b){ b.onclick=function(){ STOCKACCT.pivot=b.getAttribute('data-sa'); STOCKACCT.open=null; stockAccountRender(m); }; });
+  wireTiles(m);
+  $all('[data-sax]').forEach(function(b){ b.onclick=function(){
+    var i=Number(b.getAttribute('data-sax')); STOCKACCT.open=(STOCKACCT.open===i?null:i);
+    STOCKACCT.moved=null; stockAccountRender(m); }; });
+  $all('[data-sam]').forEach(function(b){ b.onclick=function(){
+    var i=Number(b.getAttribute('data-sam')); STOCKACCT.moved=(STOCKACCT.moved===i?null:i);
+    STOCKACCT.open=null; stockAccountRender(m); }; });
 }
 
 /* ---------- daily sales performance ----------
