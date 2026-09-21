@@ -763,56 +763,92 @@ function shareOf(rows, roster, uid, day) {
    the tokens, uppercased, sorted, rejoined. */
 export const nameKey = s => K(s).split(/\s+/).filter(Boolean).sort().join(' ');
 const agentIdxCache = new WeakMap();
+/* THE RESOLVED CACHE HAD NO IN-FLIGHT DE-DUPE -- fixed 2026-09-21 in the postgres war.
+   =========================================================================================
+   Two calls into `agentIdxCache` a millisecond apart, on a database that has not built the
+   index yet, both see no hit and both start the SAME three-table build (watu_loans +
+   hoop_agents + hoop_sales, thousands of rows) -- and that "two calls a millisecond apart"
+   is not a rare accident. `customers()` awaits agentIndex twice in one Promise.all; the
+   dashboard fires notifications/recoveryWeek/salesWeek/boot together, each pulling its own
+   copy; dailySummary on the phone does it again on its own timer. A cold cache used to pay
+   for the register once PER CONCURRENT CALLER rather than once per instance.
+
+   `agentIdxInFlight` is the fix: the FIRST caller to find no hit starts the build and parks
+   its promise here; every caller that arrives before that promise settles awaits the SAME
+   one instead of starting its own. Deliberately keyed like agentIdxCache -- per db, in
+   memory only, gone the moment the build settles (success or failure) so a later call with
+   a moved DATA_VERSION starts its own build rather than ever reading a stale in-flight
+   entry. */
+const agentIdxInFlight = new WeakMap();
+/** In-memory only, like agentIndex's own cache -- there is nothing to invalidate on another
+    instance. Called from staffManager, staffActive, staffChannelSave, enrolSave and
+    enrolUpdate in portal.js the moment their OWN write to hoop_agents succeeds, so the very
+    next read on this instance sees the new manager, channel or active flag rather than
+    waiting up to fifteen minutes for the version-lapse fallback. Never bumps DATA_VERSION:
+    that is the upload's signal to every OTHER instance, and a staff edit is not an upload. */
+export function clearAgentIndex(db) { agentIdxCache.delete(db); }
 export async function agentIndex(db, nowMs) {
   const version = (await settingGet(db, 'DATA_VERSION')) || '';
   const hit = agentIdxCache.get(db);
   if (hit && hit.version === version && (nowMs - hit.at) < 15 * 60000) return hit;
-  const byImei = {}, phoneByName = {}, byPhone = {};
-  let tree = EMPTY_TREE;
+  const already = agentIdxInFlight.get(db);
+  if (already) return already;
+  const build = (async () => {
+    const byImei = {}, phoneByName = {}, byPhone = {};
+    let tree = EMPTY_TREE;
+    try {
+      // Guarantors landed with the offline queue (2026-08-17). Until the migration has
+      // run, PostgREST refuses the WHOLE select for the unknown columns -- so fall back
+      // to the old shape rather than letting the agent fence and the card go dark.
+      const [reg, agents, sales] = await Promise.all([
+        fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id, branch, guarantor_name, guarantor_phone'))
+          .catch(() => fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id'))),
+        // `manager` rode in with the targets migration; a database that has not run it
+        // refuses the whole select for the unknown column, so a tree built without it is
+        // still built -- salesTree falls back to "nearest holder of the rung above, by
+        // branch" exactly as the targets roll-up and stockAllow already do.
+        fetchAll(() => db.from('hoop_agents').select('name, phone, branch, manager, role'))
+          .catch(e => { if (!/manager/i.test(String((e && e.message) || ''))) throw e;
+            return fetchAll(() => db.from('hoop_agents').select('name, phone, branch, role')); }),
+        // The sales report carries the agent's payout number per sale (the owner: "sales
+        // report of store keeper sipho has the agents numbers") -- a SECOND source of
+        // agent phones, so a card need not wait for the agent's register page to land.
+        fetchAll(() => db.from('hoop_sales').select('commission_agent, commission_phone')
+          .not('commission_phone', 'is', null)).catch(() => []),
+      ]);
+      for (const r of reg) if (r.agent || r.branch || r.guarantor_name || r.guarantor_phone)
+        byImei[String(r.imei)] = { name: r.agent || '', id: r.agent_id || '', branch: r.branch || '',
+          gName: r.guarantor_name || '', gPhone: r.guarantor_phone || '' };
+      for (const a of agents) if (a.name) {
+        phoneByName[nameKey(a.name)] = a.phone || '';
+        // The reverse map is the AGENT sign-in fence: their registered phone -> who they
+        // are. branch rides along because it IS the agent's location (the owner: "the
+        // agents location are the branch column" of Sipho's report).
+        const p = pnorm(a.phone);
+        if (p && !byPhone[p]) byPhone[p] = { name: a.name, key: nameKey(a.name), branch: a.branch || '' };
+      }
+      // Sipho's register wins on a clash; sales phones fill only the gaps.
+      for (const s of sales) if (s.commission_agent && s.commission_phone) {
+        const k = nameKey(s.commission_agent);
+        if (!phoneByName[k]) phoneByName[k] = s.commission_phone;
+      }
+      // THE RSM/TEAM LEADER FENCE'S OWN WALK -- see fenceSetOf. Built once here, alongside
+      // everything else this index already reads the register for, so extending the fence
+      // to a third role cost no new round trip.
+      tree = salesTree(agents);
+    } catch (e) { /* decoration for the card; the agent fence fails CLOSED on empty maps */ }
+    const value = { version, at: nowMs, byImei, phoneByName, byPhone, tree };
+    agentIdxCache.set(db, value);
+    return value;
+  })();
+  agentIdxInFlight.set(db, build);
   try {
-    // Guarantors landed with the offline queue (2026-08-17). Until the migration has
-    // run, PostgREST refuses the WHOLE select for the unknown columns -- so fall back
-    // to the old shape rather than letting the agent fence and the card go dark.
-    const [reg, agents, sales] = await Promise.all([
-      fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id, branch, guarantor_name, guarantor_phone'))
-        .catch(() => fetchAll(() => db.from('watu_loans').select('imei, agent, agent_id'))),
-      // `manager` rode in with the targets migration; a database that has not run it
-      // refuses the whole select for the unknown column, so a tree built without it is
-      // still built -- salesTree falls back to "nearest holder of the rung above, by
-      // branch" exactly as the targets roll-up and stockAllow already do.
-      fetchAll(() => db.from('hoop_agents').select('name, phone, branch, manager, role'))
-        .catch(e => { if (!/manager/i.test(String((e && e.message) || ''))) throw e;
-          return fetchAll(() => db.from('hoop_agents').select('name, phone, branch, role')); }),
-      // The sales report carries the agent's payout number per sale (the owner: "sales
-      // report of store keeper sipho has the agents numbers") -- a SECOND source of
-      // agent phones, so a card need not wait for the agent's register page to land.
-      fetchAll(() => db.from('hoop_sales').select('commission_agent, commission_phone')
-        .not('commission_phone', 'is', null)).catch(() => []),
-    ]);
-    for (const r of reg) if (r.agent || r.branch || r.guarantor_name || r.guarantor_phone)
-      byImei[String(r.imei)] = { name: r.agent || '', id: r.agent_id || '', branch: r.branch || '',
-        gName: r.guarantor_name || '', gPhone: r.guarantor_phone || '' };
-    for (const a of agents) if (a.name) {
-      phoneByName[nameKey(a.name)] = a.phone || '';
-      // The reverse map is the AGENT sign-in fence: their registered phone -> who they
-      // are. branch rides along because it IS the agent's location (the owner: "the
-      // agents location are the branch column" of Sipho's report).
-      const p = pnorm(a.phone);
-      if (p && !byPhone[p]) byPhone[p] = { name: a.name, key: nameKey(a.name), branch: a.branch || '' };
-    }
-    // Sipho's register wins on a clash; sales phones fill only the gaps.
-    for (const s of sales) if (s.commission_agent && s.commission_phone) {
-      const k = nameKey(s.commission_agent);
-      if (!phoneByName[k]) phoneByName[k] = s.commission_phone;
-    }
-    // THE RSM/TEAM LEADER FENCE'S OWN WALK -- see fenceSetOf. Built once here, alongside
-    // everything else this index already reads the register for, so extending the fence
-    // to a third role cost no new round trip.
-    tree = salesTree(agents);
-  } catch (e) { /* decoration for the card; the agent fence fails CLOSED on empty maps */ }
-  const value = { version, at: nowMs, byImei, phoneByName, byPhone, tree };
-  agentIdxCache.set(db, value);
-  return value;
+    return await build;
+  } finally {
+    // Settled either way: a later caller must be free to start its OWN build rather than
+    // ever await one that has already resolved or rejected.
+    agentIdxInFlight.delete(db);
+  }
 }
 
 /* ---------- the list: the newest Watu deck ---------- */

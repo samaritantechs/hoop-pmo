@@ -9,7 +9,7 @@ import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signi
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList,
   TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree,
-  clearRosterCache } from './_lib/call-core.js';
+  clearRosterCache, clearAgentIndex } from './_lib/call-core.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -8566,6 +8566,7 @@ const FNS = {
     };
     await write(add, leader.name);
     await write(drop, null);
+    clearAgentIndex(db);   // the channel just moved in hoop_agents -- the next read sees it now
     return { ok: true, phone, added: add.length, removed: drop.length };
   },
 
@@ -8622,8 +8623,11 @@ const FNS = {
       if (!tableMissing(e)) throw e;
       doorKnown = false;
     }
-    // access_codes.suspend_from/to just moved (where the door matched a code) --
-    // rosterFull's away set must see it this instant, not in thirty seconds.
+    // Two tables moved: hoop_agents.active (agentIndex's own read) and, where the door
+    // matched a code, access_codes.suspend_from/to (rosterFull's away set). Both busted so
+    // the very next list()/summary or "who reports to whom" sees this instant, not in 15
+    // minutes or 30 seconds.
+    clearAgentIndex(db);
     clearRosterCache(db);
     return { ok: true, phone, name, active,
       /* What actually happened at the door, in the caller's hands rather than assumed. */
@@ -8647,6 +8651,7 @@ const FNS = {
       throw new Error(error.message);
     }
     if (!data || !data.length) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    clearAgentIndex(db);   // the tree just changed -- the next roll-up/fence read sees it now
     return { ok: true, phone, manager };
   },
 
@@ -9801,6 +9806,7 @@ const FNS = {
       throw new Error(error.message);
     }
     const gaps = enrolGaps({ ...(before || {}), ...row });
+    clearAgentIndex(db);   // hoop_agents just moved -- the next agentIndex-backed read sees it now
     return { ok: true, phone, created: !before, gaps,
       complete: gaps.length === 0,
       /* Said back rather than left for somebody to notice: an ID of the wrong length is the
@@ -9888,6 +9894,7 @@ const FNS = {
       throw new Error(error.message);
     }
     if (!data || !data.length) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    clearAgentIndex(db);   // hoop_agents just moved -- the next agentIndex-backed read sees it now
     return { ok: true, phone, step,
       verified: !!patch.verified_at, active: patch.active,
       emailed: !!(mail && mail.sent), to: (mail && mail.to) || '' };
