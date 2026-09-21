@@ -11007,7 +11007,7 @@ function staffChannelDrawer(m, phone, name){
       var want=$all('.chm').filter(function(x){ return x.checked; }).map(function(x){ return x.value; });
       srv('staffChannelSave',{phone:phone, members:want}).then(function(r){
         toast('Imehifadhiwa · +'+money(r.added)+' / −'+money(r.removed));
-        closeDrawer(); if(TAB==='staff') drawStaff(m);
+        closeDrawer(); if(TAB==='staff') staffDirRedraw_(m);
       }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
     };
     if(pick.length===0 && ms.length===0) return;
@@ -11038,7 +11038,7 @@ function staffActiveToggle(m, phone, name, wasActive){
         : ' · hakuna msimbo wa jina hili / no portal code in that name');
     toast((on?'Imewashwa: ':'Imezimwa: ')+name+door
       +(r.adminSkipped?' · ADMIN haiguswi / admin code left alone':''));
-    if(TAB==='staff') drawStaff(m);
+    if(TAB==='staff') staffDirRedraw_(m);
   }).catch(function(e){ toast(safeErr(e), true); });
 }
 function staffWireChannel(m){
@@ -11086,90 +11086,111 @@ function staffBranchDrawer(m, phone, name, current, options){
   var go=function(){
     var b=$('#brSave'); if(b) b.disabled=true;
     srv('staffBranchSave',{phone:phone, branch:$('#brInp').value}).then(function(){
-      closeDrawer(); toast('Imehifadhiwa / Saved'); drawStaff(m);
+      closeDrawer(); toast('Imehifadhiwa / Saved'); staffDirRedraw_(m);
     }).catch(function(e){ if(b) b.disabled=false; toast(safeErr(e), true); });
   };
   $('#brSave').onclick=go;
   if(inp) inp.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); go(); } };
 }
+/* DIRECTORY-ONLY REDRAW.
+   -----------------------------------------------------------------------------------------
+   staffActiveToggle, staffChannelSave and staffBranchSave each move exactly one row of the
+   STAFF register -- who is active, whose channel they are in, where they work -- and none of
+   them touches a salary. All three used to call drawStaff(m), which rebuilds the whole pane
+   and, at the end of it, calls drawSalaries() again: a second srv('salaryList') read for an
+   answer none of these three writes could have changed.
+
+   The directory now lives in its own container (#staffDirBox), a sibling of #salaryBox
+   rather than wrapped around it, so staffDirRedraw_ can repaint the register alone and leave
+   the salary card exactly as it was -- drawStaff itself still draws both, unchanged, for a
+   real entry into the pane (test ~2151 pins that it still calls drawSalaries()). */
+function staffDirRedraw_(m){
+  srv('staffDirectory').then(function(d){ staffDirRender_(m, d); })
+    .catch(function(e){ var b=$('#staffDirBox'); if(b) b.innerHTML='<div class="mut">'+esc(safeErr(e))+'</div>'; });
+}
 function drawStaff(m){
   m.innerHTML='<div class="card"><h2>Staff</h2><div class="sk"></div></div>';
   srv('staffDirectory').then(function(d){
-    var canKin=(d.staff||[]).length&&d.staff[0].kin!==undefined;
-    m.innerHTML='<div class="card"><h2>Staff — the whole office ('+money(d.total)+')</h2>'
-      +'<div class="mut" style="margin-bottom:8px">From the agents register: agents, team leaders, RSMs. System logins (portal codes, app users) live under Access codes.</div>'
-      +'<div class="row"><input class="inp" id="staffQ" placeholder="Search: name, phone, role, branch, IMEI, agent…"></div>'
-      /* EACH PERSON GETS THERE BY ROLE. Three ranks, in the order the ladder runs, so somebody
-         opening this pane is looking at a shape of the company rather than an alphabet.
-         Country_Sales_Manager is deliberately not one of them -- "this is company admin, no
-         need to be in the list" -- but anybody the ladder does not name still appears under
-         Wengine, because a staff register that silently drops rows is how people go missing. */
-      +'<div class="row" style="gap:6px">'+STAFF_TIERS.map(function(t){
-        var n=(d.staff||[]).filter(function(x){ return staffTierOf(x.role)===t.k; }).length;
-        return '<button class="chip" data-tier="'+esc(t.k)+'" style="border:1px solid transparent;cursor:pointer">'
-          +esc(t.sw)+' · '+money(n)+'</button>';
-      }).join('')+'</div>'
-      /* WHO IS IN THEIR CHANNEL, edited from the LEADER rather than from each subordinate.
-         The column underneath is the same `manager` the target cascade walks; what changed is
-         which end of the question the screen asks. Blank still means "the branch decides",
-         which is right for almost everybody, so the cell says that rather than sitting empty. */
-      +'<div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Chaneli / Channel</th><th>Phone</th>'+(canKin?'<th>Next of kin</th>':'')+'<th>Status</th></tr></thead><tbody>'
-      +((d.staff||[]).length?(d.staff||[]).map(function(o){
-        var leaf=staffTierOf(o.role)==='fo';
-        return '<tr data-role="'+esc(o.role||'')+'" data-tierk="'+esc(staffTierOf(o.role))+'"><td><b>'+esc(o.name)+'</b>'+(o.joined?'<div class="mut" style="font-size:10px">since '+esc(o.joined)+'</div>':'')+'</td>'
-          +'<td>'+esc(o.role||'—')+'</td>'
-          /* THE BRANCH IS EDITABLE, and that is what closes the last gap on OLD STOCK: a
-             holder is in one place and carries many phones, so one edit here answers every
-             one of them on the next open. A blank reads as unknown rather than as a dash
-             that might be a value, because a van is dispatched on this. */
-          +'<td>'+(BOOT.readOnly
-            ? (o.branch?esc(o.branch):'<span class="mut">—</span>')
-            : '<button class="btn sm ghost" data-brn="'+esc(o.phone||'')+'" '
-              +'data-brnn="'+esc(o.name||'')+'" data-brnv="'+esc(o.branch||'')+'" '
-              +'style="padding:1px 7px;font:inherit;font-size:11.5px" '
-              +'title="Weka mahali anapofanyia kazi / set where they work">'
-              +(o.branch?esc(o.branch):'<span class="mut">weka / set</span>')+'</button>')
-          +'</td>'
-          +'<td style="font-size:11.5px">'
-          +(leaf
-            ? (o.manager?esc(o.manager):'<span class="mut">kwa tawi / by branch</span>')
-            : '<button class="btn sm ghost" data-chan="'+esc(o.phone||'')+'" data-chann="'+esc(o.name||'')+'">Chaneli / Channel ›</button>')
-          +'</td>'
-          +'<td>'+esc(o.phone||'')+'</td>'
-          +(canKin?'<td class="mut" style="font-size:11px">'+esc(o.kin||'—')+(o.kinPhone?' · '+esc(o.kinPhone):'')+'</td>':'')
-          +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')
-          +(BOOT.readOnly?'':' <button class="btn sm ghost" data-act="'+esc(o.phone||'')+'" data-actn="'+esc(o.name||'')+'" data-actv="'+(o.active?'1':'0')+'">'
-            +(o.active?'Zima / Off':'Washa / On')+'</button>')+'</td></tr>';
-      }).join(''):'<tr><td colspan="7" class="mut">No staff yet — upload the Agents Register page (saved HTML) at /upload.</td></tr>')
-      +'</tbody></table></div></div><div id="salaryBox"></div><div id="staffCust"></div>';
-    staffWireChannel(m);
-    /* The list of places already in use rides along, so a new spelling is a decision rather
-       than a typo -- every distinct one becomes its own bar on the OLD STOCK pivot. */
-    $all('[data-brn]').forEach(function(b){ b.onclick=function(){
-      staffBranchDrawer(m, b.getAttribute('data-brn'), b.getAttribute('data-brnn'),
-        b.getAttribute('data-brnv'), d.branches||[]);
-    }; });
+    m.innerHTML='<div id="staffDirBox"></div><div id="salaryBox"></div><div id="staffCust"></div>';
+    staffDirRender_(m, d);
     drawSalaries();
-    /* The rank chips are FILTERS: click one to see just that rank, click again for all.
-       The search box and the chip compose -- both must match. */
-    var TIERF='';
-    function applyStaffFilter(){
-      var q=($('#staffQ')?$('#staffQ').value.trim().toUpperCase():'');
-      $all('tbody tr', $('#main')).forEach(function(tr){
-        var okQ=!q||tr.textContent.toUpperCase().indexOf(q)>=0;
-        var okR=!TIERF||tr.getAttribute('data-tierk')===TIERF;
-        tr.style.display=(okQ&&okR)?'':'none';
-      });
-      $all('[data-tier]',m).forEach(function(c){
-        c.style.borderColor=(c.getAttribute('data-tier')===TIERF)?'var(--b700)':'transparent';
-        c.style.background=(c.getAttribute('data-tier')===TIERF)?'var(--b100)':'';
-      });
-    }
-    $all('[data-tier]',m).forEach(function(c){
-      c.onclick=function(){ TIERF=(TIERF===c.getAttribute('data-tier'))?'':c.getAttribute('data-tier'); applyStaffFilter(); };
-    });
-    wireSearch_('#staffQ','#staffCust',function(){ applyStaffFilter(); });
   }).catch(function(e){ paneFailed(m,e); });
+}
+function staffDirRender_(m, d){
+  var box=$('#staffDirBox'); if(!box) return;
+  var canKin=(d.staff||[]).length&&d.staff[0].kin!==undefined;
+  box.innerHTML='<div class="card"><h2>Staff — the whole office ('+money(d.total)+')</h2>'
+    +'<div class="mut" style="margin-bottom:8px">From the agents register: agents, team leaders, RSMs. System logins (portal codes, app users) live under Access codes.</div>'
+    +'<div class="row"><input class="inp" id="staffQ" placeholder="Search: name, phone, role, branch, IMEI, agent…"></div>'
+    /* EACH PERSON GETS THERE BY ROLE. Three ranks, in the order the ladder runs, so somebody
+       opening this pane is looking at a shape of the company rather than an alphabet.
+       Country_Sales_Manager is deliberately not one of them -- "this is company admin, no
+       need to be in the list" -- but anybody the ladder does not name still appears under
+       Wengine, because a staff register that silently drops rows is how people go missing. */
+    +'<div class="row" style="gap:6px">'+STAFF_TIERS.map(function(t){
+      var n=(d.staff||[]).filter(function(x){ return staffTierOf(x.role)===t.k; }).length;
+      return '<button class="chip" data-tier="'+esc(t.k)+'" style="border:1px solid transparent;cursor:pointer">'
+        +esc(t.sw)+' · '+money(n)+'</button>';
+    }).join('')+'</div>'
+    /* WHO IS IN THEIR CHANNEL, edited from the LEADER rather than from each subordinate.
+       The column underneath is the same `manager` the target cascade walks; what changed is
+       which end of the question the screen asks. Blank still means "the branch decides",
+       which is right for almost everybody, so the cell says that rather than sitting empty. */
+    +'<div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Chaneli / Channel</th><th>Phone</th>'+(canKin?'<th>Next of kin</th>':'')+'<th>Status</th></tr></thead><tbody>'
+    +((d.staff||[]).length?(d.staff||[]).map(function(o){
+      var leaf=staffTierOf(o.role)==='fo';
+      return '<tr data-role="'+esc(o.role||'')+'" data-tierk="'+esc(staffTierOf(o.role))+'"><td><b>'+esc(o.name)+'</b>'+(o.joined?'<div class="mut" style="font-size:10px">since '+esc(o.joined)+'</div>':'')+'</td>'
+        +'<td>'+esc(o.role||'—')+'</td>'
+        /* THE BRANCH IS EDITABLE, and that is what closes the last gap on OLD STOCK: a
+           holder is in one place and carries many phones, so one edit here answers every
+           one of them on the next open. A blank reads as unknown rather than as a dash
+           that might be a value, because a van is dispatched on this. */
+        +'<td>'+(BOOT.readOnly
+          ? (o.branch?esc(o.branch):'<span class="mut">—</span>')
+          : '<button class="btn sm ghost" data-brn="'+esc(o.phone||'')+'" '
+            +'data-brnn="'+esc(o.name||'')+'" data-brnv="'+esc(o.branch||'')+'" '
+            +'style="padding:1px 7px;font:inherit;font-size:11.5px" '
+            +'title="Weka mahali anapofanyia kazi / set where they work">'
+            +(o.branch?esc(o.branch):'<span class="mut">weka / set</span>')+'</button>')
+        +'</td>'
+        +'<td style="font-size:11.5px">'
+        +(leaf
+          ? (o.manager?esc(o.manager):'<span class="mut">kwa tawi / by branch</span>')
+          : '<button class="btn sm ghost" data-chan="'+esc(o.phone||'')+'" data-chann="'+esc(o.name||'')+'">Chaneli / Channel ›</button>')
+        +'</td>'
+        +'<td>'+esc(o.phone||'')+'</td>'
+        +(canKin?'<td class="mut" style="font-size:11px">'+esc(o.kin||'—')+(o.kinPhone?' · '+esc(o.kinPhone):'')+'</td>':'')
+        +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')
+        +(BOOT.readOnly?'':' <button class="btn sm ghost" data-act="'+esc(o.phone||'')+'" data-actn="'+esc(o.name||'')+'" data-actv="'+(o.active?'1':'0')+'">'
+          +(o.active?'Zima / Off':'Washa / On')+'</button>')+'</td></tr>';
+    }).join(''):'<tr><td colspan="7" class="mut">No staff yet — upload the Agents Register page (saved HTML) at /upload.</td></tr>')
+    +'</tbody></table></div></div>';
+  staffWireChannel(m);
+  /* The list of places already in use rides along, so a new spelling is a decision rather
+     than a typo -- every distinct one becomes its own bar on the OLD STOCK pivot. */
+  $all('[data-brn]').forEach(function(b){ b.onclick=function(){
+    staffBranchDrawer(m, b.getAttribute('data-brn'), b.getAttribute('data-brnn'),
+      b.getAttribute('data-brnv'), d.branches||[]);
+  }; });
+  /* The rank chips are FILTERS: click one to see just that rank, click again for all.
+     The search box and the chip compose -- both must match. */
+  var TIERF='';
+  function applyStaffFilter(){
+    var q=($('#staffQ')?$('#staffQ').value.trim().toUpperCase():'');
+    $all('tbody tr', $('#main')).forEach(function(tr){
+      var okQ=!q||tr.textContent.toUpperCase().indexOf(q)>=0;
+      var okR=!TIERF||tr.getAttribute('data-tierk')===TIERF;
+      tr.style.display=(okQ&&okR)?'':'none';
+    });
+    $all('[data-tier]',m).forEach(function(c){
+      c.style.borderColor=(c.getAttribute('data-tier')===TIERF)?'var(--b700)':'transparent';
+      c.style.background=(c.getAttribute('data-tier')===TIERF)?'var(--b100)':'';
+    });
+  }
+  $all('[data-tier]',m).forEach(function(c){
+    c.onclick=function(){ TIERF=(TIERF===c.getAttribute('data-tier'))?'':c.getAttribute('data-tier'); applyStaffFilter(); };
+  });
+  wireSearch_('#staffQ','#staffCust',function(){ applyStaffFilter(); });
 }
 
 /* ---------- access codes ---------- */
@@ -11311,13 +11332,23 @@ function drawCodes(m){
             'ONE shared code for ALL sales agents — share it in the WhatsApp group and rotate it here when somebody leaves. An agent signs in with just their registered phone number and this code; their name and branch are read from the agents register, and the app shows them ONLY the customers they sold. A number that is not on the register cannot sign in at all.',
             'Create the agent code');
       })();
+    /* MINT/ROTATE USED TO CHAIN A TRAILING srv('boot') -- the door, the whole session's gate
+       reads, and every OTHER pane's summary -- just to learn the one code newTeamCode had
+       already handed back. newTeamCode echoes `team` alongside `code`, so the page patches
+       that one team's entry on BOOT.teams itself (BOOT.teams is exactly the shape a fresh
+       boot would have handed back for it) and redraws straight from that -- no second trip. */
+    var patchTeamCode_=function(team,code){
+      var row=(BOOT.teams||[]).filter(function(x){ return x.team===team; })[0];
+      if(row) row.code=code;
+      else (BOOT.teams=BOOT.teams||[]).push({team:team,code:code,rsm:'',rsmNo:''});
+    };
     $all('[data-comk]',m).forEach(function(b){
       b.onclick=function(){
         var t=b.getAttribute('data-comk');
         srv('saveTeam',{team:t})
           .then(function(){ return srv('newTeamCode',{team:t}); })
           .then(function(d2){ toast((t==='AGENT'?'Agent':'Company')+' code: '+d2.code);
-            return srv('boot').then(function(x){BOOT=x;drawCodes(m);}); })
+            patchTeamCode_(d2.team,d2.code); drawCodes(m); })
           .catch(function(e){toast(String(e.message||e),true);});
       };
     });
@@ -11327,7 +11358,7 @@ function drawCodes(m){
         if(!confirm('Rotate the '+(t==='AGENT'?'agent':'company')+' code? The old one stops working for new registrations.')) return;
         srv('newTeamCode',{team:t}).then(function(d2){
           toast('New '+(t==='AGENT'?'agent':'company')+' code: '+d2.code);
-          return srv('boot').then(function(x){BOOT=x;drawCodes(m);});
+          patchTeamCode_(d2.team,d2.code); drawCodes(m);
         }).catch(function(e){toast(String(e.message||e),true);});
       };
     });

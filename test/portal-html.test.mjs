@@ -2035,7 +2035,10 @@ test('portal.html: the staff register is edited from the leader’s side, not th
      which end of the question the screen asks: a leader's panel lists the rank below and you
      tick it, instead of opening each subordinate and typing their leader's name. */
   const html = read('portal.html');
-  const fn = IMP_SRC('drawStaff', html);
+  // The register itself is drawn by staffDirRender_ -- drawStaff only fetches (see the
+  // postgres-round-trip-audit fix: a directory-only redraw for the three writes that never
+  // touch a salary, so they stop re-fetching salaryList through drawStaff -> drawSalaries()).
+  const fn = IMP_SRC('staffDirRender_', html);
   assert.match(fn, /<th>Chaneli \/ Channel<\/th>/);
   assert.ok(!/Reports to/.test(fn), 'the reports-to column is what this replaced');
   assert.ok(!/data-mgr=/.test(fn), 'and the per-person pencil with it');

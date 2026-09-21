@@ -168,3 +168,17 @@ test('transferDecline returns declinedAt/declinedBy/reason, not just ok/id', asy
   assert.equal(row.decline_reason, r.reason);
   assert.equal(Date.parse(row.declined_at), Date.parse(r.declinedAt));
 });
+
+/* =========================================================================================
+   FIX 12 (team code) -- mint/rotate used to chain a trailing srv('boot') just to learn the
+   one code newTeamCode had already handed back. newTeamCode already echoes `team` alongside
+   `code` (this test pins that it still does); the page patches BOOT.teams[...].code from the
+   two and redraws directly, with no second trip. Nothing here changed server-side.
+   ========================================================================================= */
+test('newTeamCode echoes team alongside the new code, for the page to patch BOOT.teams with', async () => {
+  const d = fakeDb({ teams: [{ team: 'KINONDONI', team_code: 'AB2C3D' }] });
+  const r = await _FNS.newTeamCode(d, ADMIN, { team: 'KINONDONI' });
+  assert.equal(r.ok, true);
+  assert.equal(r.team, 'KINONDONI', 'the page keys BOOT.teams by this field');
+  assert.match(r.code, /^[2-9A-HJKMNP-Z]{6}$/);
+});

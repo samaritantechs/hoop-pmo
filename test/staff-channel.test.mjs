@@ -349,17 +349,20 @@ test('the pane offers the places already in use, from both the register and the 
 
 test('the branch cell is a control, and a blank one says it is unset', () => {
   const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
-  /* From drawStaff to whatever function follows it -- drawSalaries is defined ABOVE this one,
-     so slicing to it gives nothing at all and every assertion below would pass on an empty
-     string. A fence that reads the wrong half of the file is not a fence. */
-  const at = html.indexOf('function drawStaff(');
+  /* The register itself is drawn by staffDirRender_ -- drawStaff only fetches and holds the
+     drawer's own entry point (see the postgres-round-trip-audit fix: staffActiveToggle/
+     staffChannelSave/staffBranchSave redraw the directory alone, through staffDirRedraw_,
+     rather than re-fetching salaries through drawStaff every time). From staffDirRender_ to
+     whatever function follows it (drawCodes) -- a fence that reads the wrong half of the
+     file is not a fence. */
+  const at = html.indexOf('function staffDirRender_(');
   const draw = html.slice(at, html.indexOf('\nfunction ', at + 10));
-  assert.ok(draw.length > 500, 'the slice must actually hold drawStaff');
+  assert.ok(draw.length > 500, 'the slice must actually hold staffDirRender_');
   assert.match(draw, /data-brn="/, 'the branch opens an editor');
   assert.match(draw, /weka \/ set/, 'and an empty one invites being filled in');
   assert.match(draw, /BOOT\.readOnly\s*\n?\s*\?/, 'a view-only code reads it and cannot press it');
 
-  const dr = html.slice(html.indexOf('function staffBranchDrawer('), at);
+  const dr = html.slice(html.indexOf('function staffBranchDrawer('), html.indexOf('function staffDirRedraw_('));
   assert.match(dr, /list="brList"/, 'a datalist, so a genuinely new branch is still typeable');
   assert.match(dr, /Leaving it empty clears the location/,
     'clearing a wrong town is a real thing somebody needs to do, and guessing at it leaves the wrong one');
