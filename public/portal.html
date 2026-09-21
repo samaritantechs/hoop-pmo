@@ -8193,6 +8193,15 @@ function drawNewStock(m){
   }).catch(function(e){ paneFailed(m,e); });
 }
 
+/* FETCH/RENDER SPLIT -- and split IN TWO, not one, because this pane holds two INDEPENDENT
+   reads for two different questions (see the note below). Every control -- a status tile,
+   #strGo/#strClr/#strAll (all of them STOCKR's own filter, which stockReqReport narrows by),
+   and #syGo (SYNCQ's own filter, which only syncAging reads) -- ran the SAME Promise.all of
+   BOTH, so a status click paid for a syncAging trip that could not possibly answer
+   differently, and #syGo paid for a stockReqReport trip the sync filter never touches
+   [11 trips/10,671 rows + 4 trips/2,300 rows, every single click]. STREP holds both halves;
+   a STOCKR control now re-fetches ONLY stockReqReport, and #syGo ONLY syncAging. */
+var STREP={report:null,sync:null};
 function drawStockRep(m){
   if(!STOCKR.from&&!STOCKR.to&&!STOCKR.explicit){ var mr=monthRange_(); STOCKR.from=mr.from; STOCKR.to=mr.to; }
   m.innerHTML='<div class="sk"></div>';
@@ -8200,49 +8209,67 @@ function drawStockRep(m){
      sync report answers "how long since it spoke to us" -- different questions about the same
      handsets, and the desk issuing stock wants both on one screen. */
   Promise.all([srv('stockReqReport',STOCKR), srv('syncAging',SYNCQ)]).then(function(res){
-    var d=res[0], sy=res[1];
-    var t=d.totals||{}, ag=d.aging||{}, rows=d.rows||[], holders=ag.holders||[];
-    var pick=function(k){ return function(){ STOCKR.status=(STOCKR.status===k?'':k); if(TAB==='strep') drawStockRep(m); }; };
-    m.innerHTML=(ag.low?'<div class="note bad">Stoo ya sokoni ipo chini ya kiwango: '+money(ag.pieces)
-        +' pcs, kikomo ni '+money(ag.lowAlert)+' (SOP G). Taarifa uongozini. / Market stock is below the alert level.</div>':'')
-      +'<div class="tiles">'
-      +tile('Maombi',money(t.count||0),'kwenye kipindi hiki',{on:STOCKR.status==='',cta:STOCKR.status===''?'yote':'onyesha yote ›',go:function(){ STOCKR.status=''; if(TAB==='strep') drawStockRep(m); }})
-      +tile('Yanasubiri',money(t.pending||0),'hayajaamuliwa',{color:t.pending?'bad':'',on:STOCKR.status==='pending',cta:'chuja ›',go:pick('pending')})
-      +tile('Yamekabidhiwa',money(t.issued||0),'pcs zilizotoka '+money(t.qtyIssued||0)+' kati ya '+money(t.qtyAsked||0)+' zilizoombwa',{color:'ok',on:STOCKR.status==='issued',cta:'chuja ›',go:pick('issued')})
-      +tile('Yamekataliwa',money(t.rejected||0),'',{on:STOCKR.status==='rejected',cta:'chuja ›',go:pick('rejected')})
-      +tile('Zimetolewa kwa override',money(t.overrides||0),'licha ya stoo iliyokaa — SOP E',{color:t.overrides?'bad':''})
-      +tile('Stoo ya sokoni',money(ag.pieces||0),'pcs kwenye deki ya '+esc(ag.asOf||'—')+' · kikomo '+money(ag.lowAlert||0),{color:ag.low?'bad':''})
-      +'</div>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
-      +'<span class="mut" style="font-size:12px">Tarehe ya kuomba:</span>'
-      +'<input id="strFrom" class="inp" type="date" style="width:auto" value="'+esc(STOCKR.from||'')+'">'
-      +'<input id="strTo" class="inp" type="date" style="width:auto" value="'+esc(STOCKR.to||'')+'">'
-      +'<input id="strHolder" class="inp" style="width:auto" placeholder="Kwa ajili ya / holder" value="'+esc(STOCKR.holder||'')+'">'
-      +'<button class="btn sm" id="strGo">Chuja / Filter</button>'
-      +'<button class="btn sm ghost" id="strClr">Mwezi huu</button>'
-      +'<button class="btn sm ghost" id="strAll">Tarehe zote</button>'
-      +'</div>'
-      +'<h3 style="margin:14px 0 6px">Stoo iliyokaa / Aging stock tracker <span class="mut" style="font-size:11.5px">— kikomo siku '+money(ag.agingDays||5)+', deki ya '+esc(ag.asOf||'—')+'</span></h3>'
-      +(holders.length?'<div class="scroll" style="margin-bottom:12px"><table><thead><tr><th>MWENYE STOO</th><th class="r">PCS</th>'
-        +'<th class="r">ZILIZOKAA</th><th class="r">KONGWE (SIKU)</th><th>MODELI</th></tr></thead><tbody>'
-        +holders.map(function(h){
-          return '<tr><td>'+esc(h.holder||'—')+'</td><td class="r">'+money(h.pieces)+'</td>'
-            +'<td class="r'+(h.aging?' bad':'')+'">'+money(h.aging)+'</td>'
-            +'<td class="r'+(h.aging?' bad':'')+'">'+money(h.oldest)+'</td>'
-            +'<td style="font-size:11px">'+esc(h.items||'')+'</td></tr>';
-        }).join('')+'</tbody></table></div>'
-        :'<div class="mut" style="margin-bottom:12px">Hakuna ripoti ya stoo iliyokaa bado — pakia Aged Stock. / No aged-stock upload yet.</div>')
-      +syncSection(sy)
-      +'<h3 style="margin:14px 0 6px">Maombi na makabidhiano / Requests and handovers</h3>'
-      +(d.notReady?stockNotReady()
-        :rows.length?stockTable(rows,{}):'<div class="mut">Hakuna ombi kwenye kipindi hiki. / No requests in this period.</div>');
-    wireTiles(m);
-    syncWire(m, function(){ if(TAB==='strep') drawStockRep(m); });
-    $('#strGo').onclick=function(){ STOCKR={from:$('#strFrom').value,to:$('#strTo').value,holder:$('#strHolder').value,status:STOCKR.status,explicit:true}; if(TAB==='strep') drawStockRep(m); };
-    $('#strClr').onclick=function(){ var r=monthRange_(); STOCKR={from:r.from,to:r.to,status:'',holder:'',explicit:true}; if(TAB==='strep') drawStockRep(m); };
-    $('#strAll').onclick=function(){ STOCKR={from:'',to:'',status:'',holder:'',explicit:true}; if(TAB==='strep') drawStockRep(m); };
-    stockWireRows(m, rows, {});
+    STREP.report=res[0]; STREP.sync=res[1];
+    stockRepRender(m);
   }).catch(function(e){ paneFailed(m,e); });
+}
+// A STOCKR control (a status tile, the date/holder filter): only the report half moved.
+function stockRepRefetchReport_(m){
+  srv('stockReqReport',STOCKR).then(function(d){
+    STREP.report=d;
+    if(TAB==='strep') stockRepRender(m);
+  }).catch(function(e){ paneFailed(m,e); });
+}
+function stockRepRender(m){
+  var d=STREP.report, sy=STREP.sync; if(!d||!sy) return;
+  var t=d.totals||{}, ag=d.aging||{}, rows=d.rows||[], holders=ag.holders||[];
+  var pick=function(k){ return function(){ STOCKR.status=(STOCKR.status===k?'':k); if(TAB==='strep') stockRepRefetchReport_(m); }; };
+  m.innerHTML=(ag.low?'<div class="note bad">Stoo ya sokoni ipo chini ya kiwango: '+money(ag.pieces)
+      +' pcs, kikomo ni '+money(ag.lowAlert)+' (SOP G). Taarifa uongozini. / Market stock is below the alert level.</div>':'')
+    +'<div class="tiles">'
+    +tile('Maombi',money(t.count||0),'kwenye kipindi hiki',{on:STOCKR.status==='',cta:STOCKR.status===''?'yote':'onyesha yote ›',go:function(){ STOCKR.status=''; if(TAB==='strep') stockRepRefetchReport_(m); }})
+    +tile('Yanasubiri',money(t.pending||0),'hayajaamuliwa',{color:t.pending?'bad':'',on:STOCKR.status==='pending',cta:'chuja ›',go:pick('pending')})
+    +tile('Yamekabidhiwa',money(t.issued||0),'pcs zilizotoka '+money(t.qtyIssued||0)+' kati ya '+money(t.qtyAsked||0)+' zilizoombwa',{color:'ok',on:STOCKR.status==='issued',cta:'chuja ›',go:pick('issued')})
+    +tile('Yamekataliwa',money(t.rejected||0),'',{on:STOCKR.status==='rejected',cta:'chuja ›',go:pick('rejected')})
+    +tile('Zimetolewa kwa override',money(t.overrides||0),'licha ya stoo iliyokaa — SOP E',{color:t.overrides?'bad':''})
+    +tile('Stoo ya sokoni',money(ag.pieces||0),'pcs kwenye deki ya '+esc(ag.asOf||'—')+' · kikomo '+money(ag.lowAlert||0),{color:ag.low?'bad':''})
+    +'</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+    +'<span class="mut" style="font-size:12px">Tarehe ya kuomba:</span>'
+    +'<input id="strFrom" class="inp" type="date" style="width:auto" value="'+esc(STOCKR.from||'')+'">'
+    +'<input id="strTo" class="inp" type="date" style="width:auto" value="'+esc(STOCKR.to||'')+'">'
+    +'<input id="strHolder" class="inp" style="width:auto" placeholder="Kwa ajili ya / holder" value="'+esc(STOCKR.holder||'')+'">'
+    +'<button class="btn sm" id="strGo">Chuja / Filter</button>'
+    +'<button class="btn sm ghost" id="strClr">Mwezi huu</button>'
+    +'<button class="btn sm ghost" id="strAll">Tarehe zote</button>'
+    +'</div>'
+    +'<h3 style="margin:14px 0 6px">Stoo iliyokaa / Aging stock tracker <span class="mut" style="font-size:11.5px">— kikomo siku '+money(ag.agingDays||5)+', deki ya '+esc(ag.asOf||'—')+'</span></h3>'
+    +(holders.length?'<div class="scroll" style="margin-bottom:12px"><table><thead><tr><th>MWENYE STOO</th><th class="r">PCS</th>'
+      +'<th class="r">ZILIZOKAA</th><th class="r">KONGWE (SIKU)</th><th>MODELI</th></tr></thead><tbody>'
+      +holders.map(function(h){
+        return '<tr><td>'+esc(h.holder||'—')+'</td><td class="r">'+money(h.pieces)+'</td>'
+          +'<td class="r'+(h.aging?' bad':'')+'">'+money(h.aging)+'</td>'
+          +'<td class="r'+(h.aging?' bad':'')+'">'+money(h.oldest)+'</td>'
+          +'<td style="font-size:11px">'+esc(h.items||'')+'</td></tr>';
+      }).join('')+'</tbody></table></div>'
+      :'<div class="mut" style="margin-bottom:12px">Hakuna ripoti ya stoo iliyokaa bado — pakia Aged Stock. / No aged-stock upload yet.</div>')
+    +syncSection(sy)
+    +'<h3 style="margin:14px 0 6px">Maombi na makabidhiano / Requests and handovers</h3>'
+    +(d.notReady?stockNotReady()
+      :rows.length?stockTable(rows,{}):'<div class="mut">Hakuna ombi kwenye kipindi hiki. / No requests in this period.</div>');
+  wireTiles(m);
+  // ONLY syncAging re-fetches here -- SYNCQ is the sync half's own filter, and the report
+  // half (STREP.report) is untouched, so #syGo never pays for a stockReqReport it did not ask for.
+  syncWire(m, function(){
+    srv('syncAging',SYNCQ).then(function(sy2){
+      STREP.sync=sy2;
+      if(TAB==='strep') stockRepRender(m);
+    }).catch(function(e){ toast(safeErr(e), true); });
+  });
+  $('#strGo').onclick=function(){ STOCKR={from:$('#strFrom').value,to:$('#strTo').value,holder:$('#strHolder').value,status:STOCKR.status,explicit:true}; if(TAB==='strep') stockRepRefetchReport_(m); };
+  $('#strClr').onclick=function(){ var r=monthRange_(); STOCKR={from:r.from,to:r.to,status:'',holder:'',explicit:true}; if(TAB==='strep') stockRepRefetchReport_(m); };
+  $('#strAll').onclick=function(){ STOCKR={from:'',to:'',status:'',holder:'',explicit:true}; if(TAB==='strep') stockRepRefetchReport_(m); };
+  stockWireRows(m, rows, {});
 }
 
 /* ---------- issues ----------

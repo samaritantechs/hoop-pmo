@@ -1947,12 +1947,17 @@ test('portal.html: the handover form asks for what the SOP says makes somebody a
 
 test('portal.html: the stock report is the aging tracker and the distribution book on one pane', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawStockRep', html);
-  assert.match(fn, /srv\('stockReqReport',STOCKR\)/);
+  /* FETCH/RENDER SPLIT, into TWO independent halves: drawStockRep only fetches both trackers
+     (the pane's first open); stockRepRender draws them. A control that moves only one of the
+     two re-fetches through stockRepRefetchReport_ / the syncWire callback, never both -- see
+     the postgres-round-trip-audit fix. */
+  const fetchFn = IMP_SRC('drawStockRep', html);
+  assert.match(fetchFn, /srv\('stockReqReport',STOCKR\)/);
+  assert.match(fetchFn, /monthRange_\(\)/, 'this month by default, like every other report here');
+  const fn = IMP_SRC('stockRepRender', html);
   assert.match(fn, /ag\.low\?'<div class="note bad">/, 'SOP G: the low-stock alert is a banner, not a tile nobody reads');
   assert.match(fn, /t\.overrides/, 'and how often the gate was overridden');
   assert.match(fn, /Stoo iliyokaa \/ Aging stock tracker/);
-  assert.match(fn, /monthRange_\(\)/, 'this month by default, like every other report here');
   assert.match(html, /<b>STOCK_AGING_DAYS<\/b>/, 'Settings explains the threshold');
   assert.match(html, /<b>STOCK_LOW_ALERT<\/b>/);
 });
@@ -2529,11 +2534,17 @@ test('portal.html: the sync report counts silence and never accuses anybody of t
 
 test('portal.html: the stock report reads both trackers, and the sync columns sort', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawStockRep', html);
-  assert.match(fn, /Promise\.all\(\[srv\('stockReqReport',STOCKR\), srv\('syncAging',SYNCQ\)\]\)/,
-    'shelf age and silence are different questions about the same handsets, on one screen');
+  const fetchFn = IMP_SRC('drawStockRep', html);
+  assert.match(fetchFn, /Promise\.all\(\[srv\('stockReqReport',STOCKR\), srv\('syncAging',SYNCQ\)\]\)/,
+    'shelf age and silence are different questions about the same handsets, on one screen -- fetched together only on the pane\'s first open');
+  const fn = IMP_SRC('stockRepRender', html);
   assert.match(fn, /\+syncSection\(sy\)/);
-  assert.match(fn, /syncWire\(m, function\(\)\{ if\(TAB==='strep'\) drawStockRep\(m\); \}\)/);
+  // The sync half re-fetches ONLY syncAging -- never stockReqReport, which a status tile or
+  // #strGo already covers on its own via stockRepRefetchReport_.
+  assert.match(fn, /syncWire\(m, function\(\)\{/);
+  assert.match(fn, /srv\('syncAging',SYNCQ\)\.then\(function\(sy2\)\{/);
+  assert.doesNotMatch(fn, /syncWire\(m, function\(\)\{ if\(TAB==='strep'\) (draw|stockRep)[A-Za-z_]*\(m\); \}\)/,
+    'the sync control must not re-fetch the report half too');
   /* Every table on this page sorts itself on a header click, so the only thing the columns
      have to do is lead with a number that means something. */
   const sec = IMP_SRC('syncSection', html);
