@@ -10,7 +10,8 @@ import { nudge } from './_lib/push.js';
 import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signin.js';
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList,
-  TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree } from './_lib/call-core.js';
+  TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree,
+  clearRosterCache, clearAgentIndex } from './_lib/call-core.js';
 import { memoByDataVersion } from './_lib/memo.js';
 
 /* =====================================================================================
@@ -8777,6 +8778,7 @@ const FNS = {
     };
     await write(add, leader.name);
     await write(drop, null);
+    clearAgentIndex(db);   // the channel just moved in hoop_agents -- the next read sees it now
     return { ok: true, phone, added: add.length, removed: drop.length };
   },
 
@@ -8833,6 +8835,12 @@ const FNS = {
       if (!tableMissing(e)) throw e;
       doorKnown = false;
     }
+    // Two tables moved: hoop_agents.active (agentIndex's own read) and, where the door
+    // matched a code, access_codes.suspend_from/to (rosterFull's away set). Both busted so
+    // the very next list()/summary or "who reports to whom" sees this instant, not in 15
+    // minutes or 30 seconds.
+    clearAgentIndex(db);
+    clearRosterCache(db);
     return { ok: true, phone, name, active,
       /* What actually happened at the door, in the caller's hands rather than assumed. */
       doorKnown,
@@ -8855,6 +8863,7 @@ const FNS = {
       throw new Error(error.message);
     }
     if (!data || !data.length) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    clearAgentIndex(db);   // the tree just changed -- the next roll-up/fence read sees it now
     return { ok: true, phone, manager };
   },
 
@@ -9529,6 +9538,7 @@ const FNS = {
     const active = !!(args && args.active);
     const { error } = await db.from('call_users').update({ active }).eq('user_id', uid);
     if (error) throw new Error(error.message);
+    clearRosterCache(db);   // active just moved -- today's deal must not go on skipping/dealing them
     return { ok: true, userId: uid, active };
   },
 
@@ -9830,6 +9840,7 @@ const FNS = {
       throw new Error(error.message);
     }
     if (!data || !data.length) throw new Error('Unknown code: ' + code);
+    clearRosterCache(db);   // the suspension window just moved -- today's deal must see it now
     return { ok: true, code, from, to };
   },
 
@@ -10030,6 +10041,7 @@ const FNS = {
       throw new Error(error.message);
     }
     const gaps = enrolGaps({ ...(before || {}), ...row });
+    clearAgentIndex(db);   // hoop_agents just moved -- the next agentIndex-backed read sees it now
     return { ok: true, phone, created: !before, gaps,
       complete: gaps.length === 0,
       /* Said back rather than left for somebody to notice: an ID of the wrong length is the
@@ -10117,6 +10129,7 @@ const FNS = {
       throw new Error(error.message);
     }
     if (!data || !data.length) bad('Mfanyakazi hayupo kwenye register. / That person is not in the register.');
+    clearAgentIndex(db);   // hoop_agents just moved -- the next agentIndex-backed read sees it now
     return { ok: true, phone, step,
       verified: !!patch.verified_at, active: patch.active,
       emailed: !!(mail && mail.sent), to: (mail && mail.to) || '' };
