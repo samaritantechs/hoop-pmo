@@ -139,7 +139,13 @@ const AUDIT_DIFF = {
   renameAccessCode:{ table: 'access_codes', key: a => ({ code: a.code }), fields: ['name'] },
   accessCodeSuspend:{ table: 'access_codes', key: a => ({ code: a.code }),
                      fields: ['suspend_from', 'suspend_to'] },
-  officerActive:   { table: 'access_codes', key: a => ({ code: a.code }), fields: ['active'] },
+  /* BUNDLED CORRECTNESS BUG, FOUND IN THE POSTGRES-WAR AUDIT: this named access_codes/code,
+     which is the credential ("codes"), not the call login officerActive actually flips --
+     `db.from('call_users').update({ active }).eq('user_id', uid)`, argument `userId`. The
+     mismatch never threw -- auditRowOf's key-building drops a where clause with no value and
+     auditRowOf just returns null for it (see below) -- so this fired silently on every call and
+     officerActive has logged NO diff, ever, no matter which database it ran against. */
+  officerActive:   { table: 'call_users', key: a => ({ user_id: a.userId }), fields: ['active'] },
 
   /* WHO WORKS HERE, and under whom. staffActive shuts a login; staffManager moves somebody
      onto a different RSM, which moves every target and every commission that hangs off it. */
@@ -150,20 +156,34 @@ const AUDIT_DIFF = {
   staffBranchSave: { table: 'hoop_agents', key: a => ({ phone: a.phone }), fields: ['branch'] },
 
   /* MONEY, AND ONLY ITS DECISION. `status` is who let it through; the amount stays in
-     staff_advances behind the advrep nav, where it belongs. */
-  advDecide:       { table: 'staff_advances', key: a => ({ id: a.id }), fields: ['status'] },
-  advPay:          { table: 'staff_advances', key: a => ({ id: a.id }), fields: ['status'] },
-  impDecide:       { table: 'imprest_requests', key: a => ({ id: a.id }), fields: ['status'] },
-  impRetire:       { table: 'imprest_requests', key: a => ({ id: a.id }), fields: ['status'] },
-  leaveDecide:     { table: 'leave_requests', key: a => ({ id: a.id }), fields: ['status'] },
-  topupUpdate:     { table: 'topups', key: a => ({ id: a.id }), fields: ['status'] },
+     staff_advances behind the advrep nav, where it belongs.
+
+     `selfCtx: true` marks the nine handlers below that already read this exact row, by this
+     exact key, for their OWN business logic (an approve/decide fn has to see the current
+     status before it will act on it at all) -- see audited()'s use of it. Each one leaves what
+     it read and wrote in args.__auditCtx, so audited() can build the diff from that instead of
+     buying the same row twice more: once before the handler runs and once after. A spec with
+     no selfCtx (staffManager, lossUpdate, the transfers, ...) is untouched -- its handler never
+     reads its own row, so audited() still has to. */
+  advDecide:       { table: 'staff_advances', key: a => ({ id: a.id }), fields: ['status'], selfCtx: true },
+  advPay:          { table: 'staff_advances', key: a => ({ id: a.id }), fields: ['status'], selfCtx: true },
+  impDecide:       { table: 'imprest_requests', key: a => ({ id: a.id }), fields: ['status'], selfCtx: true },
+  impRetire:       { table: 'imprest_requests', key: a => ({ id: a.id }), fields: ['status'], selfCtx: true },
+  leaveDecide:     { table: 'leave_requests', key: a => ({ id: a.id }), fields: ['status'], selfCtx: true },
+  topupUpdate:     { table: 'topups', key: a => ({ id: a.id }), fields: ['status'], selfCtx: true },
   stockDecide:     { table: 'stock_requests', key: a => ({ id: a.id }), fields: ['status'] },
   stockIssue:      { table: 'stock_requests', key: a => ({ id: a.id }), fields: ['status'] },
-  commDecide:      { table: 'commission_runs', key: a => ({ id: a.id }), fields: ['status'] },
-  commPay:         { table: 'commission_runs', key: a => ({ id: a.id }), fields: ['status'] },
+  commDecide:      { table: 'commission_runs', key: a => ({ id: a.id }), fields: ['status'], selfCtx: true },
+  commPay:         { table: 'commission_runs', key: a => ({ id: a.id }), fields: ['status'], selfCtx: true },
   lossUpdate:      { table: 'loss_cases', key: a => ({ id: a.id }), fields: ['status'] },
+  /* BUNDLED CORRECTNESS BUG, FOUND IN THE POSTGRES-WAR AUDIT: `to_code` names a column `issues`
+     does not have -- the routing columns are to_role and TO_NAME (see ISSUE_COLS in portal.js).
+     PostgREST refuses the WHOLE select for one unknown column, so on any migrated database
+     BOTH of auditRowOf's reads for issueUpdate failed outright, and every status or routing
+     diff this fn ever produced was silently dropped -- the swallowed error looked exactly like
+     "nothing moved". */
   issueUpdate:     { table: 'issues', key: a => ({ id: a.id }),
-                     fields: ['status', 'to_role', 'to_code'] },
+                     fields: ['status', 'to_role', 'to_name'], selfCtx: true },
 
   /* ONE HANDSET, ONE ORDER. deviceSetState takes a LIST and is deliberately absent: a diff
      that described one of four hundred phones would be a lie about the other 399. */
@@ -249,7 +269,22 @@ export function auditWrite(db, row) {
 }
 
 /** Wraps one dispatched call. The handler's own result and its own errors pass straight
-    through; this only watches. */
+    through; this only watches.
+
+    THE FREE BEFORE-READ. Measured on the postgres-war audit: every AUDIT_DIFF write cost FIVE
+    trips -- the handler's own keyed read (it has to look at the row to decide whether its own
+    action is even still valid), audited()'s before-read of the SAME row, the update, audited()'s
+    after-read of the same row again, and the audit_log insert. Two of those five were this
+    function asking Postgres a question the handler had just asked, and was about to ask again.
+
+    For every spec marked `selfCtx: true`, the handler is instead handed a place to leave what
+    it already found: `args.__auditCtx = { before, afterPatch }`, filled in by the handler right
+    after its own keyed read and right before its own `.update()`. audited() then builds the
+    diff from that -- `before` as read, `after` as `{ ...before, ...afterPatch }` -- and never
+    issues either read of its own. A spec with no selfCtx (or a selfCtx handler whose ctx never
+    got filled, because it threw before reaching its own read) falls back to exactly the two
+    reads this always did; there is no cheaper way to know a value from before a write that
+    already happened. */
 export async function audited(db, user, fn, args, run, where) {
   if (!AUDITED.has(fn)) return run();
   const started = Date.now();
@@ -267,25 +302,38 @@ export async function audited(db, user, fn, args, run, where) {
     ip: short(where && where.ip),
     ua: short(where && where.ua),
   };
-  /* THE ROW AS IT STANDS, read BEFORE the handler runs, because afterwards it is gone. Only
-     for the calls AUDIT_DIFF names, only the fields it names, and never at the cost of the
-     save: auditRowOf swallows everything. */
   const spec = AUDIT_DIFF[fn] || null;
-  const before = spec ? await auditRowOf(db, spec, args) : null;
+  const selfServed = !!(spec && spec.selfCtx && args && typeof args === 'object');
+  if (selfServed) args.__auditCtx = { before: null, afterPatch: null };
+  /* THE ROW AS IT STANDS, read BEFORE the handler runs, because afterwards it is gone. Skipped
+     entirely when the handler is about to read it anyway and hand the result over -- that read
+     happens below, inside run(), not here. Only for the calls AUDIT_DIFF names, only the fields
+     it names, and never at the cost of the save: auditRowOf swallows everything. */
+  const before = (spec && !selfServed) ? await auditRowOf(db, spec, args) : null;
   try {
     const out = await run();
-    const d = spec ? auditDiff(before, await auditRowOf(db, spec, args), spec.fields) : null;
+    const ctx = selfServed ? args.__auditCtx : null;
+    const d = !spec ? null
+      : (ctx && ctx.before && ctx.afterPatch)
+        ? auditDiff(ctx.before, { ...ctx.before, ...ctx.afterPatch }, spec.fields)
+        : auditDiff(ctx ? ctx.before : before, await auditRowOf(db, spec, args), spec.fields);
     await auditWrite(db, { ...base, ok: true, error: null, ms: Date.now() - started,
       before: d ? d.before : null, after: d ? d.after : null });
     return out;
   } catch (e) {
     /* A REFUSED ATTEMPT CHANGED NOTHING, so there is no "after" -- and saying so is the point.
        `before` still rides along: what somebody tried to overwrite is half of what a refused
-       attempt is worth reading for. */
+       attempt is worth reading for. Read off ctx when the handler got far enough to fill it,
+       off the eager read otherwise -- one of the two is always null. */
+    const beforeRow = selfServed ? (args.__auditCtx && args.__auditCtx.before) : before;
     await auditWrite(db, { ...base, ok: false, error: short(e && e.message) || 'failed',
       ms: Date.now() - started,
-      before: before && spec ? pick_(before, spec.fields) : null, after: null });
+      before: beforeRow && spec ? pick_(beforeRow, spec.fields) : null, after: null });
     throw e;   // the handler's own error, unchanged: auditWrite cannot reject
+  } finally {
+    // NEVER LEAKS: a scratch pad on the handler's own arguments must not survive past this call,
+    // into a response, a log, or the next request's reuse of the same args object.
+    if (selfServed) delete args.__auditCtx;
   }
 }
 const pick_ = (row, fields) => {

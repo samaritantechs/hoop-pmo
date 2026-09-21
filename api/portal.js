@@ -5354,7 +5354,9 @@ const FNS = {
         || (y.at || 0) - (x.at || 0)) };
   },
 
-  /** APPROVE (possibly for less) OR DECLINE, with a comment either way. */
+  /** APPROVE (possibly for less) OR DECLINE, with a comment either way.
+      Budget: 1 keyed read (also serves as audited()'s before-state, via __auditCtx) + 1
+      keyed update + 1 audit_log insert -- 3 trips, not 5: see audit.js's selfCtx. */
   async advDecide(db, user, args) {
     requireNav(user, 'advappr');
     requireWrite(user);
@@ -5388,6 +5390,9 @@ const FNS = {
     if (String(dev.status) !== 'pending') {
       bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
     }
+    /* THE ROW audited() WOULD OTHERWISE READ A SECOND TIME. `dev` above IS the before-state its
+       diff needs; leaving it on args.__auditCtx saves the extra keyed read -- see audit.js. */
+    if (args.__auditCtx) args.__auditCtx.before = dev;
     /* DECIDING YOUR OWN REQUEST IS ALLOWED, AND THAT IS DELIBERATE. Do not "fix" this.
 
          "role is navigation based so i didnt expect (This is your own request — another
@@ -5447,6 +5452,7 @@ const FNS = {
       decided_at: at,
       updated_at: at,
     };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     /* Guarded on status so two approvers pressing at the same moment cannot both win: the
        second update matches no row, and that person is told it was already decided rather
        than silently overwriting the first decision. */
@@ -5514,7 +5520,9 @@ const FNS = {
 
   /** THE MONEY GOING OUT (Finance SOP G.6, first half). Separate from the approval because
       they happen on different days and by different hands, and a report that cannot tell
-      "approved" from "paid" can chase neither. */
+      "approved" from "paid" can chase neither.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5. */
   async advPay(db, user, args) {
     requireNav(user, 'advrep');
     requireWrite(user);
@@ -5535,10 +5543,16 @@ const FNS = {
     if (!r) bad('Ombi halipo. / That request no longer exists.');
     if (String(r.status) !== 'approved') bad('Ombi hili halijaidhinishwa. / That request is not approved.');
     if (r.paid_at) bad('Advance hii tayari imelipwa. / That advance has already been paid.');
+    if (args.__auditCtx) args.__auditCtx.before = r;
     const at = new Date().toISOString();
+    /* `status` itself never moves here -- paying an already-approved advance does not change
+       its status column -- so AUDIT_DIFF's ['status'] never actually shows a diff for advPay,
+       exactly as it did not before this change; the patch is still handed over so audited()
+       need not read the row again to confirm that. */
+    const patch = { paid_at: at, paid_by: user.name || '', payment_ref: ref, updated_at: at };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     const { data, error } = await db.from('staff_advances')
-      .update({ paid_at: at, paid_by: user.name || '', payment_ref: ref, updated_at: at })
-      .eq('id', id).eq('status', 'approved').is('paid_at', null).select('id');
+      .update(patch).eq('id', id).eq('status', 'approved').is('paid_at', null).select('id');
     if (error) {
       if (/paid_at|payment_ref/i.test(String(error.message))) bad(ADV_RULES_NOT_READY);
       throw new Error(error.message);
@@ -5849,7 +5863,11 @@ const FNS = {
   },
 
   /** APPROVE (possibly for less) OR REJECT, with a comment either way; a rejection must say why.
-      Deciding your own request is allowed, and recorded, for the reason advDecide gives. */
+      Deciding your own request is allowed, and recorded, for the reason advDecide gives.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips for the decision itself, not 5; unchanged by this fix, the
+      two best-effort mail sends afterwards are pre-existing and each may cost sendMail its
+      own keyed settings read when a toKey recipient is used. */
   async impDecide(db, user, args) {
     requireNav(user, 'impappr');
     requireWrite(user);
@@ -5869,6 +5887,7 @@ const FNS = {
     const row = rows.find(r => String(r.id) === id);
     if (!row) bad('Ombi halipo. / That request no longer exists.');
     if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
     const asked = num(row.total_amount);
     let granted = null;
     if (approve) {
@@ -5880,6 +5899,7 @@ const FNS = {
     const at = new Date().toISOString();
     const patch = { status: approve ? 'approved' : 'rejected', approved_amount: approve ? granted : null,
       comment: comment || null, decided_by: user.name || '', decided_at: at, updated_at: at };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     // Guarded on status so two approvers pressing at once cannot both win.
     const { data, error } = await db.from('imprest_requests')
       .update(patch).eq('id', id).eq('status', 'pending').select('id');
@@ -5910,7 +5930,12 @@ const FNS = {
   /** THE RETIREMENT. "when someone gets where he was destinated for their tasks they fill
       retirement with 3 pictures ... to keep reference of actual incurred costs". Own request,
       approved, not yet retired; once, ever. The photos are checked for size here regardless of
-      what the phone did, and stored in their own table -- see the migration. */
+      what the phone did, and stored in their own table -- see the migration.
+      Budget: 1 keyed read (shared with audited() via __auditCtx; AUDIT_DIFF's only tracked
+      field, status, never actually moves here, so the diff is always empty either way) + the
+      claim/finish writes the comment above already accounts for + 1 audit_log insert --
+      audited()'s own before- and after-reads are both gone: two fewer trips than before this
+      fix, for a diff that was never going to say anything regardless. */
   async impRetire(db, user, args) {
     requireNav(user, 'impreq');
     requireWrite(user);
@@ -5932,6 +5957,7 @@ const FNS = {
     /* FINISHED is retire_total set -- see the write order below. A claim with no summary is a
        filing that died, or one that is going on right now; both are handled at the claim. */
     if (row.retire_total != null) bad('Ombi hili tayari lina retirement. / This request has already been retired.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
 
     const fare = intNN(a.fareActual), accom = intNN(a.accomActual);
     const o1 = intNN(a.other1Actual), o2 = intNN(a.other2Actual), o3 = intNN(a.other3Actual);
@@ -6000,8 +6026,13 @@ const FNS = {
       if (dup(pErr)) busy();
       throw new Error(pErr.message);
     }
+    /* `status` never appears in this write -- retiring an approved claim does not change its
+       status column -- so AUDIT_DIFF's ['status'] shows no diff here either way; the patch is
+       still handed over so audited() need not read the row a second time to learn that. */
+    const finishPatch = { retire_total: total, retire_balance: balance, updated_at: at };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = finishPatch;
     const { data: done, error: uErr } = await db.from('imprest_requests')
-      .update({ retire_total: total, retire_balance: balance, updated_at: at })
+      .update(finishPatch)
       .eq('id', id).eq('retired_at', at).select('id');
     if (uErr) throw new Error(uErr.message);
     // Cannot happen inside RETIRE_CLAIM_MS; kept so a stale re-claim can never finish over a live one.
@@ -6197,6 +6228,8 @@ const FNS = {
       rows: shown.sort(pendingFirst) };
   },
 
+  /** Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5. */
   async leaveDecide(db, user, args) {
     requireNav(user, 'leaveappr');
     requireWrite(user);
@@ -6216,9 +6249,11 @@ const FNS = {
     const row = rows.find(r => String(r.id) === id);
     if (!row) bad('Ombi halipo. / That request no longer exists.');
     if (String(row.status) !== 'pending') bad('Ombi hili tayari limeamuliwa. / That request has already been decided.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
     const at = new Date().toISOString();
     const patch = { status: approve ? 'approved' : 'rejected', comment: comment || null,
       decided_by: user.name || '', decided_at: at, updated_at: at };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     const { data, error } = await db.from('leave_requests')
       .update(patch).eq('id', id).eq('status', 'pending').select('id');
     if (error) throw new Error(error.message);
@@ -6520,7 +6555,12 @@ const FNS = {
 
   /** MOVE IT. The desk changes status, assignment, references and the verified tick, and
       writes the note that explains the move; a raiser may only add a note to their own issue
-      ("here is the document"). Resolving needs a resolution; escalating tells the GM. */
+      ("here is the document"). Resolving needs a resolution; escalating tells the GM.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      issue_notes insert when there is a note or a status change + 1 audit_log insert -- 4
+      trips, not 6 (was the worst of the nine: two DIFFERENT bugs used to hide in this one --
+      see AUDIT_DIFF.issueUpdate's to_name fix, without which the before/after read was
+      refused outright on any migrated database and every diff here was silently dropped). */
   async issueUpdate(db, user, args) {
     requireAnyNav(user, ['issuereq', 'issues']);
     requireWrite(user);
@@ -6539,6 +6579,7 @@ const FNS = {
     const desk = navsFor(user).includes('issues');
     /* NOT YOURS reads as NOT THERE, and a raiser who is not the desk may only talk. */
     if (!row || (!desk && String(row.staff_code || '') !== String(user.code || ''))) bad('Suala halipo. / That issue no longer exists.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
     const note = S(a.note, 2000);
     const at = new Date().toISOString();
     const patch = { updated_by: user.name || '', updated_at: at };
@@ -6568,6 +6609,7 @@ const FNS = {
       if (a.verified != null) patch.verified = a.verified === true;
     }
     if (!note && !change && Object.keys(patch).length === 2) bad('Hakuna kilichobadilika. / Nothing to save.');
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     /* GUARDED on what was read, so two desks cannot silently overwrite each other's move. */
     const { data, error } = await db.from('issues').update(patch).eq('id', id).eq('updated_at', row.updated_at).select('id');
     if (error) throw new Error(error.message);
@@ -6764,7 +6806,9 @@ const FNS = {
   },
 
   /** MOVE ONE (SOP B.2-B.6). Verifying, paying and confirming the unlock are three different
-      acts by possibly three different people, so each is its own step with its own stamp. */
+      acts by possibly three different people, so each is its own step with its own stamp.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5 (the postgres-war audit's own measured example). */
   async topupUpdate(db, user, args) {
     requireNav(user, 'topups');
     requireWrite(user);
@@ -6782,6 +6826,7 @@ const FNS = {
     const row = rows.find(r => String(r.id) === id);
     if (!row) bad('Top-up haipo. / That top-up no longer exists.');
     if (row.status === 'unlocked') bad('Top-up hii imekamilika. / That top-up is already complete.');
+    if (args.__auditCtx) args.__auditCtx.before = row;
     const step = String(a.step || '').trim().toLowerCase();
     const at = new Date().toISOString();
     const patch = { updated_by: user.name || '', updated_at: at };
@@ -6820,6 +6865,7 @@ const FNS = {
     if (comment) patch.comment = comment;
     for (const [js, col] of TOPUP_CHECKS) if (a.checks && a.checks[js] === true) patch[col] = true;
     if (Object.keys(patch).length === 2) bad('Hakuna kilichobadilika. / Nothing to save.');
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     /* GUARDED on the status that was read, so two desks cannot both pay the same top-up. */
     const { data, error } = await db.from('topups').update(patch)
       .eq('id', id).eq('status', row.status).select('id');
@@ -8122,7 +8168,9 @@ const FNS = {
   },
 
   /** SIGN-OFF (SOP A.4). The Administration approval group's own grant; rejecting sends the
-      sheet back to draft so Finance can fix it and rebuild. */
+      sheet back to draft so Finance can fix it and rebuild.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5. */
   async commDecide(db, user, args) {
     requireNav(user, 'commappr');
     requireWrite(user);
@@ -8139,6 +8187,7 @@ const FNS = {
     const r = runs.find(x => String(x.id) === id);
     if (!r) bad('Kipindi hakipo. / That cycle no longer exists.');
     if (r.status === 'paid') bad('Kipindi hiki tayari kimelipwa. / That cycle has already been paid.');
+    if (args.__auditCtx) args.__auditCtx.before = r;
     const approve = a.approve === true;
     const comment = String(a.comment == null ? '' : a.comment).trim().slice(0, 2000);
     if (!approve && !comment) bad('Sababu inahitajika ukirudisha. / A reason is required when sending it back.');
@@ -8147,6 +8196,7 @@ const FNS = {
     const patch = approve
       ? { status: 'approved', approved_by: user.name || '', approved_at: now, comment: comment || null, updated_at: now }
       : { status: 'draft', approved_by: null, approved_at: null, comment, updated_at: now };
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     const { data, error } = await db.from('commission_runs').update(patch)
       .eq('id', id).eq('status', r.status).select('id');
     if (error) throw new Error(error.message);
@@ -8156,7 +8206,9 @@ const FNS = {
 
   /** PAY AND CLEAR (SOP A.5-A.7). The checklist is a GATE: all five ticks and a payment
       reference, or nothing moves. Guarded on cleared_at being empty, which is what stops the
-      same cycle being paid twice however many people press the button. */
+      same cycle being paid twice however many people press the button.
+      Budget: 1 keyed read (shared with audited() via __auditCtx) + 1 keyed update + 1
+      audit_log insert -- 3 trips, not 5. */
   async commPay(db, user, args) {
     requireNav(user, 'commission');
     requireWrite(user);
@@ -8177,6 +8229,7 @@ const FNS = {
         + '/ This cycle is already paid and cleared; it cannot be paid twice.');
     }
     if (r.status !== 'approved') bad('Inahitaji idhini kabla ya malipo (SOP A.4). / It needs sign-off before payment.');
+    if (args.__auditCtx) args.__auditCtx.before = r;
     const ref = String(a.paymentRef == null ? '' : a.paymentRef).trim().slice(0, 120);
     if (!ref) bad('Andika kumbukumbu ya malipo. / Give the payment reference (SOP A.7).');
     const checks = a.checks || {};
@@ -8189,6 +8242,7 @@ const FNS = {
     const patch = { status: 'paid', paid_by: user.name || '', paid_at: now, payment_ref: ref,
       cleared_at: now, updated_at: now };
     for (const [js, col] of COMM_CHECKS) patch[col] = true;
+    if (args.__auditCtx) args.__auditCtx.afterPatch = patch;
     /* GUARDED ON cleared_at BEING NULL. Two people pressing Pay at the same moment: the second
        update matches nothing and is told the cycle is already cleared. */
     const { data, error } = await db.from('commission_runs').update(patch)
