@@ -4909,36 +4909,59 @@ function advWirePay(m, redraw){
   });
 }
 
-/* THE APPROVAL PANE. Pending first, because the queue is a worklist. */
+/* THE APPROVAL PANE. Pending first, because the queue is a worklist.
+
+   THE DOOR IS THE COST, NOT THE ROWS -- advQueue reads the whole staff_advances table on
+   EVERY call regardless of `state` (it slices to `want` in memory, after fetching
+   everything), so the three chips were three ways to pay the same 300-row read and the same
+   auth+gate door again [1 trip/300 rows, every click]. Any state OTHER than 'pending' or
+   'decided' already gets back the WHOLE table (advQueue's own ternary falls through to
+   `all`) -- so once that fuller answer has been fetched, the OTHER two chips are answerable
+   from it without asking again. ADVQ_LAST holds it, for 5 minutes (a worklist several
+   people work at once should not go stale much longer than that); a chip whose rows are not
+   in hand still fetches, same as before. */
+var ADVQ_LAST=null;
+function advQFull_(state){ return state!=='pending' && state!=='decided'; }
+function advQSlice_(rows, state){
+  return state==='pending' ? rows.filter(function(r){ return r.status==='pending'; })
+    : state==='decided' ? rows.filter(function(r){ return r.status!=='pending'; })
+    : rows;
+}
 function drawAdvAppr(m){
+  var have=ADVQ_LAST&&(Date.now()-ADVQ_LAST.at)<5*60000
+    &&(ADVQ_LAST.args.state===ADVQ||advQFull_(ADVQ_LAST.args.state));
+  if(have){ advApprRender(m, ADVQ_LAST.data, advQSlice_(ADVQ_LAST.data.rows||[], ADVQ)); return; }
   m.innerHTML='<div class="sk"></div>';
   srv('advQueue',{state:ADVQ}).then(function(d){
-    if(d.notReady){ m.innerHTML=advNotReady(); return; }
-    var rows=d.rows||[];
-    var chip=function(k,label){ return '<button class="btn sm'+(ADVQ===k?'':' ghost')
-      +'" data-avq="'+k+'">'+label+'</button>'; };
-    m.innerHTML='<div class="tiles">'
-      +tile('Yanasubiri',money(d.pending||0),'maombi ambayo hayajaamuliwa',
-        Object.assign({color:(d.pending?'bad':'')},
-          { on:ADVQ==='pending', cta:'chuja ›', go:function(){ ADVQ=(ADVQ==='pending'?'':'pending'); drawAdvAppr(m); } }))
-      +'</div>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
-      +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')
-      +'</div>'
-      +(rows.length?advTable(rows,'decide')
-        :'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
-    wireTiles(m);
-    [].slice.call(m.querySelectorAll('[data-avq]')).forEach(function(b){
-      b.onclick=function(){ ADVQ=b.getAttribute('data-avq'); drawAdvAppr(m); };
-    });
-    [].slice.call(m.querySelectorAll('[data-avd]')).forEach(function(b){
-      b.onclick=function(){
-        var id=b.getAttribute('data-avd');
-        var r=rows.filter(function(x){ return String(x.id)===id; })[0];
-        if(r) advDecideDrawer(m, r, d.amounts);
-      };
-    });
+    ADVQ_LAST={args:{state:ADVQ}, data:d, at:Date.now()};
+    advApprRender(m, d, d.rows||[]);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function advApprRender(m, d, rows){
+  if(d.notReady){ m.innerHTML=advNotReady(); return; }
+  var chip=function(k,label){ return '<button class="btn sm'+(ADVQ===k?'':' ghost')
+    +'" data-avq="'+k+'">'+label+'</button>'; };
+  m.innerHTML='<div class="tiles">'
+    +tile('Yanasubiri',money(d.pending||0),'maombi ambayo hayajaamuliwa',
+      Object.assign({color:(d.pending?'bad':'')},
+        { on:ADVQ==='pending', cta:'chuja ›', go:function(){ ADVQ=(ADVQ==='pending'?'':'pending'); drawAdvAppr(m); } }))
+    +'</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
+    +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')
+    +'</div>'
+    +(rows.length?advTable(rows,'decide')
+      :'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
+  wireTiles(m);
+  [].slice.call(m.querySelectorAll('[data-avq]')).forEach(function(b){
+    b.onclick=function(){ ADVQ=b.getAttribute('data-avq'); drawAdvAppr(m); };
+  });
+  [].slice.call(m.querySelectorAll('[data-avd]')).forEach(function(b){
+    b.onclick=function(){
+      var id=b.getAttribute('data-avd');
+      var r=rows.filter(function(x){ return String(x.id)===id; })[0];
+      if(r) advDecideDrawer(m, r, d.amounts);
+    };
+  });
 }
 var ADVQ='pending';
 
@@ -4978,7 +5001,9 @@ function advDecideDrawer(m, r, amounts){
       approvedAmount:approve?Number($('#avdAmt').value):null,
       comment:$('#avdCmt').value }).then(function(){
       toast(approve?'Imeidhinishwa / Approved':'Imekataliwa / Declined');
-      closeDrawer(); drawAdvAppr(m);
+      // The decision just made changes the very rows ADVQ_LAST is holding -- drop it so the
+      // redraw asks the server again rather than repainting a queue that decided nothing.
+      closeDrawer(); ADVQ_LAST=null; drawAdvAppr(m);
     }).catch(function(e){
       if(b) b.disabled=false; if(n) n.disabled=false; toast(safeErr(e), true);
     });
@@ -5597,100 +5622,130 @@ function impRetireDrawer(m, r){
 }
 
 /* THE APPROVAL PANE. The queue, the widgets over it, and the rate table the administrator
-   owns -- "role setiings where adminstrator can add roles and their accomodation per day". */
+   owns -- "role setiings where adminstrator can add roles and their accomodation per day".
+
+   THE DOOR IS THE COST -- impQueue reads the whole imprest_requests table on every call and
+   slices to `state` in memory (its own ternary falls through to the FULL table for anything
+   other than 'pending'/'decided'/'toRetire'), so the four chips paid for that read and the
+   door again on every click [1 trip/300 rows]. impRoles rode along in the same Promise.all
+   though it never changes with IMPQ at all. IMPQ_LAST holds BOTH, for 5 minutes; a chip whose
+   rows are already in hand (or that a fuller answer already covers) renders from it, and only
+   a state the hold cannot answer -- or a role rate changed -- asks the server again. */
 var IMPQ='pending';
+var IMPQ_LAST=null;
+function impQFull_(state){ return state!=='pending' && state!=='decided' && state!=='toRetire'; }
+function impQSlice_(rows, state){
+  return state==='pending' ? rows.filter(function(r){ return r.status==='pending'; })
+    : state==='decided' ? rows.filter(function(r){ return r.status!=='pending'; })
+    : state==='toRetire' ? rows.filter(function(r){ return r.status==='approved'&&!r.retiredAt; })
+    : rows;
+}
 function drawImpAppr(m){
+  var have=IMPQ_LAST&&(Date.now()-IMPQ_LAST.at)<5*60000
+    &&(IMPQ_LAST.args.state===IMPQ||impQFull_(IMPQ_LAST.args.state));
+  if(have){
+    impApprRender(m, IMPQ_LAST.data.queue, IMPQ_LAST.data.roles,
+      impQSlice_(IMPQ_LAST.data.queue.rows||[], IMPQ));
+    return;
+  }
   m.innerHTML='<div class="sk"></div>';
   Promise.all([srv('impQueue',{state:IMPQ}), srv('impRoles',{})]).then(function(a){
-    var d=a[0], roles=a[1].roles||[], allRoles=a[1].all||[];
-    if(d.notReady){ m.innerHTML=impNotReady(); return; }
-    var rows=d.rows||[], c=d.counts||{};
-    var chip=function(k,label){ return '<button class="btn sm'+(IMPQ===k?'':' ghost')+'" data-impq="'+k+'">'+label+'</button>'; };
-    var pick=function(k){ return function(){ IMPQ=(IMPQ===k?'':k); if(TAB==='impappr') drawImpAppr(m); }; };
-    m.innerHTML='<div class="tiles">'
-      +tile('Yanasubiri',money(c.pending||0),'maombi ambayo hayajaamuliwa',{color:c.pending?'bad':'',on:IMPQ==='pending',cta:'chuja ›',go:pick('pending')})
-      +tile('Yameidhinishwa',money(c.approved||0),'jumla ya maombi',{color:'ok',on:IMPQ==='decided',cta:'chuja ›',go:pick('decided')})
-      +tile('Yamekataliwa',money(c.rejected||0),'',{on:IMPQ==='decided',cta:'chuja ›',go:pick('decided')})
-      +tile('Bila retirement',money(c.toRetire||0),'yameidhinishwa, hesabu bado',{color:c.toRetire?'warn':'',on:IMPQ==='toRetire',cta:'chuja ›',go:pick('toRetire')})
-      +'</div>'
-      +'<div class="card" style="padding:12px;margin:10px 0">'
-      +'<h4 style="margin:0 0 4px">Viwango vya malazi / Accommodation rates</h4>'
-      +'<div class="mut" style="font-size:11px;margin-bottom:6px">Kiwango kwa siku kwa kila wadhifa; mwombaji anachagua wadhifa na seva inazidisha. '
-      +'/ A nightly rate per role; the requester picks the role and the server multiplies.</div>'
-      +(roles.length?'<div class="scroll"><table><thead><tr><th>Wadhifa / Role</th><th class="r">TZS kwa siku / per day</th><th class="noxl"></th></tr></thead><tbody>'
-        +roles.map(function(r){ return '<tr><td>'+esc(r.role)+'</td><td class="r">'+money(r.rate)+'</td>'
-          +'<td class="r noxl" style="white-space:nowrap"><button class="btn sm ghost" data-rle="'+esc(r.role)+'" data-rate="'+esc(r.rate)+'">Badili</button> '
-          +'<button class="btn sm ghost danger" data-rld="'+esc(r.role)+'">Futa</button></td></tr>'; }).join('')
-        +'</tbody></table></div>':'<div class="mut">Hakuna wadhifa bado. / No roles yet.</div>')
-      /* THE ROLE IS CHOSEN, NEVER TYPED.
-         -----------------------------------------------------------------------------------
-           "at Viwango vya malazi / Accommodation rates roles should be a drop down of all
-            existing to make choice"
-
-         A TYPED ROLE IS A ROLE THAT MATCHES NOBODY. The rate is found by NAME when a request
-         is priced, so "SALES CORDINATOR" with one letter missing is not a typo you notice --
-         it is a rate row nothing will ever look up, and a traveller paid nothing for their
-         nights with no error on any screen to say why.
-
-         THE OPTIONS ARE THE UNION of the roles that exist and the roles that already hold a
-         rate. That second half is load-bearing: Badili fills this control from a rate row,
-         and a value that is not among the options does not stick -- the box would silently
-         keep whatever was selected before and the save would land on the WRONG ROLE. A rate
-         row for a role since deleted must stay editable, if only to be corrected. */
-      +(function(){
-        var opts=allRoles.slice();
-        roles.forEach(function(r){ if(opts.indexOf(r.role)<0) opts.push(r.role); });
-        opts.sort();
-        return '<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">'
-          +'<select id="rlRole" class="inp" style="flex:2;min-width:160px">'
-          +'<option value="">Chagua wadhifa / choose a role</option>'
-          +opts.map(function(x){ return '<option value="'+esc(x)+'">'+esc(x)+'</option>'; }).join('')
-          +'</select>'
-          +'<input id="rlRate" class="inp" style="flex:1;min-width:110px" type="number" min="0" step="1" placeholder="TZS kwa siku">'
-          +'<button class="btn sm" id="rlAdd">Hifadhi / Save</button></div>'
-          /* NAMES THE WAY OUT when the wanted role is not on the list, because a dropdown
-             with no escape is where somebody gives up and pays by hand. */
-          +'<div class="mut" style="font-size:10.5px;margin-top:4px">Wadhifa haupo? Uunde kwanza '
-          +'kwenye <b>Misimbo ya kuingia</b>, kisha urudi hapa. '
-          +'/ Role not listed? Create it under <b>Access codes</b> first, then come back.</div>';
-      })()
-      +'</div>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
-      +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')+chip('toRetire','Bila retirement / Not retired')
-      +'</div>'
-      +(rows.length?impTable(rows,{decide:true,photos:true}):'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
-    wireTiles(m);
-    [].slice.call(m.querySelectorAll('[data-impq]')).forEach(function(b){
-      b.onclick=function(){ IMPQ=b.getAttribute('data-impq'); if(TAB==='impappr') drawImpAppr(m); };
-    });
-    var saveRole=function(role, rate, b){
-      if(b) b.disabled=true;
-      srv('impRoleSave',{role:role, rate:rate}).then(function(){ toast('Kiwango kimehifadhiwa / Rate saved'); if(TAB==='impappr') drawImpAppr(m); })
-        .catch(function(e){ if(b) b.disabled=false; toast(safeErr(e), true); });
-    };
-    $('#rlAdd').onclick=function(){
-      /* THE ROLE FIRST, because it is now a choice and the unset one is a real state. The
-         server refuses a blank name anyway; saying so here costs no round trip and puts the
-         message next to the control that is empty. */
-      if(!$('#rlRole').value){ toast('Chagua wadhifa kwanza. / Choose a role first.', true); return; }
-      if($('#rlRate').value===''){ toast('Andika kiwango cha malazi (0 inaruhusiwa). / Enter the nightly rate (0 is allowed).', true); return; }
-      saveRole($('#rlRole').value, $('#rlRate').value, this);
-    };
-    [].slice.call(m.querySelectorAll('[data-rle]')).forEach(function(b){
-      b.onclick=function(){ $('#rlRole').value=b.getAttribute('data-rle'); $('#rlRate').value=b.getAttribute('data-rate'); $('#rlRate').focus(); };
-    });
-    [].slice.call(m.querySelectorAll('[data-rld]')).forEach(function(b){
-      b.onclick=function(){
-        var role=b.getAttribute('data-rld');
-        if(!confirm('Futa wadhifa '+role+'? Maombi ya zamani hayabadiliki. / Delete role '+role+'? Old requests keep their stamped rate.')) return;
-        b.disabled=true;
-        srv('impRoleDelete',{role:role}).then(function(){ toast('Imefutwa / Deleted'); if(TAB==='impappr') drawImpAppr(m); })
-          .catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
-      };
-    });
-    impWireRows(m, rows, { view:impDetailsDrawer, photos:function(r){ impPhotosDrawer(r.id); },
-      decide:function(r){ impDecideDrawer(m, r); } });
+    var d=a[0];
+    IMPQ_LAST={args:{state:IMPQ}, data:{queue:d, roles:a[1]}, at:Date.now()};
+    impApprRender(m, d, a[1], d.rows||[]);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function impApprRender(m, d, rolesResp, rows){
+  var roles=rolesResp.roles||[], allRoles=rolesResp.all||[];
+  if(d.notReady){ m.innerHTML=impNotReady(); return; }
+  var c=d.counts||{};
+  var chip=function(k,label){ return '<button class="btn sm'+(IMPQ===k?'':' ghost')+'" data-impq="'+k+'">'+label+'</button>'; };
+  var pick=function(k){ return function(){ IMPQ=(IMPQ===k?'':k); if(TAB==='impappr') drawImpAppr(m); }; };
+  m.innerHTML='<div class="tiles">'
+    +tile('Yanasubiri',money(c.pending||0),'maombi ambayo hayajaamuliwa',{color:c.pending?'bad':'',on:IMPQ==='pending',cta:'chuja ›',go:pick('pending')})
+    +tile('Yameidhinishwa',money(c.approved||0),'jumla ya maombi',{color:'ok',on:IMPQ==='decided',cta:'chuja ›',go:pick('decided')})
+    +tile('Yamekataliwa',money(c.rejected||0),'',{on:IMPQ==='decided',cta:'chuja ›',go:pick('decided')})
+    +tile('Bila retirement',money(c.toRetire||0),'yameidhinishwa, hesabu bado',{color:c.toRetire?'warn':'',on:IMPQ==='toRetire',cta:'chuja ›',go:pick('toRetire')})
+    +'</div>'
+    +'<div class="card" style="padding:12px;margin:10px 0">'
+    +'<h4 style="margin:0 0 4px">Viwango vya malazi / Accommodation rates</h4>'
+    +'<div class="mut" style="font-size:11px;margin-bottom:6px">Kiwango kwa siku kwa kila wadhifa; mwombaji anachagua wadhifa na seva inazidisha. '
+    +'/ A nightly rate per role; the requester picks the role and the server multiplies.</div>'
+    +(roles.length?'<div class="scroll"><table><thead><tr><th>Wadhifa / Role</th><th class="r">TZS kwa siku / per day</th><th class="noxl"></th></tr></thead><tbody>'
+      +roles.map(function(r){ return '<tr><td>'+esc(r.role)+'</td><td class="r">'+money(r.rate)+'</td>'
+        +'<td class="r noxl" style="white-space:nowrap"><button class="btn sm ghost" data-rle="'+esc(r.role)+'" data-rate="'+esc(r.rate)+'">Badili</button> '
+        +'<button class="btn sm ghost danger" data-rld="'+esc(r.role)+'">Futa</button></td></tr>'; }).join('')
+      +'</tbody></table></div>':'<div class="mut">Hakuna wadhifa bado. / No roles yet.</div>')
+    /* THE ROLE IS CHOSEN, NEVER TYPED.
+       -----------------------------------------------------------------------------------
+         "at Viwango vya malazi / Accommodation rates roles should be a drop down of all
+          existing to make choice"
+
+       A TYPED ROLE IS A ROLE THAT MATCHES NOBODY. The rate is found by NAME when a request
+       is priced, so "SALES CORDINATOR" with one letter missing is not a typo you notice --
+       it is a rate row nothing will ever look up, and a traveller paid nothing for their
+       nights with no error on any screen to say why.
+
+       THE OPTIONS ARE THE UNION of the roles that exist and the roles that already hold a
+       rate. That second half is load-bearing: Badili fills this control from a rate row,
+       and a value that is not among the options does not stick -- the box would silently
+       keep whatever was selected before and the save would land on the WRONG ROLE. A rate
+       row for a role since deleted must stay editable, if only to be corrected. */
+    +(function(){
+      var opts=allRoles.slice();
+      roles.forEach(function(r){ if(opts.indexOf(r.role)<0) opts.push(r.role); });
+      opts.sort();
+      return '<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">'
+        +'<select id="rlRole" class="inp" style="flex:2;min-width:160px">'
+        +'<option value="">Chagua wadhifa / choose a role</option>'
+        +opts.map(function(x){ return '<option value="'+esc(x)+'">'+esc(x)+'</option>'; }).join('')
+        +'</select>'
+        +'<input id="rlRate" class="inp" style="flex:1;min-width:110px" type="number" min="0" step="1" placeholder="TZS kwa siku">'
+        +'<button class="btn sm" id="rlAdd">Hifadhi / Save</button></div>'
+        /* NAMES THE WAY OUT when the wanted role is not on the list, because a dropdown
+           with no escape is where somebody gives up and pays by hand. */
+        +'<div class="mut" style="font-size:10.5px;margin-top:4px">Wadhifa haupo? Uunde kwanza '
+        +'kwenye <b>Misimbo ya kuingia</b>, kisha urudi hapa. '
+        +'/ Role not listed? Create it under <b>Access codes</b> first, then come back.</div>';
+    })()
+    +'</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
+    +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')+chip('toRetire','Bila retirement / Not retired')
+    +'</div>'
+    +(rows.length?impTable(rows,{decide:true,photos:true}):'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
+  wireTiles(m);
+  [].slice.call(m.querySelectorAll('[data-impq]')).forEach(function(b){
+    b.onclick=function(){ IMPQ=b.getAttribute('data-impq'); if(TAB==='impappr') drawImpAppr(m); };
+  });
+  var saveRole=function(role, rate, b){
+    if(b) b.disabled=true;
+    // A rate change lives in the SAME held payload as the queue -- drop it so the redraw
+    // does not repaint the accommodation table from before the edit.
+    srv('impRoleSave',{role:role, rate:rate}).then(function(){ toast('Kiwango kimehifadhiwa / Rate saved'); IMPQ_LAST=null; if(TAB==='impappr') drawImpAppr(m); })
+      .catch(function(e){ if(b) b.disabled=false; toast(safeErr(e), true); });
+  };
+  $('#rlAdd').onclick=function(){
+    /* THE ROLE FIRST, because it is now a choice and the unset one is a real state. The
+       server refuses a blank name anyway; saying so here costs no round trip and puts the
+       message next to the control that is empty. */
+    if(!$('#rlRole').value){ toast('Chagua wadhifa kwanza. / Choose a role first.', true); return; }
+    if($('#rlRate').value===''){ toast('Andika kiwango cha malazi (0 inaruhusiwa). / Enter the nightly rate (0 is allowed).', true); return; }
+    saveRole($('#rlRole').value, $('#rlRate').value, this);
+  };
+  [].slice.call(m.querySelectorAll('[data-rle]')).forEach(function(b){
+    b.onclick=function(){ $('#rlRole').value=b.getAttribute('data-rle'); $('#rlRate').value=b.getAttribute('data-rate'); $('#rlRate').focus(); };
+  });
+  [].slice.call(m.querySelectorAll('[data-rld]')).forEach(function(b){
+    b.onclick=function(){
+      var role=b.getAttribute('data-rld');
+      if(!confirm('Futa wadhifa '+role+'? Maombi ya zamani hayabadiliki. / Delete role '+role+'? Old requests keep their stamped rate.')) return;
+      b.disabled=true;
+      srv('impRoleDelete',{role:role}).then(function(){ toast('Imefutwa / Deleted'); IMPQ_LAST=null; if(TAB==='impappr') drawImpAppr(m); })
+        .catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+    };
+  });
+  impWireRows(m, rows, { view:impDetailsDrawer, photos:function(r){ impPhotosDrawer(r.id); },
+    decide:function(r){ impDecideDrawer(m, r); } });
 }
 
 /* ONE DRAWER, BOTH ANSWERS -- the advance's drawer with a typed figure instead of a dropdown,
@@ -5718,7 +5773,7 @@ function impDecideDrawer(m, r){
     srv('impDecide',{ id:r.id, approve:approve, approvedAmount:approve?$('#imdAmt').value:null, comment:$('#imdCmt').value })
     .then(function(d){
       toast((approve?'Imeidhinishwa / Approved':'Imekataliwa / Rejected')+(d.emailNote?' · email: '+d.emailNote:''), !!d.emailNote);
-      closeDrawer(); if(TAB==='impappr') drawImpAppr(m);
+      closeDrawer(); IMPQ_LAST=null; if(TAB==='impappr') drawImpAppr(m);
     }).catch(function(e){ if(b) b.disabled=false; if(n) n.disabled=false; toast(safeErr(e), true); });
   };
   $('#imdOk').onclick=function(){ send(true); };
@@ -5940,35 +5995,61 @@ function drawLeaveReq(m){
 /* HR'S DESK. Pending first; the widgets say what is waiting, what was filed late, and who is
    away today -- the three questions HR is asked across a desk. */
 var LEAVEQ='pending';
+/* THE DOOR IS THE COST -- leaveQueue reads the whole leave_requests table on every call and
+   slices to `state` in memory (its ternary falls through to the FULL table for anything
+   other than 'pending'/'decided'/'today'), so the four chips paid for that read and the door
+   again on every click [1 trip/300 rows]. LEAVEQ_LAST holds the fullest answer seen, for 5
+   minutes; 'pending' and 'decided' are pure status filters so they render from it once it is
+   full. 'today' depends on the CURRENT date rather than only on rows already in hand -- it is
+   never derived locally, and always asks the server, same as before. */
+var LEAVEQ_LAST=null;
+function leaveQFull_(state){ return state!=='pending' && state!=='decided' && state!=='today'; }
+function leaveQCanLocal_(held, want){
+  return !!held && want!=='today' && (held.args.state===want || leaveQFull_(held.args.state));
+}
+function leaveQSlice_(rows, state){
+  return state==='pending' ? rows.filter(function(r){ return r.status==='pending'; })
+    : state==='decided' ? rows.filter(function(r){ return r.status!=='pending'; })
+    : rows;
+}
 function drawLeaveAppr(m){
+  var held=LEAVEQ_LAST&&(Date.now()-LEAVEQ_LAST.at)<5*60000?LEAVEQ_LAST:null;
+  if(leaveQCanLocal_(held,LEAVEQ)){
+    leaveApprRender(m, held.data, leaveQSlice_(held.data.rows||[], LEAVEQ));
+    return;
+  }
   m.innerHTML='<div class="sk"></div>';
   srv('leaveQueue',{state:LEAVEQ}).then(function(d){
-    if(d.notReady){ m.innerHTML=leaveNotReady(); return; }
-    var rows=d.rows||[], c=d.counts||{};
-    var chip=function(k,label){ return '<button class="btn sm'+(LEAVEQ===k?'':' ghost')+'" data-lvq="'+k+'">'+label+'</button>'; };
-    var pick=function(k){ return function(){ LEAVEQ=(LEAVEQ===k?'':k); if(TAB==='leaveappr') drawLeaveAppr(m); }; };
-    m.innerHTML='<div class="tiles">'
-      +tile('Yanasubiri',money(c.pending||0),'maombi ambayo hayajaamuliwa',{color:c.pending?'bad':'',on:LEAVEQ==='pending',cta:'chuja ›',go:pick('pending')})
-      +tile('Taarifa fupi',money(c.shortNotice||0),'yanasubiri, chini ya wiki moja',{color:c.shortNotice?'warn':''})
-      +tile('Likizoni leo',money(c.onLeaveToday||0),'wafanyakazi walio likizoni sasa',{on:LEAVEQ==='today',cta:'onyesha ›',go:pick('today')})
-      +tile('Yameidhinishwa',money(c.approved||0),'jumla · yamekataliwa '+money(c.rejected||0),{color:'ok',on:LEAVEQ==='decided',cta:'chuja ›',go:pick('decided')})
-      +'</div>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
-      +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')+chip('today','Likizoni leo / On leave today')
-      +'</div>'
-      +(rows.length?leaveTable(rows,true):'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
-    wireTiles(m);
-    [].slice.call(m.querySelectorAll('[data-lvq]')).forEach(function(b){
-      b.onclick=function(){ LEAVEQ=b.getAttribute('data-lvq'); if(TAB==='leaveappr') drawLeaveAppr(m); };
-    });
-    var find=function(id){ return rows.filter(function(x){ return String(x.id)===id; })[0]; };
-    [].slice.call(m.querySelectorAll('[data-lvv]')).forEach(function(b){
-      b.onclick=function(){ var r=find(b.getAttribute('data-lvv')); if(r) leaveDetailsDrawer(r); };
-    });
-    [].slice.call(m.querySelectorAll('[data-lvd]')).forEach(function(b){
-      b.onclick=function(){ var r=find(b.getAttribute('data-lvd')); if(r) leaveDecideDrawer(m, r); };
-    });
+    LEAVEQ_LAST={args:{state:LEAVEQ}, data:d, at:Date.now()};
+    leaveApprRender(m, d, d.rows||[]);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function leaveApprRender(m, d, rows){
+  if(d.notReady){ m.innerHTML=leaveNotReady(); return; }
+  var c=d.counts||{};
+  var chip=function(k,label){ return '<button class="btn sm'+(LEAVEQ===k?'':' ghost')+'" data-lvq="'+k+'">'+label+'</button>'; };
+  var pick=function(k){ return function(){ LEAVEQ=(LEAVEQ===k?'':k); if(TAB==='leaveappr') drawLeaveAppr(m); }; };
+  m.innerHTML='<div class="tiles">'
+    +tile('Yanasubiri',money(c.pending||0),'maombi ambayo hayajaamuliwa',{color:c.pending?'bad':'',on:LEAVEQ==='pending',cta:'chuja ›',go:pick('pending')})
+    +tile('Taarifa fupi',money(c.shortNotice||0),'yanasubiri, chini ya wiki moja',{color:c.shortNotice?'warn':''})
+    +tile('Likizoni leo',money(c.onLeaveToday||0),'wafanyakazi walio likizoni sasa',{on:LEAVEQ==='today',cta:'onyesha ›',go:pick('today')})
+    +tile('Yameidhinishwa',money(c.approved||0),'jumla · yamekataliwa '+money(c.rejected||0),{color:'ok',on:LEAVEQ==='decided',cta:'chuja ›',go:pick('decided')})
+    +'</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">'
+    +chip('','Yote / All')+chip('pending','Yanasubiri / Pending')+chip('decided','Yaliyoamuliwa / Decided')+chip('today','Likizoni leo / On leave today')
+    +'</div>'
+    +(rows.length?leaveTable(rows,true):'<div class="mut">Hakuna maombi hapa. / Nothing here.</div>');
+  wireTiles(m);
+  [].slice.call(m.querySelectorAll('[data-lvq]')).forEach(function(b){
+    b.onclick=function(){ LEAVEQ=b.getAttribute('data-lvq'); if(TAB==='leaveappr') drawLeaveAppr(m); };
+  });
+  var find=function(id){ return rows.filter(function(x){ return String(x.id)===id; })[0]; };
+  [].slice.call(m.querySelectorAll('[data-lvv]')).forEach(function(b){
+    b.onclick=function(){ var r=find(b.getAttribute('data-lvv')); if(r) leaveDetailsDrawer(r); };
+  });
+  [].slice.call(m.querySelectorAll('[data-lvd]')).forEach(function(b){
+    b.onclick=function(){ var r=find(b.getAttribute('data-lvd')); if(r) leaveDecideDrawer(m, r); };
+  });
 }
 function leaveDecideDrawer(m, r){
   drawer('<h3>Likizo — '+esc(r.staffName||'—')+'</h3>'
@@ -5985,7 +6066,7 @@ function leaveDecideDrawer(m, r){
     var b=$('#lvdOk'), n=$('#lvdNo'); if(b) b.disabled=true; if(n) n.disabled=true;
     srv('leaveDecide',{ id:r.id, approve:approve, comment:$('#lvdCmt').value }).then(function(){
       toast(approve?'Imeidhinishwa / Approved':'Imekataliwa / Rejected');
-      closeDrawer(); if(TAB==='leaveappr') drawLeaveAppr(m);
+      closeDrawer(); LEAVEQ_LAST=null; if(TAB==='leaveappr') drawLeaveAppr(m);
     }).catch(function(e){ if(b) b.disabled=false; if(n) n.disabled=false; toast(safeErr(e), true); });
   };
   $('#lvdOk').onclick=function(){ send(true); };
@@ -6201,6 +6282,9 @@ function topupDrawer(m, r, desk, checks){
     var a=Object.assign({id:r.id, step:step, comment:$('#tuC')?$('#tuC').value:'', checks:picked()}, extra||{});
     srv('topupUpdate',a).then(function(){
       toast('Imehifadhiwa / Saved'); closeDrawer();
+      // Verify/pay/unlock/reject/note all move this row -- the held queue cache no longer
+      // matches what the server would say, so it is dropped rather than trusted.
+      TOPUPQ_LAST=null;
       if(TAB==='topups') drawTopups(m); else if(TAB==='tureq') drawTopupReq(m);
     }).catch(function(e){ toast(safeErr(e), true); });
   };
@@ -6240,46 +6324,70 @@ function drawTopupReq(m){
     });
   }).catch(function(e){ paneFailed(m,e); });
 }
+/* THE DOOR IS THE COST -- topupQueue reads the whole topups table on every call and slices
+   in memory: 'all' is the only value that returns everything, every other value (including
+   the default '', "Live") is a genuinely narrower slice. So only after 'Zote / All' has been
+   asked for once can the other chips be answered from what is already in hand [1 trip/300
+   rows a click, otherwise]. Filtering the held rows preserves topupQueue's own sort
+   (topupWaitFirst): a .filter() never reorders what it keeps. */
+var TOPUPQ_LAST=null;
+function topupQFull_(state){ return state==='all'; }
+function topupQSlice_(rows, state){
+  return rows.filter(function(r){
+    if(state==='all') return true;
+    if(state) return r.status===state;
+    return r.status!=='unlocked' && r.status!=='rejected';
+  });
+}
 function drawTopups(m){
+  var held=TOPUPQ_LAST&&(Date.now()-TOPUPQ_LAST.at)<5*60000?TOPUPQ_LAST:null;
+  if(held&&(held.args.state===TOPUPQ||topupQFull_(held.args.state))){
+    topupsRender(m, held.data, topupQSlice_(held.data.rows||[], TOPUPQ));
+    return;
+  }
   m.innerHTML='<div class="sk"></div>';
   srv('topupQueue',{state:TOPUPQ}).then(function(d){
-    if(d.notReady){ m.innerHTML=topupNotReady(); return; }
-    var rows=d.rows||[], c=d.counts||{}, checks=d.checks||[], canW=!BOOT.readOnly;
-    var pick=function(k){ return function(){ TOPUPQ=(TOPUPQ===k?'':k); if(TAB==='topups') drawTopups(m); }; };
-    var longest=c.longestWaitMins||0;
-    m.innerHTML=(longest>=120?'<div class="note bad">Kuna mteja amesubiri saa '+Math.floor(longest/60)
-        +' na dakika '+(longest%60)+' na simu yake bado imefungwa. SOP B.5: malipo haya hayapaswi kucheleweshwa. '
-        +'/ Somebody has been waiting that long with a locked phone; SOP B.5 says this must never be delayed.</div>':'')
-      +'<div class="tiles">'
-      +tile('Zinasubiri',money(c.waiting||0),'wateja wenye simu zilizofungwa',{color:c.waiting?'bad':'',on:TOPUPQ==='requested',cta:'chuja ›',go:pick('requested')})
-      +tile('Muda mrefu zaidi',longest<60?money(longest)+' dk':Math.floor(longest/60)+'h '+(longest%60)+'dk','ndio aliyesubiri zaidi sasa',
-        {color:longest>=120?'bad':(longest>=30?'warn':'ok')})
-      +tile('Zimethibitishwa',money(c.verified||0),'zinasubiri malipo',{color:c.verified?'warn':'',on:TOPUPQ==='verified',cta:'chuja ›',go:pick('verified')})
-      +tile('Zimelipwa',money(c.paid||0),'zinasubiri uthibitisho wa kufunguliwa',{on:TOPUPQ==='paid',cta:'chuja ›',go:pick('paid')})
-      +tile('Zimefunguliwa',money(c.unlocked||0),'zimekamilika',{color:'ok',on:TOPUPQ==='unlocked',cta:'chuja ›',go:pick('unlocked')})
-      +'</div>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
-      +'<button class="btn sm'+(TOPUPQ===''?'':' ghost')+'" data-tuq="">Zinaendelea / Live</button>'
-      +'<button class="btn sm'+(TOPUPQ==='all'?'':' ghost')+'" data-tuq="all">Zote / All</button>'
-      +'<span style="flex:1"></span>'
-      +(canW?'<button class="btn sm" id="tuNew">+ Ingiza top-up / Log one</button>':'')
-      +'</div>'
-      +(rows.length?topupTable(rows,true):'<div class="mut">Hakuna top-up hapa. / Nothing here.</div>');
-    wireTiles(m);
-    [].slice.call(m.querySelectorAll('[data-tuq]')).forEach(function(b){
-      b.onclick=function(){ TOPUPQ=b.getAttribute('data-tuq'); if(TAB==='topups') drawTopups(m); };
-    });
-    var nw=$('#tuNew');
-    if(nw) nw.onclick=function(){
-      drawer('<h3>Ingiza top-up / Log a top-up</h3><div class="sub">Kwa niaba ya ajenti aliyepiga simu. / On behalf of an agent who phoned it in.</div>'
-        +topupRaiseHtml('tun'));
-      topupRaiseWire('tun', function(){ closeDrawer(); if(TAB==='topups') drawTopups(m); });
-    };
-    [].slice.call(m.querySelectorAll('[data-tuv]')).forEach(function(b){
-      b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-tuv'); })[0];
-        if(r) topupDrawer(m, r, true, checks); };
-    });
+    TOPUPQ_LAST={args:{state:TOPUPQ}, data:d, at:Date.now()};
+    topupsRender(m, d, d.rows||[]);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function topupsRender(m, d, rows){
+  if(d.notReady){ m.innerHTML=topupNotReady(); return; }
+  var c=d.counts||{}, checks=d.checks||[], canW=!BOOT.readOnly;
+  var pick=function(k){ return function(){ TOPUPQ=(TOPUPQ===k?'':k); if(TAB==='topups') drawTopups(m); }; };
+  var longest=c.longestWaitMins||0;
+  m.innerHTML=(longest>=120?'<div class="note bad">Kuna mteja amesubiri saa '+Math.floor(longest/60)
+      +' na dakika '+(longest%60)+' na simu yake bado imefungwa. SOP B.5: malipo haya hayapaswi kucheleweshwa. '
+      +'/ Somebody has been waiting that long with a locked phone; SOP B.5 says this must never be delayed.</div>':'')
+    +'<div class="tiles">'
+    +tile('Zinasubiri',money(c.waiting||0),'wateja wenye simu zilizofungwa',{color:c.waiting?'bad':'',on:TOPUPQ==='requested',cta:'chuja ›',go:pick('requested')})
+    +tile('Muda mrefu zaidi',longest<60?money(longest)+' dk':Math.floor(longest/60)+'h '+(longest%60)+'dk','ndio aliyesubiri zaidi sasa',
+      {color:longest>=120?'bad':(longest>=30?'warn':'ok')})
+    +tile('Zimethibitishwa',money(c.verified||0),'zinasubiri malipo',{color:c.verified?'warn':'',on:TOPUPQ==='verified',cta:'chuja ›',go:pick('verified')})
+    +tile('Zimelipwa',money(c.paid||0),'zinasubiri uthibitisho wa kufunguliwa',{on:TOPUPQ==='paid',cta:'chuja ›',go:pick('paid')})
+    +tile('Zimefunguliwa',money(c.unlocked||0),'zimekamilika',{color:'ok',on:TOPUPQ==='unlocked',cta:'chuja ›',go:pick('unlocked')})
+    +'</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+    +'<button class="btn sm'+(TOPUPQ===''?'':' ghost')+'" data-tuq="">Zinaendelea / Live</button>'
+    +'<button class="btn sm'+(TOPUPQ==='all'?'':' ghost')+'" data-tuq="all">Zote / All</button>'
+    +'<span style="flex:1"></span>'
+    +(canW?'<button class="btn sm" id="tuNew">+ Ingiza top-up / Log one</button>':'')
+    +'</div>'
+    +(rows.length?topupTable(rows,true):'<div class="mut">Hakuna top-up hapa. / Nothing here.</div>');
+  wireTiles(m);
+  [].slice.call(m.querySelectorAll('[data-tuq]')).forEach(function(b){
+    b.onclick=function(){ TOPUPQ=b.getAttribute('data-tuq'); if(TAB==='topups') drawTopups(m); };
+  });
+  var nw=$('#tuNew');
+  if(nw) nw.onclick=function(){
+    drawer('<h3>Ingiza top-up / Log a top-up</h3><div class="sub">Kwa niaba ya ajenti aliyepiga simu. / On behalf of an agent who phoned it in.</div>'
+      +topupRaiseHtml('tun'));
+    topupRaiseWire('tun', function(){ closeDrawer(); TOPUPQ_LAST=null; if(TAB==='topups') drawTopups(m); });
+  };
+  [].slice.call(m.querySelectorAll('[data-tuv]')).forEach(function(b){
+    b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-tuv'); })[0];
+      if(r) topupDrawer(m, r, true, checks); };
+  });
 }
 
 /* ---------- loss and damage ----------
@@ -8469,7 +8577,8 @@ function issueDrawer(m, r){
     srv('issueUpdate',a).then(function(d){
       toast(d.change?('Hali: '+d.change.replace('>',' → ')+(d.status==='escalated'?(d.emailed?' · GM ameambiwa kwa email':' · email haikutumwa: '+(d.emailNote||'')):'')):'Imehifadhiwa / Saved',
         d.status==='escalated'&&!d.emailed);
-      closeDrawer(); issueRedraw(m);
+      // The status/assignment this issue just moved to is exactly what ISSUEQ_LAST is holding.
+      closeDrawer(); ISSUEQ_LAST=null; issueRedraw(m);
     }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
   };
 }
@@ -8499,54 +8608,90 @@ function drawIssueReq(m){
 /* `view` is left BLANK on purpose: the server decides the default, because it is the only
    one that knows whether routing exists yet and whether this code is a supervisor. */
 var ISSUEQ={department:'',state:'',view:''};
+/* THE DOOR IS THE COST -- issueQueue reads the whole issues table on every call, and every
+   count on this pane (the four status tiles, byDept, mine/directed) is already computed from
+   the FULL table regardless of args; only `rows` (the table underneath) narrows by
+   department/state/view [1 trip/300 rows a click]. issueTargets never varies with ISSUEQ at
+   all. ISSUEQ_LAST holds both, for 5 minutes.
+
+   department and state are plain field matches (r.department===x, r.status===y) and are safe
+   to re-derive from a held FULL pool (no department filter, state:'all') for the SAME view.
+   view (mine vs. everything) is NOT re-derived: it runs on issueOnMyDesk, a role-based rule
+   this file does not duplicate on the client (see the CLAUDE.md rule against two
+   implementations of one answer) -- switching it always asks the server, same as before. */
+var ISSUEQ_LAST=null;
+function issueQFull_(args){ return !args.department && args.state==='all'; }
+function issueQCanLocal_(held, args){
+  return !!held && held.args.view===args.view
+    && ((held.args.department===args.department && held.args.state===args.state) || issueQFull_(held.args));
+}
+function issueQSlice_(rows, args){
+  return rows.filter(function(r){
+    if(args.department && r.department!==args.department) return false;
+    if(args.state==='all') return true;
+    if(args.state) return r.status===args.state;
+    return r.status!=='resolved';
+  });
+}
 function drawIssues(m){
+  var held=ISSUEQ_LAST&&(Date.now()-ISSUEQ_LAST.at)<5*60000?ISSUEQ_LAST:null;
+  if(issueQCanLocal_(held,ISSUEQ)){
+    issuesRender(m, held.data.queue, held.data.targets, issueQSlice_(held.data.queue.rows||[], ISSUEQ));
+    return;
+  }
   m.innerHTML='<div class="sk"></div>';
   Promise.all([srv('issueQueue',ISSUEQ), srv('issueTargets',{})]).then(function(res){
-    var d=res[0]; d.targets=res[1]; ISSUE_TARGETS=(res[1]&&res[1].roles)||[];
-    if(d.notReady){ m.innerHTML=issueNotReady(); return; }
-    var rows=d.rows||[], c=d.counts||{}, byDept=c.byDept||{};
-    var pick=function(k){ return function(){ ISSUEQ.state=(ISSUEQ.state===k?'':k); if(TAB==='issues') drawIssues(m); }; };
-    var chip=function(k,label,n){ return '<button class="btn sm'+(ISSUEQ.department===k?'':' ghost')+'" data-isq="'+esc(k)+'">'+esc(label)+(n?' <b>'+money(n)+'</b>':'')+'</button>'; };
-    /* MY DESK OR THE WHOLE LOG. The owner's desk rule -- "every user sees what they have on
-       desk" -- with the whole queue one click away, because somebody has to be able to see
-       everything and a supervisor whose view is their own desk is not supervising. */
-    var mineOn=(d.view||'mine')!=='all';
-    m.innerHTML=(d.routeNote?'<div class="note bad">'+esc(d.routeNote)+'</div>':'')
-      +'<div class="tiles">'
-      +tile('Kwenye dawati langu',money(c.mine||0),
-        (c.directed||0)?money(c.directed)+' yameelekezwa kwangu mimi binafsi':'yote ni ya wadhifa wangu',
-        {color:(c.mine||0)?'warn':'ok',on:mineOn,cta:mineOn?'unaangalia haya':'onyesha yangu ›',
-         go:function(){ ISSUEQ.view=mineOn?'all':'mine'; if(TAB==='issues') drawIssues(m); }})
-      +tile('Wazi',money(c.open||0),'hayajaanza kufanyiwa kazi',{color:c.open?'warn':'',on:ISSUEQ.state==='open',cta:'chuja ›',go:pick('open')})
-      +tile('Yanasubiri',money(c.waiting||0),'yanasubiri jibu la mtu mwingine',{on:ISSUEQ.state==='waiting',cta:'chuja ›',go:pick('waiting')})
-      +tile('Yamepandishwa',money(c.escalated||0),'kwa GM',{color:c.escalated?'bad':'',on:ISSUEQ.state==='escalated',cta:'chuja ›',go:pick('escalated')})
-      +tile('Yametatuliwa',money(c.resolved||0),'jumla',{color:'ok',on:ISSUEQ.state==='resolved',cta:'onyesha ›',go:pick('resolved')})
-      +'</div>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
-      +chip('','Idara zote / All',0)+(d.departments||[]).map(function(k){ return chip(k,issueDept(k),byDept[k]||0); }).join('')
-      +'<span style="flex:1"></span>'
-      +'<button class="btn sm'+(mineOn?'':' ghost')+'" id="isqMine">'
-      +(mineOn?'Dawati langu / My desk':'Kila kitu / Everything')+'</button>'
-      +'<button class="btn sm ghost" id="isqAll">'+(ISSUEQ.state==='all'?'Yasiyotatuliwa tu / Unresolved only':'Zote hata zilizotatuliwa / Include resolved')+'</button>'
-      +(BOOT.readOnly?'':'<button class="btn sm" id="isqNew">+ Ingiza suala / Log an issue</button>')
-      +'</div>'
-      +(rows.length?issueTable(rows,true):'<div class="mut">Hakuna suala hapa. / Nothing here.</div>');
-    wireTiles(m);
-    var mb=$('#isqMine');
-    if(mb) mb.onclick=function(){ ISSUEQ.view=mineOn?'all':'mine'; if(TAB==='issues') drawIssues(m); };
-    [].slice.call(m.querySelectorAll('[data-isq]')).forEach(function(b){
-      b.onclick=function(){ ISSUEQ.department=b.getAttribute('data-isq'); if(TAB==='issues') drawIssues(m); };
-    });
-    $('#isqAll').onclick=function(){ ISSUEQ.state=(ISSUEQ.state==='all'?'':'all'); if(TAB==='issues') drawIssues(m); };
-    var nw=$('#isqNew');
-    if(nw) nw.onclick=function(){
-      drawer('<h3>Ingiza suala / Log an issue</h3><div class="sub">Kwa niaba ya mteja au mtu aliyepiga simu. / On behalf of a customer or a caller.</div>'+issueRaiseHtml(d,'isn'));
-      issueRaiseWire('isn', function(){ closeDrawer(); if(TAB==='issues') drawIssues(m); });
-    };
-    [].slice.call(m.querySelectorAll('[data-isv]')).forEach(function(b){
-      b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-isv'); })[0]; if(r) issueDrawer(m, r); };
-    });
+    var d=res[0];
+    ISSUEQ_LAST={args:{department:ISSUEQ.department,state:ISSUEQ.state,view:ISSUEQ.view},
+      data:{queue:d, targets:res[1]}, at:Date.now()};
+    issuesRender(m, d, res[1], d.rows||[]);
   }).catch(function(e){ paneFailed(m,e); });
+}
+function issuesRender(m, d, targetsResp, rows){
+  d.targets=targetsResp; ISSUE_TARGETS=(targetsResp&&targetsResp.roles)||[];
+  if(d.notReady){ m.innerHTML=issueNotReady(); return; }
+  var c=d.counts||{}, byDept=c.byDept||{};
+  var pick=function(k){ return function(){ ISSUEQ.state=(ISSUEQ.state===k?'':k); if(TAB==='issues') drawIssues(m); }; };
+  var chip=function(k,label,n){ return '<button class="btn sm'+(ISSUEQ.department===k?'':' ghost')+'" data-isq="'+esc(k)+'">'+esc(label)+(n?' <b>'+money(n)+'</b>':'')+'</button>'; };
+  /* MY DESK OR THE WHOLE LOG. The owner's desk rule -- "every user sees what they have on
+     desk" -- with the whole queue one click away, because somebody has to be able to see
+     everything and a supervisor whose view is their own desk is not supervising. */
+  var mineOn=(d.view||'mine')!=='all';
+  m.innerHTML=(d.routeNote?'<div class="note bad">'+esc(d.routeNote)+'</div>':'')
+    +'<div class="tiles">'
+    +tile('Kwenye dawati langu',money(c.mine||0),
+      (c.directed||0)?money(c.directed)+' yameelekezwa kwangu mimi binafsi':'yote ni ya wadhifa wangu',
+      {color:(c.mine||0)?'warn':'ok',on:mineOn,cta:mineOn?'unaangalia haya':'onyesha yangu ›',
+       go:function(){ ISSUEQ.view=mineOn?'all':'mine'; if(TAB==='issues') drawIssues(m); }})
+    +tile('Wazi',money(c.open||0),'hayajaanza kufanyiwa kazi',{color:c.open?'warn':'',on:ISSUEQ.state==='open',cta:'chuja ›',go:pick('open')})
+    +tile('Yanasubiri',money(c.waiting||0),'yanasubiri jibu la mtu mwingine',{on:ISSUEQ.state==='waiting',cta:'chuja ›',go:pick('waiting')})
+    +tile('Yamepandishwa',money(c.escalated||0),'kwa GM',{color:c.escalated?'bad':'',on:ISSUEQ.state==='escalated',cta:'chuja ›',go:pick('escalated')})
+    +tile('Yametatuliwa',money(c.resolved||0),'jumla',{color:'ok',on:ISSUEQ.state==='resolved',cta:'onyesha ›',go:pick('resolved')})
+    +'</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+    +chip('','Idara zote / All',0)+(d.departments||[]).map(function(k){ return chip(k,issueDept(k),byDept[k]||0); }).join('')
+    +'<span style="flex:1"></span>'
+    +'<button class="btn sm'+(mineOn?'':' ghost')+'" id="isqMine">'
+    +(mineOn?'Dawati langu / My desk':'Kila kitu / Everything')+'</button>'
+    +'<button class="btn sm ghost" id="isqAll">'+(ISSUEQ.state==='all'?'Yasiyotatuliwa tu / Unresolved only':'Zote hata zilizotatuliwa / Include resolved')+'</button>'
+    +(BOOT.readOnly?'':'<button class="btn sm" id="isqNew">+ Ingiza suala / Log an issue</button>')
+    +'</div>'
+    +(rows.length?issueTable(rows,true):'<div class="mut">Hakuna suala hapa. / Nothing here.</div>');
+  wireTiles(m);
+  var mb=$('#isqMine');
+  if(mb) mb.onclick=function(){ ISSUEQ.view=mineOn?'all':'mine'; if(TAB==='issues') drawIssues(m); };
+  [].slice.call(m.querySelectorAll('[data-isq]')).forEach(function(b){
+    b.onclick=function(){ ISSUEQ.department=b.getAttribute('data-isq'); if(TAB==='issues') drawIssues(m); };
+  });
+  $('#isqAll').onclick=function(){ ISSUEQ.state=(ISSUEQ.state==='all'?'':'all'); if(TAB==='issues') drawIssues(m); };
+  var nw=$('#isqNew');
+  if(nw) nw.onclick=function(){
+    drawer('<h3>Ingiza suala / Log an issue</h3><div class="sub">Kwa niaba ya mteja au mtu aliyepiga simu. / On behalf of a customer or a caller.</div>'+issueRaiseHtml(d,'isn'));
+    issueRaiseWire('isn', function(){ closeDrawer(); ISSUEQ_LAST=null; if(TAB==='issues') drawIssues(m); });
+  };
+  [].slice.call(m.querySelectorAll('[data-isv]')).forEach(function(b){
+    b.onclick=function(){ var r=rows.filter(function(x){ return String(x.id)===b.getAttribute('data-isv'); })[0]; if(r) issueDrawer(m, r); };
+  });
 }
 /* THE LOG BOOK (GD SOP B.3 "record the resolution and closing date"; IT SOP C.4 "register the
    log book of the resolved matter"). A period by the date raised, this month by default, with

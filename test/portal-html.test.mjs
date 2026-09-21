@@ -1626,7 +1626,7 @@ test('portal.html: the drawers refuse what the server would refuse, and say so f
   const decide = IMP_SRC('impDecideDrawer', html);
   assert.match(decide, /if\(approve\)\{ var amt=\$\('#imdAmt'\)\.value; if\(amt===''\|\|!\(Number\(amt\)>0\)\)\{ toast\(/,
     'a cleared amount box is not "approve the full amount"');
-  const appr = IMP_SRC('drawImpAppr', html);
+  const appr = IMP_SRC('impApprRender', html);
   assert.match(appr, /if\(\$\('#rlRate'\)\.value===''\)\{ toast\(/, 'a blank rate is not a zero rate');
   const req = IMP_SRC('drawImpReq', html);
   assert.match(req, /Math\.floor\(n\)!==n\|\|n<0/, 'the preview refuses decimals and negatives like the server');
@@ -1673,10 +1673,10 @@ test('portal.html: the leave preview counts the same working days the server wil
 
 test('portal.html: every imprest and leave list says which migration to run when the tables are missing', () => {
   const html = read('portal.html');
-  for (const name of ['drawImpReq', 'drawImpAppr', 'drawImpRep']) {
+  for (const name of ['drawImpReq', 'impApprRender', 'drawImpRep']) {
     assert.match(IMP_SRC(name, html), /if\(d\.notReady\)\{ m\.innerHTML=impNotReady\(\); return; \}/, name + ' handles notReady');
   }
-  for (const name of ['drawLeaveReq', 'drawLeaveAppr', 'drawLeaveRep']) {
+  for (const name of ['drawLeaveReq', 'leaveApprRender', 'drawLeaveRep']) {
     assert.match(IMP_SRC(name, html), /if\(d\.notReady\)\{ m\.innerHTML=leaveNotReady\(\); return; \}/, name + ' handles notReady');
   }
   assert.match(IMP_SRC('impNotReady', html), /RUN-ME-2026-09-07-imprest-leave\.sql/);
@@ -1687,7 +1687,7 @@ test('portal.html: every imprest and leave list says which migration to run when
 
 test('portal.html: the approval pane owns the rate table and the CEO report reads by travel date', () => {
   const html = read('portal.html');
-  const appr = IMP_SRC('drawImpAppr', html);
+  const appr = IMP_SRC('impApprRender', html);
   assert.match(appr, /srv\('impRoleSave',\{role:role, rate:rate\}\)/, 'add or change a role\'s nightly rate');
   assert.match(appr, /srv\('impRoleDelete',\{role:role\}\)/);
   assert.match(appr, /confirm\('Futa wadhifa/, 'deleting a role asks first');
@@ -1756,9 +1756,9 @@ test('portal.html: the raise form sends the parts of an issue and never who rais
   assert.match(wire, /needs=t==='imei'\|\|t==='agent'\|\|t==='receipt'/);
   // Both panes build the same form: the desk logs on a caller's behalf (the complaints form).
   assert.match(IMP_SRC('drawIssueReq', html), /issueRaiseHtml\(d,'is'\)/);
-  assert.match(IMP_SRC('drawIssues', html), /issueRaiseHtml\(d,'isn'\)/);
+  assert.match(IMP_SRC('issuesRender', html), /issueRaiseHtml\(d,'isn'\)/);
   // And the desk's form is not offered to a view-only code.
-  assert.match(IMP_SRC('drawIssues', html), /BOOT\.readOnly\?'':'<button class="btn sm" id="isqNew"/);
+  assert.match(IMP_SRC('issuesRender', html), /BOOT\.readOnly\?'':'<button class="btn sm" id="isqNew"/);
 });
 
 test('portal.html: the drawer gives the controls that move an issue to the desk nav alone', () => {
@@ -1785,8 +1785,9 @@ test('portal.html: the desk is one queue with a department chip, and the report 
      that knows whether routing exists yet and whether this code is a supervisor. */
   assert.match(html, /var ISSUEQ=\{department:'',state:'',view:''\};/,
     'unresolved, every department, and the desk view left to the server');
-  assert.match(desk, /\(d\.departments\|\|\[\]\)\.map\(function\(k\)\{ return chip\(k,issueDept\(k\),byDept\[k\]\|\|0\); \}\)/, 'one chip per department, with its open count');
-  assert.match(desk, /ISSUEQ\.state=\(ISSUEQ\.state==='all'\?'':'all'\)/, 'resolved ones are a toggle away, not gone');
+  const deskRender = IMP_SRC('issuesRender', html);
+  assert.match(deskRender, /\(d\.departments\|\|\[\]\)\.map\(function\(k\)\{ return chip\(k,issueDept\(k\),byDept\[k\]\|\|0\); \}\)/, 'one chip per department, with its open count');
+  assert.match(deskRender, /ISSUEQ\.state=\(ISSUEQ\.state==='all'\?'':'all'\)/, 'resolved ones are a toggle away, not gone');
   const rep = IMP_SRC('drawIssueRep', html);
   assert.match(rep, /Tarehe ya kuletwa:/, 'the period is the date raised');
   assert.match(rep, /monthRange_\(\)/, 'this month by default, like every other report here');
@@ -1799,7 +1800,7 @@ test('portal.html: the desk is one queue with a department chip, and the report 
   assert.match(html, /<b>GM_EMAIL<\/b>/);
   // Every pane names the migration when the table is not there yet.
   assert.match(IMP_SRC('issueNotReady', html), /RUN-ME-2026-09-08-issues\.sql/);
-  for (const fn of ['drawIssueReq', 'drawIssues', 'drawIssueRep']) {
+  for (const fn of ['drawIssueReq', 'issuesRender', 'drawIssueRep']) {
     assert.match(IMP_SRC(fn, html), /if\(d\.notReady\)\{ m\.innerHTML=issueNotReady\(\); return; \}/, fn + ' says which file to run');
   }
 });
@@ -2275,7 +2276,7 @@ test('portal.html: the top-up queue draws the wait and shouts when somebody has 
   const w = IMP_SRC('topupWait', html);
   assert.match(w, /m>=120\?'bad':\(m>=30\?'warn':'ok'\)/, 'minutes turn amber then red');
   assert.match(w, /done\) return '<span class="mut">/, 'a finished one is not still shouting');
-  const fn = IMP_SRC('drawTopups', html);
+  const fn = IMP_SRC('topupsRender', html);
   assert.match(fn, /longest>=120\?'<div class="note bad">/, 'and a long wait is a banner, not a tile nobody reads');
   assert.match(fn, /SOP B\.5/);
   assert.match(fn, /c\.longestWaitMins/);
@@ -2611,7 +2612,7 @@ test('portal.html: the raise form picks a role, then optionally a person in it',
 
 test('portal.html: the desk opens on my desk, with the whole log one click away', () => {
   const html = read('portal.html');
-  const fn = IMP_SRC('drawIssues', html);
+  const fn = IMP_SRC('issuesRender', html);
   assert.match(fn, /var mineOn=\(d\.view\|\|'mine'\)!=='all'/,
     'which view is live comes from the server, which decided the default');
   assert.match(fn, /Kwenye dawati langu/, 'the desk tile is what is on THIS person’s desk');
