@@ -3,6 +3,7 @@ import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole, USER_TABS, EXTRA_TABS,
   clearRolesCache } from './_lib/auth.js';
 import { clearSystemOpenCache } from './_lib/system-gate.js';
+import { noteDeviceSettingsWritten } from './_lib/device-core.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey, addDaysKey, weekMondayKey, TZ_OFFSET_MS } from './_lib/time.js';
 import { sendMail, noticeHtml } from './_lib/mail.js';
@@ -10106,7 +10107,9 @@ const FNS = {
 
   /** Budget: 1 keyed upsert, plus, only when key is SYSTEM_OPEN, clearSystemOpenCache(db) --
       no trip of its own, an in-memory drop so the admin who just closed the system sees it
-      take effect immediately rather than waiting out isSystemOpen's 30s TTL. */
+      take effect immediately rather than waiting out isSystemOpen's 30s TTL. Also drops
+      device-core.js's OWN separate settings memo unconditionally -- see the note beside that
+      call below -- which is likewise no trip of its own. */
   async settingSet(db, user, args) {
     requireWrite(user); requireSettings(user);
     const key = K(args && args.key);
@@ -10122,6 +10125,14 @@ const FNS = {
        screen and had no way to know the portal stayed reachable for up to thirty more seconds
        for everybody else, on the one setting whose whole job is "not reachable, right now". */
     if (key === 'SYSTEM_OPEN') clearSystemOpenCache(db);
+    /* device-core.js's beat-settings memo (readBeatSettings) is a SEPARATE cache from the one
+       just dropped above -- a different module, a different WeakMap -- so editing
+       DEVICE_LOCK_BRAND or any other DEVICE_* key here would otherwise sit invisible to the
+       next handset that beats until its own 15s TTL ran out. This is the only place any
+       DEVICE_* setting is ever written from (the Settings screen), so it is dropped on every
+       key rather than only the ones spelled DEVICE_ -- a WeakMap delete costs nothing to pay
+       for free on the keys that are not one. */
+    noteDeviceSettingsWritten(db);
     return { ok: true, key };
   },
 

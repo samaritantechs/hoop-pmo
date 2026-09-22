@@ -366,24 +366,89 @@ async function byToken(db, p) {
 const BEAT_SETTINGS_KEYS = [...LOCK_SETTINGS, 'DEVICE_OFFLINE_GRACE_HOURS',
   'DEVICE_BOOT_GRACE_MINUTES', 'DEVICE_BOOT_GRACE_EVERY_HOURS', 'DEVICE_FRP_ACCOUNT_IDS'];
 
+/* THREE HUNDRED HANDSETS, THE SAME SEVEN ROWS, FOR AS LONG AS THIS PROCESS STAYS WARM.
+   =========================================================================================
+   The note above (postgres war, 2026-09-21) merged FOUR settings reads into ONE -- but that
+   one trip was still paid by EVERY beat, from EVERY handset, with no memory between one
+   phone's beat and the next through the SAME warm process. Measured empirically: three
+   successive beats from three different handsets on the same warm `db` cost 3, 6, 9
+   cumulative trips -- perfectly linear, no warm discount at all, because nothing remembered
+   that the settings table had just been asked the same seven keys a moment earlier.
+
+   So the one shared read is memoised too, in the same shape isSystemOpen (system-gate.js)
+   already uses for the same reason: a WeakMap keyed on the DATABASE CLIENT -- not one module
+   variable, because a test builds a fresh fake db per case and a shared variable would hand
+   one test's settings to the next, the same trap system-gate.js's own note warns about -- a
+   short TTL, and the read held IN FLIGHT as well as the answer, so a burst of beats landing
+   on a cold cache together share the one request already under way rather than each starting
+   its own.
+
+   NOT memoByDataVersion (memo.js), on purpose. That helper goes stale only when DATA_VERSION
+   moves, and DATA_VERSION is bumped by api/upload.js on a file upload -- settingSet
+   (portal.js) does a plain upsert with no such bump for a DEVICE_* key. Keying this cache on
+   DATA_VERSION would mean an admin's DEVICE_LOCK_BRAND edit sits invisible on every handset
+   until somebody next uploads a file: a real correctness bug wearing an optimization's
+   clothes, not merely a missed one. So this cache is busted EXPLICITLY the moment settingSet
+   writes -- see noteDeviceSettingsWritten below, called from api/portal.js -- with the short
+   TTL only as a backstop for whatever reaches `settings` some other way.
+
+   THE TTL IS SHORTER THAN isSystemOpen's 30s because this table is asked far more often here
+   -- every beat, from every handset, not once per portal screen load -- so keeping the window
+   tight costs nothing against a fleet that does not poll faster than once a minute, and the
+   explicit bust means an admin's own edit never has to wait it out at all.
+
+   A FAILED READ IS CACHED TOO, for the same TTL. readSettings above already turns "the table
+   would not answer" into `null` rather than a throw, and every helper below already treats
+   `null` as "could not ask" and degrades exactly as it always did -- caching the `null` too
+   just means a struggling settings table gets asked once per window, not once per handset. */
+const BEAT_SETTINGS_TTL_MS = 15000;
+const beatSettingsCache = new WeakMap();          // db -> { at, rows } | { at, pending }
+
+/** Dropped the moment an admin write could have touched any key in BEAT_SETTINGS_KEYS --
+    called from settingSet in api/portal.js, the one place a DEVICE_* setting is ever written,
+    so an admin's edit reaches the very next beat rather than waiting out the TTL above. Cheap
+    to call unconditionally on every settingSet write (a WeakMap delete costs nothing), so
+    nothing here has to track which of the editable keys are device-related and which are not. */
+export function noteDeviceSettingsWritten(db) { beatSettingsCache.delete(db); }
+
+async function readBeatSettings(db, nowMs) {
+  const at = nowMs == null ? Date.now() : nowMs;
+  const hit = beatSettingsCache.get(db);
+  if (hit && Object.prototype.hasOwnProperty.call(hit, 'rows') && (at - hit.at) < BEAT_SETTINGS_TTL_MS) {
+    return hit.rows;
+  }
+  if (hit && hit.pending && (at - hit.at) < BEAT_SETTINGS_TTL_MS) return hit.pending;
+  // readSettings() never throws -- it already turns a failure into null -- so there is no
+  // in-flight entry left dangling on a rejection a later call would need to guard against.
+  const pending = readSettings(db, BEAT_SETTINGS_KEYS).then(rows => {
+    beatSettingsCache.set(db, { at, rows });
+    return rows;
+  });
+  beatSettingsCache.set(db, { at, pending });
+  return pending;
+}
+
 /* ---------------------------------------------------------------------------------------
    THE HEARTBEAT. One call does both directions: the phone says what it is, and is told
    what it should be. Deliberately one round trip FROM THE HANDSET -- these run on cellular
    data in places with one bar, and every extra request is another chance to not arrive.
 
-   WHAT IT COSTS THE DATABASE, warm, for an ordinary settled phone: 2 reads (the device row
+   WHAT IT COSTS THE DATABASE. The FIRST beat through a warm process: 2 reads (the device row
    by token, and the one settings row for everything lockWords/graceFor/bootGraceFor/frpFor
-   might want) + 1 write (the devices update). A phone whose reported state just changed
-   pays one more write, for the transition history row -- see BEAT_COLS. Before the fix
-   below this was 6 trips: the same 2 reads plus 4, because each of those four helpers
-   asked `settings` on its own. */
+   might want) + 1 write (the devices update). A phone whose reported state just changed pays
+   one more write, for the transition history row -- see BEAT_COLS. Before the first fix this
+   was 6 trips: the same 2 reads plus 4, because each of those four helpers asked `settings`
+   on its own (fixed 2026-09-21). EVERY BEAT AFTER THE FIRST, on the same warm process, now
+   pays only 1: byToken, with the settings row served from readBeatSettings' memo -- the
+   second handset through, and the two-hundredth, cost nothing for settings at all (fixed
+   2026-09-22, see the note above readBeatSettings). */
 async function beat(db, [payload], nowMs) {
   const p = payload || {};
-  // Read together: neither depends on the other, and this is the trip that used to be paid
-  // four separate times over (once inside each of lockWords/graceFor/bootGraceFor/frpFor).
+  // Read together: neither depends on the other. The settings side is the trip that used to
+  // be paid four separate times over, then once per beat forever -- now once per warm window.
   const [dev, settingsRows] = await Promise.all([
     byToken(db, p),
-    readSettings(db, BEAT_SETTINGS_KEYS),
+    readBeatSettings(db, nowMs),
   ]);
   const imei = S(dev.imei);
 
@@ -560,17 +625,25 @@ async function shifted(db, [payload], nowMs) {
   const dev = await byToken(db, payload);
   const at = new Date(nowMs).toISOString();
   const reason = 'imehamishwa kwenda ofisi nyingine (shift) / shifted to another office';
-  const { error } = await db.from('devices').update({
+  /* ONE UPDATE, NOT TWO. Clearing the shift order used to be a second, separate write after
+     this one -- best-effort, inside a try/catch, because a devices table pre-migration for
+     shift_server/shift_batch has neither column to clear and this call must not fail on that
+     account. Folding it into the SAME patch costs one round trip instead of two on every
+     migrated database, with the pre-migration case handled exactly the way byToken/beat's own
+     fallback above is: a column-not-found error NAMES the columns PostgREST refused the whole
+     write over, and the retry drops exactly those rather than guessing at a ladder of them. */
+  const patch = {
     state: 'released', state_reason: reason, state_by: 'shift', state_at: at,
-    released_at: at, updated_at: at,
-  }).eq('imei', dev.imei);
+    released_at: at, updated_at: at, shift_server: null, shift_batch: null,
+  };
+  let { error } = await db.from('devices').update(patch).eq('imei', dev.imei);
+  if (error && /shift_server|shift_batch/.test(String(error.message || ''))) {
+    const { shift_server, shift_batch, ...rest } = patch;
+    ({ error } = await db.from('devices').update(rest).eq('imei', dev.imei));
+  }
   if (error) throw new Error(error.message);
   await db.from('device_events').insert([{ imei: dev.imei, event: 'shifted',
     from_state: dev.state, to_state: 'released', reason, actor: 'device', at }]);
-  try {
-    await db.from('devices').update({ shift_server: null, shift_batch: null })
-      .eq('imei', dev.imei);
-  } catch (ignored) { /* pre-migration: nothing to clear */ }
   return { ok: true };
 }
 
