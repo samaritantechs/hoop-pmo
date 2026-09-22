@@ -30,7 +30,7 @@ const TTL_MS = 30000;
    single long-lived client, so this behaves exactly as one variable would. In a test there is a
    fresh fake per case -- and a shared variable would have handed one test's answer to the next,
    which is how a suite passes while the door is standing open. */
-const cache = new WeakMap();                 // db -> { at, open }
+const cache = new WeakMap();                 // db -> { at, open } | { at, pending }
 
 /** Called by settingSet (portal.js) right after a successful write of SYSTEM_OPEN.
     THIS EXPORT USED TO SIT UNCALLED, and the comment above it claimed otherwise -- "settingSet
@@ -48,20 +48,41 @@ export function readsAsOpen(value) {
   return v === 'YES' || v === 'ON' || v === 'TRUE' || v === '1' || v === 'OPEN';
 }
 
+/* THE SAME RACE readBeatSettings (device-core.js) HAD, AND THE SAME FIX.
+   A read already in flight when clearSystemOpenCache deletes the entry -- an admin's flip
+   landing mid-request -- used to resolve afterward and write its PRE-EDIT answer straight
+   back into the cache, unconditionally. That resurrected the stale value for up to another
+   whole TTL_MS, quietly undoing the one guarantee the explicit bust exists to make: that the
+   admin who flipped the switch sees it take effect immediately, not up to a minute later.
+
+   The fix is an identity check, not a bigger cache: the entry this read is about to land
+   into is captured by reference (`pending`) before the request goes out, and the write-back
+   only lands if the cache still points at THIS entry -- so a bust, or a newer read starting
+   in the meantime, wins over a slower answer that started before it. Sharing `pending` with
+   any concurrent caller is the same change that made this safe, not an extra: two portal
+   requests racing a cold cache now share one read instead of one silently overwriting the
+   other's answer. */
 export async function isSystemOpen(db, nowMs = Date.now()) {
   const hit = cache.get(db);
-  if (hit && hit.at <= nowMs && (nowMs - hit.at) < TTL_MS) return hit.open;
-  let open = false;
-  try {
-    const { data } = await db.from('settings').select('value').eq('key', KEY).maybeSingle();
-    open = readsAsOpen(data && data.value);
-  } catch (e) {
-    /* A settings table that will not answer must not silently throw the doors open. Closed is
-       the safe answer, and the admin path above never reaches this line. */
-    open = false;
+  if (hit && Object.prototype.hasOwnProperty.call(hit, 'open') && hit.at <= nowMs && (nowMs - hit.at) < TTL_MS) {
+    return hit.open;
   }
-  cache.set(db, { at: nowMs, open });
-  return open;
+  if (hit && hit.pending && hit.at <= nowMs && (nowMs - hit.at) < TTL_MS) return hit.pending;
+  const pending = (async () => {
+    try {
+      const { data } = await db.from('settings').select('value').eq('key', KEY).maybeSingle();
+      return readsAsOpen(data && data.value);
+    } catch (e) {
+      /* A settings table that will not answer must not silently throw the doors open. Closed
+         is the safe answer, and the admin path above never reaches this line. */
+      return false;
+    }
+  })().then(open => {
+    if (cache.get(db)?.pending === pending) cache.set(db, { at: nowMs, open });
+    return open;
+  });
+  cache.set(db, { at: nowMs, pending });
+  return pending;
 }
 
 /** The one rule for "is this person an administrator", read the same way requireAdmin reads

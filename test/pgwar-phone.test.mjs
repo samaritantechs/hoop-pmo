@@ -12,7 +12,9 @@
  *   3. agentIndex de-dupes concurrent cold builds, and portal writes bust it explicitly.
  *   4. (no new test -- see the note above summaryForOfficer/summaryForRole in call-core.js;
  *      the per-officer cache key is correct and stays, only the header's claim was wrong.)
- *   5. device-core.js's beat() shares ONE settings read across its four helpers.
+ *   5. device-core.js's beat() shares ONE settings read across its four helpers, that ONE
+ *      read is itself memoised across handsets on the same warm process (bust on
+ *      settingSet), and shifted() clears the shift order in one write instead of two.
  *   6. call.html's sync timer no longer forces a summary recompute on every tick.
  */
 import test from 'node:test';
@@ -24,7 +26,7 @@ process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'https://test.invalid';
 process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'test-key';
 const { _FNS } = await import('../api/portal.js');
 const { callApi, agentIndex, nameKey, rosterFull, _clearSummaryCache } = await import('../api/_lib/call-core.js');
-const { deviceApi } = await import('../api/_lib/device-core.js');
+const { deviceApi, noteDeviceSettingsWritten } = await import('../api/_lib/device-core.js');
 
 /** Counts every request the code sends, exactly as fetchAll issues them -- copied from
     test/speed.test.mjs's counting() so the two files can change independently. */
@@ -265,6 +267,153 @@ test('beat(): retire, stock and FRP branches still produce the right commands of
     settings: [{ key: 'DEVICE_FRP_ACCOUNT_IDS', value: '999999999, 888888888' }],
   }), 'dev_beat', [{ token: 'tok4', locked: true }], NOW);
   assert.deepEqual(frp.frpAccounts, ['999999999', '888888888']);
+});
+
+/* =========================================================================================
+   5b. THE NEXT STEP: the one shared settings read itself is memoised across handsets on the
+   same warm process (postgres war, 2026-09-22) -- see readBeatSettings in device-core.js.
+   Measured empirically before this fix: three successive beats from three different handsets
+   on the same warm `db` cost 3, 6, 9 CUMULATIVE trips -- perfectly linear, no warm discount,
+   because the settings read above was shared across the four helpers WITHIN one beat but
+   never remembered from one beat to the next. ========================================== */
+
+test('beat(): a second handset on the same warm db pays nothing at all for settings', async () => {
+  const c = counting({
+    devices: [
+      { imei: 'W1', state: 'locked', enrol_token: 'wtok1', reported: 'locked', customer: 'Asha', sold_ref: 'S1' },
+      { imei: 'W2', state: 'locked', enrol_token: 'wtok2', reported: 'locked', customer: 'Baraka', sold_ref: 'S2' },
+    ],
+    device_events: [],
+    settings: [
+      { key: 'DEVICE_LOCK_BRAND', value: 'HOOP LIMITED' },
+      { key: 'DEVICE_HELP_PHONE', value: '0700000000' },
+      { key: 'DEVICE_OFFLINE_GRACE_HOURS', value: '48' },
+    ],
+  });
+
+  const r1 = await deviceApi(c.db, 'dev_beat', [{ token: 'wtok1', locked: true }], NOW);
+  const first = c.stat().trips;
+  const r2 = await deviceApi(c.db, 'dev_beat', [{ token: 'wtok2', locked: true }], NOW);
+  const second = c.stat().trips - first;
+
+  // Correctness first: the memo must not have changed a single answer on the wire.
+  assert.equal(r1.brand, 'HOOP LIMITED');
+  assert.equal(r2.brand, 'HOOP LIMITED');
+  assert.equal(r1.helpPhone, r2.helpPhone);
+  assert.equal(r1.graceHours, r2.graceHours);
+
+  assert.equal(first, 3, 'the FIRST beat still costs byToken (1) + the settings read (1) + the write (1)');
+  assert.ok(second < first,
+    `the SECOND handset's incremental cost (${second} trips) must be lower than the first's (${first}) -- the settings table is being re-read`);
+  assert.equal(second, 2,
+    'byToken (1) + the write (1); settings served from the warm memo -- no settings trip at all');
+});
+
+test('beat(): two beats landing at once on a cold cache share ONE settings read, not two', async () => {
+  const c = counting({
+    devices: [
+      { imei: 'C1', state: 'enrolled', enrol_token: 'ctok1', reported: 'unlocked' },
+      { imei: 'C2', state: 'enrolled', enrol_token: 'ctok2', reported: 'unlocked' },
+    ],
+    device_events: [],
+    settings: [{ key: 'DEVICE_LOCK_BRAND', value: 'HOOP LIMITED' }],
+  });
+  const [r1, r2] = await Promise.all([
+    deviceApi(c.db, 'dev_beat', [{ token: 'ctok1', locked: false }], NOW),
+    deviceApi(c.db, 'dev_beat', [{ token: 'ctok2', locked: false }], NOW),
+  ]);
+  assert.equal(r1.brand, 'HOOP LIMITED');
+  assert.equal(r2.brand, 'HOOP LIMITED');
+  const { trips } = c.stat();
+  // byToken x2 (2) + ONE shared settings read, the build in flight rather than started twice
+  // (1) + the write x2 (2) = 5, not 6.
+  assert.equal(trips, 5,
+    `${trips} trips for two concurrent cold beats -- the settings read is being started twice instead of shared`);
+});
+
+test('settingSet(DEVICE_LOCK_BRAND) is visible on the very next beat, not after the stale TTL', async () => {
+  const d = fakeDb({
+    devices: [{ imei: 'E1', state: 'enrolled', enrol_token: 'etok1', reported: 'unlocked' }],
+    device_events: [],
+    settings: [{ key: 'DEVICE_LOCK_BRAND', value: 'HOOP LIMITED' }],
+  });
+  const before = await deviceApi(d, 'dev_beat', [{ token: 'etok1', locked: false }], NOW);
+  assert.equal(before.brand, 'HOOP LIMITED');
+
+  await _FNS.settingSet(d, ADMIN, { key: 'DEVICE_LOCK_BRAND', value: 'HOOP FINANCE' });
+
+  const after = await deviceApi(d, 'dev_beat', [{ token: 'etok1', locked: false }], NOW);   // SAME nowMs
+  assert.equal(after.brand, 'HOOP FINANCE',
+    'the beat-settings memo must be dropped on write, not merely wait out its 15s TTL');
+});
+
+test('a bust mid-flight wins: an edit landing WHILE a beat is still reading settings is not overwritten by the slower, stale answer', async () => {
+  // The exact race an in-flight-promise cache has to get right: a beat starts reading
+  // settings -- the read is in flight, nothing has resolved yet -- and an edit busts the
+  // cache in that same window, before the original read's .then() ever runs. Calling
+  // noteDeviceSettingsWritten directly (not through settingSet's own await chain) makes the
+  // ordering deterministic rather than racy: JS runs all synchronous code to completion
+  // before any queued microtask, including the pending read's .then(), gets a turn -- so the
+  // bust is GUARANTEED to land before the stale read resolves, every time this test runs.
+  // If the cache write-back overwrites unconditionally, the stale pre-edit value lands in
+  // the cache AFTER the bust and survives there for another whole TTL window -- silently
+  // undoing the one guarantee noteDeviceSettingsWritten exists to make.
+  const d = fakeDb({
+    devices: [{ imei: 'G1', state: 'enrolled', enrol_token: 'gtok1', reported: 'unlocked' }],
+    device_events: [],
+    settings: [{ key: 'DEVICE_LOCK_BRAND', value: 'HOOP LIMITED' }],
+  });
+
+  const inFlight = deviceApi(d, 'dev_beat', [{ token: 'gtok1', locked: false }], NOW);
+  noteDeviceSettingsWritten(d);          // synchronous -- guaranteed to beat the pending .then()
+  const first = await inFlight;
+  assert.equal(first.brand, 'HOOP LIMITED', 'the first beat still reports what it actually read');
+
+  d._dump('settings').find(r => r.key === 'DEVICE_LOCK_BRAND').value = 'HOOP FINANCE';
+  const second = await deviceApi(d, 'dev_beat', [{ token: 'gtok1', locked: false }], NOW);
+  assert.equal(second.brand, 'HOOP FINANCE',
+    'the second beat must see the edit -- the stale answer landing after the bust must not have resurrected the old value in the cache');
+});
+
+/* =========================================================================================
+   5c. shifted() wrote the devices row TWICE -- state fields, then a separate write to clear
+   shift_server/shift_batch. One combined UPDATE, falling back to two only on a genuine
+   pre-migration column-not-found error, mirrors beat()'s own fallback-retry shape. */
+
+test('shifted(): the shift order is cleared in the same write, not a second one', async () => {
+  const c = counting({
+    devices: [{ imei: 'F1', state: 'enrolled', enrol_token: 'ftok1',
+      shift_server: 'https://other.example', shift_batch: 'e'.repeat(32) }],
+    device_events: [],
+    settings: [],
+  });
+  const out = await deviceApi(c.db, 'dev_shifted', [{ token: 'ftok1' }], NOW);
+  assert.equal(out.ok, true);
+  const row = c.db._dump('devices').find(x => x.imei === 'F1');
+  assert.equal(row.state, 'released');
+  assert.equal(row.shift_server, null, 'the order is still cleared');
+  assert.equal(row.shift_batch, null, 'the order is still cleared');
+  const ev = c.db._dump('device_events').find(x => x.event === 'shifted');
+  assert.ok(ev, 'the transition is still filed');
+
+  const { trips } = c.stat();
+  // byToken (1) + ONE combined update (1) + the device_events insert (1) = 3, not 4.
+  assert.equal(trips, 3, `${trips} trips for shifted() -- the shift order is being cleared in a second write`);
+});
+
+test('shifted(): still works pre-migration, when shift_server/shift_batch do not exist yet', async () => {
+  const db = fakeDb({
+    devices: [{ imei: 'F2', state: 'enrolled', enrol_token: 'ftok2' }],
+    device_events: [],
+    settings: [],
+  }, { missingColumns: { devices: ['shift_server', 'shift_batch'] } });
+
+  const out = await deviceApi(db, 'dev_shifted', [{ token: 'ftok2' }], NOW);
+  assert.equal(out.ok, true, 'the state transition must not fail just because the migration has not run');
+  const row = db._dump('devices').find(x => x.imei === 'F2');
+  assert.equal(row.state, 'released');
+  const ev = db._dump('device_events').find(x => x.event === 'shifted');
+  assert.ok(ev, 'the transition is filed even without the shift columns');
 });
 
 /* =========================================================================================

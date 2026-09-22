@@ -29,7 +29,7 @@ import assert from 'node:assert/strict';
 
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'https://test.invalid';
 process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'test-key';
-const { _FNS } = await import('../api/portal.js');
+const { _FNS, _clearTrendCache } = await import('../api/portal.js');
 const { callApi, _clearSummaryCache } = await import('../api/_lib/call-core.js');
 import { NOW, TODAY, day, stamp, imei, uuid, BRANCHES, bigBook, counting, ALL_NAVS, ADMIN, RSM_ONE, CREDIT, AGENT, BOOK, IMEI0, uid } from './speed-fixture.mjs';
 
@@ -200,8 +200,19 @@ const BUDGETS = [
   ['Sign-in watch',           'signinWatch',    {}, ADMIN,     3, 173, 3, 173],   // cold 2 / 144, warm 2 / 144
   ['Audit log',               'audit',          {}, ADMIN,     5, 266, 5, 266],   // cold 4 / 221, warm 4 / 221
   // ---- the dashboard, fetched as one ----
-  ['Dashboard week (one trip)', 'dashboardWeek', {}, ADMIN, 6, 5, 6, 5],   // cold 5 / 4, warm 5 / 4 -- lockedTrend + recoveryWeek + salesWeek + stockAccount, one door instead of four
-  ['Dashboard week (one trip, RSM)', 'dashboardWeek', {}, RSM_ONE, 12, 7290, 8, 5],   // cold 10 / 6075, warm 6 / 4 -- lockedTrend + recoveryWeek + salesWeek + stockAccount, one door instead of four
+  /* COLD numbers corrected by the trendCache test-integrity fix (2026-09-22): the old 6/5 and
+     12/7290 were never a real cold measurement -- trendCache is a bare module-level Map (see
+     the note above sweep() below), and by the time this entry ran in the original measurement
+     and in the BUDGETS loop, lockedTrend/recoveryWeek/salesWeek/stockAccount had already been
+     primed by their own standalone entries above with the identical (args={}, user) cache key,
+     so this was silently measuring a WARM call. dashboardWeek does no reading of its own; it
+     is exactly lockedTrend + recoveryWeek + salesWeek + stockAccount run once each with a truly
+     empty trendCache (Promise.all on one client also shares ONE agentIndex build across the
+     four for the RSM, which is why the RSM total is less than the four separate entries' sum).
+     WARM was already honest (a second dashboardWeek call in the same 5-minute window really is
+     cheap) and is unchanged. */
+  ['Dashboard week (one trip)', 'dashboardWeek', {}, ADMIN, 17, 30060, 6, 5],   // cold 14 / 25050, warm 5 / 4 -- lockedTrend + recoveryWeek + salesWeek + stockAccount, one door instead of four
+  ['Dashboard week (one trip, RSM)', 'dashboardWeek', {}, RSM_ONE, 22, 9666, 8, 5],   // cold 18 / 8055, warm 6 / 4 -- lockedTrend + recoveryWeek + salesWeek + stockAccount, one door instead of four
 ];
 
 /* TWO NUMBERS PER SCREEN: COLD, then WARM. Cold is a fresh instance -- the first person of the
@@ -212,6 +223,11 @@ const BUDGETS = [
 for (const [label, fn, args, user, tripBudget, rowBudget, warmTrips, warmRows] of BUDGETS) {
   test(`speed: ${label} -- cold within ${tripBudget} trips / ${rowBudget.toLocaleString()} rows, warm within ${warmTrips} / ${warmRows.toLocaleString()}`, async () => {
     _clearSummaryCache();
+    // trendCache (portal.js) is a bare module-level Map, not per-db like agentIndex/summaryCache --
+    // without this, lockedTrend/recoveryWeek/salesWeek/stockAccount (and dashboardWeek, which calls
+    // all four) ride an earlier BUDGETS entry's cache hit and report a "cold" cost that is really a
+    // warm one. See the trendCache-leak fix note above sweep() below.
+    _clearTrendCache();
     const c = counting(BOOK);
     await _FNS[fn](c.db, user, args);
     const cold = c.stat();
@@ -372,7 +388,12 @@ const KNOWN_UNSCOPED = new Set(['stockView', 'stockAccount', 'deviceList', 'sync
 const KNOWN_OVER = new Map(BUDGETS.filter(b => b[3] === RSM_ONE && Object.keys(b[2]).length === 0 && b[5] > OFFICER_ROW_CEILING)
   .map(b => [b[1], b[5]]));
 
-/* Swept once, shared by the two tells below. */
+/* Swept once, shared by the two tells below.
+   trendCache (portal.js) is a bare module-level Map -- not per-db like summaryCache/agentIndex --
+   so without clearing it here, lockedTrend/recoveryWeek/salesWeek/stockAccount ride whatever the
+   BUDGETS loop above already primed the cache with (same args={}, same user objects, same week),
+   and this sweep measures a stale warm hit instead of each fresh counting() client's real cold
+   cost. That silently defangs both tells below for exactly these four functions. */
 let sweepP = null;
 function sweep() {
   sweepP = sweepP || (async () => {
@@ -381,6 +402,7 @@ function sweep() {
       if (WRITERS.has(fn)) continue;
       const run = async user => {
         _clearSummaryCache();
+        _clearTrendCache();
         const c = counting(BOOK);
         try { await _FNS[fn](c.db, user, {}); } catch (e) { return null; }   // needs arguments, or refused -- not a read
         return c.stat().rows;
