@@ -165,7 +165,7 @@ test('door: renameAccessCode does NOT clear the roles memo -- it never touches r
       to. clearSystemOpenCache was exported and never called; the switch stayed open, on every
       OTHER request, for up to thirty seconds after an admin closed it on their own screen.
    ========================================================================================= */
-const { requireSystemOpen } = await import('../api/_lib/system-gate.js');
+const { requireSystemOpen, clearSystemOpenCache } = await import('../api/_lib/system-gate.js');
 
 test('gate: settingSet(SYSTEM_OPEN=NO) closes the door immediately, not after 30s', async () => {
   const OWNER = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
@@ -193,6 +193,23 @@ test('gate: a setting other than SYSTEM_OPEN does not touch the cache', async ()
   // Still open -- an unrelated setting must not force a fresh read either way, but it certainly
   // must not have accidentally closed anything.
   await requireSystemOpen(db, OFFICER);
+});
+
+test('gate: a bust mid-flight wins -- a read resolving AFTER clearSystemOpenCache must not resurrect the pre-edit value', async () => {
+  const OFFICER = { code: 'C1', name: 'Juma', role: 'OFFICER', teams: null, tabs: ['dashboard'], readOnly: false };
+  const db = fakeDb({ settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }] });
+
+  // Two portal requests racing a cold cache: this one starts the read (synchronously reaches
+  // the cache's `pending` write) before the admin's close is even in flight.
+  const inFlight = requireSystemOpen(db, OFFICER);
+  clearSystemOpenCache(db);                   // the admin's flip, landing WHILE the read above is in flight
+  await inFlight;                             // the stale read resolves "open" -- it must not land in the cache
+
+  db._dump('settings').find(r => r.key === 'SYSTEM_OPEN').value = 'NO';
+  // If the stale read's answer overwrote the bust, this still reads the resurrected "open"
+  // for up to another whole TTL_MS -- exactly the guarantee clearSystemOpenCache exists to make.
+  await assert.rejects(() => requireSystemOpen(db, OFFICER), /closed|imefungwa/i,
+    'a slower answer that started before the bust must not resurrect the pre-edit value in the cache');
 });
 
 /* =========================================================================================

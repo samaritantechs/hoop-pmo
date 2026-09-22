@@ -421,7 +421,12 @@ async function readBeatSettings(db, nowMs) {
   // readSettings() never throws -- it already turns a failure into null -- so there is no
   // in-flight entry left dangling on a rejection a later call would need to guard against.
   const pending = readSettings(db, BEAT_SETTINGS_KEYS).then(rows => {
-    beatSettingsCache.set(db, { at, rows });
+    // Land the answer only if THIS read is still the one the cache is waiting on. A bust
+    // (noteDeviceSettingsWritten, called mid-flight by an admin's edit) deletes the entry;
+    // without this check the slower answer that started BEFORE the edit would land AFTER
+    // it and silently resurrect the pre-edit value for another whole TTL window -- the one
+    // case the explicit bust exists to avoid.
+    if (beatSettingsCache.get(db)?.pending === pending) beatSettingsCache.set(db, { at, rows });
     return rows;
   });
   beatSettingsCache.set(db, { at, pending });

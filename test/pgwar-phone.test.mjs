@@ -26,7 +26,7 @@ process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'https://test.invalid';
 process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'test-key';
 const { _FNS } = await import('../api/portal.js');
 const { callApi, agentIndex, nameKey, rosterFull, _clearSummaryCache } = await import('../api/_lib/call-core.js');
-const { deviceApi } = await import('../api/_lib/device-core.js');
+const { deviceApi, noteDeviceSettingsWritten } = await import('../api/_lib/device-core.js');
 
 /** Counts every request the code sends, exactly as fetchAll issues them -- copied from
     test/speed.test.mjs's counting() so the two files can change independently. */
@@ -345,6 +345,34 @@ test('settingSet(DEVICE_LOCK_BRAND) is visible on the very next beat, not after 
   const after = await deviceApi(d, 'dev_beat', [{ token: 'etok1', locked: false }], NOW);   // SAME nowMs
   assert.equal(after.brand, 'HOOP FINANCE',
     'the beat-settings memo must be dropped on write, not merely wait out its 15s TTL');
+});
+
+test('a bust mid-flight wins: an edit landing WHILE a beat is still reading settings is not overwritten by the slower, stale answer', async () => {
+  // The exact race an in-flight-promise cache has to get right: a beat starts reading
+  // settings -- the read is in flight, nothing has resolved yet -- and an edit busts the
+  // cache in that same window, before the original read's .then() ever runs. Calling
+  // noteDeviceSettingsWritten directly (not through settingSet's own await chain) makes the
+  // ordering deterministic rather than racy: JS runs all synchronous code to completion
+  // before any queued microtask, including the pending read's .then(), gets a turn -- so the
+  // bust is GUARANTEED to land before the stale read resolves, every time this test runs.
+  // If the cache write-back overwrites unconditionally, the stale pre-edit value lands in
+  // the cache AFTER the bust and survives there for another whole TTL window -- silently
+  // undoing the one guarantee noteDeviceSettingsWritten exists to make.
+  const d = fakeDb({
+    devices: [{ imei: 'G1', state: 'enrolled', enrol_token: 'gtok1', reported: 'unlocked' }],
+    device_events: [],
+    settings: [{ key: 'DEVICE_LOCK_BRAND', value: 'HOOP LIMITED' }],
+  });
+
+  const inFlight = deviceApi(d, 'dev_beat', [{ token: 'gtok1', locked: false }], NOW);
+  noteDeviceSettingsWritten(d);          // synchronous -- guaranteed to beat the pending .then()
+  const first = await inFlight;
+  assert.equal(first.brand, 'HOOP LIMITED', 'the first beat still reports what it actually read');
+
+  d._dump('settings').find(r => r.key === 'DEVICE_LOCK_BRAND').value = 'HOOP FINANCE';
+  const second = await deviceApi(d, 'dev_beat', [{ token: 'gtok1', locked: false }], NOW);
+  assert.equal(second.brand, 'HOOP FINANCE',
+    'the second beat must see the edit -- the stale answer landing after the bust must not have resurrected the old value in the cache');
 });
 
 /* =========================================================================================
