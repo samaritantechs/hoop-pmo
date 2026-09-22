@@ -33,8 +33,15 @@ create extension if not exists "pgcrypto";   -- gen_random_uuid()
 -- Rename surface -- one-line edits where copied code names Hope columns:
 --   followup_status:   ref -> imei,  full_name -> client_name,  disb_date -> disbursed_date
 --   followup_comments: ref -> imei,  full_name -> client_name
---   PAGE_KEY map (api/_lib/supabase.js): followup_status pages order by 'ref' -> 'imei'
 --   upsertTables (api/upload.js): followup_status conflict key 'ref' -> 'imei'
+--
+-- DONE 2026-09-22: the PAGE_KEY line above sat unstruck for as long as this table has
+-- existed -- api/_lib/supabase.js's PAGE_KEY map still said followup_status pages order by
+-- 'ref', a column this table has never had, so every fetchAll of the deck paid a doomed
+-- first round trip. Found from a real query log, not this list; fixed to 'imei', and nine
+-- other tables missing an `id` column (watu_loans, hoop_agents, hoop_sales, old_stock,
+-- stock_audit, hoop_aged_stock, device_tokens, device_prices, staff_salaries) were added to
+-- the same map at the same time -- see PAGE_KEY's own comment for the full account.
 --
 -- Not carried over (Hope-only): status, ds, dc, days_elapsed, arrears, rejesho and the
 -- guarantor_* columns -- the Watu feed carries none of them (starter section 5 lists the
