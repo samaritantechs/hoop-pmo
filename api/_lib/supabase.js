@@ -229,13 +229,39 @@ const LIKELY_CAPS = new Set([1000, 2000, 5000, 10000, 20000, 25000, 50000, 10000
    a time. A tiebreaker that cannot be applied must never turn a working screen into an error. */
 
 /* Tables whose primary key is not called `id`. Everything else that is big enough to page has
-   one that is, so `id` is the default rather than a guess. */
-const PAGE_KEY = {
+   one that is, so `id` is the default rather than a guess.
+
+   TEN OF THESE WERE WRONG OR MISSING, FOUND FROM A REAL QUERY LOG, NOT THE TEST SUITE.
+   =========================================================================================
+   fetchAll's fallback (the comment above readPages) makes a missing tiebreaker column safe --
+   the request is refused, caught, and retried without one -- but "safe" still means a doomed
+   first round trip, paid forever, on every single page. `devices` and `imprest_roles` below
+   were found and fixed that way once already; what had not been checked is whether every
+   OTHER table missing an `id` column was also listed here.
+
+   Nine were not, discovered by reading db/schema.sql and every file in db/migrations/ against
+   this map rather than by watching it fail: device_prices, device_tokens, hoop_aged_stock,
+   hoop_agents, hoop_sales, old_stock, staff_salaries, stock_audit, watu_loans -- keyed by
+   their real primary key below. A TENTH was worse than missing: `followup_status: 'ref'` was
+   never true of THIS schema at all -- schema.sql's own adaptation-map comment has said since
+   the day this table was renamed from Hope's `ref` to Hoop's `imei` that this map still needed
+   the same edit, and it was never made. followup_status is the deck -- the single most-read
+   table in the system, on the portal AND on every phone's list()/sync -- so this was not a
+   rare corner: it was a doomed round trip on very nearly every page this whole app serves,
+   for as long as the table has existed, invisible to `npm test` because the fake database
+   (test/fake-db.mjs) does not model PostgREST refusing an ORDER BY on a column that is not
+   there -- it only knows about columns a MIGRATION has not added yet (`missingColumns`), which
+   is a different failure this map has nothing to do with. test/pgwar-page-key.test.mjs reads
+   the real schema statically and checks every table this file ever pages against it, so this
+   class of gap cannot reopen unnoticed the way it did here. */
+// Exported ONLY for test/pgwar-page-key.test.mjs, which checks this map against the real
+// schema; nothing else outside this file should ever need to read it directly.
+export const PAGE_KEY = {
   teams: 'team',
   access_codes: 'code',
   roles: 'role',
   settings: 'key',
-  followup_status: 'ref',
+  followup_status: 'imei',
   call_users: 'user_id',
   call_agents: 'user_id',
   /* devices is keyed by IMEI and has no `id` column at all, so the default below asked
@@ -250,6 +276,16 @@ const PAGE_KEY = {
      by the role name and has no `id`, so the rate table's every read -- the request form's
      load and the lookup inside every submitted request -- paid the doomed first trip. */
   imprest_roles: 'role',
+  // The nine found by the schema sweep above, each keyed on its real primary key.
+  device_prices: 'item',
+  device_tokens: 'imei',
+  hoop_aged_stock: 'serial',
+  hoop_agents: 'phone',
+  hoop_sales: 'sale_key',
+  old_stock: 'imei',
+  staff_salaries: 'staff_code',
+  stock_audit: 'imei',
+  watu_loans: 'imei',
 };
 
 /** The table a built query points at, read off the URL PostgREST is about to be asked for.
