@@ -2798,6 +2798,7 @@ function mintCode(existing) {
 /* A dashboard is opened in bursts (everyone at 8am); the trend is the same answer for
    all of them, so it is computed once every five minutes, not once per open. */
 const trendCache = new Map();
+export function _clearTrendCache() { trendCache.clear(); }
 
 /* =========================================================================================
    THE MONDAY PROBLEM -- why every weekly chart went blank this morning.
