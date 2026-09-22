@@ -618,7 +618,7 @@ function deviceId(){
 
 /* ================= state ================= */
 var DEV = deviceId();
-var S = { boot:null, view:'win45', cache:{}, cacheAt:{}, reqId:0, isAdmin:false, rows:[], q:'', curRef:null, comments:[], repData:null, repFrom:weekStartIso_(), repTo:weekEndIso_(), repTeam:'', repLeader:'', syncEverySec:300, permOk:null,
+var S = { boot:null, view:'win45', cache:{}, cacheAt:{}, pending:{}, reqId:0, isAdmin:false, rows:[], q:'', curRef:null, comments:[], repData:null, repFrom:weekStartIso_(), repTo:weekEndIso_(), repTeam:'', repLeader:'', syncEverySec:300, permOk:null,
   /* Which of the three recycling roles the Exp.Def list is narrowed to, remembered across
      restarts the same way the scope and the open/shut summary are. Somebody who works the
      bike officers' book works it every day. */
@@ -1467,11 +1467,27 @@ function segLabel_(src, r){
 function cloneRow_(r){ var o = {}; for (var k in r) { if (r.hasOwnProperty(k)) o[k] = r[k]; } return o; }
 /** Loads whichever of today/tomorrow/defaulters aren't cached yet -- used so a search can look
     across every segment the officer has, not just whichever tab happens to be open. */
+/* sourceFresh_ only flips true once a source's OWN fetch has LANDED -- so while the first
+   request for a not-yet-cached source is still in flight, every caller in between (a search
+   box firing this on every keystroke, on a slow connection, is exactly the case) saw "not
+   fresh" and started ANOTHER request for the same source. S.pending remembers the in-flight
+   promise per source: a caller that finds one already running awaits THAT one instead of
+   starting a new request, and the flag is cleared on both the success and failure path so a
+   later fetch that is genuinely needed (source dropped stale, retry) is never stuck blocked. */
 function ensureAllSources_(){
   var need = ['today'].filter(function(s){ return !sourceFresh_(s); });
   if (!need.length) return Promise.resolve();
   return Promise.all(need.map(function(s){
-    return srv('api_callList', DEV, s).then(function(d){ S.cache[s] = d.rows || []; S.cacheAt[s] = Date.now(); saveCacheToDevice_(); }).catch(function(){ S.cache[s] = S.cache[s] || []; });
+    if (S.pending[s]) return S.pending[s];
+    var p = srv('api_callList', DEV, s).then(function(d){
+      S.cache[s] = d.rows || []; S.cacheAt[s] = Date.now(); saveCacheToDevice_();
+      delete S.pending[s];
+    }).catch(function(){
+      S.cache[s] = S.cache[s] || [];
+      delete S.pending[s];
+    });
+    S.pending[s] = p;
+    return p;
   }));
 }
 function globalSearchRows_(q){
