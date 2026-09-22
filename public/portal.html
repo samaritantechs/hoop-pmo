@@ -6407,6 +6407,17 @@ var LOSS_CAUSE_LABEL={negligence:'Uzembe / Negligence',unresolved_sale:'Mauzo ha
 var LOSS_METHOD_LABEL={lump_sum:'Malipo ya mkupuo / Lump sum',salary_deduction:'Kukatwa mshahara / Salary deduction',
   commission_deduction:'Kukatwa kamisheni / Commission deduction'};
 var LOSSQ='';
+/* The price list is the 3,000-loan model scan (api/portal.js priceList: "2 trips / 3,004 rows
+   -- almost all of it the four prices"), and both loss panes ask for it, and drawLoss's own
+   tile clicks (pick(k), below) redraw on every click. Held the same 5 minutes as the other
+   panes above so a filter click or reopening the tab never repeats that scan -- only a price
+   actually being saved or removed here is a genuine reason to ask again, so priceSave/priceDelete
+   clear .at before their own redraw. */
+var LOSS_PRICES={data:null,at:0};
+function lossPricesFetch_(){
+  if(LOSS_PRICES.data&&(Date.now()-LOSS_PRICES.at)<5*60000) return Promise.resolve(LOSS_PRICES.data);
+  return srv('priceList',{}).then(function(d){ LOSS_PRICES.data=d; LOSS_PRICES.at=Date.now(); return d; });
+}
 function lossChip(r){
   if(r.status==='settled') return '<span class="chip ok">Settled</span>';
   if(r.status==='written_off') return '<span class="chip">Written off</span>';
@@ -6547,7 +6558,7 @@ function lossWire(m, rows, desk){
 }
 function drawLossReq(m){
   m.innerHTML='<div class="sk"></div>';
-  Promise.all([srv('lossList',{}), srv('priceList',{})]).then(function(res){
+  Promise.all([srv('lossList',{}), lossPricesFetch_()]).then(function(res){
     var d=res[0], pl=res[1];
     if(d.notReady){ m.innerHTML=lossNotReady(); return; }
     var rows=d.rows||[];
@@ -6565,7 +6576,7 @@ function drawLossReq(m){
 }
 function drawLoss(m){
   m.innerHTML='<div class="sk"></div>';
-  Promise.all([srv('lossList',{state:LOSSQ}), srv('priceList',{})]).then(function(res){
+  Promise.all([srv('lossList',{state:LOSSQ}), lossPricesFetch_()]).then(function(res){
     var d=res[0], pl=res[1];
     if(d.notReady){ m.innerHTML=lossNotReady(); return; }
     var rows=d.rows||[], c=d.counts||{}, t=d.totals||{}, prices=pl.prices||[], canW=!BOOT.readOnly;
@@ -6615,14 +6626,14 @@ function drawLoss(m){
     if(ps) ps.onclick=function(){
       var b=this; b.disabled=true;
       srv('priceSave',{item:$('#lspItem').value, amount:$('#lspAmt').value, note:$('#lspNote').value})
-      .then(function(){ toast('Bei imehifadhiwa / Price saved'); if(TAB==='loss') drawLoss(m); })
+      .then(function(){ LOSS_PRICES.at=0; toast('Bei imehifadhiwa / Price saved'); if(TAB==='loss') drawLoss(m); })
       .catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
     };
     [].slice.call(m.querySelectorAll('[data-lspd]')).forEach(function(b){
       b.onclick=function(){
         if(!confirm('Futa bei ya '+b.getAttribute('data-lspd')+'?')) return;
         srv('priceDelete',{item:b.getAttribute('data-lspd')})
-        .then(function(){ toast('Imefutwa / Removed'); if(TAB==='loss') drawLoss(m); })
+        .then(function(){ LOSS_PRICES.at=0; toast('Imefutwa / Removed'); if(TAB==='loss') drawLoss(m); })
         .catch(function(e){ toast(safeErr(e), true); });
       };
     });
