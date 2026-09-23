@@ -203,6 +203,15 @@ const AUDIT_DIFF = {
                      fields: ['status', 'receiver_signed_by', 'receiver_signed_at', 'accepted_by', 'accepted_at', 'moved'] },
   transferDecline: { table: 'transfers', key: a => ({ id: a.id }),
                      fields: ['status', 'declined_by', 'declined_at', 'decline_reason'] },
+  /* The desk correcting a signature -- reopens whatever the document had settled into, so
+     every column an accept/decline could have set is named here too, alongside the four the
+     reversal itself writes. Never sender_signature/receiver_signature, same rule as
+     transferSign: the pen-stroke images have no business in a second, unguarded copy here. */
+  transferReverseSignature: { table: 'transfers', key: a => ({ id: a.id }),
+                     fields: ['sender_signed_by', 'sender_signed_at', 'receiver_signed_by', 'receiver_signed_at',
+                              'status', 'accepted_by', 'accepted_at', 'moved',
+                              'declined_by', 'declined_at', 'decline_reason',
+                              'reversed_role', 'reversed_by', 'reversed_at', 'reversal_reason', 'reversal_count'] },
 };
 const K_ = s => String(s == null ? '' : s).trim().toUpperCase();
 
