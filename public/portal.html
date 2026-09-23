@@ -10386,8 +10386,11 @@ function trViewRender(m, id, t){
       if(!why.trim()){ toast('Andika sababu. / A reason is required.', true); return; }
       btn.disabled=true;
       srv('transferReverseSignature',{id:id, role:role, reason:why}).then(function(r){
+        // A note means something needs the desk's attention -- either the migration for the
+        // reason to show on the document, or handsets that had moved on and were correctly
+        // left untouched (r.skipped) -- both shown as a warning, not the ordinary green toast.
         toast(r.note || (r.restored?('Imebadilishwa: simu '+money(r.restored)+' zimerejeshwa / Reversed: '+money(r.restored)+' sent back')
-          :'Sahihi imebadilishwa / Signature reversed'), r.loggedOnDocument===false);
+          :'Sahihi imebadilishwa / Signature reversed'), !!r.note);
         refresh(trMergeReverseSignature_, r);
       }).catch(function(e){ btn.disabled=false; toast(safeErr(e), true); });
     };

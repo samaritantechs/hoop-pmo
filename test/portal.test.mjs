@@ -2847,6 +2847,55 @@ test('reversing the receiver\'s signature on an ACCEPTED document sends the stoc
   assert.equal(d._dump('transfers').find(t => t.id === s.id).status, 'accepted');
 });
 
+test('a stale reversal never yanks stock away from whoever legitimately holds it now under a LATER, unrelated document', async () => {
+  const d = trDb();
+  // doc1: SUPER AGENT -> RSM DAR, accepted -- the one about to be (belatedly) corrected.
+  const doc1 = await _FNS.transferCreate(d, STORE, { toName: 'RSM DAR', imeis: ['351000000000001'] });
+  await _FNS.transferAccept(d, RSM_DAR, { id: doc1.id, signature: TR_PNG });
+  assert.equal(rowOf(d, 'devices', '351000000000001').holder, 'RSM DAR');
+
+  // doc2: a SEPARATE, LATER, entirely legitimate document -- RSM DAR passes it on to an agent.
+  const doc2 = await _FNS.transferCreate(d, RSM_DAR, { toName: 'AGENT TWO', imeis: ['351000000000001'] });
+  await _FNS.transferAccept(d, AG2, { id: doc2.id, signature: TR_PNG });
+  assert.equal(rowOf(d, 'devices', '351000000000001').holder, 'AGENT TWO', 'now legitimately AGENT TWO\'s, under doc2');
+
+  // Sipho only now notices doc1's receiver signature was wrong, and reverses it.
+  const r = await _FNS.transferReverseSignature(d, STORE, { id: doc1.id, role: 'receiver', reason: 'wrong RSM named, found late' });
+  assert.equal(r.restored, 0, 'nothing was actually sent back');
+  assert.equal(r.skipped, 1, 'the one handset is reported as skipped, not silently dropped');
+  assert.match(r.note, /1 handset.*moved on/i);
+  assert.equal(rowOf(d, 'devices', '351000000000001').holder, 'AGENT TWO',
+    'UNTOUCHED -- doc1\'s reversal must never overwrite what doc2 legitimately did afterwards');
+  assert.equal(d._dump('transfers').find(t => t.id === doc2.id).status, 'accepted', 'doc2 itself is not touched either');
+  // doc1 itself still reopens correctly -- only the stock-restore half was unsafe, not the signature correction.
+  const row1 = d._dump('transfers').find(t => t.id === doc1.id);
+  assert.equal(row1.status, 'sent'); assert.equal(row1.receiver_signed_by, null);
+  const trail = d._dump('device_events').filter(e => e.imei === '351000000000001');
+  assert.equal(trail.length, 2, 'doc1\'s own forward move and doc2\'s forward move -- no false reversal line was written');
+});
+
+test('reversal still finishes cleanly on a document accepted before the flow migration, with the desk placed correctly', async () => {
+  const d = trDb({}, { missingColumns: { transfers: ['status', 'from_role', 'to_role', 'accepted_at', 'accepted_by',
+    'declined_at', 'declined_by', 'decline_reason', 'moved',
+    'reversed_role', 'reversed_by', 'reversed_at', 'reversal_reason', 'reversal_count'] } });
+  // The desk sends to an RSM, pre-flow-migration -- accepting is inferred (trStatusOf's fallback)
+  // from receiver_signed_by alone, with no to_role/from_role column to say who anybody is.
+  const s = await _FNS.transferCreate(d, STORE, { toName: 'RSM DAR', imeis: ['351000000000001'] });
+  await _FNS.transferAccept(d, RSM_DAR, { id: s.id, signature: TR_PNG });
+  assert.equal(rowOf(d, 'devices', '351000000000001').holder, 'RSM DAR');
+  assert.ok(!('status' in d._dump('transfers')[0]), 'confirms the degraded fixture really has no status column');
+
+  const r = await _FNS.transferReverseSignature(d, STORE, { id: s.id, role: 'receiver', reason: 'wrong RSM, pre-migration record' });
+  assert.equal(r.ok, true); assert.equal(r.restored, 1);
+  // THE FIX: sent back to SUPER AGENT (the desk's own node), not literally "SIPHO K" -- the
+  // sender's role is looked up off transferParties when from_role is not there to trust.
+  assert.equal(rowOf(d, 'devices', '351000000000001').holder, 'SUPER AGENT',
+    'must resolve to the desk\'s node, not fall back to the literal account name');
+  const row = d._dump('transfers').find(t => t.id === s.id);
+  assert.equal(row.receiver_signed_by, null, 'the signature itself always clears, even this degraded');
+  assert.ok(!('status' in row), 'no status column existed to write -- correctly never attempted');
+});
+
 test('reversing one of two signatures on a COMPLETED three-way document leaves the other in place', async () => {
   const d = trDb();
   const r = await _FNS.transferCreate(d, STORE, { toName: 'RSM MWANZA', fromName: 'RSM DAR', imeis: ['351000000000003'], signature: TR_PNG });
