@@ -9970,20 +9970,44 @@ function trPadHtml_(padId){
     +'<div style="margin-top:4px"><button type="button" class="btn sm ghost" id="'+padId+'Clear">Futa / Clear</button></div>';
 }
 /** One party's block on the printable document: the stored image once signed, else what the
-    document is waiting for. The pads themselves live below the document, off the print. */
+    document is waiting for. The pads themselves live below the document, off the print.
+
+    THE REVERSAL BUTTON lives HERE, next to the one signature it corrects -- "a reversal
+    button per user signature" -- not in a panel below with the others, because this is not
+    an action the party themselves takes. Desk-visible only (t.mine.desk -- see transferGet),
+    only once a signature actually exists, and never for role 'desk' itself: TR_SIG_ROLES on
+    the server excludes it, because there is no door to re-supply the desk's own signature on
+    an EXISTING document, only at filing. .noprint keeps it off the printed/saved document,
+    same as every other action on this screen -- see the @media print rule. */
 function trSigBlock_(label, role, t){
   var signedBy = role==='sender' ? t.senderSignedBy : role==='desk' ? t.deskSignedBy : t.receiverSignedBy;
   var signedAt = role==='sender' ? t.senderSignedAt : role==='desk' ? t.deskSignedAt : t.receiverSignedAt;
   var img = role==='sender' ? t.senderSignature : role==='desk' ? t.deskSignature : t.receiverSignature;
+  var canReverse = role!=='desk' && !!(t.mine&&t.mine.desk) && !BOOT.readOnly;
   if(signedBy){
     return '<div class="fld"><label>'+esc(label)+'</label>'
       +'<div style="border:1.5px solid var(--line);border-radius:9px;padding:8px;background:#fff">'
       +'<img src="'+esc(img)+'" style="max-width:280px;max-height:110px;display:block">'
-      +'</div><div class="mut" style="font-size:11px;margin-top:3px">'+esc(signedBy)+' · '+esc(clock(signedAt))+'</div></div>';
+      +'</div><div class="mut" style="font-size:11px;margin-top:3px">'+esc(signedBy)+' · '+esc(clock(signedAt))+'</div>'
+      +(canReverse?'<div class="noprint" style="margin-top:5px"><button type="button" class="btn sm ghost" '
+        +'id="trRev_'+role+'">↺ Badilisha sahihi / Reverse signature</button></div>':'')
+      +'</div>';
   }
   return '<div class="fld"><label>'+esc(label)+'</label><div class="mut">'
     +(role==='receiver'?(t.status==='declined'?'Imekataliwa / Declined':'Inasubiri kukubaliwa / Awaiting acceptance')
       :'Bado hakujasainiwa / Not signed yet')+'</div></div>';
+}
+/* THE ONE MERGE reversal needs -- mirrors transferReverseSignature's own write exactly (see
+   its comment in api/portal.js), the same way trMergeSign_/trMergeAccept_/trMergeDecline_
+   each mirror theirs. Kept beside them for the same reason: this describes the SERVER's rule,
+   not the screen's. */
+function trMergeReverseSignature_(t, r){
+  var by = r.role+'SignedBy', at = r.role+'SignedAt', sig = r.role+'Signature';
+  t[by]=''; t[at]=null; t[sig]=null;
+  t.status='sent'; t.acceptedAt=null; t.acceptedBy=null; t.moved=null;
+  t.declinedAt=null; t.declinedBy=null; t.declineReason='';
+  t.reversedRole=r.role; t.reversedBy=r.reversedBy; t.reversedAt=Date.now(); t.reversalReason=r.reason;
+  t.reversalCount=(t.reversalCount||0)+1;
 }
 /* THE DOCUMENT, and what the person looking at it may do with it: the sender signs their own
    side; the receiver accepts -- which IS their signature and the moment the stock moves -- or
@@ -10236,6 +10260,15 @@ function trViewRender(m, id, t){
     +(t.status==='accepted'?'<br><b>Imekubaliwa / Accepted:</b> '+esc(clock(t.acceptedAt))+(t.moved!=null?' · simu '+money(t.moved)+' zimehama / moved':''):'')
     +(t.status==='declined'?'<br><b>Imekataliwa / Declined:</b> '+esc(clock(t.declinedAt))+' — '+esc(t.declineReason||''):'')
     +'</div></div>'
+    /* THE CORRECTION, on the document itself -- "so it gets resigned on every transfer
+       card" carries its own explanation too, the same way a decline does. Only the LATEST
+       reversal shows here; reversalCount says whether there has been more than one, and every
+       one, past and present, is in the audit log (see transferReverseSignature). */
+    +(t.reversalCount?'<div class="mut" style="margin-bottom:10px;border-left:3px solid var(--line);padding-left:8px">'
+      +'↺ Sahihi ya '+(t.reversedRole==='sender'?'anayetoa':'anayepokea')+' ilibadilishwa na '+esc(t.reversedBy)+' · '+esc(clock(t.reversedAt))
+      +' — '+esc(t.reversalReason||'')+(t.reversalCount>1?' <span class="mut">('+money(t.reversalCount)+' jumla)</span>':'')
+      +'<br>/ '+(t.reversedRole==='sender'?'Sender\'s':'Receiver\'s')+' signature reversed by '+esc(t.reversedBy)+' · '+esc(clock(t.reversedAt))
+      +' — '+esc(t.reversalReason||'')+(t.reversalCount>1?' ('+money(t.reversalCount)+' total)':'')+'</div>':'')
     +(t.threeWay&&t.status==='sent'?'<div class="mut" style="margin-bottom:10px">Uhamisho kwa niaba -- unahitaji sahihi tatu: stoo (imekwisha), '
       +esc(t.fromName)+' na '+esc(t.toName)+'. Bado inasubiri: '
       +[!t.senderSignedBy?esc(t.fromName):null, !t.receiverSignedBy?esc(t.toName):null].filter(Boolean).join(', ')
@@ -10342,6 +10375,27 @@ function trViewRender(m, id, t){
   declineAs($('#trDecline'));    // the receiver, in Kubali/Accept-or-decline
   declineAs($('#trDeclineS'));   // the source RSM, on a three-way document, alongside signing
   declineAs($('#trDeclineDesk')); // the filing desk, on a three-way document, before both RSMs finish
+  /* REVERSE ONE SIGNATURE -- the desk only (trSigBlock_ never renders these buttons for
+     anybody else). Same "typed reason, confirmed before it fires" shape as declineAs, because
+     clearing a signed party's signature is at least as consequential as declining one. */
+  var reverseAs=function(role){
+    var btn=$('#trRev_'+role); if(!btn) return;
+    btn.onclick=function(){
+      var why=prompt('Sababu ya kubadilisha sahihi hii / Reason for reversing this signature:');
+      if(why==null) return;
+      if(!why.trim()){ toast('Andika sababu. / A reason is required.', true); return; }
+      btn.disabled=true;
+      srv('transferReverseSignature',{id:id, role:role, reason:why}).then(function(r){
+        // A note means something needs the desk's attention -- either the migration for the
+        // reason to show on the document, or handsets that had moved on and were correctly
+        // left untouched (r.skipped) -- both shown as a warning, not the ordinary green toast.
+        toast(r.note || (r.restored?('Imebadilishwa: simu '+money(r.restored)+' zimerejeshwa / Reversed: '+money(r.restored)+' sent back')
+          :'Sahihi imebadilishwa / Signature reversed'), !!r.note);
+        refresh(trMergeReverseSignature_, r);
+      }).catch(function(e){ btn.disabled=false; toast(safeErr(e), true); });
+    };
+  };
+  reverseAs('sender'); reverseAs('receiver');
   /* THE WRAPPER HAS NO PRINT DIALOG. window.print() in that WebView does nothing at all, so
      on a phone Chapisha hands over the file the officer actually wanted; everywhere else it
      prints the document from its own page (printDoc_). */

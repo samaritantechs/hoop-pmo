@@ -146,6 +146,7 @@ AUDITED.add('transferSign');
 AUDITED.add('transferAccept');
 AUDITED.add('transferDecline');
 AUDITED.add('transferCreateBulk');
+AUDITED.add('transferReverseSignature');
 
 const K = s => String(s == null ? '' : s).trim().toUpperCase();
 const num = v => (typeof v === 'number' ? v : Number(v) || 0);
@@ -2168,16 +2169,33 @@ async function locateStock(db, imeis) {
   return out;
 }
 
+/** WHOSE HANDS A DOCUMENT'S RECEIVER RESOLVES TO -- the register's one name for the desk if
+    the receiving role is a store role, else the receiver's own name ("role store =
+    superagent"). Shared by trMoveStock (who a forward move goes TO) and
+    transferReverseSignature's possession check (who a reversal expects to find the stock
+    WITH, before it is safe to send back) -- one definition of the rule, read by both. */
+function trHolderOf(toRole, toName, toRoleFallback) {
+  const role = K(toRole || '').replace(/[\s_-]+/g, ' ') || toRoleFallback;
+  return isStoreRole(role) ? STORE_NODE : String(toName);
+}
 /** THE WRITE THAT MOVES STOCK -- shared by transferAccept (the ordinary case: the receiver's
-    signature is always the last one needed) and transferSign (a three-way document, where the
+    signature is always the last one needed), transferSign (a three-way document, where the
     SOURCE RSM's own approval can be the signature that completes it, if the receiver already
-    accepted first). Extracted so there is exactly one place this ever happens, whichever of
-    the two calls turns out to be the last signature in.
+    accepted first), and transferReverseSignature (sending it back, sender and receiver
+    swapped). Extracted so there is exactly one place this ever happens, whichever caller.
 
     `toRoleFallback` exists only for a pre-flow-migration document with no to_role column at
     all -- transferAccept passes the accepting user's own role, exactly as it always guessed;
     transferSign's three-way completion can never hit this case (a three-way document cannot
     exist before the flow migration that gives it a to_role), so it passes ''.
+
+    `opts.imeis`, given, is used INSTEAD OF reading transfer_items -- transferReverseSignature's
+    own possession check (see there) has already worked out which serials are safe to move and
+    which are not. `opts.expectHolder`, given, drops any serial whose CURRENT holder is not
+    that name from the move entirely, returning it in `skipped` instead -- the guard a
+    REVERSAL needs and a forward move never did: stock a document moved can have moved AGAIN
+    since, on a separate, later, unrelated transfer, and an old document being corrected must
+    never yank a handset away from whoever legitimately holds it now because of that.
 
     NOT a clearStockIndex(db) buster (checked against every table this writes, postgres-war
     FIX 1): it moves devices.holder and old_stock.agent/rsm, never inserting or deleting a
@@ -2185,17 +2203,28 @@ async function locateStock(db, imeis) {
     a holder changing, and old_stock is never memoised at all (read fresh every time, see
     stock-index.js's header). Its own hoop_agents read (managerIndex, below) is a plain,
     unmemoised fetch, same as before. */
-async function trMoveStock(db, t, actorName, toRoleFallback) {
-  /* WHOSE HANDS IT GOES INTO. The receiver's name -- unless the receiver is the store desk,
-     whose stock the register has always written under SUPER AGENT ("role store =
-     superagent"): one name for the warehouse, whichever clerk signed for it. */
-  const toRole = K(t.to_role || '').replace(/[\s_-]+/g, ' ') || toRoleFallback;
-  const holder = isStoreRole(toRole) ? STORE_NODE : String(t.to_name);
+async function trMoveStock(db, t, actorName, toRoleFallback, opts) {
+  const holder = trHolderOf(t.to_role, t.to_name, toRoleFallback);
 
-  const items = await fetchAll(() => db.from('transfer_items').select('imei').eq('transfer_id', t.id));
-  const imeis = [...new Set(items.map(i => String(i.imei)))];
+  let imeis;
+  if (opts && opts.imeis) {
+    imeis = opts.imeis;
+  } else {
+    const items = await fetchAll(() => db.from('transfer_items').select('imei').eq('transfer_id', t.id));
+    imeis = [...new Set(items.map(i => String(i.imei)))];
+  }
   const at = new Date().toISOString();
   const where = await locateStock(db, imeis);
+  let skipped = [];
+  if (opts && opts.expectHolder) {
+    const keep = [];
+    for (const i of imeis) {
+      const w = where.get(i);
+      if (w && sameName(w.holder, opts.expectHolder)) keep.push(i); else skipped.push(i);
+    }
+    imeis = keep;
+  }
+  const toRole = K(t.to_role || '').replace(/[\s_-]+/g, ' ') || toRoleFallback;
   const devIm = imeis.filter(i => where.get(i).source === 'devices');
   const oldIm = imeis.filter(i => where.get(i).source === 'old_stock');
 
@@ -2231,7 +2260,8 @@ async function trMoveStock(db, t, actorName, toRoleFallback) {
       if (error) throw new Error(error.message);
     }
   }
-  return { at, holder, moved: devIm.length + oldIm.length, devices: devIm.length, oldStock: oldIm.length, unknown: imeis.length - devIm.length - oldIm.length };
+  return { at, holder, moved: devIm.length + oldIm.length, devices: devIm.length, oldStock: oldIm.length,
+    unknown: imeis.length - devIm.length - oldIm.length, skipped: skipped.length };
 }
 
 /* =============================================================================================
@@ -2436,11 +2466,19 @@ const TR_COLS_BASE = 'id, ref, created_at, created_by, from_name, from_phone, to
   + 'receiver_signed_by, receiver_signed_at';
 const TR_COLS_FLOW = ', status, from_role, to_role, accepted_at, accepted_by, declined_at, declined_by, decline_reason, moved';
 const TR_COLS_3WAY = ', three_way, desk_signed_by, desk_signed_at';
+const TR_COLS_REVERSAL = ', reversed_role, reversed_by, reversed_at, reversal_reason, reversal_count';
 const TR_FLOW_RX = /\bstatus\b|from_role|to_role|accepted_at|accepted_by|declined_at|declined_by|decline_reason|\bmoved\b/;
 const TR_3WAY_RX = /three_way|desk_signature|desk_signed_by|desk_signed_at/;
+const TR_REVERSAL_RX = /reversed_role|reversed_by|reversed_at|reversal_reason|reversal_count/;
 const TR_FILE = 'db/migrations/RUN-ME-2026-09-16-transfers.sql';
 const TR_FLOW_FILE = 'db/migrations/RUN-ME-2026-09-17-transfers-flow.sql';
 const TR_3WAY_FILE = 'db/migrations/RUN-ME-2026-09-18-transfers-three-way.sql';
+const TR_REVERSAL_FILE = 'db/migrations/RUN-ME-2026-09-23-transfer-reversal.sql';
+/* The desk's own signature is excluded on purpose -- it is captured once, at filing, and
+   there is no door for the desk to sign an EXISTING document again the way a sender or
+   receiver can (transferCreate only ever makes a NEW row). Reversing it would strand a
+   three-way document with no way to finish. See RUN-ME-2026-09-23-transfer-reversal.sql. */
+const TR_SIG_ROLES = new Set(['sender', 'receiver']);
 /** Every document, newest first. Tolerant of a database that has run none, some or all three
     transfer migrations: needsFlow means the list reads but Send/Receive need the second file.
     The third (three-way) file is never required to open the list or read/accept/decline an
@@ -2448,10 +2486,16 @@ const TR_3WAY_FILE = 'db/migrations/RUN-ME-2026-09-18-transfers-three-way.sql';
     outright if it is missing; see there). */
 async function trReadAll(db) {
   try {
-    const rows = await fetchAll(() => db.from('transfers').select(TR_COLS_BASE + TR_COLS_FLOW + TR_COLS_3WAY)
+    const rows = await fetchAll(() => db.from('transfers')
+      .select(TR_COLS_BASE + TR_COLS_FLOW + TR_COLS_3WAY + TR_COLS_REVERSAL)
       .order('created_at', { ascending: false }));
     return { rows, notReady: false, needsFlow: false };
   } catch (e) {
+    if (TR_REVERSAL_RX.test(String(e && e.message || ''))) {
+      const rows = await fetchAll(() => db.from('transfers').select(TR_COLS_BASE + TR_COLS_FLOW + TR_COLS_3WAY)
+        .order('created_at', { ascending: false }));
+      return { rows, notReady: false, needsFlow: false };
+    }
     if (TR_3WAY_RX.test(String(e && e.message || ''))) {
       const rows = await fetchAll(() => db.from('transfers').select(TR_COLS_BASE + TR_COLS_FLOW)
         .order('created_at', { ascending: false }));
@@ -2490,6 +2534,12 @@ function trRow(r) {
     deskSignedBy: r.desk_signed_by || '', deskSignedAt: r.desk_signed_at ? Date.parse(r.desk_signed_at) : null,
     signed: (r.three_way ? (r.desk_signed_by ? 1 : 0) : 0) + (r.sender_signed_by ? 1 : 0) + (r.receiver_signed_by ? 1 : 0),
     signaturesNeeded: r.three_way ? 3 : 2,
+    /* THE LATEST CORRECTION, if this document has ever had one -- see
+       RUN-ME-2026-09-23-transfer-reversal.sql. reversalCount can be more than one even though
+       only the most recent role/by/at/reason travel here; earlier ones are in audit_log. */
+    reversedRole: r.reversed_role || '', reversedBy: r.reversed_by || '',
+    reversedAt: r.reversed_at ? Date.parse(r.reversed_at) : null,
+    reversalReason: r.reversal_reason || '', reversalCount: r.reversal_count || 0,
   };
 }
 async function trOne(db, id) {
@@ -11509,6 +11559,147 @@ const FNS = {
     const { error } = await db.from('transfers').update(upd).eq('id', id);
     if (error) throw new Error(error.message);
     return { ok: true, id, role, signedBy: String(user.name), moved: move.moved, holder: move.holder };
+  },
+
+  /** REVERSE ONE SIGNATURE -- the desk only. "Some signatories on transfers are not okay" --
+      the wrong name got recorded, or the wrong person signed -- and Sipho needs to clear
+      exactly that one party's signature so the right person can sign again, without touching
+      the OTHER party's, which is still good. Deliberately narrower than a full undo: only
+      sender or receiver, never the desk's own (see TR_SIG_ROLES).
+
+      A document a reversal touches always ends up back at status:'sent', whatever it had
+      settled into. A document is not honestly "accepted" once one of the signatures that made
+      it so is gone, and it is not honestly "declined" either, once the party whose refusal
+      that was is the one being corrected -- so the accepted and declined columns, and
+      `moved`, are cleared right alongside the signature, the same way
+      transferAccept/transferSign/transferDecline each only ever set the ones that apply to
+      their own write.
+
+      STOCK ALREADY MOVED GOES BACK, the same way it came -- BUT ONLY WHAT IS STILL WHERE THE
+      FORWARD MOVE LEFT IT. A reversal can fire long after the fact, and the stock this
+      document moved can have moved AGAIN since, on a separate, later, entirely valid transfer
+      that has nothing to do with the one being corrected. Blindly running trMoveStock
+      backwards would yank a handset away from whoever legitimately holds it now because of
+      that later document -- so every serial's CURRENT holder is checked against where the
+      forward move actually left it (trHolderOf) before anything moves; a serial that has
+      moved on is left exactly where it is, reported back as `skipped`, never touched. A
+      document still at status:'sent' never moved anything, so reversing one of its signatures
+      is the column, cleared, and nothing else -- no possession check needed there.
+
+      A PRE-FLOW-MIGRATION DOCUMENT can still be "accepted" (trStatusOf's own fallback: a
+      receiver signature with no status column reads as accepted) with no to_role/from_role at
+      all. trMoveStock's toRoleFallback exists for exactly the FORWARD case, where the
+      ACCEPTING user's own role stands in -- there is no such user here, so the SENDER's role
+      is instead looked up fresh off transferParties, the same register every ordinary Send
+      already resolves a typed sender against, rather than silently guessing wrong (the fix
+      for a real gap: trHolderOf(undefined, name, undefined) used to default to the literal
+      account name instead of the desk's own SUPER AGENT node).
+
+      THE SECOND WRITE CANNOT BE LEFT HALF DONE. If stock already moved back but the transfers
+      row then fails to update (a migration missing a column this write needs), the register
+      and the document would disagree -- so this cascades through the SAME degraded-migration
+      fallbacks transferAccept/transferDecline already have (TR_FLOW_RX), not just the new
+      reversal columns' own (TR_REVERSAL_RX), before ever surfacing an error.
+
+      THE REASON IS KEPT ON THE ROW -- reversed_role/by/at/reversal_reason, the same idea as
+      decline_reason, so the card itself carries the correction, not only audit_log.
+      reversal_count is bumped every time; only the latest four travel live, but every one,
+      past and present, is in audit_log's own before/after trail (see audit.js AUDIT_DIFF).
+
+      Budget: 1 keyed transfers read (trOne). A document still 'sent': +1 transfers update.
+      A document already 'accepted': + trMoveStock's own cost (1 keyed transfer_items read +
+      1 bounded locateStock sweep + up to 2 `.in()` updates + a device_events insert, minus
+      whatever `skipped` drops) + 0-1 transferParties reads (only pre-flow-migration, with no
+      from_role to trust) + 1 transfers update, same shape as an ordinary acceptance, run
+      backwards. */
+  async transferReverseSignature(db, user, args) {
+    requireWrite(user); requireNav(user, 'transfers');
+    if (!isStoreDesk(user)) {
+      refuse403('Kubadilisha sahihi ni kazi ya stoo pekee. / Reversing a signature is the store desk\'s job only.');
+    }
+    const a = args || {};
+    const id = String(a.id || '').trim();
+    if (!id) bad('Weka ID ya uhamisho. / A transfer id is required.');
+    const role = String(a.role || '').trim();
+    if (!TR_SIG_ROLES.has(role)) {
+      bad('Chagua sahihi sahihi: mtoaji au mpokeaji. Sahihi ya stoo haibadiliki hapa. '
+        + '/ Choose which signature: sender or receiver. The desk\'s own signature cannot be reversed here.');
+    }
+    const reason = String(a.reason || '').trim();
+    if (!reason) bad('Andika sababu ya kubadilisha sahihi. / A reason is required to reverse a signature.');
+
+    const t = await trOne(db, id);
+    const signedByCol = role + '_signed_by', signedAtCol = role + '_signed_at', sigCol = role + '_signature';
+    if (!t[signedByCol]) {
+      bad('Sahihi hii bado haijawekwa -- hakuna cha kubadilisha. / That signature has not been set yet -- there is nothing to reverse.');
+    }
+
+    const fromStatus = trStatusOf(t);
+    const at = new Date().toISOString();
+    let moved = 0, skipped = 0;
+    if (fromStatus === 'accepted') {
+      let fromRoleForRestore = t.from_role;
+      if (!fromRoleForRestore) {
+        try {
+          const parties = await transferParties(db);
+          const party = parties.get(nameKey(t.from_name));
+          if (party) fromRoleForRestore = party.role;
+        } catch (ignored) { /* best effort -- trHolderOf still falls back to the literal name */ }
+      }
+      const expectHolder = trHolderOf(t.to_role, t.to_name, '');
+      const back = { ...t, to_name: t.from_name, to_role: fromRoleForRestore, from_name: t.to_name };
+      const restore = await trMoveStock(db, back, user.name, fromRoleForRestore, { expectHolder });
+      moved = restore.moved; skipped = restore.skipped;
+    }
+
+    const fullUpd = {
+      [sigCol]: null, [signedByCol]: null, [signedAtCol]: null,
+      status: 'sent', updated_at: at,
+      accepted_at: null, accepted_by: null, moved: null,
+      declined_at: null, declined_by: null, decline_reason: null,
+      reversed_role: role, reversed_by: user.name, reversed_at: at,
+      reversal_reason: reason.slice(0, 400), reversal_count: (t.reversal_count || 0) + 1,
+    };
+    const { reversed_role, reversed_by, reversed_at, reversal_reason, reversal_count, ...withoutReversal } = fullUpd;
+    const { status: s_, accepted_at, accepted_by, moved: m_, declined_at, declined_by, decline_reason,
+      ...withoutFlow } = withoutReversal;
+
+    /* TWO INDEPENDENT DEGRADATIONS, EITHER OR BOTH MISSING -- checked together on every
+       attempt, not as a rigid two-step cascade, because PostgREST names only ONE missing
+       column per error and there is no guarantee it is the reversal one first: a maximally
+       degraded row (this migration AND the flow one both un-run) could just as easily name
+       `status` on the very first try. Retrying only against TR_REVERSAL_RX in that case would
+       skip straight past `withoutReversal` to `withoutFlow` without ever having tried it, and
+       wrongly report the reversal trail as attempted when it was not. */
+    let res = await db.from('transfers').update(fullUpd).eq('id', id);
+    let landed = fullUpd;
+    const failing = () => res.error && String(res.error.message || '');
+    if (failing() && (TR_REVERSAL_RX.test(failing()) || TR_FLOW_RX.test(failing()))) {
+      landed = withoutReversal;
+      res = await db.from('transfers').update(withoutReversal).eq('id', id);
+    }
+    if (failing() && TR_FLOW_RX.test(failing())) {
+      // Rare, and only reachable at all on a document that reached "accepted" WITHOUT the flow
+      // migration (trStatusOf's own fallback) -- the signature itself still clears; reopening
+      // it explicitly cannot, because there is no status column here to reopen it INTO. It
+      // reads 'sent' again regardless, the same fallback way it read 'accepted' in the first
+      // place, once receiver_signed_by (or sender_signed_by, for the source RSM's own
+      // approval) is the column actually gone.
+      landed = withoutFlow;
+      res = await db.from('transfers').update(withoutFlow).eq('id', id);
+    }
+    if (res.error) throw new Error(res.error.message);
+    const loggedOnDocument = landed === fullUpd, reopened = landed !== withoutFlow;
+
+    const note = !loggedOnDocument
+      ? 'Sahihi imebadilishwa. Endesha <b>' + TR_REVERSAL_FILE + '</b> ili sababu ionekane kwenye hati. '
+        + '/ Signature reversed. Run <b>' + TR_REVERSAL_FILE + '</b> for the reason to show on the document.'
+      : skipped
+        ? 'Simu ' + skipped + ' hazikurejeshwa -- tayari zimehama kwenye hati nyingine. Angalia hati zao. '
+          + '/ ' + skipped + ' handset(s) were not sent back -- they have since moved on under a different document. Check those documents.'
+        : null;
+    return { ok: true, id, role, fromStatus, restored: moved, skipped, reversedBy: user.name, reversedAt: at,
+      reason: reason.slice(0, 400), loggedOnDocument, reopened, note };
   },
 };
 

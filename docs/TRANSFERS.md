@@ -176,6 +176,48 @@ the same rule extends to it exactly — the desk signs once, at filing, and may 
 either RSM; whichever of the source and destination RSM signs last is the one write that moves
 the stock, in either order.
 
+## Reversing a signature
+
+> *"Some signatories on transfers are not okay so sipho needs a reversal button per user
+> signature so that it gets resigned on every transfer card."*
+
+The rule above — a signature is written once, by its owner — still stands for the two ordinary
+parties acting on their own document. What this adds is narrower and different: **the desk
+(STORE/ADMIN) may clear one party's signature** when it was never a valid signature to begin
+with — the wrong name, a mistaken tap, somebody signing who was not the real party — not a
+change of mind about a transfer that was correctly signed. `↺ Badilisha sahihi / Reverse
+signature` sits next to each signature on the document, visible only to the desk, and only once
+that signature exists.
+
+Reversing one **reopens the whole document to `sent`**, whatever it had settled into. A
+document is not honestly `accepted` once one of the signatures that made it so is gone, so the
+accepted stamps go with it — and if the stock had already moved, **it goes back the way it
+came**: the exact same placement rules an ordinary acceptance uses (`isStoreRole`, RSM, AGENT),
+sender and receiver swapped, never a second copy of them. A document still `sent` never moved
+anything, so reversing one of its signatures is the signature, cleared, and nothing else.
+
+**Only sender or receiver — never the desk's own.** The desk's signature on a *kwa niaba*
+document is captured once, at filing; there is no door to re-supply it on an existing document,
+only at a fresh filing. Reversing it would strand the document with no way to finish.
+
+**The OTHER party's signature, if there is one, is untouched.** On a three-way document with
+all three already in, reversing just the receiver's leaves the desk's and the source RSM's
+exactly as they were — the corrected party signs again through the door they always had
+(Kubali/Accept, or Send's "sign later"), and whichever of the remaining signatures completes
+the document a second time moves the stock again, correctly.
+
+**A reason is required**, and it is kept on the document itself — the same idea as
+`decline_reason`, so a corrected card carries its own explanation rather than a signature block
+that simply went blank. `reversal_count` says how many times a document has needed correcting;
+only the latest role/by/at/reason travel live, but every reversal, past and present, is in
+`audit_log`'s own before/after trail.
+
+Schema: `db/migrations/RUN-ME-2026-09-23-transfer-reversal.sql`, four columns on `transfers`
+(`reversed_role`, `reversed_by`, `reversed_at`, `reversal_reason`) plus `reversal_count`. The
+same fallback as every other transfer migration: without it, the reversal itself still lands —
+the signature clears, stock still moves back, the document still reopens — only the visible
+trail on the card waits on the file being run.
+
 ## Who the stock names becomes a system user
 
 > *"please from new stock write me sql so that we pull all rsm or just always pull them auto
@@ -245,12 +287,16 @@ credit/customer panes and the calls app — see `docs/CREDIT-FENCE.md`.
 - **Not the other company.** A handset moving HOOP ↔ HOPE is *Shift*, on the locking desk, and
   stays there: that is a device changing owner between two systems, not stock changing hands
   between two people in this one.
-- **No re-sign, no edit after signing.** A fresh transfer, not an edit.
+- **No re-sign, no edit after signing — for the two parties themselves.** A fresh transfer, not
+  an edit. The desk has one narrow, logged exception for a signature that was never valid to
+  begin with — see *Reversing a signature*, above — and it is still not an edit: the document
+  reopens and is signed again through the ordinary door, never quietly patched.
 - **Deleting a document is not an undo.** Acceptance is the write that moves stock, and from that
   moment the handsets are in the receiver's hands on every list — their Stock window, their NEW
   STOCK, their OLD STOCK — exactly as if they had been handed over at the counter. Removing the
-  row afterwards moves nothing back and takes `prev_holder` with it. Stock goes back the way it
-  came: **send it**, which leaves a document saying so.
+  row afterwards moves nothing back and takes `prev_holder` with it. The desk's own reversal (see
+  *Reversing a signature*) is the one write in this system that DOES send stock back — everything
+  else still means **send it**, which leaves a document saying so.
 - **No link to `devices` or `hoop_aged_stock` from the items.** A transfer can carry stock that was
   never locked, so `transfer_items.imei` is plain text; each line remembers where the serial was
   found (`source`) and whose hands it was in (`prev_holder`).
