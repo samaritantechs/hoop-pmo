@@ -128,6 +128,8 @@ const BUDGETS = [
   ['Stock account',           'stockAccount',   {}, ADMIN,     5, 1647, 3, 2],   // cold 4 / 1372, warm 2 / 1
   ['Stock account (RSM)',     'stockAccount',   {}, RSM_ONE,   5, 1647, 3, 2],   // cold 4 / 1372, warm 2 / 1 -- same as admin
   ['Device list (lock bench)', 'deviceList',    {}, ADMIN,     3, 2400, 3, 2400],   // cold 2 / 2000, warm 2 / 2000
+  // The bench pane proper: + the handover settings memo (1 read, 60s per instance) for the drawer's address.
+  ['Device list (bench, lock pane)', 'deviceList', { pane: 'lock' }, ADMIN, 4, 2402, 3, 2400],   // cold 3 / 2002, warm 2 / 2000
   ['Device list (RSM)',       'deviceList',     {}, RSM_ONE,   3, 2400, 3, 2400],   // cold 2 / 2000, warm 2 / 2000 -- same as admin
   ['Device history',          'deviceHistory',  { imei: IMEI0 }, ADMIN,   3, 3, 3, 3],   // cold 2 / 2, warm 2 / 2
   ['Device token',            'deviceToken',    { imei: IMEI0 }, ADMIN,   2, 2, 2, 2],   // cold 1 / 1, warm 1 / 1
@@ -362,7 +364,7 @@ const OFFICER_ROW_CEILING = 4000;
 /* Functions that CHANGE something. A speed sweep must not fire them, and their cost is not a
    read cost anyway. oldStock and newStock stamp as they read (they mint staff codes off the
    stock lists) and are swept regardless: they are the two heaviest panes an RSM opens. */
-const WRITERS = new Set(['notifSeen', 'fuOutcomesSend', 'portalAddComment', 'deviceEnrol', 'deviceShift', 'deviceSetState',
+const WRITERS = new Set(['notifSeen', 'fuOutcomesSend', 'portalAddComment', 'deviceEnrol', 'deviceShift', 'deviceHandover', 'deviceSetState',
   'deviceDelete', 'advRequest', 'advDecide', 'advPay', 'advDeduct', 'salarySave', 'salaryDelete', 'impRoleSave', 'impRoleDelete',
   'impRequest', 'impDecide', 'impRetire', 'leaveRequest', 'leaveDecide', 'issueRaise', 'issueUpdate', 'topupRequest', 'topupUpdate',
   'priceSave', 'priceDelete', 'lossRaise', 'lossUpdate', 'commRateSave', 'commRateDelete', 'commBuild', 'commDecide', 'commPay',

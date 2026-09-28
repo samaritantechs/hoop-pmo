@@ -1861,23 +1861,23 @@ test('deviceShift with no batch: no secret says need-batch; with the secret it a
   const d = fleet([{ imei: 'S10', state: 'enrolled', enrol_token: 'tokS10' }]);
   const saved = process.env.DEVICE_SHIFT_SECRET;
   delete process.env.DEVICE_SHIFT_SECRET;
-  await assert.rejects(() => _FNS.deviceShift(d, ADMIN, { imeis: 'S10', server: 'https://other.example' }),
+  await assert.rejects(() => _FNS.deviceShift(d, ADMIN, { imeis: 'S10', server: 'https://hope-pmo-v2.vercel.app' }),
     x => x.status === 400 && x.code === 'need-batch');
   process.env.DEVICE_SHIFT_SECRET = 'shared-secret-xyz';
   const realFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, opts) => { calls.push({ url, body: JSON.parse(opts.body) });
     return { ok: true, status: 200, json: async () => ({ ok: true, batch: 'f'.repeat(32) }) }; };
   try {
-    const r = await _FNS.deviceShift(d, ADMIN, { imeis: 'S10', server: 'https://other.example/' });
+    const r = await _FNS.deviceShift(d, ADMIN, { imeis: 'S10', server: 'https://hope-pmo-v2.vercel.app/' });
     assert.equal(r.ordered, 1);
-    assert.equal(calls[0].url, 'https://other.example/api/shift-batch');
+    assert.equal(calls[0].url, 'https://hope-pmo-v2.vercel.app/api/shift-batch');
     assert.equal(calls[0].body.secret, 'shared-secret-xyz');
     assert.deepEqual(calls[0].body.imeis, ['S10']);
     const beat = await deviceApi(d, 'dev_beat', [{ token: 'tokS10' }], NOW);
-    assert.deepEqual(beat.shift, { server: 'https://other.example', batch: 'f'.repeat(32) });
+    assert.deepEqual(beat.shift, { server: 'https://hope-pmo-v2.vercel.app', batch: 'f'.repeat(32) });
     globalThis.fetch = async () => ({ ok: false, status: 403, json: async () => ({ ok: false, error: 'Shift secret refused.' }) });
     const d2 = fleet([{ imei: 'S11', state: 'enrolled', enrol_token: 'tokS11' }]);
-    await assert.rejects(() => _FNS.deviceShift(d2, ADMIN, { imeis: 'S11', server: 'https://other.example' }),
+    await assert.rejects(() => _FNS.deviceShift(d2, ADMIN, { imeis: 'S11', server: 'https://hope-pmo-v2.vercel.app' }),
       x => x.status === 400 && /refused/i.test(x.message));
     assert.ok(!d2._dump('devices').find(r => r.imei === 'S11').shift_server, 'no order written');
   } finally {

@@ -16,7 +16,13 @@ import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
 import { memoByDataVersion } from './_lib/memo.js';
 import { getOldStockAux, getAgingAux, memoStock, clearStockIndex } from './_lib/stock-index.js';
 import { handoverConfig, noteHandoverSettingsWritten, partnerSalesIn, queueHandover,
-  completeHandovers, shiftBatchFromPartner, soldToPartner, shiftAppTooOld } from './_lib/handover.js';
+  completeHandovers, shiftBatchFromPartner, soldToPartner, shiftAppTooOld, shiftStalled,
+  latestSaleBy, saleBeforeArrival, MIGRATION_NOTE, DEFAULT_BUYER } from './_lib/handover.js';
+
+/* WHO MAY WRITE A SHIFT ORDER, in one place: deviceShift's own gate (a code that can write and
+   holds the lock bench), or ADMIN. The Devices panes and NEW STOCK complete queued handovers
+   as a piggyback on their reads, and only for a viewer who could have pressed Hamisha. */
+const mayShift_ = user => !isReadOnly(user) && (isAdminRole(user) || (user.tabs || []).includes('devlock'));
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -3024,7 +3030,7 @@ async function newStockBuild(db, user) {
      survives the release. That is the case the owner asked about and the one that matters
      most: a phone let go is a phone nobody is tracking any more, and its last fix is all
      that is left of it. */
-  const DEV_CORE = 'imei, item, holder, state, state_by, state_at, last_seen, customer, app_version';
+  const DEV_CORE = 'imei, item, holder, state, state_by, state_at, last_seen, customer, app_version, enrolled_by, enrolled_at';
   const DEV_LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
   // The shift order, so a phone sold to the other office can be shown on its way there, and
   // queued for the handover off this very read (newStock below) rather than a second one.
@@ -3067,6 +3073,10 @@ async function newStockBuild(db, user) {
     const had = salesBy.get(k);
     if (!had || String(s.sale_date || '9999') < String(had.sale_date || '9999')) salesBy.set(k, s);
   }
+  /* AND THE LATEST, for the one question the earliest cannot answer: whose is it NOW. A phone
+     the partner handed back and the shop re-sold carries both receipts; the handover (newStock)
+     must read the September customer, not the August partner. */
+  const lastSale = latestSaleBy(sales);
   const ctx = {
     watu: new Map(watu.filter(r => r.imei).map(r => [String(r.imei), r])),
     sales: salesBy,
@@ -3173,7 +3183,13 @@ async function newStockBuild(db, user) {
         shiftQueued: !!d.shift_server && !d.shift_batch,
         shiftPending: !!d.shift_server && !!d.shift_batch,
         shiftTo: d.shift_server || null,
+        shiftStalled: shiftStalled(d, now),
         appVersion: d.app_version || '',
+        /* For the handover decision only (newStock): the LAST sale's buyer, and where the row
+           came from -- a phone that arrived from the partner after its partner sale is home. */
+        lastCustomer: (lastSale.get(imei) || {}).client_name || '',
+        lastSaleDate: (lastSale.get(imei) || {}).sale_date || null,
+        enrolledBy: d.enrolled_by || '', enrolledAt: d.enrolled_at || null,
         neverLocked: false,
         by: d.state_by || '', atMs: d.state_at ? Date.parse(d.state_at) : null,
         /* The position rides under the status because they answer one question together --
@@ -4842,9 +4858,18 @@ const FNS = {
        or an old order's batch has expired (handover.js). Throttled to once a minute per instance,
        so a partner that is down or a secret that is not set costs this pane one short, bounded
        wait and a sentence -- never a hang. Reported back so the screen can say what happened. */
-    /* A read-only code sees everything and changes nothing -- including this. */
-    const handover = isReadOnly(user) ? { pending: rows.filter(r => r.shift_server && !r.shift_batch).length, ordered: 0, renewed: 0 }
-      : await completeHandovers(db, user.name, { rows });
+    /* ONLY FOR A CODE THAT COULD ORDER A SHIFT ITSELF (deviceShift's own gate). A read-only code
+       sees everything and changes nothing; the Unlocking desk's search must not write shift
+       orders under its name either. Everyone else still sees the queue and what it is waiting
+       for. The order is written as the system's ('auto'), with the opener named in the reason. */
+    const hasShift = keep.some(o => o.cols === SHIFT);
+    /* Before the shift migration no order can be written or shown. Said on the bench's own
+       strip (the migration by name), so "nothing sold to HOPE" and "nothing can move yet" do
+       not look the same; the Unlocking desk, which cannot run it, is not nagged. */
+    const handover = !hasShift ? { pending: 0, ordered: 0, renewed: 0, note: pane === 'lock' ? MIGRATION_NOTE : undefined }
+      : !mayShift_(user) ? { pending: rows.filter(r => r.shift_server && !r.shift_batch).length, ordered: 0, renewed: 0,
+        server: rows.find(r => r.shift_server && !r.shift_batch)?.shift_server || null }
+        : await completeHandovers(db, user.name, { rows, openedBy: user.name });
     /* The rows in hand were read BEFORE the batch was written; say on screen what is true now. */
     if (handover.imeis && handover.imeis.length) {
       const got = new Set(handover.imeis);
@@ -4954,6 +4979,8 @@ const FNS = {
         shiftAt: r.shift_at ? Date.parse(r.shift_at) : null,
         shiftedAway: r.state === 'released' && String(r.state_by || '') === 'shift',
         shiftAppTooOld: !!r.shift_server && shiftAppTooOld(r.app_version),
+        // Ordered, and it has beaten here well after the order without moving: a fault, not slowness.
+        shiftStalled: shiftStalled(r, now),
       };
     }).sort((x, y) => {
       /* THE UNLOCKING DESK IS HOLDING A LOCKED PHONE THAT IS ALIVE, and wants THAT row.
@@ -5000,9 +5027,11 @@ const FNS = {
     /* THE OTHER OFFICE'S ADDRESS, only for the pane that can order a shift -- the drawer used to
        carry it as a constant of its own, which is two definitions of one fact. Off the handover
        memo (60s), so it is not a trip on every open. */
-    const shiftPartner = pane === 'lock' || a.shiftPartner ? (await handoverConfig(db)).server : null;
+    const shiftPartner = pane === 'lock' || a.shiftPartner ? ((await handoverConfig(db)).server || null) : null;
     return { ok: true, rows: out.slice(0, 500), total: out.length,
       shiftPartner, handover,
+      // False before RUN-ME-2026-09-15-device-shift.sql: no order can be written or shown yet.
+      hasShift,
       /* WHAT WAS SEARCHED FOR, back on the wire. The box shows the digits the server actually
          used rather than what was typed, so "IMEI: 3513 8833" reads back as 35138833 and
          nobody wonders why the spaces stopped mattering. */
@@ -5045,20 +5074,34 @@ const FNS = {
     let notSold = 0;
     const list = a.imeis != null ? imeisOnly_(a.imeis) : [];
     if (list.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). / Too many at once — 500 max.');
+    let alreadyGone = 0, cameBack = 0;
     if (list.length) {
       if (!cfg.buyers.length) {
         bad('Uhamisho wa mauzo umezimwa (DEVICE_HANDOVER_BUYER = none). / Handover on sale is switched '
           + 'off (DEVICE_HANDOVER_BUYER is none); use Hamisha for a phone that should move anyway.');
       }
-      const sales = await fetchAll(() => db.from('hoop_sales').select('imei, client_name').in('imei', list));
-      const sold = partnerSalesIn(sales, cfg.buyers);
-      notSold = list.filter(i => !sold.has(i)).length;
-      if (sold.size) queued = await queueHandover(db, sold, user.name, cfg);
+      /* The book and the register, both keyed: the LAST sale decides, a phone that already went
+         is said to have gone, and one that came back from the partner after that sale stays. */
+      const [sales, held] = await Promise.all([
+        fetchAll(() => db.from('hoop_sales').select('imei, client_name, sale_date').in('imei', list)),
+        fetchAll(() => db.from('devices').select('imei, state, state_by, enrolled_by, enrolled_at').in('imei', list)),
+      ]);
+      const rows = new Map(held.map(r => [String(r.imei), r]));
+      const sold = partnerSalesIn(sales, cfg.buyers, rows);
+      const soldAtAll = partnerSalesIn(sales, cfg.buyers);
+      notSold = list.filter(i => !soldAtAll.has(i)).length;
+      alreadyGone = list.filter(i => { const r = rows.get(i); return sold.has(i) && r && String(r.state) === 'released' && String(r.state_by || '') === 'shift'; }).length;
+      cameBack = list.filter(i => soldAtAll.has(i) && !sold.has(i)).length;
+      if (sold.size) queued = await queueHandover(db, sold, user.name, cfg, Date.now(), { arrivalsChecked: true });
     }
     const done = await completeHandovers(db, user.name, { force: true });
+    const notes = [queued.note, done.note, cfg.note,
+      alreadyGone ? alreadyGone + ' tayari zimehamishwa / already handed over' : '',
+      cameBack ? cameBack + ' zilirudi kutoka ofisi nyingine baada ya mauzo hayo — tumia Hamisha ukitaka zirudi / came back from the other office after that sale; use Hamisha to send them again' : '',
+    ].filter(Boolean);
     return { ok: true, server: cfg.server, buyers: cfg.buyers,
-      queued: queued.queued, notSold, ordered: done.ordered, renewed: done.renewed,
-      pending: done.pending, note: queued.note || done.note || null };
+      queued: queued.queued, notSold, alreadyGone, cameBack, ordered: done.ordered, renewed: done.renewed,
+      pending: done.pending, note: notes.join(' · ') || null };
   },
 
   /* ENROL -- take control of phones that are sitting in stock. Fed by IMEI, so the
@@ -5096,11 +5139,11 @@ const FNS = {
        So a known IMEI comes back with the token it already has. Same phone, same identity,
        one command, nothing on the handset to change. */
     const [already, stock] = await Promise.all([
-      fetchAll(() => db.from('devices').select('imei, enrol_token, state').in('imei', list))
+      fetchAll(() => db.from('devices').select('imei, enrol_token, state, enrolled_by, enrolled_at').in('imei', list))
         .catch(e => {
           // Pre-migration registries have no enrol_token; enrolling must still work.
           if (!/enrol_token/.test(String(e && e.message || ''))) throw e;
-          return fetchAll(() => db.from('devices').select('imei, state').in('imei', list));
+          return fetchAll(() => db.from('devices').select('imei, state, enrolled_by, enrolled_at').in('imei', list));
         }),
       fetchAll(() => db.from('hoop_aged_stock').select('serial, item, agent, as_of').in('serial', list)),
     ]);
@@ -5196,6 +5239,22 @@ const FNS = {
       if (error && /enrol_batch_at/.test(String(error.message || ''))) batchReady = false;
       else if (error) throw new Error(error.message);
     }
+    /* A PHONE COMING BACK FROM THE OTHER OFFICE (api/shift-batch.js enrols on their behalf as
+       SHIFT:<office>) IS RECORDED AS ARRIVING NOW, and any order still on its row is wiped.
+       Its enrolled_by/enrolled_at are what stop the sale that took it there from sending it
+       straight back (handover.js, saleBeforeArrival); and a stale shift_server left over from
+       a dev_shifted that never reached us would otherwise ride the phone's very first beat here
+       and bounce it. One extra write, on the server-to-server path only -- never the bench. */
+    const arriving = user.code === 'shift' ? rejoin : [];
+    if (arriving.length) {
+      const patch = { enrolled_by: user.name, enrolled_at: at, shift_server: null, shift_batch: null, shift_at: null, updated_at: at };
+      let { error } = await db.from('devices').update(patch).in('imei', arriving);
+      if (error && /shift_server|shift_batch|shift_at/.test(String(error.message || ''))) {
+        const { shift_server, shift_batch, shift_at, ...rest } = patch;
+        ({ error } = await db.from('devices').update(rest).in('imei', arriving));
+      }
+      if (error) throw new Error(error.message);
+    }
 
     /* ACHIA, THEN ENROL IT AGAIN, AND FUNGA HAS TO JUST WORK.
        =====================================================================================
@@ -5259,21 +5318,31 @@ const FNS = {
        queues, then completes, so the phone's very first beat carries it to HOPE, locked if
        Funga was pressed first (the usual order at this bench). Never fails an enrolment: a
        handover that could not be written is a sentence in the answer, not a refused bench. */
+    /* NEVER FOR THE OTHER OFFICE'S OWN CALL. api/shift-batch.js enrols here on HOPE's behalf when
+       HOPE hands a phone BACK; the sales book still says HOPE bought it (that is how it got
+       there), and running this block inside their request queued it, called HOPE from inside
+       HOPE's call to us, and ordered the phone straight back -- it ended up released on both
+       registers. The partner's synthetic user (code 'shift') gets an enrolment and nothing else. */
     let handover = null;
-    try {
-      const cfg = await handoverConfig(db);
-      if (cfg.buyers.length) {
-        const sales = await fetchAll(() => db.from('hoop_sales').select('imei, client_name').in('imei', list));
-        const sold = partnerSalesIn(sales, cfg.buyers);
-        if (sold.size) {
-          const q = await queueHandover(db, sold, user.name, cfg);
-          const done = q.queued ? await completeHandovers(db, user.name, { force: true }) : { ordered: 0, pending: 0 };
-          handover = { sold: sold.size, queued: q.queued, ordered: done.ordered, pending: done.pending,
-            server: cfg.server, note: q.note || done.note || null };
+    if (user.code !== 'shift') {
+      try {
+        const cfg = await handoverConfig(db);
+        if (cfg.buyers.length) {
+          const sales = await fetchAll(() => db.from('hoop_sales').select('imei, client_name, sale_date').in('imei', list));
+          const rowsBy = new Map(already.map(r => [String(r.imei), r]));
+          const sold = partnerSalesIn(sales, cfg.buyers, rowsBy);
+          if (sold.size) {
+            const q = await queueHandover(db, sold, user.name, cfg, Date.now(), { arrivalsChecked: true });
+            const done = q.queued ? await completeHandovers(db, user.name, { force: true }) : { ordered: 0, pending: 0 };
+            handover = { sold: sold.size, queued: q.queued, ordered: done.ordered, pending: done.pending,
+              server: cfg.server, note: q.note || done.note || null };
+          } else if (cfg.note && partnerSalesIn(sales, cfg.buyers).size) {
+            handover = { sold: 0, queued: 0, server: '', note: cfg.note };
+          }
         }
+      } catch (e) {
+        handover = { error: String((e && e.message) || e) };
       }
-    } catch (e) {
-      handover = { error: String((e && e.message) || e) };
     }
 
     return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length, handover,
@@ -5436,7 +5505,9 @@ const FNS = {
     const shiftedAway = current.filter(r => String(r.state) === 'released' && String(r.state_by || '') === 'shift')
       .map(r => String(r.imei));
     const gone = new Set(shiftedAway);
-    if (shiftedAway.length && shiftedAway.length + missing.length >= list.length) {
+    /* Refused outright only when EVERYTHING asked for has gone; a mix is answered with counts, so
+       an unknown IMEI beside a shifted one is still reported as unknown rather than swallowed. */
+    if (shiftedAway.length && shiftedAway.length === list.length) {
       bad('Simu hii imehamishwa kwenda ofisi nyingine — iagize kutoka kwenye rejista yao. '
         + '/ This phone was handed to the other office; lock, unlock or release it from that portal.');
     }
@@ -5466,7 +5537,8 @@ const FNS = {
        the standing order waiting when it wakes up. That is a deliberate act, so it takes a
        deliberate confirmation rather than being the default. */
     const stuck = to !== 'locked' || a.force === true ? [] : list.filter(i => {
-      if (known.get(i) !== 'released') return false;
+      // A phone that shifted away is the other office's, not a released phone to re-lock by cable.
+      if (known.get(i) !== 'released' || gone.has(i)) return false;
       const r = current.find(x => String(x.imei) === i);
       const spoke = r && r.last_seen ? Date.parse(r.last_seen) : 0;
       const freed = r && r.released_at ? Date.parse(r.released_at) : 0;
@@ -8136,24 +8208,44 @@ const FNS = {
        question; only for a code that can write and can order a lock, because a shift IS an
        order (deviceShift's own gate). Read-only opens stamp nothing and move nothing. */
     let handover = null;
-    const mayShift = !isReadOnly(user) && (isAdminRole(user.role) || (user.tabs || []).includes('devlock'));
+    const mayShift = mayShift_(user);
+    /* THE PHONE'S BUYER OF RECORD, for this decision: the LAST sale where the book has one, the
+       stamp otherwise; and never a phone that came back from the partner after that sale. */
+    const partnerOf = (r, buyers) => {
+      const buyer = soldToPartner(r.lastCustomer || r.customer, buyers);
+      if (!buyer) return null;
+      if (saleBeforeArrival({ sale_date: r.lastSaleDate || r.saleDate }, { enrolled_by: r.enrolledBy, enrolled_at: r.enrolledAt })) return null;
+      return buyer;
+    };
+    const HERE = new Set(['locked', 'unlocked', 'lost']);
+    if (mayShift && !hasShift && !noDevices) {
+      /* BEFORE THE MIGRATION, a phone the book says is the partner's cannot be queued -- and the
+         pane that shows the buyer must say so, or "nothing sold to HOPE" and "nothing can move
+         yet" look the same. 0 further trips: the buyer memo and the rows already in hand. */
+      try {
+        const cfg = await handoverConfig(db);
+        const sold = rows.filter(r => HERE.has(r.status) && soldToPartner(r.lastCustomer || r.customer, cfg.buyers)).length;
+        if (sold) handover = { sold, queued: 0, ordered: 0, renewed: 0, pending: 0, server: cfg.server, buyers: cfg.buyers, note: MIGRATION_NOTE };
+      } catch (e) { handover = { error: String((e && e.message) || e) }; }
+    }
     if (mayShift && hasShift && !noDevices) {
       try {
         const cfg = await handoverConfig(db);
         const sold = new Map();
         for (const r of rows) {
-          const buyer = soldToPartner(r.customer, cfg.buyers);
-          if (buyer && !r.shiftQueued && !r.shiftPending && (r.status === 'locked' || r.status === 'unlocked' || r.status === 'lost')) {
-            sold.set(r.imei, buyer);
-          }
+          const buyer = partnerOf(r, cfg.buyers);
+          if (buyer && !r.shiftQueued && !r.shiftPending && HERE.has(r.status)) sold.set(r.imei, buyer);
         }
-        const q = sold.size ? await queueHandover(db, sold, user.name, cfg) : { queued: 0, imeis: [] };
+        const q = sold.size ? await queueHandover(db, sold, user.name, cfg, now, { arrivalsChecked: true }) : { queued: 0, imeis: [] };
         const due = rows.some(r => r.shiftQueued || r.shiftPending);
-        const done = (q.queued || due) ? await completeHandovers(db, user.name) : { ordered: 0, renewed: 0, pending: 0 };
-        if (q.queued || due || q.note || done.note) {
+        const done = (q.queued || due) ? await completeHandovers(db, user.name, { openedBy: user.name }) : { ordered: 0, renewed: 0, pending: 0 };
+        /* A settings table that could not be asked queued nothing this minute -- said, not skipped. */
+        const unasked = !cfg.asked && rows.some(r => HERE.has(r.status) && soldToPartner(r.lastCustomer || r.customer, [DEFAULT_BUYER]))
+          ? 'Mipangilio haikusomeka; uhamisho haukupangwa safari hii. / Settings could not be read, so no handover was queued on this open.' : '';
+        if (q.queued || due || q.note || done.note || cfg.note || unasked) {
           handover = { sold: sold.size, queued: q.queued, ordered: done.ordered, renewed: done.renewed,
             pending: done.pending, throttled: !!done.throttled, server: cfg.server, buyers: cfg.buyers,
-            note: q.note || done.note || null };
+            note: [q.note, done.note, cfg.note, unasked].filter(Boolean).join(' · ') || null };
           // The rows on screen say it too: a phone queued a moment ago is on its way now.
           const justQueued = new Set(q.imeis || []);
           const ticketed = new Set(done.imeis || []);

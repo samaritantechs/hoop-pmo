@@ -109,20 +109,61 @@ test('an app that predates shift is named as such; an app that never said is not
   assert.equal(H.shiftAppTooOld(null), false);
 });
 
-test('what still needs a ticket: queued rows, and ordered rows whose batch is expiring -- never a released one', () => {
+test('what still needs a ticket: queued rows, and expiring orders on a phone that is HERE -- never a released, silent, gone or too-old one', () => {
   assert.equal(H.needsTicket({ shift_server: HOPE, shift_batch: null, state: 'locked' }, NOW), true);
   assert.equal(H.needsTicket({ shift_server: HOPE, shift_batch: HEX, shift_at: hoursAgo(1), state: 'locked' }, NOW), false);
-  assert.equal(H.needsTicket({ shift_server: HOPE, shift_batch: HEX, shift_at: hoursAgo(21), state: 'locked' }, NOW), true,
-    'a day-old batch is refused by the other office; renew it before the phone finds out');
+  const old = { shift_server: HOPE, shift_batch: HEX, shift_at: hoursAgo(21), state: 'locked', app_version: '1.12.0' };
+  assert.equal(H.needsTicket({ ...old, last_seen: hoursAgo(0.5) }, NOW), true,
+    'a day-old batch is refused by the other office; the phone beat here after the order and is still here: renew');
+  assert.equal(H.needsTicket({ ...old, last_seen: hoursAgo(22) }, NOW), false,
+    'it has not spoken since the order: nothing here to collect a new batch -- and it may have moved');
+  assert.equal(H.needsTicket({ ...old, last_seen: hoursAgo(5) }, NOW), false,
+    'it beat after the order but hours ago: boxed or dead, renew on the first open after it wakes');
+  assert.equal(H.needsTicket({ ...old, last_seen: null }, NOW), false, 'never spoke');
+  assert.equal(H.needsTicket({ ...old, last_seen: hoursAgo(0.5), app_version: '1.11.8' }, NOW), false,
+    'an app that cannot read an order gets no new one');
   assert.equal(H.needsTicket({ shift_server: HOPE, shift_batch: null, state: 'released' }, NOW), false);
   assert.equal(H.needsTicket({ shift_server: null, state: 'locked' }, NOW), false);
+  // And the row can say the phone did not act on its order.
+  assert.equal(H.shiftStalled({ shift_server: HOPE, shift_batch: HEX, shift_at: hoursAgo(1), last_seen: hoursAgo(0.5), state: 'locked' }, NOW), true);
+  assert.equal(H.shiftStalled({ shift_server: HOPE, shift_batch: HEX, shift_at: hoursAgo(1), last_seen: hoursAgo(2), state: 'locked' }, NOW), false, 'has not heard it yet');
+  assert.equal(H.shiftStalled({ shift_server: HOPE, shift_batch: null, last_seen: hoursAgo(0.5), state: 'locked' }, NOW), false, 'queued, no order yet');
+});
+
+test('the shared secret only ever goes to a known office: the allowlist, and the env that moves it', async () => {
+  assert.equal(H.partnerAllowed(H.DEFAULT_PARTNER), true);
+  assert.equal(H.partnerAllowed('https://hope-pmo-v2.vercel.app/'), true);
+  assert.equal(H.partnerAllowed('https://evil.example'), false);
+  assert.equal(H.partnerAllowed('https://hope-pmo-v2-ten.vercel.app.evil.example'), false);
+  await withSecret(async () => {
+    const hope = stubHope();
+    try {
+      await assert.rejects(() => H.shiftBatchFromPartner('https://evil.example', ['X1']), e => e.code === 'need-batch' && /evil\.example/.test(e.message));
+      assert.equal(hope.calls.length, 0, 'no request, so no secret on the wire');
+    } finally { hope.done(); }
+  });
+  // A setting pointing off the list is NO address: nothing is queued, and the note says why.
+  const d = book({ settings: [{ key: 'DEVICE_SHIFT_PARTNER', value: 'https://evil.example' }], devices: [dev({ imei: 'AL1' })] });
+  const cfg = await H.handoverConfig(d, NOW);
+  assert.equal(cfg.server, '');
+  assert.match(cfg.note, /DEVICE_SHIFT_PARTNER_HOSTS/);
+  const q = await H.queueHandover(d, ['AL1'], 'SIPHO', cfg, NOW);
+  assert.equal(q.queued, 0);
+  assert.match(q.note, /DEVICE_SHIFT_PARTNER_HOSTS/);
+  // The env moves the list when an office moves.
+  const saved = process.env.DEVICE_SHIFT_PARTNER_HOSTS;
+  process.env.DEVICE_SHIFT_PARTNER_HOSTS = 'evil.example, hope-pmo-v2-ten.vercel.app';
+  try {
+    assert.equal(H.partnerAllowed('https://evil.example'), true);
+    assert.equal(H.partnerAllowed('https://hope-pmo-v2.vercel.app'), false, 'the env REPLACES the built-in list');
+  } finally { if (saved === undefined) delete process.env.DEVICE_SHIFT_PARTNER_HOSTS; else process.env.DEVICE_SHIFT_PARTNER_HOSTS = saved; }
 });
 
 test('the settings memo fails CLOSED on the buyer and soft on the address', async () => {
-  const d = book({ settings: [{ key: 'DEVICE_HANDOVER_BUYER', value: 'none' }, { key: 'DEVICE_SHIFT_PARTNER', value: 'https://other.example/' }] });
+  const d = book({ settings: [{ key: 'DEVICE_HANDOVER_BUYER', value: 'none' }, { key: 'DEVICE_SHIFT_PARTNER', value: 'https://hope-pmo-v2.vercel.app/' }] });
   const cfg = await H.handoverConfig(d, NOW);
   assert.deepEqual(cfg.buyers, []);
-  assert.equal(cfg.server, 'https://other.example');
+  assert.equal(cfg.server, 'https://hope-pmo-v2.vercel.app');
   // A settings table that cannot be asked queues nothing this minute rather than guessing.
   const broken = { from: () => { throw new Error('boom'); } };
   const c2 = await H.handoverConfig(broken, NOW);
@@ -383,14 +424,18 @@ test('the Devices pane completes a queued handover off the rows it read, and eve
       dev({ imei: 'P2', shift_server: HOPE, shift_batch: HEX, shift_at: hoursAgo(1), app: '1.11.8' }),
       dev({ imei: 'P3', state: 'released', by: 'shift' }),
       dev({ imei: 'P4' }),
-    ], settings: [{ key: 'DEVICE_SHIFT_PARTNER', value: 'https://other.example/' }] });
+    ], settings: [{ key: 'DEVICE_SHIFT_PARTNER', value: 'https://hope-pmo-v2.vercel.app/' }] });
     H._resetHandover(d);
     const hope = stubHope();
     let list;
     try { list = await _FNS.deviceList(d, STORE, { pane: 'lock' }); } finally { hope.done(); }
     assert.equal(list.handover.ordered, 1, 'P1 got its batch on this open');
     assert.equal(hope.calls.length, 1);
-    assert.equal(list.shiftPartner, 'https://other.example', 'the drawer\'s address comes from the setting now');
+    assert.equal(list.shiftPartner, 'https://hope-pmo-v2.vercel.app', 'the drawer\'s address comes from the setting now');
+    assert.equal(list.hasShift, true);
+    const ev = d._dump('device_events').find(e => e.event === 'shift-ordered');
+    assert.equal(ev.actor, 'auto', 'a piggyback is the system\'s order, not the viewer\'s');
+    assert.match(ev.reason, /opened by SIPHO/);
     const by = Object.fromEntries(list.rows.map(r => [r.imei, r]));
     assert.equal(by.P3, undefined, 'a phone that has gone is off the pane');
     assert.equal(by.P2.shiftPending, true);
@@ -403,6 +448,130 @@ test('the Devices pane completes a queued handover off the rows it read, and eve
     assert.equal(gone.rows[0].shiftedAway, true, 'a search still finds it, and says where it went');
     assert.equal(gone.shiftPartner, null);
   });
+});
+
+test('the Unlocking desk cannot order a shift by searching: its open sees the queue and writes nothing', async () => {
+  await withSecret(async () => {
+    const d = book({ devices: [dev({ imei: 'U1', shift_server: HOPE }), dev({ imei: 'U2', shift_server: HOPE, shift_batch: HEX, shift_at: hoursAgo(1), seen: hoursAgo(0.2) })] });
+    H._resetHandover(d);
+    const hope = stubHope();
+    let list;
+    try { list = await _FNS.deviceList(d, DESK, { pane: 'unlock', q: 'U' }); } finally { hope.done(); }
+    assert.equal(hope.calls.length, 0, 'devunlock alone is not deviceShift\'s gate');
+    assert.deepEqual([list.handover.pending, list.handover.ordered, list.handover.server], [1, 0, HOPE], 'but it can see what is waiting, and for whom');
+    assert.equal(d._dump('devices').find(r => r.imei === 'U1').shift_batch, null);
+    assert.equal(list.rows.find(r => r.imei === 'U2').shiftStalled, true, 'ordered an hour ago, beat twelve minutes ago, still here: it did not move');
+  });
+});
+
+test('a phone HOPE hands BACK is enrolled and nothing more: no nested call to HOPE, no order back, a stale order wiped', async () => {
+  await withSecret(async () => {
+    const { shiftBatch } = await import('../api/shift-batch.js');
+    const d = book({
+      // Gone to HOPE in August; dev_shifted never reached us for R2, so its order is still on the row.
+      devices: [dev({ imei: 'R1', state: 'released', by: 'shift' }),
+        dev({ imei: 'R2', shift_server: HOPE, shift_batch: 'a'.repeat(32), shift_at: hoursAgo(30) })],
+      sales: [sale({ imei: 'R1' }), sale({ imei: 'R2' })],
+    });
+    H._resetHandover(d);
+    const hope = stubHope();
+    let r;
+    try { r = await shiftBatch(d, { secret: 'shared-secret-xyz', imeis: ['R1', 'R2'], from: 'HOPE' }); } finally { hope.done(); }
+    assert.match(r.batch, /^[0-9a-f]{32}$/);
+    assert.equal(hope.calls.length, 0, 'HOPE\'s call to us never turns into our call to HOPE');
+    const rows = Object.fromEntries(d._dump('devices').map(x => [x.imei, x]));
+    assert.equal(rows.R1.state, 'enrolled');
+    assert.equal(rows.R1.enrolled_by, 'SHIFT:HOPE');
+    assert.equal(rows.R1.enrolled_at, rows.R1.state_at, 'recorded as arriving now');
+    assert.equal(rows.R1.shift_server, null);
+    assert.equal(rows.R2.shift_server, null, 'the order that would have bounced it straight back is gone');
+    assert.equal(rows.R2.shift_batch, null);
+    assert.equal(d._dump('device_events').filter(e => /handover|shift-ordered/.test(e.event)).length, 0);
+    // The phone's first beat here carries NO shift.
+    const beat = await deviceApi(d, 'dev_beat', [{ token: 'tok-R2', locked: true }], NOW);
+    assert.equal(beat.shift, undefined);
+    // And the panes do not send it back on the strength of the August sale that took it there...
+    clearStockIndex(d);
+    const again = stubHope();
+    let ns;
+    try { ns = await _FNS.newStock(d, STORE, {}); } finally { again.done(); }
+    assert.equal(again.calls.length, 0);
+    assert.ok(!ns.handover || !ns.handover.queued, 'the sale that took it there is the old one');
+    assert.equal(d._dump('devices').find(x => x.imei === 'R1').shift_server, null);
+    // ...nor the upload, which cannot compare dates and simply never queues an arrived-from-partner row...
+    const q = await H.queueHandover(d, ['R1'], 'upload', { server: HOPE, buyers: ['HOPE MICROCREDIT'] }, NOW);
+    assert.equal(q.queued, 0);
+    // ...until the shop SELLS it to HOPE again, on a day after it came back.
+    d._dump('hoop_sales').push(sale({ imei: 'R1', day: '2026-10-02' }));
+    clearStockIndex(d); H._resetHandover(d);
+    const later = stubHope();
+    let ns2;
+    try { ns2 = await _FNS.newStock(d, STORE, {}); } finally { later.done(); }
+    assert.equal(ns2.handover.queued, 1, 'a new sale after the return is a new handover');
+    assert.equal(later.calls.length, 1);
+  });
+});
+
+test('the LATEST sale decides: a phone the partner returned and the shop re-sold to a customer stays ours', async () => {
+  await withSecret(async () => {
+    const buyers = ['HOPE MICROCREDIT'];
+    const sales = [sale({ imei: 'L1', day: '2026-08-29' }), sale({ imei: 'L1', day: '2026-09-20', customer: 'Juma Hamisi' })];
+    assert.equal(H.partnerSalesIn(sales, buyers).size, 0, 'September\'s customer outranks August\'s partner');
+    assert.equal(H.partnerSalesIn(sales.slice().reverse(), buyers).size, 0, 'whatever order the book came in');
+    assert.equal(H.partnerSalesIn([sales[1], sale({ imei: 'L1', day: '2026-09-25' })], buyers).get('L1'), 'HOPE MICROCREDIT', 'and a later partner sale wins back');
+    // Enrolling it for the new customer: no handover, no call.
+    const d = book({ sales });
+    H._resetHandover(d);
+    const hope = stubHope();
+    let r;
+    try { r = await _FNS.deviceEnrol(d, STORE, { imeis: ['L1'] }); } finally { hope.done(); }
+    assert.equal(r.handover, null);
+    assert.equal(hope.calls.length, 0);
+    assert.ok(!d._dump('devices')[0].shift_server);
+    // NEW STOCK reads the same last sale, whatever the stamp remembers.
+    clearStockIndex(d);
+    const again = stubHope();
+    let ns;
+    try { ns = await _FNS.newStock(d, STORE, {}); } finally { again.done(); }
+    assert.equal(again.calls.length, 0);
+    assert.ok(!ns.handover || !ns.handover.queued);
+    // The button, too: it says the phone is not the partner's any more.
+    const h = await _FNS.deviceHandover(d, STORE, { imeis: ['L1'] });
+    assert.equal(h.queued, 0);
+    assert.equal(h.notSold, 1);
+  });
+});
+
+test('two instances completing the same queued phone: the first writer wins, the second counts nothing and writes no event', async () => {
+  await withSecret(async () => {
+    const d = book({ devices: [dev({ imei: 'RC1', shift_server: HOPE })] });
+    H._resetHandover(d);
+    let n = 0;
+    const resolvers = [];
+    const real = globalThis.fetch;
+    // Two calls to HOPE, answered in the order the test chooses: the SECOND request's batch lands first.
+    globalThis.fetch = (url, opts) => new Promise(res => { const batch = (n++ ? 'b' : 'a').repeat(32);
+      resolvers.push(() => res({ ok: true, status: 200, json: async () => ({ ok: true, batch }) })); });
+    try {
+      const pA = H.completeHandovers(d, 'SIPHO', { force: true }, NOW);
+      const pB = H.completeHandovers(d, 'SIPHO', { force: true }, NOW);
+      await new Promise(r => setTimeout(r, 20));
+      assert.equal(resolvers.length, 2, 'both instances asked (the throttle is per instance)');
+      resolvers[1](); await new Promise(r => setTimeout(r, 10)); resolvers[0]();
+      const [a, b] = await Promise.all([pA, pB]);
+      assert.equal(a.ordered + b.ordered, 1, 'one of them ordered it, never both');
+      assert.equal(d._dump('devices')[0].shift_batch, 'b'.repeat(32), 'the batch that landed first is the one kept');
+      assert.equal(d._dump('device_events').filter(e => e.event === 'shift-ordered').length, 1);
+    } finally { globalThis.fetch = real; }
+  });
+});
+
+test('queueing is chunked, never truncated: 600 sold phones in one slice are all queued', async () => {
+  const many = Array.from({ length: 600 }, (_, i) => 'M' + String(i).padStart(4, '0'));
+  const d = book({ devices: many.map(imei => dev({ imei })) });
+  const r = await H.queueHandover(d, many, 'upload', { server: HOPE, buyers: ['HOPE MICROCREDIT'] }, NOW);
+  assert.equal(r.queued, 600);
+  assert.equal(d._dump('devices').filter(x => x.shift_server).length, 600);
 });
 
 test('the Unlocking desk sees a live, confirmed-locked phone first -- not below a shelf of silent boxed stock', async () => {
@@ -422,6 +591,38 @@ test('a phone handed to the other office cannot be ordered about from here, and 
   assert.equal(mixed.changed, 1);
   assert.equal(mixed.shiftedAway, 1);
   assert.equal(d._dump('devices').find(r => r.imei === 'G1').state, 'released', 'untouched');
+  // A shifted phone beside an unknown one: both facts come back, neither swallows the other.
+  const odd = await _FNS.deviceSetState(d, DESK, { imeis: ['G1', 'NOPE'], state: 'enrolled' });
+  assert.deepEqual([odd.changed, odd.shiftedAway, odd.notEnrolled], [0, 1, 1]);
+  // Funga on [gone, ours]: the gone phone is HOPE's, not a released phone to re-lock by cable -- no 409.
+  const lock = await _FNS.deviceSetState(d, STORE, { imeis: ['G1', 'G2'], state: 'locked' });
+  assert.equal(lock.changed, 1);
+  assert.equal(d._dump('devices').find(r => r.imei === 'G1').state, 'released');
+});
+
+test('NEW STOCK: an ADMIN without a lock-bench tick still completes the handover (isAdminRole takes the user, not the role)', async () => {
+  await withSecret(async () => {
+    const d = book({ devices: [dev({ imei: 'AD1' })], sales: [sale({ imei: 'AD1' })] });
+    clearStockIndex(d); H._resetHandover(d);
+    const hope = stubHope();
+    let r;
+    try { r = await _FNS.newStock(d, ADMIN, {}); } finally { hope.done(); }
+    assert.equal(r.handover.queued, 1);
+    assert.equal(r.handover.ordered, 1);
+    assert.equal(hope.calls.length, 1);
+  });
+});
+
+test('NEW STOCK before the shift migration says the partner\'s phones cannot move yet, instead of nothing', async () => {
+  const d = book({ devices: [dev({ imei: 'PM1' }), dev({ imei: 'PM2' })], sales: [sale({ imei: 'PM1' }), sale({ imei: 'PM2', customer: 'Juma' })],
+    opts: { missingColumns: { devices: ['shift_server', 'shift_batch', 'shift_at'] } } });
+  clearStockIndex(d); H._resetHandover(d);
+  const r = await _FNS.newStock(d, STORE, {});
+  assert.equal(r.hasShift, false);
+  assert.equal(r.handover.sold, 1);
+  assert.match(r.handover.note, /RUN-ME-2026-09-15-device-shift\.sql/);
+  const list = await _FNS.deviceList(d, STORE, { pane: 'lock' });
+  assert.equal(list.hasShift, false, 'the lock bench says so too');
 });
 
 test('NEW STOCK queues every phone the sales book says is the partner\'s -- including sales that landed long ago -- and calls a shifted phone shifted', async () => {
@@ -506,6 +707,14 @@ test('deviceHandover: the button checks the sales book itself, then completes wi
     assert.equal(r.ordered, 2, 'B1 and the already-queued B3 both get their batch');
     assert.equal(r.pending, 0);
     await assert.rejects(() => _FNS.deviceHandover(d, DESK, {}), e => e.status === 403, 'a shift is an order: the bench\'s door');
+    // A ticked phone that already went is said to have gone -- not a silent zero.
+    d._dump('devices').push(dev({ imei: 'B4', state: 'released', by: 'shift' }));
+    d._dump('hoop_sales').push(sale({ imei: 'B4' }));
+    const gone = stubHope();
+    let g;
+    try { g = await _FNS.deviceHandover(d, STORE, { imeis: ['B4'] }); } finally { gone.done(); }
+    assert.equal(g.alreadyGone, 1);
+    assert.match(g.note, /already handed over/);
   });
 });
 

@@ -3416,7 +3416,9 @@ function devPaint_(m, d, at){
         if(r.shiftQueued||r.shiftPending){
           st+='<div style="font-size:10px;margin-top:2px"><span class="chip warn" title="'+esc(r.shiftTo||'')+'">'
             +(r.shiftPending?'inahamia '+esc(devOfficeName_(r.shiftTo)):'inasubiri batch ya '+esc(devOfficeName_(r.shiftTo)))
-            +'</span>'+(r.shiftAppTooOld?' <span class="chip bad" title="lock app '+esc(r.app_version||'')+' — haisomi agizo la kuhama; sasisha kwa kebo / this app predates shift; update it by cable">app ya zamani</span>':'')+'</div>';
+            +'</span>'+(r.shiftAppTooOld?' <span class="chip bad" title="lock app '+esc(r.app_version||'')+' — haisomi agizo la kuhama; sasisha kwa kebo / this app predates shift; update it by cable">app ya zamani</span>'
+            /* Ordered, then it beat here again and is still here: it did not act on the order. */
+            :r.shiftStalled?' <span class="chip bad" title="iliagizwa kuhama, imeongea baada ya agizo, bado ipo hapa — angalia app / ordered, spoke after the order, still here: check the app">haijahama</span>':'')+'</div>';
         }
         /* THE TIME IT SPOKE, with the age underneath. The clock is what lets you place the
            beat either side of the order you gave; the age is what makes a dead phone
@@ -8338,7 +8340,8 @@ function drawNewStock(m){
                  does not simply vanish from here one morning with nothing having announced it. */
               +((r.shiftQueued||r.shiftPending)
                 ? '<div style="font-size:10px;margin-top:2px"><span class="chip warn" title="'+esc(r.shiftTo||'')+'">'
-                  +(r.shiftPending?'inahamia '+esc(devOfficeName_(r.shiftTo)):'inasubiri batch ya '+esc(devOfficeName_(r.shiftTo)))+'</span></div>'
+                  +(r.shiftPending?'inahamia '+esc(devOfficeName_(r.shiftTo)):'inasubiri batch ya '+esc(devOfficeName_(r.shiftTo)))+'</span>'
+                  +(r.shiftStalled?' <span class="chip bad" title="iliagizwa kuhama, imeongea baada ya agizo, bado ipo hapa — angalia app / ordered, spoke after the order, still here: check the app">haijahama</span>':'')+'</div>'
                 : '')
               +nsWhere(r)+'</td>'
             +'<td>'+(r.by?esc(r.by):'<span class="mut">—</span>')

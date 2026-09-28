@@ -1663,10 +1663,42 @@ order; update it by cable. A phone that has gone refuses every order from here �
 was handed to the other office; lock, unlock or release it from that portal* — so the bench
 cannot write a lock nothing will ever collect.
 
-**The batch is renewed.** A batch is refused by either office after 24 hours, silently, and a
-phone sold to HOPE and boxed for a week would otherwise carry an order it could never honour.
-Any order unclaimed after 20 hours gets a fresh batch on the next open, same office, same
-row; the row's history says *batch mpya*.
+**The batch is renewed — for a phone that is here.** A batch is refused by either office after
+24 hours, silently, and a phone sold to HOPE and boxed for a week would otherwise carry an
+order it could never honour. An order older than 20 hours gets a fresh batch on the next open,
+same office, same row (*batch mpya* in the row's history) — but only when the handset has
+beaten this office **since** the order, within the last three hours, and its app can read an
+order at all. A phone that moved and whose *dev_shifted* was lost never beats here again, so
+it is never renewed (each renewal was re-enrolling — and reviving — HOPE's row); a boxed phone
+is renewed on the first open after it wakes, not every twenty hours in the dark. A phone that
+beat here well after its order and is still here shows **haijahama** (did not move): an app
+too old to read the order, or a claim HOPE refused — look at it, it is not merely slow.
+
+**The latest sale decides, and a phone that came back is not sent back.** `hoop_sales` keeps
+one row per receipt, so a handset HOPE handed back and the shop re-sold in September still
+carries its August HOPE sale; only the **last** sale per IMEI counts. A phone that arrived
+from HOPE (its row says `enrolled_by SHIFT:HOPE`, stamped at the moment it arrived, with any
+stale order wiped off the row) is never queued on the strength of a sale dated on or before
+that arrival — the panes compare the dates, the upload simply never queues an
+arrived-from-partner row. And HOPE's own Hamisha back to us (`/api/shift-batch` enrolling as
+`SHIFT:HOPE`) runs none of this: the first cut queued the phone inside HOPE's request, called
+HOPE from inside HOPE's call, and ordered it straight back — it ended up released on both
+registers. A new HOPE sale dated after the return is a new handover, as it should be.
+
+**Who writes the order.** The panes complete a queued handover as a piggyback only for a code
+that could have pressed Hamisha itself (ADMIN, or a code holding the lock bench); the
+Unlocking desk's search sees the queue and writes nothing. A piggyback order is the system's
+(`actor: auto`), with the opener named in the reason. When two running instances ask HOPE for
+the same phone in the same minute, the first answer written wins and the second is not
+counted — two batches for one phone was a claim refused in silence.
+
+**Where the secret may go.** `DEVICE_SHIFT_PARTNER` is an editable setting, and the next open
+POSTs `DEVICE_SHIFT_SECRET` to whatever it names — so it is held to an allowlist: the hosts
+this family of deployments runs on, or `DEVICE_SHIFT_PARTNER_HOSTS` (comma-separated
+hostnames, an env var on Vercel) when an office moves. An address off the list is refused by
+name on the pane and nothing is queued to it; the Hamisha drawer can still send a phone there
+with a **pasted** batch, which needs no secret. Before the shift migration both panes say the
+partner's phones cannot move yet, instead of nothing.
 
 **What HOPE sees.** The row is on HOPE's register the moment the batch is minted — enrolled by
 `SHIFT:HOOP`, with the model this register knew — so it is in HOPE's Unlocking pane before the
