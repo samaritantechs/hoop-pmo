@@ -1264,7 +1264,8 @@ test('portal.html: drawDevices fetches, devPaint_ draws, and only one of them ca
   assert.match(paint, /devSearchFetch_\(m\)/, 'the paint half delegates the asking');
   const search = src.slice(src.indexOf('function devSearchFetch_(m){'),
                            src.indexOf('/* TICK ALL, AND THE COUNT BESIDE THE BUTTONS'));
-  assert.match(search, /srv\('deviceList',\{state:DEV\.filter,q:DEV\.q\}\)/);
+  // `pane` names the desk asking (the Unlocking desk gets live locked phones first).
+  assert.match(search, /srv\('deviceList',\{state:DEV\.filter,q:DEV\.q,pane:DEVMODE\}\)/);
   assert.match(search, /devPaint_\(m, d, Date\.now\(\)\)/, 'and hands its answer back to the paint half');
   /* AND IT DOES NOT BLANK THE PANE. That is the whole difference from drawDevices: mid-search
      the rows on screen are the ones the operator is reading. */
@@ -1424,7 +1425,8 @@ test('portal.html: the pane shouts when a phone is ordered locked but never spok
   assert.match(alarm, /id="dvAlarm"/, 'with a way to see exactly which');
 
   // Above the table, with the orders -- not buried under the register it is warning about.
-  const compose = /\+tiles\+bar\+alarm\+actions\+table\+/.exec(pane);
+  // (The handover strip -- phones on their way to the other office -- sits right under it.)
+  const compose = /\+tiles\+bar\+alarm\+(handover\+)?actions\+table\+/.exec(pane);
   assert.ok(compose, 'composed between the chips and the orders');
 
   // And it filters rather than re-reading: the rows are already in hand.

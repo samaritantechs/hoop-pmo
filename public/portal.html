@@ -3151,7 +3151,11 @@ var DEVMODE='lock';
 function drawDevices(m){
   DEVMODE = (TAB==='devunlock') ? 'unlock' : 'lock';
   m.innerHTML='<div class="card"><h2>Devices</h2><div class="sk"></div></div>';
-  srv('deviceList',{state:DEV.filter,q:DEV.q}).then(function(d){
+  /* `pane` tells the server which desk is asking: the Unlocking desk gets live locked phones
+     first (see deviceList), the bench keeps its problems-first order. The other office's
+     address comes back with the lock pane's answer and replaces the built-in default. */
+  srv('deviceList',{state:DEV.filter,q:DEV.q,pane:DEVMODE}).then(function(d){
+    if(d.shiftPartner) DEV_SHIFT_PARTNER=d.shiftPartner;
     devPaint_(m, d, Date.now());
   }).catch(function(e){ paneFailed(m,e); });
 }
@@ -3317,6 +3321,9 @@ function devPaint_(m, d, at){
      to a customer with no lock on it and no way back without the handset in your hands. That
      has already happened once. It is not a tile: the five tiles partition the fleet and this
      is not a kind of phone, it is a kind of MISTAKE. */
+  /* THE HANDOVER STRIP: phones sold to the other office that this open queued, ordered, or
+     could not -- and a button for the desk that does not want to wait a minute for the retry. */
+  var handover=devHandoverNote_(d.handover, canLock&&!BOOT.readOnly);
   var alarm=(c.lockedNeverSpoke||0) ? '<div class="note bad" style="margin:10px 0">'
     +'<b>'+money(c.lockedNeverSpoke)+' zimeagizwa kufungwa lakini hazijawahi kuongea kabisa.</b> '
     +'Hizi HAZIJAFUNGWA — token haikuingia kwenye simu (mara nyingi set-device-owner ilikataliwa '
@@ -3399,8 +3406,18 @@ function devPaint_(m, d, at){
       +'<th>Simu inasema</th><th>Iliongea lini</th><th class="noxl"></th></tr></thead><tbody>'
       +rows.map(function(r){
         var st=r.state==='locked'?(r.lockState==='pending'?'<span class="chip warn">imeagizwa · bado</span>':'<span class="chip bad">imefungwa</span>')
+          :r.shiftedAway?'<span class="chip ok" title="'+esc(r.shiftTo||'')+'">imehamishwa · '+esc(devOfficeName_(r.shiftTo))+'</span>'
           :r.state==='released'?'<span class="chip ok">imeachiwa</span>'
           :r.state==='lost'?'<span class="chip bad">imepotea</span>':'<span class="chip">tayari</span>';
+        /* ON ITS WAY TO THE OTHER OFFICE, on the row -- a phone sold to HOPE used to look like any
+           other until it vanished. Queued = sold, waiting for HOPE's batch (the next open fetches
+           it); pending = ordered, the phone moves on its next beat. An app too old to read the
+           order is the one case that sits for ever, and it says so. */
+        if(r.shiftQueued||r.shiftPending){
+          st+='<div style="font-size:10px;margin-top:2px"><span class="chip warn" title="'+esc(r.shiftTo||'')+'">'
+            +(r.shiftPending?'inahamia '+esc(devOfficeName_(r.shiftTo)):'inasubiri batch ya '+esc(devOfficeName_(r.shiftTo)))
+            +'</span>'+(r.shiftAppTooOld?' <span class="chip bad" title="lock app '+esc(r.app_version||'')+' — haisomi agizo la kuhama; sasisha kwa kebo / this app predates shift; update it by cable">app ya zamani</span>':'')+'</div>';
+        }
         /* THE TIME IT SPOKE, with the age underneath. The clock is what lets you place the
            beat either side of the order you gave; the age is what makes a dead phone
            obvious without doing arithmetic. Both, because they answer different questions,
@@ -3559,8 +3576,9 @@ function devPaint_(m, d, at){
       +'/ The account belongs to the customer — hand over the details and <b>tell them to '
       +'change the password</b> once they are signed in.</div>'
       +'</div>')
-    +tiles+bar+alarm+actions+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
+    +tiles+bar+alarm+handover+actions+table+'<div id="dvHist" style="margin-top:10px"></div></div>';
   wireTiles(m);
+  devHandoverBind_(m, function(){ drawDevices(m); });
   $all('[data-dvf]').forEach(function(b){ b.onclick=function(){ DEV.filter=b.getAttribute('data-dvf'); DEV.flag=''; drawDevices(m); }; });
   var al=$('#dvAlarm'); if(al) al.onclick=function(){ DEV.flag='lockedNeverSpoke'; DEV.filter=''; devPaint_(m, d, at); };
   var rf=$('#dvRefresh'); if(rf) rf.onclick=function(){ drawDevices(m); };
@@ -3652,7 +3670,7 @@ function devPaint_(m, d, at){
 var DEVQ_TIMER=null, DEVQ_SEQ=0, DEVQ_FOCUS=false, DEVQ_CARET=null;
 function devSearchFetch_(m){
   var mine=++DEVQ_SEQ;
-  srv('deviceList',{state:DEV.filter,q:DEV.q}).then(function(d){
+  srv('deviceList',{state:DEV.filter,q:DEV.q,pane:DEVMODE}).then(function(d){
     if(mine!==DEVQ_SEQ) return;            // a later keystroke already asked; that answer wins
     devPaint_(m, d, Date.now());
   }).catch(function(e){ if(mine===DEVQ_SEQ) toast(safeErr(e), true); });
@@ -7424,8 +7442,47 @@ function syncWire(m, redraw){
    number is the point of the pane. */
 var NSQ={status:'',q:''};
 var NS_LABEL={locked:'Imefungwa / Locked',unlocked:'Imefunguliwa / Unlocked',
-  achia:'Imeachiwa / Achia',lost:'Imepotea / Lost'};
-var NS_CLS={locked:'bad',unlocked:'',achia:'ok',lost:'bad'};
+  achia:'Imeachiwa / Achia',lost:'Imepotea / Lost',shifted:'Imehamishwa / Shifted'};
+var NS_CLS={locked:'bad',unlocked:'',achia:'ok',lost:'bad',shifted:'ok'};
+/** The other office, by its short name, off its address -- 'HOPE' for hope-pmo, 'HOOP' for
+    hoop-pmo, the bare host for anything else. For a chip, not a link. */
+function devOfficeName_(url){
+  var s=String(url||'');
+  if(/hope/i.test(s)) return 'HOPE';
+  if(/hoop/i.test(s)) return 'HOOP';
+  return s.replace(/^https?:\/\//,'').split('/')[0]||'ofisi nyingine';
+}
+/* THE HANDOVER STRIP, shared by NEW STOCK and the Devices panes: what the open just did about
+   phones sold to the other office, and what it could not. Silence here would read as "nothing
+   sold to HOPE", which is the one thing this exists to stop. */
+function devHandoverNote_(h, canPress){
+  if(!h) return '';
+  if(h.error) return '<div class="note bad">Uhamisho kwenda ofisi nyingine haukuweza kuandikwa: '+esc(h.error)
+    +' / The handover to the other office could not be written: '+esc(h.error)+'</div>';
+  var who=devOfficeName_(h.server);
+  var parts=[];
+  if(h.queued) parts.push('<b>'+money(h.queued)+'</b> zimeuzwa kwa '+esc(who)+' na zimepangwa kuhama / sold to '+esc(who)+', queued to move');
+  if(h.ordered) parts.push('<b>'+money(h.ordered)+'</b> zimeagizwa kuhama — zinahama zikipiga ripoti / ordered — they move on their next beat');
+  if(h.renewed) parts.push('<b>'+money(h.renewed)+'</b> zimepewa batch mpya / re-issued a fresh batch');
+  if(h.pending) parts.push('<b>'+money(h.pending)+'</b> bado zinasubiri batch ya '+esc(who)+(h.throttled?' (itajaribu tena baada ya dakika) / still waiting for a batch (retries within a minute)':' / still waiting for a batch'));
+  if(!parts.length && !h.note) return '';
+  return '<div class="note '+(h.note&&!h.ordered?'bad':'ok')+'" style="margin:8px 0">'
+    +parts.join(' · ')
+    +(h.note?'<div style="margin-top:4px">'+esc(h.note)+'</div>':'')
+    +(canPress&&(h.pending||h.note)?' <button class="btn sm ghost" id="dvHandNow" style="margin-left:6px">Hamisha sasa / Hand over now</button>':'')
+    +'</div>';
+}
+function devHandoverBind_(m, redraw){
+  var b=$('#dvHandNow'); if(!b) return;
+  b.onclick=function(){
+    b.disabled=true;
+    srv('deviceHandover',{}).then(function(r){
+      toast((r.ordered?money(r.ordered)+' zimeagizwa kuhama':'')+(r.renewed?' · '+money(r.renewed)+' batch mpya':'')
+        +(r.pending?' · '+money(r.pending)+' bado zinasubiri':'')+(r.note?' — '+r.note:'')||'Hakuna cha kuhamisha / nothing to hand over', !!(r.note&&!r.ordered));
+      redraw();
+    }).catch(function(e){ b.disabled=false; toast(safeErr(e), true); });
+  };
+}
 /** A stamped cell, with what filled it underneath. Provenance is small and grey because it is
     the second question -- but it is on the row rather than in a drawer, because "where did
     this come from" is asked of exactly the cells somebody is already looking at. */
@@ -8221,7 +8278,12 @@ function drawNewStock(m){
     /* THE GAP COUNT IS THE HEALTH OF THE STAMP. It should fall after every upload, and a number
        that never falls means a feed is not arriving -- which is invisible on a table of blanks
        and obvious as one number. */
-    var head=fenceNote_(d)+staffSyncNote_(d)+'<div class="mut" style="font-size:11.5px;margin:8px 0">'
+    var head=fenceNote_(d)+staffSyncNote_(d)
+      /* PHONES SOLD TO THE OTHER OFFICE: what this open did about them, and a button for the
+         desk that does not want to wait a minute for the retry. This is the pane that knows who
+         bought each phone, so it is the pane that says so. */
+      +devHandoverNote_(d.handover, !BOOT.readOnly)
+      +'<div class="mut" style="font-size:11.5px;margin:8px 0">'
       +'Ilisomwa '+esc(clock(d.asOf))
       +(d.stamped?' · <b>'+money(d.stamped)+'</b> safu zimeongezwa taarifa mpya sasa hivi '
         +'/ rows gained new detail on this read':'')
@@ -8272,6 +8334,12 @@ function drawNewStock(m){
             +'<td>'+(r.neverLocked
               ? '<span class="chip warn" title="Iliuzwa kabla hatujaifunga / sold before we ever locked it">Haijafungwa</span>'
               : '<span class="chip '+(NS_CLS[r.status]||'')+'">'+esc(NS_LABEL[r.status]||r.status||'—')+'</span>')
+              /* Sold to the other office and on its way: said under the state, so the phone
+                 does not simply vanish from here one morning with nothing having announced it. */
+              +((r.shiftQueued||r.shiftPending)
+                ? '<div style="font-size:10px;margin-top:2px"><span class="chip warn" title="'+esc(r.shiftTo||'')+'">'
+                  +(r.shiftPending?'inahamia '+esc(devOfficeName_(r.shiftTo)):'inasubiri batch ya '+esc(devOfficeName_(r.shiftTo)))+'</span></div>'
+                : '')
               +nsWhere(r)+'</td>'
             +'<td>'+(r.by?esc(r.by):'<span class="mut">—</span>')
             +(r.atMs?'<div class="mut" style="font-size:9.5px">'+esc(clock(r.atMs))+'</div>':'')+'</td>'
@@ -8309,6 +8377,7 @@ function drawNewStock(m){
     $('#nsGo').onclick=go;
     $('#nsQ').onkeydown=function(e){ if(e.key==='Enter') go(); };
     $('#nsRef').onclick=function(){ drawNewStock(m); };
+    devHandoverBind_(m, function(){ drawNewStock(m); });
   }).catch(function(e){ paneFailed(m,e); });
 }
 
@@ -11635,7 +11704,12 @@ function drawSettings(m){
       +'<b>DEVICE_LOCK_MESSAGE</b> = sentensi — weka <code>{brand}</code> na <code>{namba}</code> popote unapotaka. '
       +'IMEI inatoka kwenye register, si kwenye simu yenyewe. Hakuna mstari wa REASON kwenye simu — '
       +'sababu ya kufunga bado inaonekana kwenye historia ya rejista pekee. '
-      +'<b>DEVICE_OFFLINE_GRACE_HOURS</b> = saa za ukimya kabla simu ya mteja kujifunga (168 = wiki moja).</div>'
+      +'<b>DEVICE_OFFLINE_GRACE_HOURS</b> = saa za ukimya kabla simu ya mteja kujifunga (168 = wiki moja). '
+      +'<b>DEVICE_SHIFT_PARTNER</b> = anwani ya ofisi nyingine (HOPE) ambako Hamisha na uhamisho wa mauzo huenda. '
+      +'<b>DEVICE_HANDOVER_BUYER</b> = jina la mnunuzi kwenye mauzo (hoop_sales) linalomaanisha "simu hii ni ya HOPE sasa" — '
+      +'HOPE MICROCREDIT ikiwa tupu; majina zaidi kila moja mstari wake; <code>none</code> kuzima. '
+      +'Simu iliyouzwa kwa jina hilo huhamishwa yenyewe kwenda HOPE (nembo, namba na Kufungua simu huwa za HOPE) '
+      +'— angalia NEW STOCK. / A phone sold to that buyer moves itself to HOPE (logo, number and Unlocking become HOPE\'s); see NEW STOCK.</div>'
       /* THE FENCE THAT OUTLIVES A WIPE. The lock app itself does not survive recovery, Odin or
          fastboot; the FRP record in the persistent partition does. Named by account ID, not
          address -- the API takes the number, and a pasted address would reach the fleet as a

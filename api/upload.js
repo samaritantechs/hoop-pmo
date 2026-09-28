@@ -8,6 +8,9 @@ import { importWatu, importSales, isSalesFile, importAgents, isAgentsFile,
 import { WINDOW_DAYS } from './_lib/call-core.js';
 import { noteSignin, outcomeOf, ipOf, uaOf } from './_lib/signin.js';
 import { clearStockIndex } from './_lib/stock-index.js';
+// The handover on sale -- imported from _lib directly, never via portal.js (stock-index.js says
+// why): the upload only QUEUES, one keyed write; nothing here waits on another company's server.
+import { handoverConfig, partnerSalesIn, queueHandover } from './_lib/handover.js';
 
 /* =====================================================================================
    POST /api/upload -- the daily Watu list, AND the hoopltd.shop sales export. The header
@@ -34,6 +37,10 @@ import { clearStockIndex } from './_lib/stock-index.js';
    Row bounds: every write is bounded by the file's own row count; nothing here reads the
    register's ROWS back. No read is repeated across slices; nothing is fetched to be
    merged -- the header-presence upsert IS the merge.
+   A SALES slice adds: 1 settings read memoised 60s per instance (the handover buyer and
+   partner address, api/_lib/handover.js) and, ONLY when the slice carries a sale to that
+   buyer, 1 devices update returning the rows it touched (bounded by the slice's own partner
+   sales, never the register) + 1 device_events insert. No outbound call, ever, from here.
 
    REPLACE-BY-DAY, WITHOUT DELETING ANYTHING: snapshots append under a fresh batch uuid;
    the register upserts in place; followup_status rows get deck_date = this upload's date,
@@ -346,7 +353,38 @@ export default withApi(async (req) => {
     }
     // See the identical note on the agents import above -- zero-cost, every slice.
     clearStockIndex(supabase);
-    if (isLast) await logUpload(user, 'upload:sales', snapshotDate + ' · rows ' + sales.records.length);
+    /* SOLD TO THE OTHER OFFICE: QUEUE THE HANDOVER, HERE, AND NOTHING MORE.
+       -------------------------------------------------------------------------------------
+         "transfereed stock from Hoop to Hope should switch lock logo to Hope and appear in
+          Hope Unlocking too"
+
+       The rows this slice just wrote already say who bought each phone (client_name), so the
+       IMEIs sold to the partner are a filter over what is in memory -- no read of the
+       register. What follows is ONE update returning the rows it touched (the phones on the
+       register that are not already ordered or released) and one event insert, and only on a
+       slice that carries a partner sale; the buyer name and the partner address come off a
+       memo read at most once a minute per instance. The batch from the other office -- the
+       outbound call -- is deliberately NOT made here: it rides the Devices and NEW STOCK
+       opens instead (api/_lib/handover.js). An upload never waits on another company.
+
+       And it never FAILS an upload. The sales are in; a handover that could not be queued (the
+       shift migration not run, a database wobble) is a sentence in the result, and the NEW
+       STOCK open will queue the same phones from the same sales book later. */
+    let handover = null;
+    try {
+      const cfg = await handoverConfig(supabase);
+      const sold = partnerSalesIn(sales.records, cfg.buyers);
+      if (sold.size) {
+        const q = await queueHandover(supabase, sold, user.name || 'upload', cfg);
+        handover = { sold: sold.size, queued: q.queued, server: cfg.server, note: q.note || null };
+      } else if (!cfg.asked) {
+        handover = { sold: 0, queued: 0, note: 'Mipangilio haikusomeka; uhamisho haukupangwa safu hii. / Settings could not be read, so no handover was queued on this slice.' };
+      }
+    } catch (e) {
+      handover = { sold: null, queued: 0, error: String((e && e.message) || e) };
+    }
+    if (isLast) await logUpload(user, 'upload:sales', snapshotDate + ' · rows ' + sales.records.length
+      + (handover && handover.queued ? ' · handover queued ' + handover.queued : ''));
     return {
       kind: 'sales',
       inserted: sales.records.length,
@@ -354,6 +392,7 @@ export default withApi(async (req) => {
       batch,
       dropped: sales.dropped.length,
       droppedRows: sales.dropped.slice(0, 50),
+      handover,
       part: { index, total, last: isLast },
     };
   }

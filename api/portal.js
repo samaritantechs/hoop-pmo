@@ -15,6 +15,8 @@ import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   clearRosterCache, clearAgentIndex } from './_lib/call-core.js';
 import { memoByDataVersion } from './_lib/memo.js';
 import { getOldStockAux, getAgingAux, memoStock, clearStockIndex } from './_lib/stock-index.js';
+import { handoverConfig, noteHandoverSettingsWritten, partnerSalesIn, queueHandover,
+  completeHandovers, shiftBatchFromPartner, soldToPartner, shiftAppTooOld } from './_lib/handover.js';
 
 /* =====================================================================================
    POST /api/portal   { code, fn, args }
@@ -61,6 +63,7 @@ AUDITED.add('deleteRole');
 /* Locking somebody's phone is the most consequential write this system has. */
 AUDITED.add('deviceEnrol');
 AUDITED.add('deviceSetState');
+AUDITED.add('deviceHandover');
 AUDITED.add('deviceShift');
 /* A read, audited: it hands out a handset credential, so who asked for which one is kept. */
 AUDITED.add('deviceToken');
@@ -210,6 +213,10 @@ const EDITABLE_SETTINGS = [
   /* THE WEEKLY IT REPORT (IT SOP E, "to the General Manager"). Blank falls back to
      GM_EMAIL; this key exists for an office that wants the CEO or the auditor copied. */
   'IT_REPORT_EMAIL',
+  /* THE HANDOVER TO HOPE ON SALE (api/_lib/handover.js): the other office's address -- which
+     the Hamisha drawer also reads from here now -- and the buyer name(s) in hoop_sales that
+     mean "this phone is theirs": HOPE MICROCREDIT unless told otherwise, `none` to switch off. */
+  'DEVICE_SHIFT_PARTNER', 'DEVICE_HANDOVER_BUYER',
 ];
 
 /* =======================================================================================
@@ -247,34 +254,11 @@ function imeisOnly_(raw) {
   return list;
 }
 
-/* THE OTHER OFFICE, ASKED SERVER-TO-SERVER. One POST to their /api/device with the shared
-   secret; what comes back is exactly what a person would have copied out of their Sajili
-   simu. Every failure names itself: not configured here (the client's cue to fall back to
-   the code-once path), refused there (secrets differ), or unreachable. Never silent. */
-async function shiftBatchFromPartner_(server, imeis) {
-  const secret = String(process.env.DEVICE_SHIFT_SECRET || '').trim();
-  if (!secret) {
-    const e = new Error('need-batch: DEVICE_SHIFT_SECRET haijawekwa kwenye seva hii, kwa hiyo Hamisha '
-      + 'inahitaji msimbo wako wa ofisi nyingine au batch. / need-batch: DEVICE_SHIFT_SECRET is not '
-      + 'set on this deployment, so Shift needs your code for the other office, or a pasted batch.');
-    e.status = 400; e.code = 'need-batch'; throw e;
-  }
-  let res, body;
-  try {
-    res = await fetch(server + '/api/shift-batch', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ secret, imeis, from: 'HOOP' }) });
-    body = await res.json().catch(() => ({}));
-  } catch (e) {
-    bad('Ofisi nyingine haipatikani: ' + server + ' / The other office could not be reached: '
-      + String((e && e.message) || e));
-  }
-  if (!res.ok || body.ok === false || !body.batch) {
-    bad('Ofisi nyingine imekataa kutoa batch / The other office refused to hand back a batch: '
-      + String(body.error || ('HTTP ' + res.status)));
-  }
-  return String(body.batch).trim();
-}
+/* THE OTHER OFFICE, ASKED SERVER-TO-SERVER -- one definition, in _lib/handover.js, because the
+   automatic handover on a sale and the Hamisha drawer must ask the same question the same way
+   (with the same timeout and the same three named failures). Kept under this name so the
+   drawer's path below reads as it always did. */
+const shiftBatchFromPartner_ = shiftBatchFromPartner;
 
 function bad(msg) {
   const e = new Error(msg); e.status = 400; throw e;
@@ -3040,27 +3024,34 @@ async function newStockBuild(db, user) {
      survives the release. That is the case the owner asked about and the one that matters
      most: a phone let go is a phone nobody is tracking any more, and its last fix is all
      that is left of it. */
-  const DEV_CORE = 'imei, item, holder, state, state_by, state_at, last_seen, customer';
+  const DEV_CORE = 'imei, item, holder, state, state_by, state_at, last_seen, customer, app_version';
   const DEV_LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
+  // The shift order, so a phone sold to the other office can be shown on its way there, and
+  // queued for the handover off this very read (newStock below) rather than a second one.
+  const DEV_SHIFT = ', shift_server, shift_batch, shift_at';
   let devs = [];
   let noDevices = false;
   let hasLoc = true;
-  try {
-    devs = await fetchAll(() => db.from('devices').select(DEV_CORE + DEV_LOC));
-  } catch (e) {
-    /* THE COLUMN CHECK COMES FIRST, and the order is the whole of it. tableMissing() matches
-       a missing COLUMN as well as a missing table -- deliberately, because for most callers
-       both mean "run the migration" -- so asking it first would answer a missing `last_lat`
-       with "the devices register does not exist". That is a false alarm about the wrong
-       thing, on the pane somebody opens when stock has gone missing. */
-    if (/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) {
-      /* The audit without a map is still the audit; the audit without itself is an outage.
-         PostgREST refuses a whole select over one unknown column, so a deployment that has
-         not run the location migration drops back rather than going dark. */
-      hasLoc = false;
-      devs = await fetchAll(() => db.from('devices').select(DEV_CORE));
-    } else if (tableMissing(e)) noDevices = true;
-    else throw e;
+  let hasShift = true;
+  /* THE COLUMN CHECK COMES FIRST, and the order is the whole of it. tableMissing() matches a
+     missing COLUMN as well as a missing table -- deliberately, because for most callers both
+     mean "run the migration" -- so asking it first would answer a missing `last_lat` with "the
+     devices register does not exist". That is a false alarm about the wrong thing, on the pane
+     somebody opens when stock has gone missing. The audit without a map (or without the shift
+     order) is still the audit; the audit without itself is an outage. PostgREST refuses a whole
+     select over one unknown column, so each optional group is dropped by name and the read
+     retried rather than going dark. */
+  for (;;) {
+    try {
+      devs = await fetchAll(() => db.from('devices').select(DEV_CORE + (hasLoc ? DEV_LOC : '') + (hasShift ? DEV_SHIFT : '')));
+      break;
+    } catch (e) {
+      const msg = String(e && e.message || '');
+      if (hasShift && /shift_server|shift_batch|shift_at/.test(msg)) { hasShift = false; continue; }
+      if (hasLoc && /last_lat|last_lng|last_loc_acc|last_loc_at/.test(msg)) { hasLoc = false; continue; }
+      if (tableMissing(e)) { noDevices = true; break; }
+      throw e;
+    }
   }
 
   const { watu, sales, agents, aged, olds } = await newStockFeeds(db);
@@ -3174,7 +3165,15 @@ async function newStockBuild(db, user) {
            in their list because it is rare -- but calling it "locked" because that is what the
            handset does would hide a written-off phone inside the locked count, which is the
            one number this audit is read for. */
-        status: NEWSTOCK_STATE[String(d.state || '')] || String(d.state || ''),
+        /* A PHONE THAT SHIFTED TO THE OTHER OFFICE IS NOT "ACHIA". Its row reads released, but
+           nobody's loan ended -- it is HOPE's now, and calling it released would count it under
+           "mkopo umeisha" and hide the one fact worth knowing about it. */
+        status: (String(d.state) === 'released' && String(d.state_by || '') === 'shift') ? 'shifted'
+          : (NEWSTOCK_STATE[String(d.state || '')] || String(d.state || '')),
+        shiftQueued: !!d.shift_server && !d.shift_batch,
+        shiftPending: !!d.shift_server && !!d.shift_batch,
+        shiftTo: d.shift_server || null,
+        appVersion: d.app_version || '',
         neverLocked: false,
         by: d.state_by || '', atMs: d.state_at ? Date.parse(d.state_at) : null,
         /* The position rides under the status because they answer one question together --
@@ -3230,7 +3229,7 @@ async function newStockBuild(db, user) {
     || (y.silentDays || 0) - (x.silentDays || 0)
     || String(x.imei).localeCompare(String(y.imei)));
 
-  return { rows, agents, notReady, noDevices, hasLoc, stamped, staffSync };
+  return { rows, agents, notReady, noDevices, hasLoc, hasShift, stamped, staffSync };
 }
 
 const FNS = {
@@ -4767,11 +4766,17 @@ const FNS = {
        they see -- and it also means `%` and `_` can never reach the LIKE pattern, so the
        escaping question does not arise at all. */
     const find = String(a.q == null ? '' : a.q).replace(/\D/g, '');
+    const pane = String(a.pane || '').trim();
     const CORE = 'imei, item, holder, state, state_reason, state_at, state_by, reported, '
       + 'last_seen, app_version, battery, android, sold_ref, customer, enrolled_at';
     const LOC = ', last_lat, last_lng, last_loc_acc, last_loc_at';
     // What the handset said about its reset protection (RUN-ME-2026-09-18-device-frp.sql).
     const FRP = ', frp';
+    /* The shift order on the row (RUN-ME-2026-09-15-device-shift.sql). Read here for two reasons:
+       so the row can SAY it is on its way to the other office rather than looking like a phone
+       that is merely slow, and so a handover queued by a sale can be given its batch off the rows
+       this pane has already fetched -- 0 further reads (completeHandovers below). */
+    const SHIFT = ', shift_server, shift_batch, shift_at';
     const build = (cols) => {
       const qy = db.from('devices').select(cols);
       /* A SEARCH OUTRANKS THE STATE CHIP. The desk is holding ONE phone and wants THAT row.
@@ -4794,33 +4799,36 @@ const FNS = {
 
        An empty register and a register that is not there yet are still DIFFERENT facts, so
        `notReady` rides along and the screen says which one it is looking at. */
-    let rows;
-    try { rows = await fetchAll(() => build(CORE + LOC + FRP)); }
-    catch (e0) {
-      let e = e0;
-      /* The frp column is the newest optional one: without it, the same read minus that
-         column, and the pane simply does not know which phones are fenced. */
-      if (/\bfrp\b/.test(String(e && e.message || ''))) {
-        try { rows = await fetchAll(() => build(CORE + LOC)); e = null; } catch (e1) { e = e1; }
-      }
-      if (e === null) { /* read without frp */ } else {
-      /* THE LOCATION COLUMNS MAY NOT BE THERE YET, which is a different failure from a missing
-         table and must not look like one. PostgREST refuses an entire select for a single
-         unknown column, so naming last_lat on a deployment whose migration has not been run
-         would take the WHOLE Devices pane dark -- every phone, every state, every lock button
-         -- over a feature nobody had asked for yet. The register without a map is the
-         register; the register without itself is an outage. So it drops back and carries on.
+    /* THREE OPTIONAL COLUMN GROUPS, EACH FROM A MIGRATION THAT IS RUN BY HAND, so on any given
+       day any of them may not be there. PostgREST refuses an entire select for one unknown
+       column, so naming last_lat on a deployment whose migration has not been run would take
+       the WHOLE Devices pane dark -- every phone, every state, every lock button -- over a
+       feature nobody had asked for yet. The register without a map (or without the fence
+       column, or without the shift order) is the register; the register without itself is an
+       outage. So each group is dropped by name and the read is retried without it.
 
-         AND IT IS ASKED FIRST, because tableMissing() matches a missing COLUMN as well as a
-         missing table (deliberately: for most callers both mean "run the migration"). Asked
-         the other way round, a database with the devices table but no last_lat answered
-         "the devices table has not been created yet" and offered the wrong migration. */
-      if (/last_lat|last_lng|last_loc_acc|last_loc_at/.test(String(e && e.message || ''))) {
-        rows = await fetchAll(() => build(CORE));
-      } else if (tableMissing(e)) {
-        return { ok: true, rows: [], total: 0, notReady: true,
-          counts: { enrolled: 0, locked: 0, lockPending: 0, released: 0, lost: 0, neverSeen: 0, stale: 0, frpSet: 0, frpNot: 0 } };
-      } else throw e;
+       THE COLUMN CHECK COMES BEFORE tableMissing(), because tableMissing() matches a missing
+       COLUMN as well as a missing table (deliberately: for most callers both mean "run the
+       migration"). Asked the other way round, a database with the devices table but no
+       last_lat answered "the devices table has not been created yet" and offered the wrong
+       migration. */
+    const optional = [
+      { cols: SHIFT, rx: /shift_server|shift_batch|shift_at/ },
+      { cols: FRP, rx: /\bfrp\b/ },
+      { cols: LOC, rx: /last_lat|last_lng|last_loc_acc|last_loc_at/ },
+    ];
+    let rows;
+    let keep = optional.slice();
+    for (;;) {
+      try { rows = await fetchAll(() => build(CORE + keep.map(o => o.cols).join(''))); break; }
+      catch (e) {
+        const drop = keep.find(o => o.rx.test(String(e && e.message || '')));
+        if (drop) { keep = keep.filter(o => o !== drop); continue; }
+        if (tableMissing(e)) {
+          return { ok: true, rows: [], total: 0, notReady: true,
+            counts: { enrolled: 0, locked: 0, lockPending: 0, released: 0, lost: 0, neverSeen: 0, stale: 0, frpSet: 0, frpNot: 0 } };
+        }
+        throw e;
       }
     }
     /* A PHONE THAT HAS SHIFTED AWAY IS THE OTHER OFFICE'S NOW -- "should be seen in only
@@ -4829,6 +4837,17 @@ const FNS = {
        because "where did that phone go" deserves an answer. Filtered here rather than in the
        query so the pre-migration path (no state_by column at all) is untouched. */
     if (!find) rows = rows.filter(r => !(String(r.state) === 'released' && String(r.state_by || '') === 'shift'));
+    /* A HANDOVER QUEUED BY A SALE GETS ITS BATCH HERE, off the rows just read -- 0 further
+       reads, and per partner office 1 outbound call + 2 writes only while something is queued
+       or an old order's batch has expired (handover.js). Throttled to once a minute per instance,
+       so a partner that is down or a secret that is not set costs this pane one short, bounded
+       wait and a sentence -- never a hang. Reported back so the screen can say what happened. */
+    const handover = await completeHandovers(db, user.name, { rows });
+    /* The rows in hand were read BEFORE the batch was written; say on screen what is true now. */
+    if (handover.imeis && handover.imeis.length) {
+      const got = new Set(handover.imeis);
+      for (const r of rows) if (got.has(String(r.imei))) { r.shift_batch = r.shift_batch || 'ordered'; r.shift_at = new Date().toISOString(); }
+    }
     const now = Date.now();
     const HOURS = 36 * 3600 * 1000;      // silent longer than this and it is worth asking why
     const out = rows.map(r => {
@@ -4922,8 +4941,35 @@ const FNS = {
            bench to different places. */
         frp: String(r.frp || ''),
         frpState: /^set/.test(String(r.frp || '')) ? 'set' : String(r.frp || '') ? 'not' : '',
+        /* ON ITS WAY TO THE OTHER OFFICE, said on the row. `shiftQueued` is a sale that has
+           marked the phone HOPE's but no batch has been fetched yet; `shiftPending` is a full
+           order the phone will act on at its next beat; `shiftedAway` is a phone that has gone
+           (only ever seen under an IMEI search -- see the filter above). `shiftAppTooOld` is
+           the one reason an order can sit for ever: a lock app that predates shift. */
+        shiftQueued: !!r.shift_server && !r.shift_batch,
+        shiftPending: !!r.shift_server && !!r.shift_batch,
+        shiftTo: r.shift_server || null,
+        shiftAt: r.shift_at ? Date.parse(r.shift_at) : null,
+        shiftedAway: r.state === 'released' && String(r.state_by || '') === 'shift',
+        shiftAppTooOld: !!r.shift_server && shiftAppTooOld(r.app_version),
       };
     }).sort((x, y) => {
+      /* THE UNLOCKING DESK IS HOLDING A LOCKED PHONE THAT IS ALIVE, and wants THAT row.
+         -----------------------------------------------------------------------------------
+           "am not seeing that device at unlocking"
+
+         The bench order below puts a written-off phone, then an unconfirmed lock, then
+         SILENCE above a confirmed lock -- right for chasing problems, and exactly wrong for
+         the desk, where a fleet of boxed stock (silent for weeks by design) outranks every
+         live customer handset and the 500-row cut then drops the one phone the desk can
+         actually act on. So the Unlocking pane asks for its own order: confirmed and beating
+         first, newest beat first; then locks not yet confirmed; then the rest. */
+      if (pane === 'unlock') {
+        const live = d => (d.lockState === 'confirmed' && !d.stale) ? 0
+          : d.state === 'locked' ? 1 : d.state === 'lost' ? 2 : 3;
+        return live(x) - live(y) || (y.seenAt || 0) - (x.seenAt || 0)
+          || String(x.imei).localeCompare(String(y.imei));
+      }
       /* THE PHONES YOU JUST ADDED COME FIRST.
          -----------------------------------------------------------------------------------
            "all recent added imeis should be on top so that i dont hustle finding them"
@@ -4949,7 +4995,12 @@ const FNS = {
       return rank(x) - rank(y) || String(x.imei).localeCompare(String(y.imei));
     });
     const count = f => out.filter(f).length;
+    /* THE OTHER OFFICE'S ADDRESS, only for the pane that can order a shift -- the drawer used to
+       carry it as a constant of its own, which is two definitions of one fact. Off the handover
+       memo (60s), so it is not a trip on every open. */
+    const shiftPartner = pane === 'lock' || a.shiftPartner ? (await handoverConfig(db)).server : null;
     return { ok: true, rows: out.slice(0, 500), total: out.length,
+      shiftPartner, handover,
       /* WHAT WAS SEARCHED FOR, back on the wire. The box shows the digits the server actually
          used rather than what was typed, so "IMEI: 3513 8833" reads back as 35138833 and
          nobody wonders why the spaces stopped mattering. */
@@ -4968,7 +5019,44 @@ const FNS = {
         /* The alarm, counted separately from everything else because it is not a category of
            phone -- it is a category of MISTAKE, and one the office cannot see any other way. */
         lockedNeverSpoke: count(r => r.lockedNeverSpoke),
+        // Sold to the other office and still here: waiting for a batch, or ordered and not yet gone.
+        shiftQueued: count(r => r.shiftQueued),
+        shiftPending: count(r => r.shiftPending),
       } };
+  },
+
+  /* THE HANDOVER, PRESSED RATHER THAN WAITED FOR.
+     =====================================================================================
+     The Devices panes and NEW STOCK already give every queued handover its batch on their
+     own opens, throttled to once a minute; this is the same step without the throttle, for
+     the person looking at "N zinasubiri" who does not want to wait for it. With `imeis` it
+     also QUEUES those phones first -- checked against the sales book itself, never taken on
+     the client's word, so a ticked row that was not sold to the partner is reported, not
+     moved. Budget: 1 settings read (memoised) + (with imeis) 1 keyed hoop_sales read + the
+     queue's update+insert + completeHandovers' own 1 bounded read, 1 outbound call and 2
+     writes per partner office. */
+  async deviceHandover(db, user, args) {
+    requireWrite(user); requireNav(user, 'devlock');
+    const a = args || {};
+    const cfg = await handoverConfig(db);
+    let queued = { queued: 0, imeis: [] };
+    let notSold = 0;
+    const list = a.imeis != null ? imeisOnly_(a.imeis) : [];
+    if (list.length > 500) bad('IMEI nyingi mno kwa mara moja (kikomo 500). / Too many at once — 500 max.');
+    if (list.length) {
+      if (!cfg.buyers.length) {
+        bad('Uhamisho wa mauzo umezimwa (DEVICE_HANDOVER_BUYER = none). / Handover on sale is switched '
+          + 'off (DEVICE_HANDOVER_BUYER is none); use Hamisha for a phone that should move anyway.');
+      }
+      const sales = await fetchAll(() => db.from('hoop_sales').select('imei, client_name').in('imei', list));
+      const sold = partnerSalesIn(sales, cfg.buyers);
+      notSold = list.filter(i => !sold.has(i)).length;
+      if (sold.size) queued = await queueHandover(db, sold, user.name, cfg);
+    }
+    const done = await completeHandovers(db, user.name, { force: true });
+    return { ok: true, server: cfg.server, buyers: cfg.buyers,
+      queued: queued.queued, notSold, ordered: done.ordered, renewed: done.renewed,
+      pending: done.pending, note: queued.note || done.note || null };
   },
 
   /* ENROL -- take control of phones that are sitting in stock. Fed by IMEI, so the
@@ -5044,7 +5132,11 @@ const FNS = {
       } catch (ignored) { /* table not created yet */ }
     }
     const at = new Date().toISOString();
-    const batch = randomUUID();
+    /* 32 HEX, NO DASHES -- the one shape every register in this family mints, and the only one
+       Shift.java's looksMinted() and both offices' deviceShift accept. This used to be the
+       dashed form, which the column (uuid) takes just the same but a shift order coming the
+       other way (HOPE -> HOOP, "and viceversa") was refused for as long as it stayed dashed. */
+    const batch = randomUUID().replace(/-/g, '');
     /* Whether this batch can actually be claimed against. enrol_batch_at is what decides:
        without it the server cannot tell a batch issued minutes ago from one issued last month,
        and a bearer secret that never expires is not one worth handing out. */
@@ -5158,7 +5250,31 @@ const FNS = {
        revive-only call touches no imei the memo did not already know about. */
     if (fresh.length) clearStockIndex(db);
 
-    return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length,
+    /* SOLD TO THE OTHER OFFICE BEFORE IT WAS EVER ENROLLED HERE. The sales book can name a
+       phone weeks before the bench gets to it (the owner's own example: sold 29 Aug, locked
+       21 Sep). A sale that arrived first cannot queue a handover on a row that did not exist,
+       so enrolment asks the book the other way round -- 1 keyed hoop_sales read -- and
+       queues, then completes, so the phone's very first beat carries it to HOPE, locked if
+       Funga was pressed first (the usual order at this bench). Never fails an enrolment: a
+       handover that could not be written is a sentence in the answer, not a refused bench. */
+    let handover = null;
+    try {
+      const cfg = await handoverConfig(db);
+      if (cfg.buyers.length) {
+        const sales = await fetchAll(() => db.from('hoop_sales').select('imei, client_name').in('imei', list));
+        const sold = partnerSalesIn(sales, cfg.buyers);
+        if (sold.size) {
+          const q = await queueHandover(db, sold, user.name, cfg);
+          const done = q.queued ? await completeHandovers(db, user.name, { force: true }) : { ordered: 0, pending: 0 };
+          handover = { sold: sold.size, queued: q.queued, ordered: done.ordered, pending: done.pending,
+            server: cfg.server, note: q.note || done.note || null };
+        }
+      }
+    } catch (e) {
+      handover = { error: String((e && e.message) || e) };
+    }
+
+    return { ok: true, enrolled: fresh.length, alreadyOn: list.length - fresh.length, handover,
       unknownToStock: fresh.filter(i => !stockBy.has(i)).length,
       /* Said out loud on the screen, because it is a state change the operator did not
          explicitly ask for -- they asked to enrol. Silently un-releasing rows would be the
@@ -5308,9 +5424,20 @@ const FNS = {
     }
 
     const current = await fetchAll(() => db.from('devices')
-      .select('imei, state, released_at, last_seen').in('imei', list));
+      .select('imei, state, state_by, released_at, last_seen').in('imei', list));
     const known = new Map(current.map(r => [String(r.imei), r.state]));
     const missing = list.filter(i => !known.has(i));
+    /* A PHONE THAT HAS GONE TO THE OTHER OFFICE IS NOT OURS TO ORDER ABOUT. Its row reads
+       released with state_by 'shift' and the handset beats THERE now; writing a lock here would
+       sit unread for ever and the bench would read the row as a phone being slow. Named in the
+       answer, and refused outright when it is all that was asked for. */
+    const shiftedAway = current.filter(r => String(r.state) === 'released' && String(r.state_by || '') === 'shift')
+      .map(r => String(r.imei));
+    const gone = new Set(shiftedAway);
+    if (shiftedAway.length && shiftedAway.length + missing.length >= list.length) {
+      bad('Simu hii imehamishwa kwenda ofisi nyingine — iagize kutoka kwenye rejista yao. '
+        + '/ This phone was handed to the other office; lock, unlock or release it from that portal.');
+    }
 
     /* FUNGA ON A PHONE ALREADY RELEASED IS USUALLY AN ORDER NOBODY WILL EVER HEAR.
        =====================================================================================
@@ -5361,7 +5488,7 @@ const FNS = {
        the 409 that follows is a question about the ones that did not, carrying the count of
        what already happened so the operator is never told less than the truth. */
     const held = new Set(stuck);
-    const changing = list.filter(i => !held.has(i) && known.has(i) && known.get(i) !== to);
+    const changing = list.filter(i => !held.has(i) && !gone.has(i) && known.has(i) && known.get(i) !== to);
     const at = new Date().toISOString();
     let pushed = { sent: 0, failed: 0, stale: [] };
     if (changing.length) {
@@ -5406,7 +5533,8 @@ const FNS = {
     }
 
     return { ok: true, changed: changing.length,
-      alreadyThere: list.length - changing.length - missing.length,
+      alreadyThere: list.length - changing.length - missing.length - shiftedAway.length,
+      shiftedAway: shiftedAway.length,
       notEnrolled: missing.length, notEnrolledList: missing.slice(0, 20),
       /* How many handsets were reached instantly, so the screen can say "3 zimeamshwa"
          rather than leaving somebody to guess whether the silence means anything. Zero is a
@@ -7989,7 +8117,53 @@ const FNS = {
     const now = Date.now();
 
     const built = await newStockBuild(db, user);
-    let { rows, agents, notReady, noDevices, hasLoc, stamped, staffSync } = built;
+    let { rows, agents, notReady, noDevices, hasLoc, hasShift, stamped, staffSync } = built;
+
+    /* THE HANDOVER TO HOPE, FROM THE PANE THAT ALREADY KNOWS WHO BOUGHT EACH PHONE.
+       =====================================================================================
+         "transfereed stock from Hoop to Hope should switch lock logo to Hope and appear in
+          Hope Unlocking too" / "am not seeing that device at unlocking in both hoop and hope"
+
+       This join is the only place the register and the sales book sit on one row, which makes
+       it the place a phone SOLD to the partner but still answering to this office is visible
+       at all -- including every sale that landed before this existed, which no upload will
+       ever queue again. So the desk's open queues them (one update-returning-rows + one event
+       insert, only when there are any) and then gives every queued or expired order its batch
+       (handover.js; 1 bounded read + 1 outbound call + 2 writes per office, throttled to once
+       a minute per instance). Before the fence, because "whose phone is this" is the desk's
+       question; only for a code that can write and can order a lock, because a shift IS an
+       order (deviceShift's own gate). Read-only opens stamp nothing and move nothing. */
+    let handover = null;
+    const mayShift = !isReadOnly(user) && (isAdminRole(user.role) || (user.tabs || []).includes('devlock'));
+    if (mayShift && hasShift && !noDevices) {
+      try {
+        const cfg = await handoverConfig(db);
+        const sold = new Map();
+        for (const r of rows) {
+          const buyer = soldToPartner(r.customer, cfg.buyers);
+          if (buyer && !r.shiftQueued && !r.shiftPending && (r.status === 'locked' || r.status === 'unlocked' || r.status === 'lost')) {
+            sold.set(r.imei, buyer);
+          }
+        }
+        const q = sold.size ? await queueHandover(db, sold, user.name, cfg) : { queued: 0, imeis: [] };
+        const due = rows.some(r => r.shiftQueued || r.shiftPending);
+        const done = (q.queued || due) ? await completeHandovers(db, user.name) : { ordered: 0, renewed: 0, pending: 0 };
+        if (q.queued || due || q.note || done.note) {
+          handover = { sold: sold.size, queued: q.queued, ordered: done.ordered, renewed: done.renewed,
+            pending: done.pending, throttled: !!done.throttled, server: cfg.server, buyers: cfg.buyers,
+            note: q.note || done.note || null };
+          // The rows on screen say it too: a phone queued a moment ago is on its way now.
+          const justQueued = new Set(q.imeis || []);
+          const ticketed = new Set(done.imeis || []);
+          for (const r of rows) {
+            if (justQueued.has(r.imei)) { r.shiftQueued = true; r.shiftTo = cfg.server; }
+            if (ticketed.has(r.imei)) { r.shiftQueued = false; r.shiftPending = true; }
+          }
+        }
+      } catch (e) {
+        handover = { error: String((e && e.message) || e) };
+      }
+    }
 
     /* THE FENCE (stockAllow): an RSM sees their region -- handsets they or their agents hold,
        or that their region sold -- an agent their own; the desk and ADMIN everything. Applied
@@ -8008,7 +8182,7 @@ const FNS = {
     });
 
     const count = st => rows.filter(r => r.status === st).length;
-    return { ok: true, notReady, noDevices, hasLoc, staffSync,
+    return { ok: true, notReady, noDevices, hasLoc, hasShift, staffSync, handover,
       fence: allow ? allow.info : null,
       /* `wk` slides the top-and-bottom board only -- never the table, the tiles or the two
          progress cards, which is why it is read here and nowhere else in this function. */
@@ -8021,6 +8195,10 @@ const FNS = {
         total: rows.length,
         locked: count('locked'), unlocked: count('unlocked'),
         achia: count('achia'), lost: count('lost'),
+        // Gone to the other office (shift). Not "achia": nobody's loan ended.
+        shifted: count('shifted'),
+        // Sold to the other office and still answering here: queued for a batch, or ordered.
+        handover: rows.filter(r => r.shiftQueued || r.shiftPending).length,
         never: rows.filter(r => r.neverSeen).length,
         quiet7: rows.filter(r => r.silentDays != null && r.silentDays >= 7).length,
         /* Sold, and we never had the lock on it. The number the ground visits exist to bring
@@ -10184,6 +10362,8 @@ const FNS = {
        key rather than only the ones spelled DEVICE_ -- a WeakMap delete costs nothing to pay
        for free on the keys that are not one. */
     noteDeviceSettingsWritten(db);
+    // And the handover module's own memo of the partner address and buyer, for the same reason.
+    noteHandoverSettingsWritten(db);
     return { ok: true, key };
   },
 

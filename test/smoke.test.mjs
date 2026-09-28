@@ -901,9 +901,13 @@ test('the devices pane still works before the location migration is run', () => 
   assert.ok(fn.length > 0, 'deviceList moved; this guard needs repointing');
   assert.match(fn, /last_lat\|last_lng\|last_loc_acc\|last_loc_at/,
     'deviceList must recognise the missing-location-column error');
+  /* The fallback is a ladder now (location, FRP and the shift order are each optional): the
+     group the error names is dropped and the read retried with the rest, down to CORE alone. */
   const fallback = fn.slice(fn.indexOf('tableMissing'));
-  assert.match(fallback, /build\(CORE\)/,
+  assert.match(fallback, /build\(CORE \+ keep/,
     'and fall back to a select without them, rather than letting the pane 500');
+  assert.match(fallback, /keep = keep\.filter\(o => o !== drop\)/,
+    'dropping only the group the error named, so the other optional columns survive');
 });
 
 /* =========================================================================================
