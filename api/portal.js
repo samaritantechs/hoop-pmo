@@ -4842,7 +4842,9 @@ const FNS = {
        or an old order's batch has expired (handover.js). Throttled to once a minute per instance,
        so a partner that is down or a secret that is not set costs this pane one short, bounded
        wait and a sentence -- never a hang. Reported back so the screen can say what happened. */
-    const handover = await completeHandovers(db, user.name, { rows });
+    /* A read-only code sees everything and changes nothing -- including this. */
+    const handover = isReadOnly(user) ? { pending: rows.filter(r => r.shift_server && !r.shift_batch).length, ordered: 0, renewed: 0 }
+      : await completeHandovers(db, user.name, { rows });
     /* The rows in hand were read BEFORE the batch was written; say on screen what is true now. */
     if (handover.imeis && handover.imeis.length) {
       const got = new Set(handover.imeis);

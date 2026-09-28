@@ -454,13 +454,23 @@ test('NEW STOCK queues every phone the sales book says is the partner\'s -- incl
   });
 });
 
-test('a read-only open of NEW STOCK moves nothing', async () => {
-  const VIEWER = { code: 'V1', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['newstock'], readOnly: true };
-  const d = book({ devices: [dev({ imei: 'V1' })], sales: [sale({ imei: 'V1' })] });
-  clearStockIndex(d);
-  const r = await _FNS.newStock(d, VIEWER, {});
-  assert.equal(r.handover, null);
-  assert.equal(d._dump('devices')[0].shift_server, null);
+test('a read-only open of NEW STOCK or Devices moves nothing', async () => {
+  await withSecret(async () => {
+    const VIEWER = { code: 'V1', name: 'Auditor', role: 'AUDITOR', teams: null, tabs: ['newstock', 'devlock'], readOnly: true };
+    const d = book({ devices: [dev({ imei: 'V1' }), dev({ imei: 'V2', shift_server: HOPE })], sales: [sale({ imei: 'V1' })] });
+    clearStockIndex(d); H._resetHandover(d);
+    const hope = stubHope();
+    try {
+      const r = await _FNS.newStock(d, VIEWER, {});
+      assert.equal(r.handover, null);
+      const list = await _FNS.deviceList(d, VIEWER, { pane: 'lock' });
+      assert.equal(list.handover.pending, 1, 'it can still SEE the queue');
+      assert.equal(list.handover.ordered, 0);
+    } finally { hope.done(); }
+    assert.equal(hope.calls.length, 0, 'and asks nobody');
+    assert.equal(d._dump('devices').find(x => x.imei === 'V1').shift_server, null);
+    assert.equal(d._dump('devices').find(x => x.imei === 'V2').shift_batch, null);
+  });
 });
 
 test('enrolling a phone the book already sold to the partner queues it, orders it, and says so -- and the batch is 32 hex', async () => {
