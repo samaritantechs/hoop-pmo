@@ -394,20 +394,36 @@ const KNOWN_OVER = new Map(BUDGETS.filter(b => b[3] === RSM_ONE && Object.keys(b
    BUDGETS loop above already primed the cache with (same args={}, same user objects, same week),
    and this sweep measures a stale warm hit instead of each fresh counting() client's real cold
    cost. That silently defangs both tells below for exactly these four functions. */
+/* THE SWEEP RUNS ON THE FIXTURE'S CLOCK, NOT THE WALL'S.
+   ---------------------------------------------------------------------------------------
+   The fixture is pinned to TODAY = 2026-09-18, but every screen swept with `{}` picks its
+   own default window off Date.now() -- report's is the last seven days. Ten days after the
+   fixture's date that window holds none of the fixture's calls, so the admin and the RSM
+   both read exactly the same rows (the staff and code registers and nothing else), and the
+   "same amount" tell below turned red for `report` on 2026-09-28 with no change anywhere
+   near it. A tell that goes red with the calendar is a tell nobody trusts. Date.now is
+   frozen at the fixture's NOW for the sweep and restored after, so the comparison is the
+   one that was measured on 2026-09-20 on every day of the year. */
 let sweepP = null;
 function sweep() {
   sweepP = sweepP || (async () => {
     const out = [];
-    for (const fn of Object.keys(_FNS)) {
-      if (WRITERS.has(fn)) continue;
-      const run = async user => {
-        _clearSummaryCache();
-        _clearTrendCache();
-        const c = counting(BOOK);
-        try { await _FNS[fn](c.db, user, {}); } catch (e) { return null; }   // needs arguments, or refused -- not a read
-        return c.stat().rows;
-      };
-      out.push({ fn, rsm: await run(RSM_ONE), admin: await run(ADMIN) });
+    const realNow = Date.now;
+    Date.now = () => NOW;
+    try {
+      for (const fn of Object.keys(_FNS)) {
+        if (WRITERS.has(fn)) continue;
+        const run = async user => {
+          _clearSummaryCache();
+          _clearTrendCache();
+          const c = counting(BOOK);
+          try { await _FNS[fn](c.db, user, {}); } catch (e) { return null; }   // needs arguments, or refused -- not a read
+          return c.stat().rows;
+        };
+        out.push({ fn, rsm: await run(RSM_ONE), admin: await run(ADMIN) });
+      }
+    } finally {
+      Date.now = realNow;
     }
     return out;
   })();
