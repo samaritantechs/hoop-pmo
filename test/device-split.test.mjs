@@ -204,7 +204,9 @@ test('the POS desk carries the Gmail steps, and the store bench does not', () =>
   const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
   const draw = html.slice(html.indexOf('function drawDevices('));
   // On the unlocking pane only: that is the desk with the customer standing at it.
-  assert.match(draw.slice(0, 30000), /\+\(canLock \? '' :\s*\n?\s*'<div class="note"/,
+  // The window is a locality proxy ("near the top of drawDevices"), widened once for the
+  // shift chips that now sit above the card; the assertion is the gate, not the offset.
+  assert.match(draw.slice(0, 32000), /\+\(canLock \? '' :\s*\n?\s*'<div class="note"/,
     'the card is gated to the POS desk');
   /* READ THE CARD THE WAY THE OPERATOR DOES. This pane is built by concatenating string
      literals, so a sentence on screen is spread over several of them in the source -- and a

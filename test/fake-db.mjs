@@ -139,10 +139,21 @@ class FakeQuery {
     const parts = String(expr || '').split(',').map(p => {
       const i = p.indexOf('.'), j = p.indexOf('.', i + 1);
       if (i < 0 || j < 0) return null;
-      return { col: p.slice(0, i), op: p.slice(i + 1, j), val: p.slice(j + 1) };
+      const part = { col: p.slice(0, i), op: p.slice(i + 1, j), val: p.slice(j + 1) };
+      /* PostgREST negates inside an or() as "col.not.op.val" -- the only way to say "either
+         blank or not like X" in one request. Like Postgres, NOT over a null is still null, so
+         a null never satisfies the negated test either; that is why the idiom pairs it with
+         "col.is.null". */
+      if (part.op === 'not') {
+        const k = part.val.indexOf('.');
+        if (k < 0) return null;
+        part.op = part.val.slice(0, k); part.val = part.val.slice(k + 1); part.neg = true;
+      }
+      return part;
     }).filter(Boolean);
     const test = (p, r) => {
       const v = r[p.col];
+      if (p.neg) return v != null && !test({ ...p, neg: false }, r);
       switch (p.op) {
         case 'ilike': return likeMatch(v, p.val);
         case 'eq':    return String(v) === p.val;

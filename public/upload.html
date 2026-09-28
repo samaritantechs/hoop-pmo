@@ -344,6 +344,8 @@ $('#send').onclick = function(){
   var total = Math.max(1, Math.ceil(data.length / SLICE));
   var batch = uuid_();
   var sent = 0, inserted = 0, droppedAll = [], CRIT = null;
+  // Phones sold to the other office (HOPE) and queued to move there, summed across slices.
+  var HAND = { sold: 0, queued: 0, note: '', error: '', server: '' };
   $('#send').disabled = true;
   $('#bar').style.display = 'block'; $('#barFill').style.width = '2%';
   show('Uploading…', 'ok');
@@ -359,6 +361,12 @@ $('#send').onclick = function(){
         if (x.s < 200 || x.s >= 300 || x.b.ok === false) throw new Error((x.b && x.b.error) || ('HTTP ' + x.s));
         sent++; inserted += x.b.inserted || 0;
         (x.b.droppedRows || []).forEach(function(d){ droppedAll.push(d); });
+        if (x.b.handover) {
+          HAND.sold += x.b.handover.sold || 0; HAND.queued += x.b.handover.queued || 0;
+          if (x.b.handover.note) HAND.note = x.b.handover.note;
+          if (x.b.handover.error) HAND.error = x.b.handover.error;
+          if (x.b.handover.server) HAND.server = x.b.handover.server;
+        }
         // A column the day's work is filtered by that arrived empty. Kept from the FIRST
         // part that reports it -- every slice carries the same headers, so one is the truth.
         if (!CRIT && x.b.critical && x.b.critical.length) CRIT = x.b.critical;
@@ -373,6 +381,15 @@ $('#send').onclick = function(){
           var lbl = { sales: 'Sales', agents: 'Agents', agedstock: 'Aged stock' }[srvKind] || srvKind;
           t = 'Uploaded: ' + lbl + ' — ' + inserted + ' rows.'
             + ' New rows added, existing ones updated; the phones\' lists are untouched.';
+          /* THE HANDOVER, SAID HERE. A sale to the other office queues the phone to move there
+             (logo, number and Unlocking become theirs on its next beat once NEW STOCK or Devices
+             has fetched it a batch). A queue that could not be written is said just as loudly. */
+          if (srvKind === 'sales' && (HAND.sold || HAND.queued || HAND.note || HAND.error)) {
+            t += '\nSold to the other office (' + (HAND.server || 'HOPE') + '): ' + HAND.sold + ' phone(s) in this file; '
+              + HAND.queued + ' on our register queued to move there (they move on their next beat after the next Devices/NEW STOCK open).';
+            if (HAND.note) t += '\n' + HAND.note;
+            if (HAND.error) t += '\nHandover NOT queued: ' + HAND.error;
+          }
         }
         if (droppedAll.length) t += '\nRejected rows (' + droppedAll.length + '): '
           + droppedAll.slice(0,10).map(function(d){ return d.name + ' (' + d.imei + ')'; }).join('; ')

@@ -63,6 +63,9 @@ public class LockActivity extends Activity {
     private TextView reasonView;
     private TextView helpView;
     private TextView imeiView;
+    /* Kept so a repaint can swap the MARK as well as the words. Null when the office said
+       "no mark" at build time -- see build() and refreshLogo(). */
+    private ImageView logoView;
 
     /* THE SCREEN'S OWN DOORBELL. Registered while this activity is alive, so an unlock can
        reach it without anybody having to start an activity from the background -- which is
@@ -179,6 +182,7 @@ public class LockActivity extends Activity {
            telling somebody to get in touch without saying how. */
         set(helpView, help.isEmpty() || msg.contains(help) ? "" : help);
         set(imeiView, imei.isEmpty() ? "" : "IMEI: " + imei);
+        refreshLogo();
         /* NO REASON LINE. There used to be one here -- "REASON: STOCK, UNSOLD", or worse,
            naming an accused employee by name on a screen anybody who picks the phone up can
            read. "DROP THE REASON FILLING AND ITS DATA SINCE THE MESSAGE IS ENOUGH": whoever
@@ -186,6 +190,35 @@ public class LockActivity extends Activity {
            `msg` already says both -- not the internal story behind the lock. That story
            still exists, on the row's own history; it simply no longer gets painted onto
            glass a stranger can read. */
+    }
+
+    /* THE MARK CHANGES WITH THE WORDS, ON A SCREEN THAT IS ALREADY UP.
+       -----------------------------------------------------------------------------------
+         "transfereed stock from Hoop to Hope should switch lock logo to Hope"
+
+       A handset shifted to the other office while LOCKED kept drawing the old office's mark
+       above the new office's name until it was unlocked and re-locked, or rebooted: the words
+       repaint on every beat (refresh(), above), but the logo was chosen once, in build(), and
+       this activity is singleInstance -- a later show() reaches onNewIntent, never onCreate.
+       Two companies on one screen, for as long as a customer stayed locked. LockLogo.apply
+       has already fetched the new office's mark by the time Guard.lock broadcasts the repaint
+       (Beat.apply calls it first), so re-reading the file here is all it takes.
+
+       The three answers stay apart exactly as build() keeps them: a mark the office sent, the
+       mark compiled in when no office ever said, and nothing at all when the office said none
+       -- falling back is how HOOP's mark lands on a HOPE phone, so "none" hides the view rather
+       than showing the drawable. A view that was never built (told "none" at creation) stays
+       absent; the next re-lock builds it. Every failure is swallowed: a logo may never cost a
+       lock screen its words. */
+    private void refreshLogo() {
+        try {
+            if (logoView == null) return;
+            if (LockLogo.suppressed(this)) { logoView.setVisibility(View.GONE); return; }
+            android.graphics.Bitmap sent = LockLogo.bitmap(this);
+            if (sent != null) logoView.setImageBitmap(sent);
+            else logoView.setImageResource(R.drawable.hoop_logo_white);
+            logoView.setVisibility(View.VISIBLE);
+        } catch (Throwable ignored) { }
     }
 
     private String str(String key) {
@@ -248,6 +281,7 @@ public class LockActivity extends Activity {
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT, dp(48));
                 root.addView(logo, lp);
+                logoView = logo;
             }
         } catch (Exception ignored) { }
 
