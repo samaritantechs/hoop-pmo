@@ -169,18 +169,13 @@ class Beat {
             .putInt(Prefs.BOOT_GRACE_MINUTES, r.optInt("bootGraceMinutes", 0))
             .putInt(Prefs.BOOT_GRACE_EVERY_HOURS, r.optInt("bootGraceEveryHours", 24))
             .apply();
-        /* AND THE WINDOW IS SPENT THE MOMENT WE GET THROUGH -- ON A SOLD PHONE. Fence 3:
-           reaching the server is the entire purpose of a customer's window, so arriving here IS
-           that purpose served. Closed before the answer below is acted on, so what follows is an
-           ordinary lock or an ordinary unlock with nothing left underneath it -- and so there is
-           nothing to be gained by staying offline through the five minutes.
-
-           STOCK KEEPS ITS WINDOW. graceHours at or below zero is the register saying "still in
-           the store, never self-lock", and a store's window is minutes of use for whoever is at
-           the bench, not a chance to reach us -- an online phone in stock reached us in the
-           first second and used to lock right there. See Guard.lock, which leaves the window
-           standing for stock too, and enforce(), which closes it when the minutes are up. */
-        if (r.optInt("graceHours", -1) > 0) Guard.windowServed(c);
+        /* THE BOOT WINDOW IS NOT SPENT BY REACHING US. It used to be (fence 3: "the purpose
+           served"), and on a phone that already had a network that made the window one beat
+           long -- no window at all. "both grace period and buttons should work": a locked
+           handset switched on again gets its minutes on its own clock, whoever holds it; the
+           lock the office restates below is remembered (Guard.lock) and put on the screen by
+           Guard.enforce the moment the minutes are up. Fences 1 and 2 -- a real boot only, once
+           per DEVICE_BOOT_GRACE_EVERY_HOURS -- are what bound it. */
         String msg = r.optString("message", "");
         if (msg != null && !msg.isEmpty()) Prefs.put(c, Prefs.MESSAGE, msg);
         String help = r.optString("helpPhone", "");

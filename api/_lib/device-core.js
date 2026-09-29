@@ -236,10 +236,11 @@ async function graceFor(db, dev, given) {
         phone off and on again is the first thing anybody tries, and it buys nothing: the
         second boot finds the stamp left by the first and locks immediately. This is the fence
         the ask is really about.
-     3. IT ENDS THE INSTANT THE PHONE REACHES US, because at that moment it has served its
-        entire purpose -- we can see the handset and it can hear us. If the register still
-        says lock, it locks; if the loan was cleared, it unlocks. The window is spent, never
-        waited out, so there is nothing to be gained by staying offline through it.
+     3. (GONE, APK 1.13.4.) It used to end the instant the phone reached us -- and a phone
+        that already had a network reached us in the first second, so its window was one beat
+        long. "both grace period and buttons should work": the window now runs its minutes on
+        the handset's own clock, on every locked phone; the lock this beat restates is
+        remembered and put on the screen when they are up. Fences 1 and 2 are what bound it.
 
    BOTH NUMBERS LIVE HERE RATHER THAN IN THE APK, like the beat pace and the offline grace
    above: how long a customer needs to find the wifi toggle is a business judgement that must

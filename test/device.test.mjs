@@ -1181,33 +1181,26 @@ test('the boot window has all three of its fences, in the APK', () => {
     'the window is stamped as spent BEFORE it is opened, so a process killed mid-window '
     + 'cannot claim another on the reboot that follows');
 
-  /* FENCE 3 -- reaching the server IS the purpose served, so the window ends there. */
+  /* THERE IS NO FENCE 3 ANY MORE. It ended the window the moment the phone reached the office,
+     and a phone that already had a network reached it in the first second -- so its window was
+     one beat long, which is no window at all. "We need to return the grace period since a locked
+     stock with our lock needs to give time no matter the buttons" / "both grace period and
+     buttons should work": the window runs its minutes on its own clock on every locked phone;
+     the beat does not serve it, a lock order leaves it standing and shows no screen, and
+     enforce() locks when the minutes are up. Fences 1 and 2 are what bound it. */
   const beat = src('Beat.java');
-  const served = beat.indexOf('Guard.windowServed(c)');
-  assert.ok(served > 0, 'the beat closes the window');
-  assert.ok(served < beat.indexOf('if ("lock".equals(command))'),
-    'before it acts on the answer, so what follows is an ordinary lock with nothing under it');
-  assert.match(guard, /static void windowServed\(Context c\)\s*\{\s*Prefs\.put\(c, Prefs\.GRACE_UNTIL, 0L\);/);
-
-  // And a lock order closes an open window on a SOLD phone -- otherwise the window outlives its purpose.
+  assert.ok(!/Guard\.windowServed\(/.test(beat), 'no beat closes the window');
+  assert.ok(!/static void windowServed\(/.test(guard), 'nothing does but the clock');
   const lock = guard.slice(guard.indexOf('static void lock(Context c)'), guard.indexOf('ACTION_RELEASE'));
-  assert.match(lock, /Prefs\.put\(c, Prefs\.GRACE_UNTIL, 0L\)/);
+  assert.match(lock, /boolean keep = inWindow\(c\);\s*\n\s*if \(!keep\) Prefs\.put\(c, Prefs\.GRACE_UNTIL, 0L\)/,
+    'a lock order leaves an open window standing');
+  assert.match(lock, /if \(!keep && !doorOpen\(c\)\) show\(c\)/, 'and shows no screen while it stands');
   assert.match(lock, /if \(!was\) Prefs\.put\(c, Prefs\.GRACE_LAST, 0L\)/,
     'and only a NEW lock begins an episode that deserves its own window');
-
-  /* STOCK KEEPS ITS WINDOW. "a locked stock with our lock needs to give time no matter the
-     buttons": a phone the register still calls stock (graceHours <= 0, never self-lock) is
-     restarted so somebody at the bench can work on it, and on a phone that is online fence 3
-     used to end the window in the first second. So on stock the beat does not serve the window,
-     the lock order leaves it standing and shows no screen, and enforce() locks when the minutes
-     are up. Fences 1 and 2 are untouched: only a boot opens one, once per period. */
-  assert.match(beat, /if \(r\.optInt\("graceHours", -1\) > 0\) Guard\.windowServed\(c\)/,
-    'the beat serves the window only on a sold phone');
-  assert.match(lock, /boolean keep = stockWindow\(c\);\s*\n\s*if \(!keep\) Prefs\.put\(c, Prefs\.GRACE_UNTIL, 0L\)/,
-    'a lock order leaves a stock window standing');
-  assert.match(lock, /if \(!keep && !doorOpen\(c\)\) show\(c\)/, 'and shows no screen while it stands');
-  assert.match(guard, /static boolean stockWindow\(Context c\)[\s\S]{0,400}return hours <= 0/);
-  assert.match(guard, /static void enforce\(Context c\)[\s\S]{0,700}show\(c\)/, 'enforce still closes it when the minutes are up');
+  assert.match(guard, /static void enforce\(Context c\)[\s\S]{0,700}show\(c\)/,
+    'enforce closes it when the minutes are up -- on its timer, every beat and every job run');
+  const job = src('BeatJob.java');
+  assert.match(job, /Guard\.enforce\(c\)/, 'and the job run is the backstop for a dead timer');
 });
 
 test('the offline self-lock stands down while a boot window is open', () => {
