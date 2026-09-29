@@ -1,6 +1,6 @@
 {
-  "versionCode": 28,
-  "versionName": "1.13.1",
-  "notes": "Skrini ya bluu inarudi juu ya kufuli ya Watu yenyewe baada ya kidirisha au sasisho (1.13.0 ilikaa chini yake hadi simu izimwe); swichi ya WiFi inaruhusiwa ndani ya kidirisha wakati kitufe kimefunguliwa; ripoti ya simu haivuti skrini juu ya kidirisha wakati mteja anaandika nenosiri. / The blue screen puts itself back above Watu's lock after a panel or an update (1.13.0 stayed under it until a restart); the Wi-Fi switch inside the panel is allowed while the button holds it open; a beat no longer drags the screen over a panel while a password is being typed.",
+  "versionCode": 29,
+  "versionName": "1.13.2",
+  "notes": "Orodha ya mitandao ya WiFi sasa iko kwenye skrini ya bluu yenyewe (kidirisha cha Samsung kilisema 'Unlock to view networks'): chagua mtandao au andika jina na nenosiri, kisha Unganisha. Vitufe vyeupe; skrini inarudi juu ya kufuli ya Watu yenyewe. / The Wi-Fi network list is now on the blue screen itself (Samsung's panel said 'Unlock to view networks'): pick a network or type its name and password, then Connect. White buttons; the screen puts itself back above Watu's lock by itself.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
