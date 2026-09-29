@@ -1247,10 +1247,22 @@ in reach spends their window and gets nowhere; if that were the only one they ev
 handset would be bricked by the very mechanism meant to save it. One window per period is
 enough to be a way out and far too little to be a way of using the phone.
 
-**3. It ends the instant the phone reaches us.** That is the whole purpose served — we can see
-the handset and it can hear us. If the register still says lock, it locks; if the loan was
-cleared, it unlocks. The window is spent, never waited out, so nothing is gained by staying
-offline through it.
+**3. On a sold phone, it ends the instant the phone reaches us.** That is the whole purpose
+served — we can see the handset and it can hear us. If the register still says lock, it locks;
+if the loan was cleared, it unlocks. The window is spent, never waited out, so nothing is gained
+by staying offline through it.
+
+**Stock keeps its window (APK 1.13.3).** *"a locked stock with our lock needs to give time no
+matter the buttons."* A phone the register still calls stock — no customer, no sale; the beat
+says `graceHours: -1`, never self-lock — is restarted so somebody at the bench can work on it (a
+second lock enrolled, a SIM, a test), and on a phone that is online fence 3 ended the window in
+the first second: it reached the office, the office said lock, it locked. So on stock the beat
+does not count as the window served, a lock order leaves the window standing and shows no
+screen, and the window runs its full `DEVICE_BOOT_GRACE_MINUTES`; `Guard.enforce()` locks the
+screen when they are up. Fences 1 and 2 are untouched — only a boot opens one, once per
+`DEVICE_BOOT_GRACE_EVERY_HOURS` — so a bench that restarts the same stock phone several times
+in a day gets one window unless that setting is lowered. The toast on stock says what it is
+getting: *Dakika 5 za matumizi, kisha simu inafungwa tena.*
 
 And it closes even when nothing remembers to close it: an in-process timer for the ordinary
 case, plus `Guard.enforce()` on every beat and every job run for the case where the process
@@ -1275,10 +1287,10 @@ exists for. The self-lock is deferred by the length of the window, never skipped
 
 **Requires APK 1.11.0 (versionCode 13) or later.**
 
-**Superseded in practice by the two buttons below (APK 1.13.0).** The window still opens exactly
-as described, but it stopped being usable the day a second lock arrived on the same stock — see
-the next section. Set `DEVICE_BOOT_GRACE_MINUTES` to `0` if you would rather it did not open at
-all; nothing else depends on it.
+**The two buttons below (APK 1.13.0) do not replace it.** They are the way a locked *customer's*
+phone gets its radio on; the window is the store's time on locked *stock*, and it is honoured in
+full there (above). On a sold phone with a second lock on it the window is not usable — Knox
+Guard takes the screen within seconds — which is what the buttons are for.
 
 ## Wi‑Fi and data, from the locked screen itself
 

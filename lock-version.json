@@ -1,6 +1,6 @@
 {
-  "versionCode": 29,
-  "versionName": "1.13.2",
-  "notes": "Orodha ya mitandao ya WiFi sasa iko kwenye skrini ya bluu yenyewe (kidirisha cha Samsung kilisema 'Unlock to view networks'): chagua mtandao au andika jina na nenosiri, kisha Unganisha. Vitufe vyeupe; skrini inarudi juu ya kufuli ya Watu yenyewe. / The Wi-Fi network list is now on the blue screen itself (Samsung's panel said 'Unlock to view networks'): pick a network or type its name and password, then Connect. White buttons; the screen puts itself back above Watu's lock by itself.",
+  "versionCode": 30,
+  "versionName": "1.13.3",
+  "notes": "Simu iliyofungwa ambayo bado ni stoo (haijauzwa) inapata dakika zake zote za matumizi baada ya kuwashwa upya, hata ikiwa mtandaoni — awali ilifungwa sekunde ya kwanza ilipomfikia ofisi. Simu iliyouzwa haibadiliki. / A locked phone that is still stock (unsold) keeps its full boot window after a restart, even when online — it used to lock in the first second, the moment it reached the office. Sold phones are unchanged.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

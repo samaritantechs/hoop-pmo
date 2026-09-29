@@ -1189,11 +1189,25 @@ test('the boot window has all three of its fences, in the APK', () => {
     'before it acts on the answer, so what follows is an ordinary lock with nothing under it');
   assert.match(guard, /static void windowServed\(Context c\)\s*\{\s*Prefs\.put\(c, Prefs\.GRACE_UNTIL, 0L\);/);
 
-  // And a lock order always closes an open window -- otherwise the window outlives its purpose.
+  // And a lock order closes an open window on a SOLD phone -- otherwise the window outlives its purpose.
   const lock = guard.slice(guard.indexOf('static void lock(Context c)'), guard.indexOf('ACTION_RELEASE'));
   assert.match(lock, /Prefs\.put\(c, Prefs\.GRACE_UNTIL, 0L\)/);
   assert.match(lock, /if \(!was\) Prefs\.put\(c, Prefs\.GRACE_LAST, 0L\)/,
     'and only a NEW lock begins an episode that deserves its own window');
+
+  /* STOCK KEEPS ITS WINDOW. "a locked stock with our lock needs to give time no matter the
+     buttons": a phone the register still calls stock (graceHours <= 0, never self-lock) is
+     restarted so somebody at the bench can work on it, and on a phone that is online fence 3
+     used to end the window in the first second. So on stock the beat does not serve the window,
+     the lock order leaves it standing and shows no screen, and enforce() locks when the minutes
+     are up. Fences 1 and 2 are untouched: only a boot opens one, once per period. */
+  assert.match(beat, /if \(r\.optInt\("graceHours", -1\) > 0\) Guard\.windowServed\(c\)/,
+    'the beat serves the window only on a sold phone');
+  assert.match(lock, /boolean keep = stockWindow\(c\);\s*\n\s*if \(!keep\) Prefs\.put\(c, Prefs\.GRACE_UNTIL, 0L\)/,
+    'a lock order leaves a stock window standing');
+  assert.match(lock, /if \(!keep && !doorOpen\(c\)\) show\(c\)/, 'and shows no screen while it stands');
+  assert.match(guard, /static boolean stockWindow\(Context c\)[\s\S]{0,400}return hours <= 0/);
+  assert.match(guard, /static void enforce\(Context c\)[\s\S]{0,700}show\(c\)/, 'enforce still closes it when the minutes are up');
 });
 
 test('the offline self-lock stands down while a boot window is open', () => {
