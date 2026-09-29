@@ -1275,6 +1275,53 @@ exists for. The self-lock is deferred by the length of the window, never skipped
 
 **Requires APK 1.11.0 (versionCode 13) or later.**
 
+**Superseded in practice by the two buttons below (APK 1.13.0).** The window still opens exactly
+as described, but it stopped being usable the day a second lock arrived on the same stock — see
+the next section. Set `DEVICE_BOOT_GRACE_MINUTES` to `0` if you would rather it did not open at
+all; nothing else depends on it.
+
+## Wi‑Fi and data, from the locked screen itself
+
+> "we don't have the grace period to go switch on wifi or data since theirs beats the phone in
+> seconds after power on. so we need to give both the wifi and data buttons on top of our lock,
+> leaving the grace period behind."
+
+Watu's Knox Guard lock now sits on the same handsets and takes the screen within seconds of
+boot, so the five-minute window above opens onto a screen the customer cannot use either. Our
+screen stays on top of theirs — so the toggles live on ours. Under the emergency button, from
+APK **1.13.0** (versionCode 27):
+
+| button | what it does |
+|---|---|
+| **Washa WiFi / Wi‑Fi on** | switches the radio on *itself* (a Device Owner may; an ordinary app has been refused since Android 10) — a radio that is on rejoins any network the phone already knows with nobody typing anything — then opens the system's own Wi‑Fi panel for a new network |
+| **Data za simu / Mobile data** | opens the system's internet panel, which carries the mobile-data switch. There is **no API** for an app, Device Owner or not, to flip mobile data itself; the panel is the sanctioned way and the same one Watu's own screen offers |
+
+A line under the buttons says whether the phone can hear the office right now, and what a press
+did (*WiFi imewashwa — chagua mtandao*, *Mtandao upo*, or — when the panel could not open — that
+Wi‑Fi, once on, joins a known network by itself).
+
+**The phone speaks the moment it can.** The locked screen watches connectivity and beats the
+instant a network comes up (twice: at once, and again twelve seconds later for a slow DNS or a
+captive portal), so the unlock, release or shift the office already ordered lands in seconds
+rather than at the next quarter-hour — which is what the boot window was really for.
+
+**How the panel opens at all, and what that costs.** The panels are Settings activities, and the
+locked activity is `singleInstance`, so they start in a *new* task — which lock task refuses,
+silently, from any package not on the allowlist. `LockAdmin.harden` therefore allowlists
+`com.android.settings` beside our own package (re-asserted on every boot and every self-update,
+so the fleet picks it up with the APK). A panel has a way into the rest of Settings, so the door
+is short: the locked screen puts itself back on top after **90 seconds**, and the moment a network
+comes up. What Settings can do to us in that time is bounded by the platform, not by hope: a
+Device Owner is a **protected package** — its data cannot be cleared, it cannot be disabled,
+force-stopped or uninstalled — and every restriction we hold (no factory reset, no safe boot, no
+airplane mode, no Wi‑Fi off on 13+) stays held. The emergency dialer is untouched: nothing pulls
+the screen back over a call.
+
+**Untested on hardware**, like every lock-app change here (there is no device in this loop): the
+compile is CI's; the first real check is one locked A07 after it self-updates — press each
+button, watch the line under them, and watch the register flip within seconds of the network
+coming up.
+
 ## Phones already in the field, on an older APK
 
 > "remember some phones locked with previous apk have gone to field already

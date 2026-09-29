@@ -69,12 +69,30 @@ class Net {
     static void ensureOnline(Context c) {
         if (online(c)) return;
         if (!LockAdmin.isOwner(c)) return;
+        wifiOn(c);
+    }
+
+    /**
+     * Turn the Wi-Fi radio on, and say whether it is (or is coming) on. The one thing the
+     * locked screen's Wi-Fi button can do by itself: a Device Owner may switch the radio on
+     * where an ordinary app has been refused since Android 10, and a radio that is on rejoins
+     * any network the phone already knows without anybody typing a password. Picking a NEW
+     * network is the system panel's job -- see LockActivity.radios().
+     *
+     * Best effort, always: a vendor build that refuses answers false and nothing else changes.
+     */
+    static boolean wifiOn(Context c) {
+        if (!LockAdmin.isOwner(c)) return false;
         try {
             WifiManager w = (WifiManager)
                     c.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (w != null && !w.isWifiEnabled()) w.setWifiEnabled(true);
+            if (w == null) return false;
+            if (!w.isWifiEnabled()) w.setWifiEnabled(true);
+            int st = w.getWifiState();
+            return st == WifiManager.WIFI_STATE_ENABLED || st == WifiManager.WIFI_STATE_ENABLING;
         } catch (Exception ignored) {
-            // Best effort, always. A phone that keeps what it has is fine; a crash is not.
+            // A phone that keeps what it has is fine; a crash is not.
+            return false;
         }
     }
 }

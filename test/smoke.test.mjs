@@ -763,6 +763,46 @@ test('a new lock reason repaints a screen that is already up', () => {
     'and coming back to the front must repaint too, for a broadcast that arrived too early');
 });
 
+/* "we need to give both the wifi and data buttons on top of our lock, leaving the grace period
+    behind"
+
+   A second lock (Knox Guard) now takes the screen within seconds of boot, so the five-minute
+   boot window opens onto a screen the customer cannot use. The toggles therefore live on OUR
+   screen, which is the one reliably in front -- and every part of that has a way to fail
+   silently on a phone nobody can see: a button wired to nothing, a panel refused by lock task,
+   a network that comes back to a phone that waits a quarter-hour to say so. */
+test('the locked screen carries its own Wi-Fi and data buttons, opens the system panels, and comes back on its own', () => {
+  const act = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockActivity.java');
+  const admin = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockAdmin.java');
+  const net = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Net.java');
+  assert.match(act, /wifi\.setOnClickListener\(v -> wifiPressed\(\)\)/, 'the Wi-Fi button is wired');
+  assert.match(act, /data\.setOnClickListener\(v -> dataPressed\(\)\)/, 'the data button is wired');
+  /* Wi-Fi is switched on by US first: the one thing a Device Owner can do that the panel cannot
+     on Android 13+, where DISALLOW_CHANGE_WIFI_STATE greys the customer's own toggle. */
+  const wifi = act.slice(act.indexOf('private void wifiPressed'), act.indexOf('private void dataPressed'));
+  assert.match(wifi, /Net\.wifiOn\(this\)/);
+  assert.match(net, /static boolean wifiOn\(Context c\)[\s\S]{0,500}setWifiEnabled\(true\)/);
+  // The panels are the system's own, named by action -- there is no API to flip mobile data.
+  assert.match(act, /Settings\.Panel\.ACTION_WIFI\b/);
+  assert.match(act, /Settings\.Panel\.ACTION_INTERNET_CONNECTIVITY/);
+  /* ...which a singleInstance activity in lock task can only open if Settings is allowlisted:
+     the start is refused SILENTLY otherwise, so this line is what makes the buttons real. */
+  assert.match(admin, /setLockTaskPackages\(me, new String\[\]\{ c\.getPackageName\(\), SETTINGS_PACKAGE \}\)/);
+  assert.match(admin, /SETTINGS_PACKAGE = "com\.android\.settings"/);
+  // The door is short: the screen comes back on a timer -- and never over an emergency call.
+  assert.match(act, /protected void onPause\(\)[\s\S]{0,200}if \(panelOpenedAt > 0\) ui\.postDelayed\(comeback, PANEL_MS\)/);
+  const emergency = act.slice(act.indexOf('Button emergency'), act.indexOf('root.addView(emergency'));
+  assert.doesNotMatch(emergency, /panelOpenedAt|openPanel/, 'the emergency dialer must not arm the comeback');
+  // And the network coming back beats at once, instead of at the next quarter-hour.
+  assert.match(act, /registerDefaultNetworkCallback\(netWatch\)/);
+  assert.match(act.slice(act.indexOf('private void networkBack')), /Beat\.now\(app, false\)/);
+  // The boot window itself is untouched: 400 locked phones in the field keep exactly what they have.
+  const guard = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Guard.java');
+  assert.match(guard, /static void restore\(Context c, boolean realBoot\)[\s\S]{0,900}mayOpenWindow\(c\)/);
+  const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
+  assert.ok(v.versionCode >= 27, 'raised, or SelfUpdate skips the build that carries the buttons');
+});
+
 /* "put HOOP logo above the title on locked info that displays: the white png since the bg
    is already full blue"
 

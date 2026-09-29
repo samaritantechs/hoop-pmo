@@ -23,6 +23,9 @@ import android.os.UserManager;
  */
 public class LockAdmin extends DeviceAdminReceiver {
 
+    /** The system Settings app -- the same package name on AOSP and on Samsung's One UI. */
+    static final String SETTINGS_PACKAGE = "com.android.settings";
+
     static ComponentName who(Context c) {
         return new ComponentName(c.getApplicationContext(), LockAdmin.class);
     }
@@ -113,9 +116,19 @@ public class LockAdmin extends DeviceAdminReceiver {
         if (Build.VERSION.SDK_INT >= 33) {
             try { d.addUserRestriction(me, UserManager.DISALLOW_CHANGE_WIFI_STATE); } catch (Exception ignored) { }
         }
-        // Only this package may hold the screen. Set once, here, so LockActivity's
-        // startLockTask() is allowed to pin without a prompt when the moment comes.
-        try { d.setLockTaskPackages(me, new String[]{ c.getPackageName() }); } catch (Exception ignored) { }
+        /* WHO MAY HOLD THE SCREEN: this package, so LockActivity's startLockTask() pins without
+           a prompt -- and Settings, so the locked screen's two radio buttons can open the
+           system's Wi-Fi and internet panels at all. Those panels are Settings activities, and
+           the locked activity is singleInstance, so they start in a new task, which lock task
+           refuses (silently) from any package not on this list. Nothing else can start them: a
+           locked phone has no launcher, no shade and no recents, so the only way into Settings
+           is our own button, and LockActivity puts itself back on top after a short while and
+           the moment a network comes up. What Settings can do to us is bounded by the platform:
+           a Device Owner is a protected package -- data cannot be cleared, it cannot be disabled,
+           force-stopped or uninstalled -- and every restriction above stays held. Re-asserted on
+           every boot and every update of this app (BootReceiver), which is how the phones already
+           in the field pick it up. */
+        try { d.setLockTaskPackages(me, new String[]{ c.getPackageName(), SETTINGS_PACKAGE }); } catch (Exception ignored) { }
         /* LOCATION, GRANTED BY US TO US.
            -------------------------------------------------------------------------------
              "am asked if the app could trap last sync with location coordinates"
