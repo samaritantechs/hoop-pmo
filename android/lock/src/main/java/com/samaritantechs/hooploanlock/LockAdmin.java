@@ -76,6 +76,19 @@ public class LockAdmin extends DeviceAdminReceiver {
                 else d.clearUserRestriction(me, UserManager.DISALLOW_CONFIG_DATE_TIME);
             } catch (Exception ignored) { }
         }
+        /* AND THE WI-FI TOGGLE IS THEIRS WHILE THE DOOR IS OPEN. harden() holds
+           DISALLOW_CHANGE_WIFI_STATE from Android 13 so a locked phone's radio cannot be switched
+           OFF from under us -- and the same restriction greys the switch in the very panel the
+           Wi-Fi button opens: "blocked by your organisation", no networks to see, on the one
+           phone where Net.wifiOn did not take. The customer is in that panel to turn Wi-Fi ON.
+           So the restriction is lifted for the press and put back the moment the door shuts
+           (unharden shuts the door BEFORE its own clears, so a released phone keeps none of it). */
+        if (Build.VERSION.SDK_INT >= 33) {
+            try {
+                if (open) d.clearUserRestriction(me, UserManager.DISALLOW_CHANGE_WIFI_STATE);
+                else d.addUserRestriction(me, UserManager.DISALLOW_CHANGE_WIFI_STATE);
+            } catch (Exception ignored) { }
+        }
         try {
             d.setLockTaskPackages(me, open
                 ? new String[]{ c.getPackageName(), SETTINGS_PACKAGE, PHONE_PACKAGE }
@@ -270,6 +283,9 @@ public class LockAdmin extends DeviceAdminReceiver {
         if (!isOwner(c)) return true;                     // already handed back; nothing to do
         DevicePolicyManager d = dpm(c);
         ComponentName me = who(c);
+        /* The door first, if a panel was open at the moment of release: shutting it puts the
+           Wi-Fi restriction back, and the clears below then take everything off for good. */
+        allowSettings(c, false);
         try { d.clearUserRestriction(me, UserManager.DISALLOW_FACTORY_RESET); } catch (Exception ignored) { }
         try { d.clearUserRestriction(me, UserManager.DISALLOW_SAFE_BOOT); } catch (Exception ignored) { }
         try { d.clearUserRestriction(me, UserManager.DISALLOW_ADD_USER); } catch (Exception ignored) { }
@@ -279,9 +295,6 @@ public class LockAdmin extends DeviceAdminReceiver {
         // restriction we can no longer name.
         try { d.clearUserRestriction(me, UserManager.DISALLOW_AIRPLANE_MODE); } catch (Exception ignored) { }
         try { d.clearUserRestriction(me, UserManager.DISALLOW_CHANGE_WIFI_STATE); } catch (Exception ignored) { }
-        // And the door, if a panel was open at the moment of release -- the restrictions it
-        // holds must not outlive the lock they belonged to.
-        allowSettings(c, false);
         /* AND HAND BACK THE LOCATION PERMISSION WE GRANTED OURSELVES. A phone under finance
            reports where it last synced so unaccounted stock can be found; a phone that has
            been paid off is nobody's to follow. Returned to DEFAULT rather than DENIED, which

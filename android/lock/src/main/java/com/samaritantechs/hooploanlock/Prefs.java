@@ -70,6 +70,11 @@ class Prefs {
     static final String FRP_STATE = "frpState";
     /** ms; when the window now open runs out. 0 = no window open. */
     static final String GRACE_UNTIL = "graceUntil";
+    /* THE DOOR: elapsedRealtime (never the wall clock, which the door itself lets a holder set)
+       until which a Settings panel the locked screen opened may sit in front, so a beat that
+       says "still locked" does not drag the screen back over it. 0 = no door open. Written by
+       LockActivity's openDoor/closeDoor; read by Guard.lock. */
+    static final String DOOR_UNTIL = "doorUntil";
     /* ms; when a window was last GRANTED -- the fence that makes rebooting twice pointless.
        Written when the window OPENS rather than when it closes, and it survives the reboot
        that would otherwise reset it, so power-cycling buys nothing. Cleared only when the

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 
 /**
  * Lock and unlock, in one place, so every caller -- a beat, a boot, the grace rule -- goes
@@ -31,7 +32,13 @@ class Guard {
            a beat restating the obvious) is not a new episode and must not hand back a window
            that has already been spent. */
         if (!was) Prefs.put(c, Prefs.GRACE_LAST, 0L);
-        show(c);
+        /* NOT OVER A PANEL THE SCREEN ITSELF OPENED. show() brings the locked screen to the
+           front, and a beat restating "locked" while the customer is inside the Wi-Fi panel the
+           screen sent them to would pull it back over a password half typed. While that door
+           is open (LockActivity.openDoor) and the screen is still up, the words are repainted
+           below and the return is the screen's own business -- its timer, the network coming
+           up, or the BeatJob backstop through enforce(), which shows unconditionally. */
+        if (!doorOpen(c)) show(c);
         /* AND REPAINT A SCREEN THAT IS ALREADY UP.
            -------------------------------------------------------------------------------
              "relocking with other reason works but the previous lock keeps poppin"
@@ -131,6 +138,14 @@ class Guard {
             i.putExtra(LockActivity.EXTRA_RELEASE, true);
             try { app.startActivity(i); } catch (Exception ignored) { }
         }, FALLBACK_MS);
+    }
+
+    /** A Settings panel the locked screen opened is legitimately in front right now. Bounded by
+        the stamp itself, so a process that died with it set is not believed for ever. */
+    static boolean doorOpen(Context c) {
+        long until = Prefs.of(c).getLong(Prefs.DOOR_UNTIL, 0);
+        return until > 0 && SystemClock.elapsedRealtime() < until
+            && Prefs.of(c).getBoolean(Prefs.SCREEN_UP, false);
     }
 
     /** Bring the lock screen up. Safe to call when it is already showing. */

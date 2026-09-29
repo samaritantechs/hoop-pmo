@@ -1320,7 +1320,13 @@ the *system* launches on a locked phone join the lock, and — the subtle one �
 pinned to the Wi‑Fi screen after an unlock, because `stopLockTask()` only ends lock task from the
 root task and a re-`startLockTask()` had quietly made Settings the root. Shutting the door is
 also what finishes the panel's task: the system clears a locked task whose package leaves the
-allowlist. For the same reason the screen never re-pins itself when it is already pinned.
+allowlist. The screen still re-pins itself on **every** return, as it always did — 1.13.0 briefly
+asked "already in lock task?" first, and on a phone that also carries Watu's Knox lock the answer
+is yes because of *their* task, so the blue screen stayed behind theirs until a reboot (1.13.1).
+While the door is open the customer may flip the Wi‑Fi switch inside the panel themselves (the
+13+ restriction that greys it is lifted for the press and put back with the door), and a beat
+that restates "locked" does not drag the screen back over a panel while a password is being
+typed — the return is the screen's own timer, the network coming up, or the `BeatJob` backstop.
 
 **What the door may not be used for.** While it is open, and only then, the app holds a few
 restrictions that cost the office nothing: no hotspot or tethering off a locked phone, no

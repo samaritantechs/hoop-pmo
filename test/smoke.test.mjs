@@ -775,6 +775,7 @@ test('the locked screen carries its own Wi-Fi and data buttons, opens the system
   const act = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockActivity.java');
   const admin = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/LockAdmin.java');
   const net = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Net.java');
+  const guard = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Guard.java');
   assert.match(act, /wifi\.setOnClickListener\(v -> wifiPressed\(\)\)/, 'the Wi-Fi button is wired');
   assert.match(act, /data\.setOnClickListener\(v -> dataPressed\(\)\)/, 'the data button is wired');
   /* Wi-Fi is switched on by US first: the one thing a Device Owner can do that the panel cannot
@@ -805,13 +806,21 @@ test('the locked screen carries its own Wi-Fi and data buttons, opens the system
   const stand = act.slice(act.indexOf('private void standDown'), act.indexOf('protected void onResume'));
   assert.match(stand, /closeDoor\(\);[\s\S]{0,300}stopLockTask\(\)/, 'the door shuts BEFORE the pin comes off, or the phone stays pinned to Settings');
   assert.match(act, /LockAdmin\.allowSettings\(this, false\);[\s\S]{0,200}watchNetwork\(\)/, 'a fresh process shuts a door it may have inherited');
-  const guard = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Guard.java');
   assert.match(guard.slice(guard.indexOf('static void unlock')), /LockAdmin\.allowSettings\(c, false\)/, 'an unlock shuts the door too');
-  /* PINNED ONCE. startLockTask() on the pinned task moves it to the end of the system's locked
-     list; with a panel task underneath that makes the panel the root, and stopLockTask() from a
-     non-root task leaves the phone pinned to the panel after an unlock. */
-  assert.match(act, /if \(lockedAlready\(\)\) return;\s*\n\s*try \{ startLockTask\(\); \}/);
-  assert.match(act, /getLockTaskModeState\(\) == ActivityManager\.LOCK_TASK_MODE_LOCKED/);
+  /* PINNED ON EVERY RETURN, unconditionally, as it always was. 1.13.0 asked "already in lock
+     task?" first -- and on a phone that also carries Watu's Knox lock the answer is yes because
+     of THEIR task, so the blue screen stayed behind theirs until a reboot. The root-task hazard
+     that guard was for is closed by shutting the door before the pin comes off, above. */
+  assert.match(act, /Prefs\.put\(this, Prefs\.SCREEN_UP, true\);[\s\S]{0,1200}try \{ startLockTask\(\); \}/);
+  assert.doesNotMatch(act, /getLockTaskModeState/, 'no "already pinned?" question: a second lock answers it wrongly');
+  // And a beat that restates "locked" does not drag the screen back over a panel it opened.
+  assert.match(guard.slice(guard.indexOf('static void lock')), /if \(!doorOpen\(c\)\) show\(c\)/);
+  assert.match(guard, /static boolean doorOpen\(Context c\)[\s\S]{0,300}SystemClock\.elapsedRealtime\(\)/);
+  // While the door is open the customer may flip Wi-Fi in the panel; the restriction returns with the door.
+  assert.match(door, /if \(open\) d\.clearUserRestriction\(me, UserManager\.DISALLOW_CHANGE_WIFI_STATE\)/);
+  // White buttons, not the stock grey slab.
+  assert.match(act, /private Button white\(String text\)[\s\S]{0,600}setColor\(Color\.WHITE\)/);
+  assert.match(act, /Button emergency = white\(/);
   // The door is short: the screen comes back on a timer -- and never over an emergency call.
   assert.match(act, /protected void onPause\(\)[\s\S]{0,300}if \(panelPending\) \{[\s\S]{0,200}ui\.postDelayed\(comeback, PANEL_MS\)/);
   const emergency = act.slice(act.indexOf('Button emergency'), act.indexOf('root.addView(emergency'));

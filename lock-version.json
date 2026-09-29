@@ -1,6 +1,6 @@
 {
-  "versionCode": 27,
-  "versionName": "1.13.0",
-  "notes": "Vitufe viwili vipya kwenye skrini iliyofungwa: WASHA WIFI (huwasha WiFi papo hapo na kufungua orodha ya mitandao) na DATA ZA SIMU (hufungua kidirisha cha mtandao chenye swichi ya data). Simu inapopata mtandao inapiga ripoti mara moja, hivyo Fungua, Achia au Hamisha iliyoagizwa ofisini inafika ndani ya sekunde. / Two new buttons on the locked screen: WI-FI ON (switches Wi-Fi on at once and opens the network list) and MOBILE DATA (opens the system internet panel with the data switch). The moment the phone has a network it reports in, so an unlock, release or shift the office already ordered lands within seconds.",
+  "versionCode": 28,
+  "versionName": "1.13.1",
+  "notes": "Skrini ya bluu inarudi juu ya kufuli ya Watu yenyewe baada ya kidirisha au sasisho (1.13.0 ilikaa chini yake hadi simu izimwe); swichi ya WiFi inaruhusiwa ndani ya kidirisha wakati kitufe kimefunguliwa; ripoti ya simu haivuti skrini juu ya kidirisha wakati mteja anaandika nenosiri. / The blue screen puts itself back above Watu's lock after a panel or an update (1.13.0 stayed under it until a restart); the Wi-Fi switch inside the panel is allowed while the button holds it open; a beat no longer drags the screen over a panel while a password is being typed.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
