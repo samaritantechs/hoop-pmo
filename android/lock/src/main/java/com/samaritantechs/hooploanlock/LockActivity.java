@@ -1,7 +1,6 @@
 package com.samaritantechs.hooploanlock;
 
 import android.app.Activity;
-import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -151,6 +150,7 @@ public class LockActivity extends Activity {
            its Handler and its `settingsOpen` gone with it. Shut it unconditionally: one binder
            call, and it is what clears a panel task still sitting under this screen. */
         LockAdmin.allowSettings(this, false);
+        Prefs.put(this, Prefs.DOOR_UNTIL, 0L);
         watchNetwork();
         handle(getIntent());
     }
@@ -228,28 +228,22 @@ public class LockActivity extends Activity {
         // Recorded BEFORE the pin attempt, because the screen is in front of the customer
         // either way -- startLockTask decides whether they can leave it, not whether it shows.
         Prefs.put(this, Prefs.SCREEN_UP, true);
-        /* PINNED ONCE. startLockTask() on the task that is already pinned is not a no-op inside
-           the system: it moves the task to the END of the locked-task list. Alone in that list
-           it never mattered; with a panel task underneath (radios()), it would make the panel the
-           ROOT -- and stopLockTask() from a task that is no longer root leaves the phone pinned
-           to the other one after an unlock. So a screen brought back to the front re-pins nothing. */
-        if (lockedAlready()) return;
+        /* PINNED ON EVERY RETURN, as this screen always has been -- and on a phone that also
+           carries a second lock (Knox Guard, Watu's), that is what keeps ours on top of theirs
+           after anything sends it behind: an update, a panel, their screen re-asserting itself.
+           A short-lived 1.13.0 asked the system "already in lock task?" first and re-pinned
+           nothing when so -- but with a second lock the answer is "yes" because of THEIR task,
+           and the blue screen stayed behind Watu's until a reboot.
+
+           startLockTask() on a task already pinned moves it to the END of the system's
+           locked-task list, which would matter if a panel task were still in that list when the
+           pin came off (stopLockTask() from a non-root task ends nothing). It never is:
+           standDown() shuts the door first, and shutting it is what removes the panel's task. */
         try { startLockTask(); } catch (Exception ignored) {
             /* Not Device Owner -- a hand-installed test build, or provisioning that did not
                take. The screen still shows, and it can still be left. Failing softly here is
                deliberate: a crash loop on a customer's phone would be far worse than a lock
                that is weaker than intended and visibly so on the register. */
-        }
-    }
-
-    /** True while the phone is in full lock task, which only this package -- and a panel it
-        opened -- can be the reason for. Unsure reads as "not yet", so pinning is attempted. */
-    private boolean lockedAlready() {
-        try {
-            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-            return am != null && am.getLockTaskModeState() == ActivityManager.LOCK_TASK_MODE_LOCKED;
-        } catch (Exception e) {
-            return false;
         }
     }
 
@@ -402,8 +396,7 @@ public class LockActivity extends Activity {
            away -- not for a debt, not for anything. The dialer opens outside lock task for
            emergency numbers, and this button is here so somebody in trouble does not have to
            know that. It is also, plainly, the law in most places. */
-        Button emergency = new Button(this);
-        emergency.setText("Simu ya dharura / Emergency call");
+        Button emergency = white("Simu ya dharura / Emergency call");
         emergency.setOnClickListener(v -> {
             /* Nothing of the radio buttons' machinery may ride along: no return timer that
                would pull this screen back over a live call, no open door. */
@@ -423,6 +416,31 @@ public class LockActivity extends Activity {
 
         radios(root);
         return root;
+    }
+
+    /* A WHITE BUTTON ON THE NAVY GROUND -- "just white buttons rather a mechanical view". The
+       stock widget draws a grey material slab with a shadow that jumps on press, which reads as
+       a control panel rather than a message. White with the screen's own navy for the words,
+       rounded, no elevation: the same ink-on-ground as everything else here. Built in code, and
+       guarded, for the reason row() gives -- nothing about a button's look is worth the words
+       on this screen. */
+    private Button white(String text) {
+        Button b = new Button(this);
+        b.setText(text);
+        try {
+            b.setTextColor(0xFF0B2A6B);
+            b.setTypeface(Typeface.DEFAULT_BOLD);
+            b.setAllCaps(false);
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(Color.WHITE);
+            bg.setCornerRadius(dp(10));
+            b.setBackground(bg);
+            b.setStateListAnimator(null);
+            b.setPadding(dp(18), dp(10), dp(18), dp(10));
+            b.setMinHeight(0);
+            b.setMinimumHeight(0);
+        } catch (Exception ignored) { }
+        return b;
     }
 
     /**
@@ -491,11 +509,9 @@ public class LockActivity extends Activity {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER);
-        Button wifi = new Button(this);
-        wifi.setText("Washa WiFi / Wi-Fi on");
+        Button wifi = white("Washa WiFi / Wi-Fi on");
         wifi.setOnClickListener(v -> wifiPressed());
-        Button data = new Button(this);
-        data.setText("Data za simu / Mobile data");
+        Button data = white("Data za simu / Mobile data");
         data.setOnClickListener(v -> dataPressed());
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -587,9 +603,15 @@ public class LockActivity extends Activity {
        also what clears the panel's task from under this screen. */
     private void openDoor() {
         if (LockAdmin.allowSettings(this, true)) settingsOpen = true;
+        /* Told to the beat as well (Guard.lock reads it): while a panel this screen opened is
+           legitimately in front, a beat that says "still locked" must not drag the screen back
+           over a password half typed. Bounded, so a process that dies with it set costs at most
+           this long before the beat's own show() resumes. */
+        Prefs.put(this, Prefs.DOOR_UNTIL, SystemClock.elapsedRealtime() + PANEL_MS + 30_000L);
     }
 
     private void closeDoor() {
+        Prefs.put(this, Prefs.DOOR_UNTIL, 0L);
         if (!settingsOpen) return;
         settingsOpen = false;
         LockAdmin.allowSettings(this, false);
