@@ -783,8 +783,13 @@ test('the locked screen carries its own Wi-Fi and data buttons, opens the system
   const wifi = act.slice(act.indexOf('private void wifiPressed'), act.indexOf('private void dataPressed'));
   assert.match(wifi, /Net\.wifiOn\(this\)/);
   assert.match(net, /static boolean wifiOn\(Context c\)[\s\S]{0,500}setWifiEnabled\(true\)/);
-  // The panels are the system's own, named by action -- there is no API to flip mobile data.
-  assert.match(act, /Settings\.Panel\.ACTION_WIFI\b/);
+  /* The Wi-Fi list is drawn HERE and the join is ours: the system's panel says "Unlock to view
+     networks" on this fleet. A Device Owner may still add and enable a network directly. */
+  assert.match(act, /Net\.join\(this, ssid, pass, sae\)/, 'the picker joins through Net');
+  assert.match(net, /static boolean join\(Context c, String ssid, String pass, boolean sae\)[\s\S]{0,1500}addNetwork\(cfg\)[\s\S]{0,300}enableNetwork\(id, true\)/);
+  assert.match(net, /static List<ScanResult> scan\(Context c, int max\)/);
+  assert.match(act, /android\.provider\.Settings\.ACTION_WIFI_SETTINGS/, 'full Wi-Fi settings stay reachable as the last resort');
+  // The data panel is still the system's own, named by action -- there is no API to flip mobile data.
   assert.match(act, /Settings\.Panel\.ACTION_INTERNET_CONNECTIVITY/);
   /* ...which a singleInstance activity in lock task can only open if Settings is allowlisted:
      the start is refused SILENTLY otherwise. The allowlist is a DOOR, opened for the press and

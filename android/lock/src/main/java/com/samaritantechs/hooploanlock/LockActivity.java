@@ -10,6 +10,9 @@ import android.graphics.Typeface;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.Uri;
+import android.net.wifi.ScanResult;
+import android.text.InputType;
+import android.view.inputmethod.InputMethodManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -20,9 +23,13 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
+
+import java.util.List;
 
 /**
  * The screen a locked phone shows, and the thing that actually holds it there.
@@ -139,7 +146,14 @@ public class LockActivity extends Activity {
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
         setShowWhenLocked();
-        setContentView(build());
+        /* Scrollable, because the network picker (radios()) and a keyboard under it can want
+           more height than a small screen has. With the viewport filled the ordinary screen is
+           laid out exactly as before -- centred, nothing to scroll. */
+        ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
+        sv.setBackgroundColor(0xFF0B2A6B);
+        sv.addView(build());
+        setContentView(sv);
         try {
             IntentFilter f = new IntentFilter(Guard.ACTION_RELEASE);
             f.addAction(Guard.ACTION_REPAINT);
@@ -523,6 +537,10 @@ public class LockActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(14);
         root.addView(bar, lp);
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pp.topMargin = dp(8);
+        root.addView(wifiPane(), pp);
         /* Mixed case, unlike the lines above: this is a sentence to act on, not a name to read
            out, and a two-language sentence in capitals is the one thing on this screen that
            is genuinely hard to read. */
@@ -530,15 +548,158 @@ public class LockActivity extends Activity {
         netView.setAllCaps(false);
     }
 
+    /* THE NETWORK PICKER, ON THIS SCREEN. The system's own panel says "Unlock to view
+       networks" on this fleet (Samsung hides the list while the device counts as locked, and
+       with Knox Guard on the handset it always does), so the list is drawn here and the join
+       is done by us -- see Net.scan / Net.join for what a Device Owner may still do directly.
+       Rows for what is in range; a name box and a password box for when the system gives no
+       list; the full Wi-Fi settings through the door as the last resort. */
+    private LinearLayout wifiPane;
+    private LinearLayout wifiList;
+    private EditText ssidBox;
+    private EditText passBox;
+    private boolean saePick = false;
+
     private void wifiPressed() {
         boolean on = Net.wifiOn(this);
-        say(on ? "WiFi imewashwa — chagua mtandao / Wi-Fi is on — pick a network"
-               : "WiFi haikuwashika hapa — washa kwenye kidirisha / Wi-Fi could not be switched on here — use the panel");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            openPanel(android.provider.Settings.Panel.ACTION_WIFI, android.provider.Settings.ACTION_WIFI_SETTINGS);
-        } else {
-            openPanel(android.provider.Settings.ACTION_WIFI_SETTINGS);
+        if (wifiPane != null && wifiPane.getVisibility() == View.VISIBLE) {
+            wifiPane.setVisibility(View.GONE);
+            refreshNet();
+            return;
         }
+        say(on ? "WiFi imewashwa — chagua mtandao, au andika jina lake / Wi-Fi is on — pick a network, or type its name"
+               : "WiFi haikuwashika hapa — jaribu Mipangilio / Wi-Fi could not be switched on here — try Settings");
+        showWifiPane();
+    }
+
+    private View wifiPane() {
+        LinearLayout p = new LinearLayout(this);
+        p.setOrientation(LinearLayout.VERTICAL);
+        p.setGravity(Gravity.CENTER_HORIZONTAL);
+        p.setVisibility(View.GONE);
+        wifiList = new LinearLayout(this);
+        wifiList.setOrientation(LinearLayout.VERTICAL);
+        wifiList.setGravity(Gravity.CENTER_HORIZONTAL);
+        p.addView(wifiList, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        ssidBox = field("Jina la WiFi / Wi-Fi name", false);
+        passBox = field("Nenosiri / Password", true);
+        passBox.setOnEditorActionListener((v, a, e) -> { connectTyped(); return true; });
+        p.addView(ssidBox, fieldLp());
+        p.addView(passBox, fieldLp());
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        Button go = white("Unganisha / Connect");
+        go.setOnClickListener(v -> connectTyped());
+        Button settings = white("Mipangilio / Settings");
+        settings.setOnClickListener(v -> openPanel(android.provider.Settings.ACTION_WIFI_SETTINGS));
+        Button close = white("Funga / Close");
+        close.setOnClickListener(v -> { p.setVisibility(View.GONE); refreshNet(); });
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        bp.leftMargin = dp(4);
+        bp.rightMargin = dp(4);
+        row.addView(go, bp);
+        row.addView(settings, bp);
+        row.addView(close, bp);
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rp.topMargin = dp(8);
+        p.addView(row, rp);
+        wifiPane = p;
+        return p;
+    }
+
+    private LinearLayout.LayoutParams fieldLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(8);
+        return lp;
+    }
+
+    /** A white box with navy text, like the buttons; the password one hides what is typed. */
+    private EditText field(String hint, boolean password) {
+        EditText e = new EditText(this);
+        e.setHint(hint);
+        e.setSingleLine(true);
+        e.setInputType(password
+            ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD
+            : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        try {
+            e.setTextColor(0xFF0B2A6B);
+            e.setHintTextColor(0xFF7A8AA8);
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(Color.WHITE);
+            bg.setCornerRadius(dp(10));
+            e.setBackground(bg);
+            e.setPadding(dp(14), dp(10), dp(14), dp(10));
+        } catch (Exception ignored) { }
+        return e;
+    }
+
+    private void showWifiPane() {
+        if (wifiPane == null) return;
+        wifiPane.setVisibility(View.VISIBLE);
+        try { getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN); } catch (Exception ignored) { }
+        fillWifiList();
+        // The scan just asked for lands a couple of seconds later; look once more then.
+        ui.postDelayed(this::fillWifiList, 3000);
+    }
+
+    private void fillWifiList() {
+        try {
+            if (wifiList == null || wifiPane == null || wifiPane.getVisibility() != View.VISIBLE) return;
+            wifiList.removeAllViews();
+            List<ScanResult> rs = Net.scan(this, 6);
+            if (rs.isEmpty()) {
+                TextView t = row(wifiList, 12, 0xFFDCE6FA, false, 4);
+                t.setAllCaps(false);
+                t.setText("Hakuna orodha ya mitandao (location imezimwa?) — andika jina la WiFi hapa chini. "
+                    + "/ No network list (location off?) — type the Wi-Fi name below.");
+                return;
+            }
+            for (ScanResult r : rs) {
+                final ScanResult sr = r;
+                Button b = white(r.SSID + (Net.secured(r) ? "  ·  nenosiri / password" : "  ·  wazi / open"));
+                b.setOnClickListener(v -> pick(sr));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                lp.topMargin = dp(6);
+                wifiList.addView(b, lp);
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private void pick(ScanResult r) {
+        if (r == null || ssidBox == null || passBox == null) return;
+        ssidBox.setText(r.SSID);
+        saePick = Net.saeOnly(r);
+        if (!Net.secured(r)) { joinNow(r.SSID, "", false); return; }
+        passBox.setText("");
+        passBox.requestFocus();
+        try {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(passBox, 0);
+        } catch (Exception ignored) { }
+        say("Andika nenosiri la " + r.SSID + " kisha Unganisha / Type the password for " + r.SSID + ", then Connect");
+    }
+
+    private void connectTyped() {
+        String ssid = ssidBox == null ? "" : ssidBox.getText().toString().trim();
+        String pass = passBox == null ? "" : passBox.getText().toString();
+        if (ssid.isEmpty()) { say("Andika jina la WiFi / Type the Wi-Fi name"); return; }
+        joinNow(ssid, pass, saePick);
+    }
+
+    private void joinNow(String ssid, String pass, boolean sae) {
+        boolean ok = Net.join(this, ssid, pass, sae);
+        say(ok ? "Inaunganisha na " + ssid + "… / Connecting to " + ssid + "…"
+               : "Haikuweza kuunganisha na " + ssid + " — angalia nenosiri / Could not join " + ssid + " — check the password");
+        try {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null && passBox != null) imm.hideSoftInputFromWindow(passBox.getWindowToken(), 0);
+        } catch (Exception ignored) { }
     }
 
     /* WHERE THE MOBILE-DATA SWITCH LIVES IS NOT THE SAME SCREEN ON EVERY ANDROID, and nothing
@@ -639,6 +800,8 @@ public class LockActivity extends Activity {
        is all the panel was for, and the office's answer is seconds away. */
     private void networkBack() {
         refreshNet();
+        // The picker has done its job: fold it away so the screen reads as it always did.
+        try { if (wifiPane != null && Net.online(this)) wifiPane.setVisibility(View.GONE); } catch (Exception ignored) { }
         if (!netPrimed) {
             netPrimed = true;
             if (onlineAtWatch) return;   // the network that was there all along, not one coming back
