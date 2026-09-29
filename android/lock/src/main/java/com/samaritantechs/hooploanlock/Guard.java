@@ -90,6 +90,12 @@ class Guard {
         Prefs.put(c, Prefs.LOCKED, false);
         if (!was && !up) return;                 // nothing to stand down
 
+        /* THE DOOR SHUTS WITH THE LOCK. The locked screen's radio buttons open Settings for a
+           press (LockAdmin.allowSettings); an unlock that lands while a panel is in front must
+           not leave that allowlist -- or the restrictions held with it -- on a phone that is
+           now the customer's to use. Idempotent, and a no-op when no door was ever opened. */
+        LockAdmin.allowSettings(c, false);
+
         // The route that works on a live screen: its own receiver, no activity start involved.
         try { c.sendBroadcast(new Intent(ACTION_RELEASE).setPackage(c.getPackageName())); }
         catch (Exception ignored) { }

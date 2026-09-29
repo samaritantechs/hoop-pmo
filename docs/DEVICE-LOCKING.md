@@ -1294,28 +1294,55 @@ APK **1.13.0** (versionCode 27):
 | button | what it does |
 |---|---|
 | **Washa WiFi / Wi‑Fi on** | switches the radio on *itself* (a Device Owner may; an ordinary app has been refused since Android 10) — a radio that is on rejoins any network the phone already knows with nobody typing anything — then opens the system's own Wi‑Fi panel for a new network |
-| **Data za simu / Mobile data** | opens the system's internet panel, which carries the mobile-data switch. There is **no API** for an app, Device Owner or not, to flip mobile data itself; the panel is the sanctioned way and the same one Watu's own screen offers |
+| **Data za simu / Mobile data** | opens the system screen that carries the mobile-data switch. There is **no API** for an app, Device Owner or not, to flip mobile data itself, and *which* screen carries the switch differs by Android (the internet panel on AOSP; **Data usage** on Samsung's One UI), so the button **cycles**: first the internet panel, then Data usage, then Mobile network — each press the next, and the line under the buttons says so. Two minutes later a press starts at the panel again |
 
 A line under the buttons says whether the phone can hear the office right now, and what a press
-did (*WiFi imewashwa — chagua mtandao*, *Mtandao upo*, or — when the panel could not open — that
-Wi‑Fi, once on, joins a known network by itself).
+did (*WiFi imewashwa — chagua mtandao*, *Mtandao upo*, or — when nothing opened — that Wi‑Fi,
+once on, joins a known network by itself).
 
 **The phone speaks the moment it can.** The locked screen watches connectivity and beats the
-instant a network comes up (twice: at once, and again twelve seconds later for a slow DNS or a
-captive portal), so the unlock, release or shift the office already ordered lands in seconds
-rather than at the next quarter-hour — which is what the boot window was really for.
+instant a network comes *back* (twice: at once, and again twelve seconds later for a slow DNS or
+a captive portal), so the unlock, release or shift the office already ordered lands in seconds
+rather than at the next quarter-hour — which is what the boot window was really for. A phone
+that was already online when its screen went up beats no more than it did before.
 
-**How the panel opens at all, and what that costs.** The panels are Settings activities, and the
-locked activity is `singleInstance`, so they start in a *new* task — which lock task refuses,
-silently, from any package not on the allowlist. `LockAdmin.harden` therefore allowlists
-`com.android.settings` beside our own package (re-asserted on every boot and every self-update,
-so the fleet picks it up with the APK). A panel has a way into the rest of Settings, so the door
-is short: the locked screen puts itself back on top after **90 seconds**, and the moment a network
-comes up. What Settings can do to us in that time is bounded by the platform, not by hope: a
-Device Owner is a **protected package** — its data cannot be cleared, it cannot be disabled,
-force-stopped or uninstalled — and every restriction we hold (no factory reset, no safe boot, no
-airplane mode, no Wi‑Fi off on 13+) stays held. The emergency dialer is untouched: nothing pulls
-the screen back over a call.
+**How the panel opens at all: a door, open for the press.** The panels are Settings activities,
+and the locked activity is `singleInstance`, so they start in a *new* task — which lock task
+refuses, silently, from any package not on the allowlist. So `com.android.settings` (and
+`com.android.phone`, which hosts the mobile-network screen on Android 9 and older) is put on the
+allowlist **for the press and no longer** (`LockAdmin.allowSettings`): opened as the button is
+pressed, shut by every road back to the blue screen — its own return after **90 seconds** (an
+in-process timer, backed by a `BeatJob` one-shot that survives the process being killed behind
+Settings), the moment a network comes up, the customer backing out — and by an unlock, a release,
+and unconditionally whenever a locked screen is created. It is **never** held open from `harden()`:
+that would change every phone in the field the moment it self-updated, let any Settings screen
+the *system* launches on a locked phone join the lock, and — the subtle one — leave the phone
+pinned to the Wi‑Fi screen after an unlock, because `stopLockTask()` only ends lock task from the
+root task and a re-`startLockTask()` had quietly made Settings the root. Shutting the door is
+also what finishes the panel's task: the system clears a locked task whose package leaves the
+allowlist. For the same reason the screen never re-pins itself when it is already pinned.
+
+**What the door may not be used for.** While it is open, and only then, the app holds a few
+restrictions that cost the office nothing: no hotspot or tethering off a locked phone, no
+*Reset network settings* (which would forget every Wi‑Fi and leave the phone unable to call
+home), no clock change (the boot-window rate limit and the network-back beat keep time by it —
+the buttons themselves run on the monotonic clock), no force-stop / clear-data of any app from the
+Apps screen, no sideloading. **Deliberately not `DISALLOW_DEBUGGING_FEATURES`**, the obvious one:
+applying it writes `ADB_ENABLED=0` as a side effect and nothing turns it back on — and the cable
+RELEASE on a locked handset (§ *Bringing one back*), the office's own recovery when the air cannot
+reach a phone, *is* adb. What a holder can do beyond that is bounded by the platform: a Device
+Owner is a **protected package** — uninstall, disable and clear-data are refused by the system,
+force-stop is hidden in Settings — a full lock task cannot be stopped from the shell, and every
+restriction we already hold (no factory reset, no safe boot, no airplane mode, no Wi‑Fi off on
+13+) stays held. The emergency dialer is untouched: nothing pulls the screen back over a call.
+
+**What it honestly costs.** A holder who reaches the internet panel can turn mobile data *off*
+as well as on, and can forget saved Wi‑Fi networks one by one (blocking that would block joining
+one, which is the whole point). Both leave a phone that never calls home — the same state as
+staying out of coverage or pulling the SIM, which was always available. And Developer options are
+reachable during the 90 seconds, as they were during the old five-minute window; adb cannot
+remove a Device Owner, stop its lock task or clear it, and the cable release depends on adb
+staying possible, so that is accepted with eyes open.
 
 **Untested on hardware**, like every lock-app change here (there is no device in this loop): the
 compile is CI's; the first real check is one locked A07 after it self-updates — press each

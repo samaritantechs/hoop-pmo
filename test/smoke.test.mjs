@@ -786,19 +786,45 @@ test('the locked screen carries its own Wi-Fi and data buttons, opens the system
   assert.match(act, /Settings\.Panel\.ACTION_WIFI\b/);
   assert.match(act, /Settings\.Panel\.ACTION_INTERNET_CONNECTIVITY/);
   /* ...which a singleInstance activity in lock task can only open if Settings is allowlisted:
-     the start is refused SILENTLY otherwise, so this line is what makes the buttons real. */
-  assert.match(admin, /setLockTaskPackages\(me, new String\[\]\{ c\.getPackageName\(\), SETTINGS_PACKAGE \}\)/);
+     the start is refused SILENTLY otherwise. The allowlist is a DOOR, opened for the press and
+     shut behind it -- never held in harden(), where it would change every phone in the field
+     on self-update and let any Settings screen the system launches join the lock. Shutting it
+     is also what makes the system finish the panel's task, so an unlock never leaves the
+     phone pinned to Settings. */
+  const hard = admin.slice(admin.indexOf('static void harden'), admin.indexOf('static boolean unharden'));
+  assert.match(hard, /setLockTaskPackages\(me, new String\[\]\{ c\.getPackageName\(\) \}\)/, 'harden pins this package alone, as it always did');
+  assert.doesNotMatch(hard, /SETTINGS_PACKAGE/, 'the door is never held open from harden()');
   assert.match(admin, /SETTINGS_PACKAGE = "com\.android\.settings"/);
+  const door = admin.slice(admin.indexOf('static boolean allowSettings'), admin.indexOf('static ComponentName who'));
+  assert.match(door, /new String\[\]\{ c\.getPackageName\(\), SETTINGS_PACKAGE, PHONE_PACKAGE \}/);
+  assert.match(door, /new String\[\]\{ c\.getPackageName\(\) \}/);
+  assert.doesNotMatch(door, /DISALLOW_DEBUGGING_FEATURES/, 'adb is the office\'s own cable release on a locked handset; the door must not shut it');
+  const open = act.slice(act.indexOf('private void openPanel'), act.indexOf('private void openDoor'));
+  assert.match(open, /openDoor\(\);[\s\S]*startActivity\(new Intent\(a\)\)/, 'the door opens before the start, or the start is refused');
+  assert.match(open, /BeatJob\.scheduleDoor\(this, PANEL_MS/, 'and the return is on the system\'s clock too, for a process that does not survive');
+  const stand = act.slice(act.indexOf('private void standDown'), act.indexOf('protected void onResume'));
+  assert.match(stand, /closeDoor\(\);[\s\S]{0,300}stopLockTask\(\)/, 'the door shuts BEFORE the pin comes off, or the phone stays pinned to Settings');
+  assert.match(act, /LockAdmin\.allowSettings\(this, false\);[\s\S]{0,200}watchNetwork\(\)/, 'a fresh process shuts a door it may have inherited');
+  const guard = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Guard.java');
+  assert.match(guard.slice(guard.indexOf('static void unlock')), /LockAdmin\.allowSettings\(c, false\)/, 'an unlock shuts the door too');
+  /* PINNED ONCE. startLockTask() on the pinned task moves it to the end of the system's locked
+     list; with a panel task underneath that makes the panel the root, and stopLockTask() from a
+     non-root task leaves the phone pinned to the panel after an unlock. */
+  assert.match(act, /if \(lockedAlready\(\)\) return;\s*\n\s*try \{ startLockTask\(\); \}/);
+  assert.match(act, /getLockTaskModeState\(\) == ActivityManager\.LOCK_TASK_MODE_LOCKED/);
   // The door is short: the screen comes back on a timer -- and never over an emergency call.
-  assert.match(act, /protected void onPause\(\)[\s\S]{0,200}if \(panelOpenedAt > 0\) ui\.postDelayed\(comeback, PANEL_MS\)/);
+  assert.match(act, /protected void onPause\(\)[\s\S]{0,300}if \(panelPending\) \{[\s\S]{0,200}ui\.postDelayed\(comeback, PANEL_MS\)/);
   const emergency = act.slice(act.indexOf('Button emergency'), act.indexOf('root.addView(emergency'));
-  assert.doesNotMatch(emergency, /panelOpenedAt|openPanel/, 'the emergency dialer must not arm the comeback');
+  assert.doesNotMatch(emergency, /openPanel|openDoor/, 'the emergency dialer never opens the door');
+  assert.match(emergency, /ui\.removeCallbacks\(comeback\)/, 'nor rides a return timer that would pull the screen over a live call');
   // And the network coming back beats at once, instead of at the next quarter-hour.
   assert.match(act, /registerDefaultNetworkCallback\(netWatch\)/);
   assert.match(act.slice(act.indexOf('private void networkBack')), /Beat\.now\(app, false\)/);
   // The boot window itself is untouched: 400 locked phones in the field keep exactly what they have.
-  const guard = javaCode('lock/src/main/java/com/samaritantechs/hooploanlock/Guard.java');
   assert.match(guard, /static void restore\(Context c, boolean realBoot\)[\s\S]{0,900}mayOpenWindow\(c\)/);
+  // And the clocks a customer can set are never the ones these timers run on.
+  assert.doesNotMatch(act.slice(act.indexOf('private void radios')), /System\.currentTimeMillis\(\)/,
+    'the radio machinery keeps time on SystemClock.elapsedRealtime -- the wall clock is settable from the very Settings the door opens');
   const v = JSON.parse(fs.readFileSync(new URL('../lock-version.json', import.meta.url), 'utf8'));
   assert.ok(v.versionCode >= 27, 'raised, or SelfUpdate skips the build that carries the buttons');
 });
