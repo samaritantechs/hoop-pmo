@@ -819,7 +819,7 @@ test('the locked screen carries its own Wi-Fi and data buttons, opens the system
   assert.match(act, /Prefs\.put\(this, Prefs\.SCREEN_UP, true\);[\s\S]{0,1200}try \{ startLockTask\(\); \}/);
   assert.doesNotMatch(act, /getLockTaskModeState/, 'no "already pinned?" question: a second lock answers it wrongly');
   // And a beat that restates "locked" does not drag the screen back over a panel it opened.
-  assert.match(guard.slice(guard.indexOf('static void lock')), /if \(!doorOpen\(c\)\) show\(c\)/);
+  assert.match(guard.slice(guard.indexOf('static void lock')), /if \(!keep && !doorOpen\(c\)\) show\(c\)/);
   assert.match(guard, /static boolean doorOpen\(Context c\)[\s\S]{0,300}SystemClock\.elapsedRealtime\(\)/);
   // While the door is open the customer may flip Wi-Fi in the panel; the restriction returns with the door.
   assert.match(door, /if \(open\) d\.clearUserRestriction\(me, UserManager\.DISALLOW_CHANGE_WIFI_STATE\)/);

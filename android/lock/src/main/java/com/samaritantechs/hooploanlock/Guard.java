@@ -20,11 +20,21 @@ class Guard {
     static void lock(Context c) {
         boolean was = Prefs.of(c).getBoolean(Prefs.LOCKED, false);
         Prefs.put(c, Prefs.LOCKED, true);
-        /* A LOCK ORDER ALWAYS CLOSES AN OPEN WINDOW. The boot window exists so a handset can
-           be REACHED, and the office reaching it to say "lock" is that purpose served, not
-           interrupted. Leaving it open here would be the loophole itself: take a window, wait
-           for the beat to land, and keep the phone for the rest of the five minutes anyway. */
-        Prefs.put(c, Prefs.GRACE_UNTIL, 0L);
+        /* A LOCK ORDER CLOSES AN OPEN WINDOW -- ON A PHONE THAT IS SOLD. The boot window exists
+           so a customer's handset can be REACHED, and the office reaching it to say "lock" is
+           that purpose served, not interrupted. Leaving it open there would be the loophole
+           itself: take a window, wait for the beat to land, and keep the phone for the rest of
+           the five minutes anyway.
+
+           NOT ON STOCK. "a locked stock with our lock needs to give time no matter the buttons":
+           a phone still in the store -- no customer, no sale; the register says never self-lock
+           -- is restarted so somebody at the bench can work on it (a second lock enrolled, a
+           SIM, a test), and on a phone that is online the window used to last exactly one beat.
+           On stock the window runs its minutes and enforce() locks the screen when they are up.
+           Fence 2 still holds: one window per DEVICE_BOOT_GRACE_EVERY_HOURS, and the stamp
+           survives the reboot that would reset it. */
+        boolean keep = stockWindow(c);
+        if (!keep) Prefs.put(c, Prefs.GRACE_UNTIL, 0L);
         /* AND A NEW LOCK BEGINS A NEW EPISODE. The rate limit exists to stop a power cycle
            minting a fresh window, not to punish a customer whose phone is locked again next
            month -- so the stamp is cleared when the state actually CHANGES to locked, and only
@@ -38,7 +48,7 @@ class Guard {
            is open (LockActivity.openDoor) and the screen is still up, the words are repainted
            below and the return is the screen's own business -- its timer, the network coming
            up, or the BeatJob backstop through enforce(), which shows unconditionally. */
-        if (!doorOpen(c)) show(c);
+        if (!keep && !doorOpen(c)) show(c);
         /* AND REPAINT A SCREEN THAT IS ALREADY UP.
            -------------------------------------------------------------------------------
              "relocking with other reason works but the previous lock keeps poppin"
@@ -140,6 +150,18 @@ class Guard {
         }, FALLBACK_MS);
     }
 
+    /** A boot window is open on a phone the register still calls STOCK: graceHours at or below
+        zero is "never self-lock", which only an unsold handset is ever sent (graceFor in
+        device-core.js). A phone that has never heard from the office reads as stock too --
+        it has been told nothing else. */
+    static boolean stockWindow(Context c) {
+        if (!inWindow(c)) return false;
+        int hours;
+        try { hours = Integer.parseInt(Prefs.str(c, Prefs.GRACE_HOURS, "-1")); }
+        catch (Exception e) { hours = -1; }
+        return hours <= 0;
+    }
+
     /** A Settings panel the locked screen opened is legitimately in front right now. Bounded by
         the stamp itself, so a process that died with it set is not believed for ever. */
     static boolean doorOpen(Context c) {
@@ -219,9 +241,14 @@ class Guard {
            needs no permission and no notification channel, so there is nothing here that can
            fail on one Android version and not another. */
         try {
-            android.widget.Toast.makeText(c,
-                "Dakika " + minutes + ": washa WiFi au data ili simu isikie ujumbe wa ofisi."
-                + "\n" + minutes + " minutes: turn on WiFi or data so this phone can hear the office.",
+            int hours;
+            try { hours = Integer.parseInt(Prefs.str(c, Prefs.GRACE_HOURS, "-1")); } catch (Exception e) { hours = -1; }
+            // Stock is told what it is getting -- minutes of use -- rather than sent to find a toggle.
+            android.widget.Toast.makeText(c, hours <= 0
+                ? "Dakika " + minutes + " za matumizi, kisha simu inafungwa tena."
+                  + "\n" + minutes + " minutes of use, then this phone locks again."
+                : "Dakika " + minutes + ": washa WiFi au data ili simu isikie ujumbe wa ofisi."
+                  + "\n" + minutes + " minutes: turn on WiFi or data so this phone can hear the office.",
                 android.widget.Toast.LENGTH_LONG).show();
         } catch (Exception ignored) { }
         /* The in-process timer for the ordinary case, plus enforce() being called from every

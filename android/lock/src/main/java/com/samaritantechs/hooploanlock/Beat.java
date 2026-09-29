@@ -169,12 +169,18 @@ class Beat {
             .putInt(Prefs.BOOT_GRACE_MINUTES, r.optInt("bootGraceMinutes", 0))
             .putInt(Prefs.BOOT_GRACE_EVERY_HOURS, r.optInt("bootGraceEveryHours", 24))
             .apply();
-        /* AND THE WINDOW IS SPENT THE MOMENT WE GET THROUGH. Fence 3: reaching the server is
-           the entire purpose of the window, so arriving here IS that purpose served. Closed
-           before the answer below is acted on, so what follows is an ordinary lock or an
-           ordinary unlock with nothing left underneath it -- and so there is nothing to be
-           gained by staying offline through the five minutes. */
-        Guard.windowServed(c);
+        /* AND THE WINDOW IS SPENT THE MOMENT WE GET THROUGH -- ON A SOLD PHONE. Fence 3:
+           reaching the server is the entire purpose of a customer's window, so arriving here IS
+           that purpose served. Closed before the answer below is acted on, so what follows is an
+           ordinary lock or an ordinary unlock with nothing left underneath it -- and so there is
+           nothing to be gained by staying offline through the five minutes.
+
+           STOCK KEEPS ITS WINDOW. graceHours at or below zero is the register saying "still in
+           the store, never self-lock", and a store's window is minutes of use for whoever is at
+           the bench, not a chance to reach us -- an online phone in stock reached us in the
+           first second and used to lock right there. See Guard.lock, which leaves the window
+           standing for stock too, and enforce(), which closes it when the minutes are up. */
+        if (r.optInt("graceHours", -1) > 0) Guard.windowServed(c);
         String msg = r.optString("message", "");
         if (msg != null && !msg.isEmpty()) Prefs.put(c, Prefs.MESSAGE, msg);
         String help = r.optString("helpPhone", "");
