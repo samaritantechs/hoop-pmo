@@ -1,6 +1,6 @@
 {
-  "versionCode": 26,
-  "versionName": "1.12.1",
-  "notes": "Nembo hubadilika pamoja na maneno: simu iliyohamishwa kwenda ofisi nyingine ikiwa imefungwa sasa huchora nembo ya ofisi mpya kwenye skrini iliyofungwa mara moja, bila kufunguliwa na kufungwa tena. / The mark changes with the words: a handset shifted to the other office while locked now draws the new office's logo on the locked screen at once, without an unlock-and-relock.",
+  "versionCode": 27,
+  "versionName": "1.13.0",
+  "notes": "Vitufe viwili vipya kwenye skrini iliyofungwa: WASHA WIFI (huwasha WiFi papo hapo na kufungua orodha ya mitandao) na DATA ZA SIMU (hufungua kidirisha cha mtandao chenye swichi ya data). Simu inapopata mtandao inapiga ripoti mara moja, hivyo Fungua, Achia au Hamisha iliyoagizwa ofisini inafika ndani ya sekunde. / Two new buttons on the locked screen: WI-FI ON (switches Wi-Fi on at once and opens the network list) and MOBILE DATA (opens the system internet panel with the data switch). The moment the phone has a network it reports in, so an unlock, release or shift the office already ordered lands within seconds.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }

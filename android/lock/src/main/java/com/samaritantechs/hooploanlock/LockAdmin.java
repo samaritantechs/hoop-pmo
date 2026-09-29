@@ -23,6 +23,74 @@ import android.os.UserManager;
  */
 public class LockAdmin extends DeviceAdminReceiver {
 
+    /** The system Settings app -- the same package name on AOSP and on Samsung's One UI -- and
+        the telephony app, which hosts the mobile-network screen on Android 9 and older. */
+    static final String SETTINGS_PACKAGE = "com.android.settings";
+    static final String PHONE_PACKAGE = "com.android.phone";
+
+    /* THE ONE DOOR IN THE LOCK, AND WHO HOLDS IT OPEN.
+       -----------------------------------------------------------------------------------
+       The locked screen's Wi-Fi and data buttons open the system's own network panels. Those
+       are Settings activities, and LockActivity is singleInstance, so they start in a NEW task
+       -- which lock task refuses, silently, from any package not on the allowlist. So Settings
+       is allowlisted for exactly as long as a panel our screen opened is in front: opened by
+       openPanel, closed by the screen coming back (its own comeback, a network returning, the
+       customer backing out) and by an unlock.
+
+       NOT held permanently in harden(), for two reasons the first cut got wrong. A permanent
+       entry changes every phone in the field the moment it self-updates -- any Settings
+       activity the SYSTEM launches on a locked phone (a dual-SIM prompt, a storage-full flow)
+       would join lock task on top of our screen instead of being refused. And the system does
+       the one thing we cannot when the entry is REMOVED: LockTaskController finishes every
+       locked task whose package just lost allowlist status, so closing the door is also what
+       clears the Settings task from under our screen -- left alive, it would be the task the
+       phone stayed pinned to after an unlock. Closed from every road back to the screen
+       (LockActivity), from an unlock (Guard.unlock) and from a release (unharden), and shut
+       unconditionally when a locked screen is created, so a process killed behind a panel
+       cannot leave it open past the next boot. Best effort; false when this app is not Device
+       Owner, where there is no lock task to open a door in. */
+    static boolean allowSettings(Context c, boolean open) {
+        if (!isOwner(c)) return false;
+        DevicePolicyManager d = dpm(c);
+        ComponentName me = who(c);
+        /* AND WHAT THE DOOR MAY NOT BE USED FOR, held for exactly as long as it is open -- never
+           on an unlocked phone, never at the bench. A panel has a way into the rest of Settings,
+           and each of these closes a road a pinned phone never had: a hotspot run off a locked
+           handset, a network reset that forgets every Wi-Fi and leaves the phone unable to call
+           home, a clock wound to mint boot windows and stall the network-back beat, a force-stop
+           or clear-data attempt on any app from the Apps screen, a sideload.
+
+           Deliberately NOT DISALLOW_DEBUGGING_FEATURES, though it is the obvious one: applying it
+           writes ADB_ENABLED=0 as a side effect and nothing turns it back on, and the cable RELEASE
+           on a locked handset (ReleaseReceiver) -- the office's own recovery when the air cannot
+           reach a phone -- IS adb. A door that shut that would cost more than it closes. What adb
+           can do to a Device Owner is bounded anyway: uninstall, disable and clear-data are refused
+           by the system for a protected package, and a full lock task cannot be stopped from the
+           shell. */
+        for (String r : DOOR_RESTRICTIONS) {
+            try { if (open) d.addUserRestriction(me, r); else d.clearUserRestriction(me, r); } catch (Exception ignored) { }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                if (open) d.addUserRestriction(me, UserManager.DISALLOW_CONFIG_DATE_TIME);
+                else d.clearUserRestriction(me, UserManager.DISALLOW_CONFIG_DATE_TIME);
+            } catch (Exception ignored) { }
+        }
+        try {
+            d.setLockTaskPackages(me, open
+                ? new String[]{ c.getPackageName(), SETTINGS_PACKAGE, PHONE_PACKAGE }
+                : new String[]{ c.getPackageName() });
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static final String[] DOOR_RESTRICTIONS = {
+        UserManager.DISALLOW_CONFIG_TETHERING, UserManager.DISALLOW_NETWORK_RESET,
+        UserManager.DISALLOW_APPS_CONTROL, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
+    };
+
     static ComponentName who(Context c) {
         return new ComponentName(c.getApplicationContext(), LockAdmin.class);
     }
@@ -115,6 +183,8 @@ public class LockAdmin extends DeviceAdminReceiver {
         }
         // Only this package may hold the screen. Set once, here, so LockActivity's
         // startLockTask() is allowed to pin without a prompt when the moment comes.
+        // (Settings joins this list only while a panel our screen opened is in front -- see
+        // allowSettings below -- never here, so a phone that merely self-updates changes nothing.)
         try { d.setLockTaskPackages(me, new String[]{ c.getPackageName() }); } catch (Exception ignored) { }
         /* LOCATION, GRANTED BY US TO US.
            -------------------------------------------------------------------------------
@@ -209,6 +279,9 @@ public class LockAdmin extends DeviceAdminReceiver {
         // restriction we can no longer name.
         try { d.clearUserRestriction(me, UserManager.DISALLOW_AIRPLANE_MODE); } catch (Exception ignored) { }
         try { d.clearUserRestriction(me, UserManager.DISALLOW_CHANGE_WIFI_STATE); } catch (Exception ignored) { }
+        // And the door, if a panel was open at the moment of release -- the restrictions it
+        // holds must not outlive the lock they belonged to.
+        allowSettings(c, false);
         /* AND HAND BACK THE LOCATION PERMISSION WE GRANTED OURSELVES. A phone under finance
            reports where it last synced so unaccounted stock can be found; a phone that has
            been paid off is nobody's to follow. Returned to DEFAULT rather than DENIED, which

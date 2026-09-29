@@ -99,10 +99,37 @@ public class BeatJob extends JobService {
         } catch (Exception ignored) { }
     }
 
+    /* THE THIRD JOB: THE DOOR'S BACKSTOP. When the locked screen opens a Settings panel
+       (LockActivity.radios) it arms its own timer to come back on top -- a Handler inside the
+       activity, which dies with the process, and a process behind a Settings screen on a
+       phone that is also running a second lock is a candidate to be killed. This one-shot runs
+       on the system's clock instead: onStartJob calls Guard.enforce, which puts a locked
+       screen back (and its onCreate shuts the door), plus a beat. Cancelled when the screen
+       comes back on its own, so the ordinary case costs nothing. */
+    private static final int DOOR_ID = 4713;
+
+    static void scheduleDoor(Context c, long afterMs) {
+        try {
+            JobScheduler js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+            if (js == null || Prefs.of(c).getBoolean(Prefs.RETIRED, false)) return;
+            js.schedule(new JobInfo.Builder(DOOR_ID, new ComponentName(c, BeatJob.class))
+                    .setMinimumLatency(afterMs)
+                    .setOverrideDeadline(afterMs + 30_000L)
+                    .build());
+        } catch (Exception ignored) { }
+    }
+
+    static void cancelDoor(Context c) {
+        try {
+            JobScheduler js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+            if (js != null) js.cancel(DOOR_ID);
+        } catch (Exception ignored) { }
+    }
+
     static void cancel(Context c) {
         try {
             JobScheduler js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
-            if (js != null) { js.cancel(JOB_ID); js.cancel(SOON_ID); }
+            if (js != null) { js.cancel(JOB_ID); js.cancel(SOON_ID); js.cancel(DOOR_ID); }
         } catch (Exception ignored) { }
     }
 

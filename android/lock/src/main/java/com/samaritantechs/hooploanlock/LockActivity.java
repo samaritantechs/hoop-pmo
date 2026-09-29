@@ -1,15 +1,21 @@
 package com.samaritantechs.hooploanlock;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -67,6 +73,51 @@ public class LockActivity extends Activity {
        "no mark" at build time -- see build() and refreshLogo(). */
     private ImageView logoView;
 
+    /* THE RADIO, FROM THIS SCREEN -- see radios(). netView is the one line under the two
+       buttons that says whether the phone can hear the office right now, and what a button
+       press did. Everything below it exists so a customer who turns the network on is not
+       left waiting a quarter of an hour for the beat that would free or move their phone. */
+    private TextView netView;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    /* When one of OUR two buttons last opened a system panel, and 0 otherwise. The emergency
+       button never sets it: a screen that pulled itself back over a live emergency call would
+       take the hang-up button away from somebody who needs it. */
+    private long panelOpenedAt = 0;
+    /* Set by openPanel, and turned into panelOpenedAt by the onPause that a panel actually
+       opening causes. A start that was refused never pauses us, so it never arms the return;
+       neither does the emergency dialer, which clears it first. */
+    private boolean panelPending = false;
+    /* Whether Settings is on the lock-task allowlist right now -- see LockAdmin.allowSettings.
+       Opened for a press, closed by every road back to this screen. */
+    private boolean settingsOpen = false;
+    /* The data button cycles through the screens that carry the mobile-data switch on one
+       Android or another (see dataPressed); a fresh attempt starts at the first again. */
+    private int dataScreen = 0;
+    private long dataPressedAt = 0;
+    private boolean inFront = false;
+    private long lastNetBeat = 0;
+    private ConnectivityManager.NetworkCallback netWatch;
+    /* registerDefaultNetworkCallback reports the network that is ALREADY there the moment it
+       is registered. That is not the network coming back, and a phone that was online when
+       its screen went up has nothing new to say -- so the first report is swallowed when the
+       phone was online at registration, and only a genuine return beats. */
+    private boolean netPrimed = false;
+    private boolean onlineAtWatch = false;
+    /* HOW LONG A PANEL MAY STAY IN FRONT. Settings has to be reachable for the panel to open
+       at all (LockAdmin.harden allowlists it for lock task), and a panel has a way into the
+       rest of Settings -- so the locked screen puts itself back on top after this long, and
+       the moment a network comes up. Long enough to type a Wi-Fi password twice. */
+    private static final long PANEL_MS = 90_000L;
+    private final Runnable comeback = () -> {
+        /* Closing the door is what clears the panel's task: the system finishes a locked task
+           whose package leaves the allowlist (LockAdmin.allowSettings), which puts this screen
+           back in front by itself. show() is the belt to that brace. */
+        closeDoor();
+        if (inFront || isFinishing()) return;
+        if (!Prefs.of(this).getBoolean(Prefs.LOCKED, false)) return;
+        Guard.show(getApplicationContext());
+    };
+
     /* THE SCREEN'S OWN DOORBELL. Registered while this activity is alive, so an unlock can
        reach it without anybody having to start an activity from the background -- which is
        the thing Android 10+ may refuse in silence, and which stranded a customer's phone
@@ -96,12 +147,20 @@ public class LockActivity extends Activity {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(release, f, Context.RECEIVER_NOT_EXPORTED);
             else registerReceiver(release, f);
         } catch (Exception ignored) { }
+        /* A FRESH PROCESS MAY HAVE INHERITED AN OPEN DOOR -- the last one killed behind a panel,
+           its Handler and its `settingsOpen` gone with it. Shut it unconditionally: one binder
+           call, and it is what clears a panel task still sitting under this screen. */
+        LockAdmin.allowSettings(this, false);
+        watchNetwork();
         handle(getIntent());
     }
 
     @Override
     protected void onDestroy() {
         try { unregisterReceiver(release); } catch (Exception ignored) { }
+        unwatchNetwork();
+        ui.removeCallbacksAndMessages(null);
+        closeDoor();
         /* THE GLASS IS THE TRUTH. However this activity ended -- released, finished, or killed
            by the system to reclaim memory -- the lock screen is no longer in front of anybody,
            and the next beat must say so. If the office still wants this phone locked, that beat
@@ -113,6 +172,10 @@ public class LockActivity extends Activity {
 
     /** Leave lock task and go. Only the activity that entered it may leave it. */
     private void standDown() {
+        /* The door shuts BEFORE the pin comes off. A panel task still on the allowlist would
+           survive stopLockTask() as the phone's remaining locked task -- an unlocked phone pinned
+           to the Wi-Fi screen with no Home -- so it is finished first, by losing the allowlist. */
+        closeDoor();
         try { stopLockTask(); } catch (Exception ignored) { }
         Prefs.put(this, Prefs.SCREEN_UP, false);
         finish();
@@ -126,6 +189,25 @@ public class LockActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refresh();
+        inFront = true;
+        ui.removeCallbacks(comeback);
+        panelOpenedAt = 0;
+        panelPending = false;
+        closeDoor();
+        BeatJob.cancelDoor(this);
+    }
+
+    /* Paused by a panel one of our buttons has just opened: arm the return. Paused by anything
+       else -- the emergency dialer, the screen going off, the system -- nothing is armed. */
+    @Override
+    protected void onPause() {
+        super.onPause();
+        inFront = false;
+        if (panelPending) {
+            panelPending = false;
+            panelOpenedAt = SystemClock.elapsedRealtime();
+            ui.postDelayed(comeback, PANEL_MS);
+        }
     }
 
     @Override
@@ -146,11 +228,28 @@ public class LockActivity extends Activity {
         // Recorded BEFORE the pin attempt, because the screen is in front of the customer
         // either way -- startLockTask decides whether they can leave it, not whether it shows.
         Prefs.put(this, Prefs.SCREEN_UP, true);
+        /* PINNED ONCE. startLockTask() on the task that is already pinned is not a no-op inside
+           the system: it moves the task to the END of the locked-task list. Alone in that list
+           it never mattered; with a panel task underneath (radios()), it would make the panel the
+           ROOT -- and stopLockTask() from a task that is no longer root leaves the phone pinned
+           to the other one after an unlock. So a screen brought back to the front re-pins nothing. */
+        if (lockedAlready()) return;
         try { startLockTask(); } catch (Exception ignored) {
             /* Not Device Owner -- a hand-installed test build, or provisioning that did not
                take. The screen still shows, and it can still be left. Failing softly here is
                deliberate: a crash loop on a customer's phone would be far worse than a lock
                that is weaker than intended and visibly so on the register. */
+        }
+    }
+
+    /** True while the phone is in full lock task, which only this package -- and a panel it
+        opened -- can be the reason for. Unsure reads as "not yet", so pinning is attempted. */
+    private boolean lockedAlready() {
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            return am != null && am.getLockTaskModeState() == ActivityManager.LOCK_TASK_MODE_LOCKED;
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -183,6 +282,7 @@ public class LockActivity extends Activity {
         set(helpView, help.isEmpty() || msg.contains(help) ? "" : help);
         set(imeiView, imei.isEmpty() ? "" : "IMEI: " + imei);
         refreshLogo();
+        refreshNet();
         /* NO REASON LINE. There used to be one here -- "REASON: STOCK, UNSOLD", or worse,
            naming an accused employee by name on a screen anybody who picks the phone up can
            read. "DROP THE REASON FILLING AND ITS DATA SINCE THE MESSAGE IS ENOUGH": whoever
@@ -305,6 +405,12 @@ public class LockActivity extends Activity {
         Button emergency = new Button(this);
         emergency.setText("Simu ya dharura / Emergency call");
         emergency.setOnClickListener(v -> {
+            /* Nothing of the radio buttons' machinery may ride along: no return timer that
+               would pull this screen back over a live call, no open door. */
+            panelPending = false;
+            panelOpenedAt = 0;
+            ui.removeCallbacks(comeback);
+            closeDoor();
             try {
                 startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:")));
             } catch (Exception ignored) { }
@@ -315,6 +421,7 @@ public class LockActivity extends Activity {
         ep.gravity = Gravity.CENTER;
         root.addView(emergency, ep);
 
+        radios(root);
         return root;
     }
 
@@ -336,6 +443,214 @@ public class LockActivity extends Activity {
         lp.topMargin = dp(topDp);
         root.addView(t, lp);
         return t;
+    }
+
+    /* THE RADIO, FROM THE LOCKED SCREEN.
+       =====================================================================================
+         "we don't have the grace period to go switch on wifi or data since theirs beats the
+          phone in seconds after power on. so we need to give both the wifi and data buttons
+          on top of our lock, leaving the grace period behind"
+
+       A locked phone that cannot reach the office cannot be unlocked, released or moved --
+       and the person holding it could not help, because this screen is pinned and Settings
+       is behind it. The boot window (Guard.openWindow) was the answer: a few minutes of
+       ordinary use after a power cycle, long enough to pull the shade down. It stopped being
+       one the day a second lock arrived on the same stock: Knox Guard takes the screen within
+       seconds of boot, so the window opens onto a screen the customer cannot use either.
+
+       So the two toggles live HERE, on the only screen that is reliably in front:
+
+         WIFI   switches the radio on ourselves -- a Device Owner may (Net.wifiOn), and a radio
+                that is on rejoins any network this phone already knows -- then opens the
+                system's own Wi-Fi panel for a new network.
+         DATA   opens the system's internet panel, which carries the mobile-data switch. There
+                is no API for an app, Device Owner or not, to flip mobile data itself; the
+                panel is the sanctioned way and the same one the other lock's button uses.
+
+       WHY THE PANEL OPENS AT ALL: this activity is singleInstance, so anything it starts lands
+       in a NEW task, and lock task refuses a new task from a package that is not allowlisted --
+       silently: the start returns a code rather than throwing. So Settings is allowlisted FOR
+       THE PRESS (LockAdmin.allowSettings: openDoor/closeDoor here), never permanently: the door
+       shuts when this screen comes back -- on its own timer (PANEL_MS, backed by a BeatJob
+       one-shot that survives this process), the moment a network comes up (networkBack), or
+       because the customer backed out -- and shutting it is also what finishes the panel's task,
+       since the system clears a locked task whose package leaves the allowlist. While it is
+       open, LockAdmin holds a few restrictions that cost the office nothing (no hotspot, no
+       network reset, no clock change, no apps control). What Settings can do to us beyond that
+       is bounded by the platform: a Device Owner is a protected package -- uninstall, disable
+       and clear-data are refused by the system, force-stop is hidden -- and the restrictions
+       LockAdmin holds stay held. adb stays deliberately open: it is the office's own cable
+       release on a locked handset.
+
+       AND THE PHONE SPEAKS THE MOMENT IT CAN. A network callback (watchNetwork) beats at once
+       when connectivity returns, so the unlock, release or shift the office already ordered
+       lands in seconds rather than at the next quarter-hour -- which is what the boot window
+       was really for. A silent refusal to open the panel is caught and SAID (openPanel): the
+       screen is still in front a moment later, so the customer is told, not left tapping. */
+    private void radios(LinearLayout root) {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER);
+        Button wifi = new Button(this);
+        wifi.setText("Washa WiFi / Wi-Fi on");
+        wifi.setOnClickListener(v -> wifiPressed());
+        Button data = new Button(this);
+        data.setText("Data za simu / Mobile data");
+        data.setOnClickListener(v -> dataPressed());
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        bp.leftMargin = dp(6);
+        bp.rightMargin = dp(6);
+        bar.addView(wifi, bp);
+        bar.addView(data, bp);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(14);
+        root.addView(bar, lp);
+        /* Mixed case, unlike the lines above: this is a sentence to act on, not a name to read
+           out, and a two-language sentence in capitals is the one thing on this screen that
+           is genuinely hard to read. */
+        netView = row(root, 12, 0xFFFFD27A, false, 8);
+        netView.setAllCaps(false);
+    }
+
+    private void wifiPressed() {
+        boolean on = Net.wifiOn(this);
+        say(on ? "WiFi imewashwa — chagua mtandao / Wi-Fi is on — pick a network"
+               : "WiFi haikuwashika hapa — washa kwenye kidirisha / Wi-Fi could not be switched on here — use the panel");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            openPanel(android.provider.Settings.Panel.ACTION_WIFI, android.provider.Settings.ACTION_WIFI_SETTINGS);
+        } else {
+            openPanel(android.provider.Settings.ACTION_WIFI_SETTINGS);
+        }
+    }
+
+    /* WHERE THE MOBILE-DATA SWITCH LIVES IS NOT THE SAME SCREEN ON EVERY ANDROID, and nothing
+       here can look inside a panel to check. AOSP puts it on the internet panel (10+) and on the
+       Mobile network screen; Samsung's One UI keeps it under Data usage. So the button cycles:
+       the panel first, then Data usage, then Mobile network -- each press the next -- and the
+       line says so. A fresh attempt two minutes later starts at the panel again. */
+    private void dataPressed() {
+        long now = SystemClock.elapsedRealtime();   // the wall clock is the customer's to set; this is not
+        if (now - dataPressedAt > 120_000L) dataScreen = 0;
+        dataPressedAt = now;
+        int which = dataScreen++ % 3;
+        say("Washa data za simu kwenye skrini inayofunguka. Hakuna swichi hapo? Bonyeza tena kwa skrini nyingine. "
+            + "/ Turn mobile data on in the screen that opens. No switch there? Press again for the next screen.");
+        if (which == 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            openPanel(android.provider.Settings.Panel.ACTION_INTERNET_CONNECTIVITY,
+                    android.provider.Settings.ACTION_DATA_USAGE_SETTINGS,
+                    android.provider.Settings.ACTION_DATA_ROAMING_SETTINGS);
+        } else if (which <= 1 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            openPanel(android.provider.Settings.ACTION_DATA_USAGE_SETTINGS,
+                    android.provider.Settings.ACTION_DATA_ROAMING_SETTINGS);
+        } else {
+            openPanel(android.provider.Settings.ACTION_DATA_ROAMING_SETTINGS,
+                    android.provider.Settings.ACTION_WIRELESS_SETTINGS);
+        }
+    }
+
+    /** The first of these that resolves, through a door opened for it and closed behind it. A
+        lock-task refusal does NOT throw -- the start is simply dropped -- so if this screen is
+        still in front a moment later, nothing opened, and that is said on the screen rather
+        than left as a button that does nothing. */
+    private void openPanel(String... actions) {
+        panelPending = true;
+        openDoor();
+        /* The return, on the system's clock as well as ours: this process may not survive a
+           minute behind a Settings screen. BeatJob runs Guard.enforce -> show(), and a screen
+           created fresh shuts the door in onCreate. Cancelled the moment this screen resumes. */
+        BeatJob.scheduleDoor(this, PANEL_MS + 15_000L);
+        for (String a : actions) {
+            try {
+                startActivity(new Intent(a));
+                ui.postDelayed(() -> {
+                    if (!inFront) return;             // it opened; onPause took over
+                    boolean never = panelPending;     // still pending in front: nothing opened
+                    panelPending = false;
+                    if (!never) return;               // opened and already came back
+                    closeDoor();
+                    say(Net.online(this) ? "Mtandao upo / Online"
+                        : "Ikiwa hakuna kilichofunguka: WiFi ikiwashwa huunganisha mtandao unaojulikana yenyewe. "
+                          + "/ If nothing opened: Wi-Fi, once on, joins a known network by itself.");
+                }, 1500);
+                return;
+            } catch (Exception ignored) { }
+        }
+        panelPending = false;
+        closeDoor();
+        say("Simu hii haina skrini hiyo ya mtandao / This phone offers no such network screen");
+    }
+
+    /* THE DOOR: Settings on the lock-task allowlist, for a press and no longer. See
+       LockAdmin.allowSettings for why it is never held open in harden(), and why closing it is
+       also what clears the panel's task from under this screen. */
+    private void openDoor() {
+        if (LockAdmin.allowSettings(this, true)) settingsOpen = true;
+    }
+
+    private void closeDoor() {
+        if (!settingsOpen) return;
+        settingsOpen = false;
+        LockAdmin.allowSettings(this, false);
+    }
+
+    private void say(String text) {
+        try { set(netView, text); } catch (Exception ignored) { }
+    }
+
+    /** The standing line under the buttons: can this phone hear the office right now. */
+    private void refreshNet() {
+        try {
+            if (netView == null) return;
+            boolean on = Net.online(this);
+            set(netView, on ? "Mtandao upo / Online"
+                : "Hakuna mtandao — washa WiFi au data ili simu isikie ofisi. / No network — turn on Wi-Fi or data so this phone can hear the office.");
+            netView.setTextColor(on ? 0xFF9BE7B0 : 0xFFFFD27A);
+        } catch (Exception ignored) { }
+    }
+
+    /* The network coming back is the event this whole screen waits for. Two beats, because the
+       first can land before the connection has finished validating; the second is long enough
+       after for a captive portal or a slow DNS to have settled, and both are cheap. Then the
+       screen comes back over whichever panel the customer is still in: the network is up, which
+       is all the panel was for, and the office's answer is seconds away. */
+    private void networkBack() {
+        refreshNet();
+        if (!netPrimed) {
+            netPrimed = true;
+            if (onlineAtWatch) return;   // the network that was there all along, not one coming back
+        }
+        long now = SystemClock.elapsedRealtime();   // never the wall clock: wound back, it would swallow these beats
+        if (now - lastNetBeat < 20_000L) return;
+        lastNetBeat = now;
+        final Context app = getApplicationContext();
+        ui.postDelayed(() -> Beat.now(app, false), 1500);
+        ui.postDelayed(() -> Beat.now(app, false), 12_000);
+        if (!inFront && panelOpenedAt > 0) ui.postDelayed(comeback, 4000);
+    }
+
+    private void watchNetwork() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return;
+            onlineAtWatch = Net.online(this);
+            netWatch = new ConnectivityManager.NetworkCallback() {
+                @Override public void onAvailable(Network n) { ui.post(() -> networkBack()); }
+                @Override public void onLost(Network n) { ui.post(() -> refreshNet()); }
+            };
+            cm.registerDefaultNetworkCallback(netWatch);
+        } catch (Exception ignored) { netWatch = null; }
+    }
+
+    private void unwatchNetwork() {
+        try {
+            if (netWatch == null) return;
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null) cm.unregisterNetworkCallback(netWatch);
+        } catch (Exception ignored) { }
+        netWatch = null;
     }
 
     /** Back does nothing. There is nowhere behind this screen to go. */
