@@ -11698,13 +11698,16 @@ function drawSettings(m){
       +'<div class="mut" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">'
       +'<b>DEVICE_*</b>: maneno yanayoonekana kwenye simu iliyofungwa. Hakuna neno lililojengwa ndani ya app — yote yanatoka hapa. '
       +'/ every word on a locked phone comes from these; none is compiled into the APK.'
-      +'<pre style="background:#0b2a6b;color:#fff;text-align:center;border-radius:8px;padding:12px;margin:8px 0;font-size:11.5px;line-height:1.6;white-space:pre-wrap">'
-      +'HOOP LIMITED\n'
-      +'SIMU HII IMEFUNGWA NA HOOP LIMITED.\nWASILIANA NASI KWA NAMBA 0700123456\n'
-      +'IMEI: 351388334583295</pre>'
+      /* THE PREVIEW IS LIVE: what the phone will actually say, from the three boxes above as
+         they are typed -- the sentence in force is already in the DEVICE_LOCK_MESSAGE box
+         (the server puts the working one there when none was ever saved), so editing starts
+         from the truth rather than from an empty box that hides a sentence the phone shows. */
+      +'<pre id="lockPrev" style="background:#0b2a6b;color:#fff;text-align:center;border-radius:8px;padding:12px;margin:8px 0;font-size:11.5px;line-height:1.6;white-space:pre-wrap"></pre>'
+      +'<div id="lockPrevNote"></div>'
       +'<b>DEVICE_LOCK_BRAND</b> = mstari wa kwanza, na <code>{brand}</code>. '
       +'<b>DEVICE_HELP_PHONE</b> = namba, na <code>{namba}</code>. '
-      +'<b>DEVICE_LOCK_MESSAGE</b> = sentensi — weka <code>{brand}</code> na <code>{namba}</code> popote unapotaka. '
+      +'<b>DEVICE_LOCK_MESSAGE</b> = sentensi — hariri iliyopo; weka <code>{brand}</code> na <code>{namba}</code> popote unapotaka. '
+      +'/ edit the sentence as it stands; the preview above is what the phone will show. '
       +'IMEI inatoka kwenye register, si kwenye simu yenyewe. Hakuna mstari wa REASON kwenye simu — '
       +'sababu ya kufunga bado inaonekana kwenye historia ya rejista pekee. '
       +'<b>DEVICE_OFFLINE_GRACE_HOURS</b> = saa za ukimya kabla simu ya mteja kujifunga (168 = wiki moja). '
@@ -11734,7 +11737,39 @@ function drawSettings(m){
           .then(function(){toast('Imehifadhiwa.');}).catch(function(e){toast(String(e.message||e),true);});
       };
     });
+    var ix={}; (d.settings||[]).forEach(function(s,i){ ix[s.key]=i; });
+    wireLockPreview_(ix);
   }).catch(function(e){ paneFailed(m,e); });
+}
+
+/* WHAT THE PHONE WILL ACTUALLY SAY, as it is typed. MIRRORS composeLockWords() / fill() in
+   api/_lib/device-core.js, which stays the authority -- the handset is sent what the SERVER
+   composes, never this. Duplicated only because a preview must render text that has not been
+   saved yet; if fill() gains a placeholder, it belongs here too. The one mistake this catches
+   is a sentence that names {namba} with no number set: "kwa namba ." on the one screen where
+   that is worst. */
+function lockFill_(text, brand, phone){
+  return String(text==null?'':text)
+    .replace(/\{\s*(brand|kampuni)\s*\}/gi, brand)
+    .replace(/\{\s*(namba|phone|simu)\s*\}/gi, phone)
+    .replace(/[ \t]{2,}/g,' ').trim();
+}
+function wireLockPreview_(ix){
+  var out=$('#lockPrev'), note=$('#lockPrevNote'); if(!out) return;
+  var b=$('#st'+ix.DEVICE_LOCK_BRAND), msg=$('#st'+ix.DEVICE_LOCK_MESSAGE), p=$('#st'+ix.DEVICE_HELP_PHONE);
+  if(!b||!msg||!p) return;
+  var upd=function(){
+    var brand=(b.value||'').trim()||'HOOP LIMITED', phone=(p.value||'').trim();
+    // The same two defaults device-core.js falls back on, for the same reason: no number, no promise of one.
+    var raw=(msg.value||'').trim()
+      ||(phone?'Simu hii imefungwa na {brand}. Wasiliana nasi kwa namba {namba}.':'Simu hii imefungwa na {brand}. Wasiliana nasi kumaliza malipo.');
+    out.textContent=brand.toUpperCase()+'\n'+lockFill_(raw,brand,phone).toUpperCase()+'\nIMEI: 351388334583295';
+    var dangling=!phone&&/\{\s*(namba|phone|simu)\s*\}/i.test(raw);
+    if(note) note.innerHTML=dangling
+      ?'<div class="note bad" style="margin:4px 0 8px">Ujumbe unataja {namba} lakini DEVICE_HELP_PHONE ni tupu — simu itaonyesha nafasi tupu. / The message names {namba} but no number is set; the phone will show a gap.</div>'
+      :'';
+  };
+  b.oninput=upd; msg.oninput=upd; p.oninput=upd; upd();
 }
 
 /* =====================================================================================

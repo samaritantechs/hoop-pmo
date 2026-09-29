@@ -133,15 +133,14 @@ async function readSettings(db, keys) {
   }
 }
 
-/** `rows`, when passed, is a settings read the caller already made (beat()'s one shared trip)
-    -- `null` for "could not ask", an array (possibly not carrying this key at all) for "asked".
-    Omitted (`undefined`) means this call is on its own and must fetch its own slice, exactly
-    as it always has -- see hello(), which has no shared read to hand in. */
-async function lockWords(db, given) {
-  // Unreadable settings read the same as unset ones here: the lock screen falls back to the
-  // default brand and drops the help number rather than promising one it does not have.
-  const rows = given !== undefined ? (given || []) : ((await readSettings(db, LOCK_SETTINGS)) || []);
-  const get = k => { const r = rows.find(x => S(x.key) === k); return r ? S(r.value) : ''; };
+/** WHAT THE LOCKED PHONE WILL SAY, from a settings read -- the one definition, used by the beat
+    (lockWords) and by the Settings pane, which shows the same sentence for editing. `raw` is the
+    template actually in force, placeholders and all: with no DEVICE_LOCK_MESSAGE row it is the
+    built-in sentence, and that is what the pane puts in the box -- "i dont see the editable
+    'SIMU HII IMEFUNGWA NA .....' at settings": a blank box for a sentence that is plainly on the
+    phone is a setting nobody can find. */
+export function composeLockWords(rows) {
+  const get = k => { const r = (rows || []).find(x => S(x.key) === k); return r ? S(r.value) : ''; };
   const brand = get('DEVICE_LOCK_BRAND') || DEFAULT_BRAND;
   const phone = get('DEVICE_HELP_PHONE');
   /* Two defaults, not one, because "Wasiliana nasi kwa namba ." is what a single default
@@ -154,7 +153,22 @@ async function lockWords(db, given) {
     brand,
     message: fill(raw, brand, phone),
     helpPhone: phone || null,
+    raw,
+    brandSet: !!get('DEVICE_LOCK_BRAND'),
+    messageSet: !!get('DEVICE_LOCK_MESSAGE'),
   };
+}
+
+/** `given`, when passed, is a settings read the caller already made (beat()'s one shared trip)
+    -- `null` for "could not ask", an array (possibly not carrying this key at all) for "asked".
+    Omitted (`undefined`) means this call is on its own and must fetch its own slice, exactly
+    as it always has -- see hello(), which has no shared read to hand in. */
+async function lockWords(db, given) {
+  // Unreadable settings read the same as unset ones here: the lock screen falls back to the
+  // default brand and drops the help number rather than promising one it does not have.
+  const rows = given !== undefined ? (given || []) : ((await readSettings(db, LOCK_SETTINGS)) || []);
+  const w = composeLockWords(rows);
+  return { brand: w.brand, message: w.message, helpPhone: w.helpPhone };
 }
 
 /* HOW LONG A PHONE MAY GO UNHEARD-FROM BEFORE IT LOCKS ITSELF.

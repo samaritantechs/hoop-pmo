@@ -3,7 +3,7 @@ import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole, USER_TABS, EXTRA_TABS,
   clearRolesCache } from './_lib/auth.js';
 import { clearSystemOpenCache } from './_lib/system-gate.js';
-import { noteDeviceSettingsWritten } from './_lib/device-core.js';
+import { noteDeviceSettingsWritten, composeLockWords } from './_lib/device-core.js';
 import { audited, AUDITED, auditList } from './_lib/audit.js';
 import { todayKey, addDaysKey, weekMondayKey, TZ_OFFSET_MS } from './_lib/time.js';
 import { sendMail, noticeHtml } from './_lib/mail.js';
@@ -10424,6 +10424,13 @@ const FNS = {
     // An empty FU_STATUSES box looked like "there is no list" when the list simply
     // lives in code -- show the WORKING vocabulary so editing starts from the truth.
     if (!String(by.FU_STATUSES || '').trim()) by.FU_STATUSES = FU_STATUSES.join(', ');
+    // Same for the words on the locked screen: "SIMU HII IMEFUNGWA NA ..." is a code default
+    // until somebody saves one, and a blank row read as "there is nothing to edit". Show the
+    // template the phone is WORKING FROM (with its {brand}/{namba} holes) so editing starts
+    // from the sentence the field is already seeing. composeLockWords is the one definition.
+    const words = composeLockWords(rows);
+    if (!String(by.DEVICE_LOCK_BRAND || '').trim()) by.DEVICE_LOCK_BRAND = words.brand;
+    if (!String(by.DEVICE_LOCK_MESSAGE || '').trim()) by.DEVICE_LOCK_MESSAGE = words.raw;
     return { ok: true,
       settings: EDITABLE_SETTINGS.map(k => ({ key: k, value: by[k] == null ? '' : by[k] })) };
   },

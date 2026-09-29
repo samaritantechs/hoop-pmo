@@ -640,6 +640,13 @@ The default message is `Simu hii imefungwa na {brand}. Wasiliana nasi kwa namba 
 and, with no `DEVICE_HELP_PHONE` set, `…Wasiliana nasi kumaliza malipo.` instead. A sentence
 that promises a number and then does not give one is worse than no sentence at all.
 
+The Settings pane shows that sentence **pre-filled** even before anybody has saved one — the
+template the phone is working from, `{brand}` and `{namba}` holes included — and previews,
+as you type, what the locked screen will say. A blank box for a sentence plainly on the phone
+was a setting nobody could find. Saving the box as shown changes nothing on the phone; only an
+edited sentence does. `composeLockWords()` in `api/_lib/device-core.js` is the one definition
+both the heartbeat and the pane read from.
+
 **Funga does not ask the operator for a reason any more**, and has not needed to for a while —
 the lock screen's message already names the company and a number to call, which is enough for
 the customer standing there. `api/portal.js`'s `deviceSetState` still accepts a `reason`

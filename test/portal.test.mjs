@@ -106,6 +106,40 @@ test('every setting the lock screen reads can actually be set', async () => {
   for (const key of KEYS) assert.ok(shown.includes(key), key + ' is missing from Settings');
 });
 
+/* "i dont see the editable 'SIMU HII IMEFUNGWA NA .....' at settings". The sentence on every
+   locked phone was a code default in device-core.js until somebody saved one, and the pane
+   showed an EMPTY box for it -- a blank row for a sentence plainly on the phone is a setting
+   nobody can find. The pane now shows the template in force, holes and all, so editing starts
+   from the truth; a saved sentence is shown exactly as saved. */
+test('Settings shows the lock sentence the phone is working from, not a blank box', async () => {
+  const valueOf = (r, k) => r.settings.find(s => s.key === k).value;
+
+  // Nothing ever saved: the working template, with its {brand} hole, and the default brand.
+  let r = await _FNS.settings(fakeDb({ settings: [] }), ADMIN);
+  assert.equal(valueOf(r, 'DEVICE_LOCK_MESSAGE'),
+    'Simu hii imefungwa na {brand}. Wasiliana nasi kumaliza malipo.');
+  assert.equal(valueOf(r, 'DEVICE_LOCK_BRAND'), 'HOOP LIMITED');
+  assert.equal(valueOf(r, 'DEVICE_HELP_PHONE'), '', 'no number is invented');
+
+  // A help number set: the template that names it -- the same one the handset is sent.
+  r = await _FNS.settings(fakeDb({ settings: [{ key: 'DEVICE_HELP_PHONE', value: '0700123456' }] }), ADMIN);
+  assert.equal(valueOf(r, 'DEVICE_LOCK_MESSAGE'),
+    'Simu hii imefungwa na {brand}. Wasiliana nasi kwa namba {namba}.');
+
+  // A saved sentence and brand come back exactly as saved.
+  r = await _FNS.settings(fakeDb({ settings: [
+    { key: 'DEVICE_LOCK_MESSAGE', value: 'Lipa kwanza, {brand}.' },
+    { key: 'DEVICE_LOCK_BRAND', value: 'Hoop Ltd' },
+  ] }), ADMIN);
+  assert.equal(valueOf(r, 'DEVICE_LOCK_MESSAGE'), 'Lipa kwanza, {brand}.');
+  assert.equal(valueOf(r, 'DEVICE_LOCK_BRAND'), 'Hoop Ltd');
+
+  // And the pane previews the composed sentence live, from the three boxes as typed.
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  assert.ok(html.includes('id="lockPrev"'), 'the live preview box');
+  assert.ok(html.includes('wireLockPreview_(ix)'), 'wired after the inputs are drawn');
+});
+
 test('renameAccessCode moves the secret, keeps the row, and flags self-rename', async () => {
   const d = fakeDb({ access_codes: [
     { code: '2802', name: 'MARKII', role: 'ADMIN', teams: null, tabs: ['upload', 'settings'] },
