@@ -20,20 +20,22 @@ class Guard {
     static void lock(Context c) {
         boolean was = Prefs.of(c).getBoolean(Prefs.LOCKED, false);
         Prefs.put(c, Prefs.LOCKED, true);
-        /* A LOCK ORDER CLOSES AN OPEN WINDOW -- ON A PHONE THAT IS SOLD. The boot window exists
-           so a customer's handset can be REACHED, and the office reaching it to say "lock" is
-           that purpose served, not interrupted. Leaving it open there would be the loophole
-           itself: take a window, wait for the beat to land, and keep the phone for the rest of
-           the five minutes anyway.
+        /* A LOCK ORDER DOES NOT CLOSE AN OPEN BOOT WINDOW. It used to -- "the office reaching
+           the phone is the window's purpose served" -- and that was a fence too many:
 
-           NOT ON STOCK. "a locked stock with our lock needs to give time no matter the buttons":
-           a phone still in the store -- no customer, no sale; the register says never self-lock
-           -- is restarted so somebody at the bench can work on it (a second lock enrolled, a
-           SIM, a test), and on a phone that is online the window used to last exactly one beat.
-           On stock the window runs its minutes and enforce() locks the screen when they are up.
-           Fence 2 still holds: one window per DEVICE_BOOT_GRACE_EVERY_HOURS, and the stamp
-           survives the reboot that would reset it. */
-        boolean keep = stockWindow(c);
+             "We need to return the grace period since a locked stock with our lock needs to
+              give time no matter the buttons." / "both grace period and buttons should work"
+
+           A locked handset that is switched on again gets its minutes, whoever holds it and
+           whether or not it is online: on a phone that already had a network the window used
+           to last exactly one beat, which is no window at all. The order is REMEMBERED here
+           (LOCKED is written above, and the beat keeps restating it) and enforce() puts the
+           screen up the moment the minutes are up -- on its timer, on every beat and on every
+           job run. What bounds this is fence 2, untouched: one window per
+           DEVICE_BOOT_GRACE_EVERY_HOURS, opened only by a real boot, and the stamp survives the
+           reboot that would reset it. Five minutes a day is a way to reach the office and to
+           switch a network on, and far too little to be a way of using the phone. */
+        boolean keep = inWindow(c);
         if (!keep) Prefs.put(c, Prefs.GRACE_UNTIL, 0L);
         /* AND A NEW LOCK BEGINS A NEW EPISODE. The rate limit exists to stop a power cycle
            minting a fresh window, not to punish a customer whose phone is locked again next
@@ -148,18 +150,6 @@ class Guard {
             i.putExtra(LockActivity.EXTRA_RELEASE, true);
             try { app.startActivity(i); } catch (Exception ignored) { }
         }, FALLBACK_MS);
-    }
-
-    /** A boot window is open on a phone the register still calls STOCK: graceHours at or below
-        zero is "never self-lock", which only an unsold handset is ever sent (graceFor in
-        device-core.js). A phone that has never heard from the office reads as stock too --
-        it has been told nothing else. */
-    static boolean stockWindow(Context c) {
-        if (!inWindow(c)) return false;
-        int hours;
-        try { hours = Integer.parseInt(Prefs.str(c, Prefs.GRACE_HOURS, "-1")); }
-        catch (Exception e) { hours = -1; }
-        return hours <= 0;
     }
 
     /** A Settings panel the locked screen opened is legitimately in front right now. Bounded by
@@ -283,12 +273,9 @@ class Guard {
         return until > 0 && System.currentTimeMillis() < until;
     }
 
-    /* Fence 3: the window ends the moment the handset reaches us, because at that moment it
-       has served its whole purpose -- the office can see this phone and this phone can hear
-       the office. Called from Beat on ANY successful answer, before the answer is acted on,
-       so what follows is an ordinary lock or an ordinary unlock with no window left under it.
-       There is therefore nothing to be gained by staying offline through the window. */
-    static void windowServed(Context c) {
-        Prefs.put(c, Prefs.GRACE_UNTIL, 0L);
-    }
+    /* THERE IS NO THIRD FENCE ANY MORE. Until 1.13.3 the window ended the moment the handset
+       reached the office (windowServed, called from every successful beat) -- and a phone that
+       already had a network reached it in the first second, so its window lasted one beat.
+       The owner asked for the minutes back, buttons or no buttons: the window now runs out on
+       its own clock, on every locked phone, and enforce() above is what closes it. */
 }

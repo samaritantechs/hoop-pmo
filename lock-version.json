@@ -1,6 +1,6 @@
 {
-  "versionCode": 30,
-  "versionName": "1.13.3",
-  "notes": "Simu iliyofungwa ambayo bado ni stoo (haijauzwa) inapata dakika zake zote za matumizi baada ya kuwashwa upya, hata ikiwa mtandaoni — awali ilifungwa sekunde ya kwanza ilipomfikia ofisi. Simu iliyouzwa haibadiliki. / A locked phone that is still stock (unsold) keeps its full boot window after a restart, even when online — it used to lock in the first second, the moment it reached the office. Sold phones are unchanged.",
+  "versionCode": 31,
+  "versionName": "1.13.4",
+  "notes": "Kila simu iliyofungwa inapata dakika zake zote za matumizi baada ya kuwashwa upya, hata ikiwa mtandaoni — awali ilifungwa sekunde ya kwanza ilipomfikia ofisi. Mara moja tu kwa siku (mipangilio), na vitufe vya WiFi/data vinabaki kwenye skrini iliyofungwa. / Every locked phone gets its full boot window after a restart, even when online — it used to lock in the first second, the moment it reached the office. Once a day (settings), and the Wi-Fi/data buttons stay on the locked screen.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk"
 }
