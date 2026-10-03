@@ -244,7 +244,8 @@ test('the wrapper is syntactically valid Java', () => {
   const r = spawnSync('javac', ['-d', '/tmp/javac-parse-check', '-nowarn',
     dir + 'com/samaritantechs/hoopcalls/MainActivity.java',
     dir + 'com/samaritantechs/hoopcalls/HoopLoanBridge.java',
-    dir + 'com/samaritantechs/hoopcalls/Updater.java'], { encoding: 'utf8' });
+    dir + 'com/samaritantechs/hoopcalls/Updater.java',
+    dir + 'com/samaritantechs/hoopcalls/MapLink.java'], { encoding: 'utf8' });
   const EXPECTED_WITHOUT_THE_SDK =
     /cannot find symbol|does not exist|cannot access|does not override or implement/;
   const syntax = (r.stderr || '').split('\n')
@@ -1043,6 +1044,83 @@ test('the wrapper hands an off-site link to the browser instead of eating it', (
      in-app rather than doing nothing at all, which is worse than the bug being fixed. */
   assert.match(out, /catch \(Exception ignored\) \{\s*\n\s*return false;/,
     'if nothing will take the link, fall back to the old in-app behaviour');
+
+  /* A PLACE GOES TO MAPS FIRST. "Hooploan app doesn't open location links into maps as
+     hopeloan does, just still works for link visiting via browser only" -- a web address is
+     the phone's to route and lands wherever that handset's link verification says; a geo:
+     address is a maps app's by definition. The geo: form is offered BEFORE the web one, and
+     the web one still goes out when nothing takes it, so no phone does worse than before. */
+  const open = out.slice(0, out.indexOf('private boolean launch('));
+  assert.match(open, /MapLink\.geoFor\(u\.toString\(\)\)/, 'the one rule for "is this a point on a map"');
+  assert.ok(open.indexOf('Uri.parse(geo)') < open.indexOf('launch(new Intent(Intent.ACTION_VIEW, u))'),
+    'geo: is tried first; the web address is the fallback, not the other way round');
+  assert.match(open, /if \(geo != null && launch\(.*\)\) return true;/,
+    'a geo: nobody takes falls through to the web address rather than ending the tap');
+
+  /* AND NO LINK CLOSES THE APP. Every hand-off goes through launch(); a bare startActivity
+     on a whatsapp: or mailto: link with no app for it threw ActivityNotFoundException
+     straight out of the WebView callback, which is a crash over one tap. */
+  const sol = main.slice(main.indexOf('shouldOverrideUrlLoading'), main.indexOf('onReceivedError'));
+  assert.doesNotMatch(sol, /startActivity\(/,
+    'shouldOverrideUrlLoading never calls startActivity itself -- launch() catches what it throws');
+  assert.match(sol, /if \(!openOutside\(u\)\) noApp\(\);/, 'and a link nothing can open says so');
+});
+
+/* THE RULE ITSELF, RUN. MapLink is plain Java on purpose -- no android.* anywhere -- so this
+   suite can compile it on an ordinary JDK and ask it questions, where the Activity around it
+   can only ever be parse-checked. A table of the links the portal actually writes, and of the
+   ones that must NOT be turned into a point: a place page, a route, a search by name, another
+   site wearing a google path, a pair that is not on the globe. */
+test('a Google Maps link to a coordinate pair becomes a geo: address, and nothing else does', () => {
+  const { spawnSync } = spawnMod;
+  if (spawnSync('javac', ['-version'], { encoding: 'utf8' }).error) return;   // CI asserts the JDK is there
+  const src = new URL('../android/app/src/main/java/com/samaritantechs/hoopcalls/MapLink.java', import.meta.url).pathname;
+  const out = fs.mkdtempSync('/tmp/maplink-');
+  const probe = out + '/Probe.java';
+  fs.writeFileSync(probe, 'package com.samaritantechs.hoopcalls;\n'
+    + 'public class Probe { public static void main(String[] a) {\n'
+    + '  for (String u : a) System.out.println(u + "\\t" + MapLink.geoFor("null".equals(u) ? null : u));\n'
+    + '} }\n');
+  try {
+  const c = spawnSync('javac', ['-d', out, '-nowarn', src, probe], { encoding: 'utf8' });
+  assert.equal(c.status, 0, 'MapLink must compile without the Android SDK:\n' + c.stderr);
+
+  const CASES = {
+    // what devWhere() and nsWhere() in portal.html write, comma encoded and bare
+    'https://www.google.com/maps?q=-6.812345%2C39.123456': 'geo:-6.812345,39.123456?q=-6.812345,39.123456',
+    'https://www.google.com/maps?q=-6.8,39.1': 'geo:-6.8,39.1?q=-6.8,39.1',
+    // the other spellings of the same point
+    'https://maps.google.com/?q=-6.8,39.1': 'geo:-6.8,39.1?q=-6.8,39.1',
+    'http://google.com/maps?q=-6.8,39.1': 'geo:-6.8,39.1?q=-6.8,39.1',
+    'https://www.google.co.tz/maps?q=-6.8,39.1': 'geo:-6.8,39.1?q=-6.8,39.1',
+    'https://www.google.com.au/maps?q=-6.8,39.1': 'geo:-6.8,39.1?q=-6.8,39.1',
+    'https://www.google.com/maps/search/?api=1&query=-6.8%2C39.1': 'geo:-6.8,39.1?q=-6.8,39.1',
+    'https://www.google.com/maps?z=15&q=-6.8,39.1&hl=sw': 'geo:-6.8,39.1?q=-6.8,39.1',
+    'https://WWW.GOOGLE.COM/maps?q=1,2': 'geo:1,2?q=1,2',
+    // not a point: the web address goes out as it is
+    'https://www.google.com/maps/place/Kariakoo/@-6.8,39.2,15z': 'null',
+    'https://www.google.com/maps/dir/?api=1&destination=-6.8,39.1': 'null',
+    'https://www.google.com/maps?q=Kariakoo+Market': 'null',
+    'https://www.google.com/search?q=-6.8,39.1': 'null',
+    'https://www.google.com/maps?q=91,0': 'null',
+    'https://www.google.com/maps?q=0,181': 'null',
+    'https://www.google.com/maps?q=-6.8,39.1,15z': 'null',
+    'https://www.google.com/maps?q=%2B6.8,39.1': 'null',   // a '+' is not a geo: coordinate
+    'https://www.google.com/maps?q=%ZZ': 'null',
+    'https://hoop-pmo.vercel.app/portal?q=-6.8,39.1': 'null',
+    'https://notgoogle.com/maps?q=-6.8,39.1': 'null',
+    'https://google.com.evil.io/maps?q=-6.8,39.1': 'null',
+    'geo:-6.8,39.1?q=-6.8,39.1': 'null',
+    'null': 'null',
+  };
+  const r = spawnSync('java', ['-cp', out, 'com.samaritantechs.hoopcalls.Probe', ...Object.keys(CASES)],
+    { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const got = Object.fromEntries(r.stdout.trim().split('\n').map(l => l.split('\t')));
+  assert.deepEqual(got, CASES);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });   // nothing left behind, run after run
+  }
 });
 
 test('a blank-target click reaches the wrapper at all', () => {
