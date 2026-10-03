@@ -1,6 +1,6 @@
 {
-  "versionCode": 7,
-  "versionName": "1.0.6",
-  "notes": "Kiungo cha ramani sasa kinafunguka kwenye Maps/kivinjari badala ya kukwama ndani ya app. / The map link now opens in Maps or the browser instead of failing inside the app.",
+  "versionCode": 8,
+  "versionName": "1.0.7",
+  "notes": "Kiungo cha mahali sasa kinafunguka moja kwa moja kwenye Google Maps, si kwenye kivinjari. / A location link now opens straight in Google Maps instead of a browser tab.",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN.apk"
 }

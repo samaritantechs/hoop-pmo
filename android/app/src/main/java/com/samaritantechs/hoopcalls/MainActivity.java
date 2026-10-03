@@ -145,12 +145,17 @@ public class MainActivity extends Activity {
                 if ("tel".equals(scheme)) {
                     // ACTION_DIAL opens the dialer with the number filled in -- no CALL_PHONE
                     // permission needed, and the officer always presses the green button themselves.
-                    startActivity(new Intent(Intent.ACTION_DIAL, u));
+                    if (!launch(new Intent(Intent.ACTION_DIAL, u))) noApp();
                     return true;
                 }
+                /* THROUGH launch(), NEVER A BARE startActivity. A whatsapp: link on a phone
+                   without WhatsApp, a mailto: with no mail app set up, throws
+                   ActivityNotFoundException -- and uncaught, that closed the whole app over one
+                   tap. Now it says so instead, and the tap is consumed either way so the WebView
+                   never tries to load a scheme it cannot and lands on the offline screen. */
                 if ("mailto".equals(scheme) || "sms".equals(scheme) || "whatsapp".equals(scheme)
                         || "geo".equals(scheme)) {
-                    startActivity(new Intent(Intent.ACTION_VIEW, u));
+                    if (!openOutside(u)) noApp();
                     return true;
                 }
                 /* ANYWHERE THAT IS NOT OUR OWN SITE BELONGS OUTSIDE THIS APP.
@@ -308,7 +313,8 @@ public class MainActivity extends Activity {
                     if (dm != null) dm.enqueue(r);
                     Toast.makeText(MainActivity.this, "Inapakua: " + name, Toast.LENGTH_LONG).show();
                 } catch (Exception e) {
-                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));   // let the browser have it
+                    // Let the browser have it -- and if there is none, say so rather than throw.
+                    if (!launch(new Intent(Intent.ACTION_VIEW, Uri.parse(url)))) noApp();
                 }
             }
         });
@@ -362,8 +368,22 @@ public class MainActivity extends Activity {
      */
     private boolean openOutside(Uri u) {
         if (u == null) return false;
+        /* A PLACE GOES TO MAPS FIRST. "Hooploan app doesn't open location links into maps as
+           hopeloan does, just still works for link visiting via browser only" -- a Google Maps
+           WEB address is the phone's to route, and which app it picks depends on whether that
+           handset has verified google.com links for Maps; a geo: address is a maps app's by
+           definition. See MapLink for the rule. Nothing taking the geo: form (a phone with no
+           maps app at all) falls through to the web address exactly as before. */
+        String geo = MapLink.geoFor(u.toString());
+        if (geo != null && launch(new Intent(Intent.ACTION_VIEW, Uri.parse(geo)))) return true;
+        return launch(new Intent(Intent.ACTION_VIEW, u));
+    }
+
+    /** Hand an intent to the phone. True when something took it; false when nothing on this
+        handset can -- never an exception, because an uncaught ActivityNotFoundException here
+        closes the whole app over one tap. */
+    private boolean launch(Intent i) {
         try {
-            Intent i = new Intent(Intent.ACTION_VIEW, u);
             /* A window this app did not open must not come back into this app's task, or
                pressing Back from the map lands somewhere nobody navigated to. */
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -372,6 +392,11 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private void noApp() {
+        Toast.makeText(this, "Hakuna programu ya kufungua kiungo hiki. / No app on this phone can open this link.",
+                Toast.LENGTH_LONG).show();
     }
 
     private String startUrl() {

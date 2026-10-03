@@ -552,15 +552,24 @@ const salesDb = audit => fakeDb({
 });
 
 test('the week and the month each answer the three numbers asked for', async () => {
-  const db = salesDb([
+  /* THIS TEST RUNS ON THE CALENDAR. For the first days of a month that begin mid-week (the
+     2nd of October 2026 was a Friday whose Monday was still September), the 1st of the month
+     IS inside this week, so a sale dated the 1st counts in BOTH windows and the "month only"
+     row below would be a third agent in the week. It failed on exactly that day, on main,
+     over nothing in the code. So the row exists only when there is a day that is in the
+     month and not in the week; when there is none, the two windows genuinely start together
+     and the month-only case has nothing to stand on. */
+  const monthHasDaysBeforeThisWeek = MONTH1 < WEEK;
+  const rows = [
     sold('A1', 'JUMA G', TODAY, 450000),
     sold('A2', 'JUMA G', WEEK, 500000),
     sold('A3', 'ASHA M', TODAY, 300000),
     // Earlier in the month but before this week: counts in the month, not in the week.
-    sold('A4', 'ELIA C', MONTH1, 200000),
+    ...(monthHasDaysBeforeThisWeek ? [sold('A4', 'ELIA C', MONTH1, 200000)] : []),
     // Last year: neither.
     sold('A5', 'ELIA C', '2025-01-05', 999000),
-  ]);
+  ];
+  const db = salesDb(rows);
   const ns = (await _FNS.newStock(db, STORE, {})).newSales;
   assert.equal(ns.week.agents, 2, 'JUMA and ASHA sold this week');
   assert.equal(ns.week.customers, 3);
@@ -569,7 +578,14 @@ test('the week and the month each answer the three numbers asked for', async () 
   assert.equal(ns.week.from, WEEK);
   assert.equal(ns.week.to, TODAY, 'and the period is on the card, so the figure can be checked');
 
-  assert.ok(ns.month.agents >= ns.week.agents);
+  /* The month is the same arithmetic over its own window -- and that window can start AFTER
+     the week's does (the Monday sale above is last month's when the week straddles the turn),
+     so the expectation is read off the fixture rather than written down. */
+  const thisMonth = rows.filter(r => r.sale_date >= MONTH1 && r.sale_date <= TODAY);
+  assert.equal(ns.month.sales, thisMonth.length);
+  assert.equal(ns.month.amount, thisMonth.reduce((s, r) => s + r.price, 0));
+  assert.equal(ns.month.agents, new Set(thisMonth.map(r => r.agent)).size,
+    'ELIA counts in the month and not the week -- whenever the month has such a day at all');
   assert.equal(ns.month.from, MONTH1);
   // Last year's sale is in neither window.
   assert.ok(ns.month.amount < 999000 + 1250000);

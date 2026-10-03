@@ -25,6 +25,7 @@ const { clearRolesCache } = await import('../api/_lib/auth.js');
 const { clearSystemOpenCache } = await import('../api/_lib/system-gate.js');
 const { _resetSeen } = await import('../api/_lib/signin.js');
 const { clearStockIndex } = await import('../api/_lib/stock-index.js');
+const { todayKey, addDaysKey } = await import('../api/_lib/time.js');
 
 const ADMIN = { code: 'X', name: 'Peter', role: 'ADMIN', teams: null, tabs: ['settings'], readOnly: false };
 const STORE = { code: 'S1', name: 'SIPHO', role: 'STORE', teams: null, tabs: ['devlock', 'devunlock', 'newstock'], readOnly: false };
@@ -501,8 +502,11 @@ test('a phone HOPE hands BACK is enrolled and nothing more: no nested call to HO
     // ...nor the upload, which cannot compare dates and simply never queues an arrived-from-partner row...
     const q = await H.queueHandover(d, ['R1'], 'upload', { server: HOPE, buyers: ['HOPE MICROCREDIT'] }, NOW);
     assert.equal(q.queued, 0);
-    // ...until the shop SELLS it to HOPE again, on a day after it came back.
-    d._dump('hoop_sales').push(sale({ imei: 'R1', day: '2026-10-02' }));
+    // ...until the shop SELLS it to HOPE again, on a day after it came back. "Came back" is
+    // stamped by shiftBatch off the REAL clock, so the day after it is tomorrow's date, not a
+    // fixed one: written as '2026-10-02' this test went red on the 3rd of October, on main,
+    // over nothing in the code.
+    d._dump('hoop_sales').push(sale({ imei: 'R1', day: addDaysKey(todayKey(), 1) }));
     clearStockIndex(d); H._resetHandover(d);
     const later = stubHope();
     let ns2;
