@@ -276,6 +276,11 @@ async function boot(db, [dev], nowMs) {
   if (!cu) return { ok: false, error: accountOff ? 'ACCOUNT_OFF' : 'DEVICE_NOT_REGISTERED',
     teams: [], brand, motto, logo, systemOpen };
   const today = todayKey(nowMs);
+  /* THIS HANDSET'S OWN synced calls, on purpose -- boot has no roster read and must not gain
+     one for a number the tile replaces within a minute. The daily-summary tile counts the
+     SEAT (every handset of the same person, see seatRoster/summaryForOfficer); an officer on
+     two phones may see this figure lower than the tile's, which is the honest difference
+     between "what this phone has synced" and "what this person has done today". */
   const logs = await fetchAll(() => db.from('call_logs').select('duration, portfolio')
     .eq('user_id', cu.user_id).eq('call_date', today));
   const syncSec = parseInt(setting('CALL_SYNC_SECONDS'), 10);
@@ -633,17 +638,81 @@ export function clearRosterCache(db) { rosterCache.delete(db); }
 export async function rosterFull(db, day = todayKey()) {
   const hit = rosterCache.get(db);
   if (hit && hit.day === day && (Date.now() - hit.at) < ROSTER_TTL_MS) return hit.value;
-  const rows = await fetchAll(() => db.from('call_users').select('user_id, name, role, active'));
-  const away = await suspendedNamesOn(db, day);
+  /* The two reads side by side, not one after the other: neither needs the other's answer,
+     and summaryForOfficer now chains its own-logs read on this roster (it has to know the
+     seat's handsets first), so a cold roster must cost ONE round, not two -- the same depth
+     that tile paid before seats existed. */
+  const [rows, away] = await Promise.all([
+    fetchAll(() => db.from('call_users').select('user_id, name, role, active')),
+    suspendedNamesOn(db, day),
+  ]);
   const on = rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role))
       && !away.has(nameKey(r.name)))
     .sort((a, b) => (String(a.user_id) < String(b.user_id) ? -1 : 1));
-  const names = {};
-  for (const r of on) names[String(r.user_id)] = r.name || '';
-  const value = { ids: on.map(r => String(r.user_id)), names };
+  const value = seatRoster(on);
   rosterCache.set(db, { day, at: Date.now(), value });
   return value;
 }
+
+/* ONE PERSON, ONE SEAT -- however many handsets they sign in on.
+   =========================================================================================
+     "No matter how many logins a hoop officer attends it shouldn't affect data duplication
+      like a Portfolio and compliance officer logged in in two phones and caused two customer
+      distributions for both instead of per accesscode since it's the same"
+
+   A call_users row is keyed on the PHONE NUMBER typed at sign-in (register(): user_id is a
+   hash of it), so one officer who signs in on two handsets with two numbers is two rows --
+   and the deal, which used to count rows, dealt that one person two shares: a second cut of
+   the book, taken off everybody else, for the same pair of hands. That is the duplication.
+
+   The deal now counts PEOPLE. Rows are grouped into seats by nameKey -- the same identity
+   the suspension window already matches on (see suspendedNamesOn: an access code and an app
+   account share nothing but the name), and for an access-code sign-in the name is not typed
+   at all but copied from the code's own row, so two handsets under one code carry one name
+   exactly. Every handset in a seat is dealt the SAME share, and the seat is one slot in the
+   round-robin.
+
+   WHAT A SEAT IS KEYED BY, AND THE HONEST COST. Two different humans registered under one
+   name would be one seat -- the price of a bridge built on the only field the tables share.
+   Blank names are never merged (each is its own seat), and the App users pane says, per row,
+   how many handsets share a seat, so the office can see it rather than find out from a
+   half-sized list.
+
+   WHY THE SEAT'S ID IS A user_id AND NOT THE NAME. `ids` feeds dealMap, whose answers are
+   looked up in `names` and compared against a handset's cu.user_id by every screen that
+   recomputes the deal (the list, Ripoti, Wateja, Recovery). Keeping each seat's id as the
+   SMALLEST user_id among its handsets means a person with one handset -- everybody until
+   this was written -- keeps exactly the id, the name and the roster position they had, so
+   nothing re-deals that did not need to. `seatOf` maps every handset's id to its seat, and
+   `members` lists the handsets of each seat, so a person's calls count whichever phone they
+   were made from. Exported for the tests. */
+export function seatRoster(on) {
+  const seats = new Map();                 // nameKey (or the row's own id, when blank) -> seat
+  const seatOf = {}, members = {}, names = {};
+  for (const r of on) {
+    const uid = String(r.user_id);
+    const pk = nameKey(r.name) || ('#' + uid);
+    let s = seats.get(pk);
+    if (!s) { s = { id: uid, name: r.name || '' }; seats.set(pk, s); members[uid] = []; names[uid] = s.name; }
+    members[s.id].push(uid);
+    seatOf[uid] = s.id;
+  }
+  // `on` arrives sorted by user_id and a seat takes the first id it meets, so this is the
+  // smallest handset id per person, in order -- the same order one-handset rosters always had.
+  const ids = [...seats.values()].map(s => s.id).sort((a, b) => (a < b ? -1 : 1));
+  return { ids, names, seatOf, members };
+}
+/** The seat a handset's row sits in -- its own id when the roster does not know it (a
+    whole-book viewer, a fenced role, a row switched off), which is what every caller did
+    before seats existed. */
+export const seatFor = (roster, uid) => (roster && roster.seatOf && roster.seatOf[String(uid)]) || String(uid);
+/** Every handset id whose calls belong to this seat; a stranger to the roster is only
+    themselves. */
+const handsetsOf = (roster, uid) => {
+  const seat = seatFor(roster, uid);
+  const m = roster && roster.members && roster.members[seat];
+  return m && m.length ? m.map(String) : [String(uid)];
+};
 
 /* WHO IS AWAY, ON A GIVEN DAY.
    =========================================================================================
@@ -691,7 +760,6 @@ export async function suspendedNamesOn(db, day = todayKey()) {
   }
   return out;
 }
-async function activeRoster(db) { return (await rosterFull(db)).ids; }
 /* THE WINDOW IS 45 DAYS PLUS TWO OF GRACE. The owner (2026-08-17): "i have 49 and they
    had 52 and my number of days are like 2 infront since months vary lengths -- add two
    more days to the calendar we are pulling so that we get all customers we should."
@@ -1037,7 +1105,9 @@ async function list(db, [dev], nowMs) {
       : 'Your name is not on the staff register yet — ask the office to add it, then reopen the app.';
     else if (!mine.length) note = 'Safi! Hakuna mteja wako kwenye orodha ya leo. / None of your team’s customers are on today’s locked list.';
   } else {
-    mine = shareOf(fu, roster, cu.user_id, today);
+    // The SEAT's share, not the row's: a second handset under the same name holds the same
+    // cards as the first, never a second cut of the book. See seatRoster.
+    mine = shareOf(fu, roster, seatFor(rosterAll, cu.user_id), today);
   }
   const hit = c => !!called[pnorm(c)];
   // WHO IS CHASING each customer: the SAME stratified deal, labeled -- so a leader, an
@@ -1314,7 +1384,11 @@ async function histFor(db, nowMs) {
 /** Reached % for one date: the dealt share when uid is given, the whole company when
     null. Yesterday's share is dealt with TODAY's roster -- a person added since then
     shifts it slightly, which is the honest cost of "nothing is stored". */
-function reachedOn(date, hist, uid, roster, poolFn) {
+/** `uid` is the SEAT whose share is measured (seatFor); `callers`, when given, is every
+    handset id whose calls count for it -- a person who rang from either of their two phones
+    reached the customer either way. Absent, the seat's own id is the only caller, which is
+    what every caller of this did before seats existed. */
+function reachedOn(date, hist, uid, roster, poolFn, callers) {
   if (!date) return null;
   const deckMap = hist.deckByDate.get(date);
   if (!deckMap || !deckMap.size) return null;
@@ -1323,19 +1397,20 @@ function reachedOn(date, hist, uid, roster, poolFn) {
   const pool = poolFn ? all.filter(poolFn) : (uid == null ? all : shareOf(all, roster, String(uid), date));
   if (!pool.length) return null;
   const phones = new Set(pool.map(r => pnorm(r.client_mobile)).filter(Boolean));
+  const own = uid == null ? null : (callers || new Set([String(uid)]));
   const got = new Set();
   for (const l of (hist.logsByDate.get(date) || [])) {
-    if (uid != null && String(l.user_id) !== String(uid)) continue;
+    if (own && !own.has(String(l.user_id))) continue;
     if (num(l.duration) <= hist.min) continue;
     const d = pnorm(l.phone);
     if (d && phones.has(d)) got.add(d);
   }
   return { pct: phones.size ? got.size / phones.size : null, num: got.size, den: phones.size };
 }
-function weekAvgFor(hist, uid, roster, poolFn) {
+function weekAvgFor(hist, uid, roster, poolFn, callers) {
   const days = [];
   for (let i = 0; i < 7; i++) {
-    const r = reachedOn(addDaysKey(hist.weekStart, i), hist, uid, roster, poolFn);
+    const r = reachedOn(addDaysKey(hist.weekStart, i), hist, uid, roster, poolFn, callers);
     if (r && r.pct != null) days.push(r.pct);
   }
   return days.length ? { pct: days.reduce((a, b) => a + b, 0) / days.length, days: days.length } : { pct: null, days: 0 };
@@ -1456,18 +1531,28 @@ async function summaryForOfficer(db, cu, nowMs) {
   const hit = summaryCache.get(key);
   if (hit && (nowMs - hit.at) < SUMMARY_TTL_MS && hit.at <= nowMs) return { ...hit.value, cached: true };
   const today = todayKey(nowMs);
-  const [sharedDeckVal, roster, myLogs, hist] = await Promise.all([
+  /* THE SEAT, NOT THE ROW (see seatRoster): the share is the seat's, and the calls are
+     every handset's in it -- the same person's call from their other phone is still their
+     call. The own-logs read needs the seat's handset ids, so it is CHAINED on the roster
+     (the same shared read list() pays, cached thirty seconds, so warm it waits on nothing)
+     while the deck and the history still run alongside -- no read added, none serialised
+     that was not already. The logs read is the same one indexed trip, with an IN list of
+     one or two ids instead of an EQ of one. */
+  const [sharedDeckVal, hist, [rosterAll, myLogs]] = await Promise.all([
     // deck_date rides along in DECK_COLS so the deal's shuffle keys on the DECK's date, not
     // today -- a stale deck must cut this tile the same share the officer's list shows.
     sharedDeck(db, nowMs),
-    activeRoster(db),
-    fetchAll(() => db.from('call_logs').select('id, duration')
-      .eq('call_date', today).eq('user_id', String(cu.user_id))),
     histFor(db, nowMs),
+    rosterFull(db).then(async r => [r, await fetchAll(() => db.from('call_logs').select('id, duration')
+      .eq('call_date', today).in('user_id', handsetsOf(r, cu.user_id)))]),
   ]);
+  const seat = seatFor(rosterAll, cu.user_id);
+  const handsets = handsetsOf(rosterAll, cu.user_id);
+  const roster = rosterAll.ids;
   const deckDate = sharedDeckVal.deckDate;
-  const mine = shareOf(sharedDeckVal.rows, roster, cu.user_id, today);
+  const mine = shareOf(sharedDeckVal.rows, roster, seat, today);
   const inWinOf = r => inWindowOf(r, today);
+  const callers = new Set(handsets);
   const value = {
     ok: true,
     deckDate,
@@ -1475,8 +1560,8 @@ async function summaryForOfficer(db, cu, nowMs) {
     locked7: { num: mine.filter(r => isLocked7(r, today)).length },
     inWindow: { num: mine.filter(inWinOf).length },
     calls: { num: myLogs.length },
-    reached: reachedOn(hist.yDate, hist, cu.user_id, roster) || { pct: null, num: 0, den: 0 },
-    weekAvg: weekAvgFor(hist, cu.user_id, roster),
+    reached: reachedOn(hist.yDate, hist, seat, roster, null, callers) || { pct: null, num: 0, den: 0 },
+    weekAvg: weekAvgFor(hist, seat, roster, null, callers),
     asOfReached: hist.yDate,
     // sharedDeck already paid for this exact read -- no reason to ask settings twice.
     dataVersion: sharedDeckVal.version || '',

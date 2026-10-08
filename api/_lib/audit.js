@@ -146,6 +146,10 @@ const AUDIT_DIFF = {
      auditRowOf just returns null for it (see below) -- so this fired silently on every call and
      officerActive has logged NO diff, ever, no matter which database it ran against. */
   officerActive:   { table: 'call_users', key: a => ({ user_id: a.userId }), fields: ['active'] },
+  /* The eraser beside it: the before-read happens before the handler runs (see below), so
+     `before` is the login as it was and `after` is nothing -- which is the only record left
+     afterwards of WHOSE login and number went, since KEEP carries no userId of its own. */
+  officerDelete:   { table: 'call_users', key: a => ({ user_id: a.userId }), fields: ['name', 'phone', 'team', 'active'] },
 
   /* WHO WORKS HERE, and under whom. staffActive shuts a login; staffManager moves somebody
      onto a different RSM, which moves every target and every commission that hangs off it. */

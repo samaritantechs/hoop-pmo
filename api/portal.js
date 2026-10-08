@@ -12,7 +12,7 @@ import { noteSignin, outcomeOf, ipOf, uaOf, SIGNIN_ALARMING } from './_lib/signi
 import { summaryFor, reportCore, lifeDayOf, fuStatusConfig, pnorm, rosterFull,
   agentIndex, nameKey, dealMap, WINDOW_DAYS, FU_STATUSES, fuBucketOf, FU_BUCKETS, teamList,
   TARGET_TIERS, roleKey, tierOf, managerIndex, salesTree,
-  clearRosterCache, clearAgentIndex } from './_lib/call-core.js';
+  clearRosterCache, clearAgentIndex, seatRoster, CREDIT_ROLES } from './_lib/call-core.js';
 import { memoByDataVersion } from './_lib/memo.js';
 import { getOldStockAux, getAgingAux, memoStock, clearStockIndex } from './_lib/stock-index.js';
 import { handoverConfig, noteHandoverSettingsWritten, partnerSalesIn, queueHandover,
@@ -63,6 +63,9 @@ const mayShift_ = user => !isReadOnly(user) && (isAdminRole(user) || (user.tabs 
 
 AUDITED.add('newTeamCode');
 AUDITED.add('officerActive');
+/* An eraser, like deviceDelete: a login row and every call it logged. The audit entry (with
+   its AUDIT_DIFF before-read, see audit.js) is the only record afterwards of whose login it was. */
+AUDITED.add('officerDelete');
 AUDITED.add('renameAccessCode');
 AUDITED.add('portalAddComment');
 AUDITED.add('deleteRole');
@@ -10084,11 +10087,36 @@ const FNS = {
   async officers(db, user) {
     const rows = await fetchAll(() => db.from('call_users')
       .select('user_id, name, team, role, phone, is_leader, active, last_sync'));
+    /* HOW MANY HANDSETS SHARE THIS PERSON'S SEAT IN THE DEAL. One officer signed in on two
+       phones is two rows here and ONE seat on the roster (seatRoster in call-core.js), dealt
+       one share that both phones see. The pane says so on each such row, because a seat
+       built on a name match is the kind of thing that must be visible where it can be
+       corrected: two different people registered under one name would also read "2". The
+       same grouping as the roster -- active credit rows, by nameKey -- so the number here
+       is the number the deal uses. */
+    const seated = seatRoster(rows.filter(r => r.active !== false && CREDIT_ROLES.has(K(r.role)))
+      .sort((a, b) => (String(a.user_id) < String(b.user_id) ? -1 : 1)));
+    const phoneOf = new Map(rows.map(r => [String(r.user_id), r.phone || '']));
+    const matesOf = uid => {
+      const seat = seated.seatOf[String(uid)];
+      return seat ? (seated.members[seat] || []).filter(id => id !== String(uid)) : [];
+    };
     return { ok: true, officers: rows
       .filter(r => !user.teams || !r.team || user.teams.some(t => K(t) === K(r.team)))
-      .map(r => ({ userId: r.user_id, name: r.name || '', team: r.team || '', role: r.role || '',
-        phone: r.phone || '', leader: !!r.is_leader, active: r.active !== false,
-        lastSync: r.last_sync || null }))
+      .map(r => {
+        const mates = matesOf(r.user_id);
+        return { userId: r.user_id, name: r.name || '', team: r.team || '', role: r.role || '',
+          phone: r.phone || '', leader: !!r.is_leader, active: r.active !== false,
+          lastSync: r.last_sync || null,
+          // 0 = not a credit row, or switched off; 1 = their own seat; 2+ = a seat shared with
+          // that many handsets, all dealt the one share. Counted without the suspension window
+          // on purpose: a person away this week still has two phones under one name, and that
+          // is what this chip is for -- the window itself is shown on the Access codes table.
+          seatHandsets: seated.seatOf[String(r.user_id)] ? mates.length + 1 : 0,
+          // The OTHER phones in the seat, by number, so the chip names them -- a viewer scoped
+          // to one team may not have the partner row on the screen at all.
+          seatMates: mates.map(id => phoneOf.get(id) || id) };
+      })
       .sort((a, b) => a.name < b.name ? -1 : 1) };
   },
 
@@ -10102,6 +10130,39 @@ const FNS = {
     if (error) throw new Error(error.message);
     clearRosterCache(db);   // active just moved -- today's deal must not go on skipping/dealing them
     return { ok: true, userId: uid, active };
+  },
+
+  /** DELETE A LOGIN ROW OUTRIGHT -- as HOPE does (deleteOfficerAccount there).
+        "just not Zima but can also delete login device history to reduce unwanted list
+         histories"
+      Switching off (Zima) keeps the row and its call history attached and is right for
+      somebody who has left; deleting is for rows that should never have stayed -- a test
+      registration, a typo'd number, the stale second phone of somebody who now has one seat.
+      Their call logs go first, because call_logs.user_id references call_users and a delete
+      that left orphaned logs would simply be refused -- and the pane says so before the
+      click lands. The roster cache is dropped the same way Zima drops it: a seat that just
+      lost a handset, or vanished, must not be dealt for thirty more seconds. */
+  async officerDelete(db, user, args) {
+    requireWrite(user); requireNav(user, 'codes');
+    const uid = String((args && args.userId) || '').trim();
+    if (!uid) throw new Error('userId is required.');
+    const { data: acct, error: aErr } = await db.from('call_users').select('user_id, name').eq('user_id', uid).maybeSingle();
+    if (aErr) throw new Error(aErr.message);
+    if (!acct) throw new Error('Akaunti hiyo haipo tena. / That login no longer exists.');
+    /* Twice, if need be: a handset syncing calls in the instant between the two deletes lands
+       a fresh log row under this user_id, and the row delete is then refused by the foreign
+       key. One more sweep of the logs and the delete goes through, rather than handing the
+       clerk Postgres' own sentence and asking them to press Futa again. */
+    for (let attempt = 0; ; attempt++) {
+      const { error: lErr } = await db.from('call_logs').delete().eq('user_id', uid);
+      if (lErr) throw new Error(lErr.message);
+      const { error } = await db.from('call_users').delete().eq('user_id', uid);
+      if (!error) break;
+      if (attempt < 1 && /foreign key|23503/i.test(String(error.message || '') + String(error.code || ''))) continue;
+      throw new Error(error.message);
+    }
+    clearRosterCache(db);
+    return { ok: true, userId: uid, name: acct.name || '', deleted: true };
   },
 
   async accessCodes(db, user) {
@@ -10248,10 +10309,44 @@ const FNS = {
     const row = { code, name: String(a.name).trim(), role: K(a.role),
       teams: wantsAll ? null : list,
       tabs: Array.isArray(a.tabs) ? a.tabs : [] };
+    /* THE NAME IS THE SEAT, SO A RENAME MUST REACH EVERY PHONE THAT CARRIES IT. The app copies
+       a code's name onto the handset's call_users row at sign-in and never again (register();
+       boot() only echoes the row), and the deal seats people by that name (seatRoster). Rename
+       a code here and only the phones that happen to re-sign pick the new name up: the one that
+       does not is now a second person -- two shares again, the sharing chip gone, and a
+       suspension on the renamed code taking only one of their phones off the roster. So the
+       old name is read first, and when it changes every app row spelled the same (nameKey,
+       so "Neema Mushi" and "MUSHI Neema" both follow) is rewritten in the same save -- a
+       portal write, nothing on the call path. */
+    const { data: was } = await db.from('access_codes').select('name').eq('code', code).maybeSingle();
     // `leader`, if an older screen still sends it, is ignored: the switch is gone (see navsFor).
     const { error } = await db.from('access_codes').upsert(row, { onConflict: 'code' });
     if (error) throw new Error(error.message);
-    return { ok: true, code };
+    const oldKey = nameKey((was && was.name) || '');
+    let renamed = 0, shared = false;
+    if (oldKey && oldKey !== nameKey(row.name)) {
+      /* UNLESS THE OLD NAME IS SOMEBODY ELSE'S TOO. A phone carries no code, only a name, so
+         "every phone spelled like the old name" would also be the phones of a SECOND code that
+         shares it -- and renaming one of two same-named codes is exactly how the office would
+         split two people the chip shows as one seat. Dragging the other person along would
+         leave their code saying one name and their phone another, and split them again the
+         moment that phone re-signed. So when another code still carries the old name, no phone
+         is touched, and the save says so (`shared`) rather than renaming the wrong people:
+         those phones take the new name on their next sign-in, one by one. */
+      const codes = await fetchAll(() => db.from('access_codes').select('code, name'));
+      shared = codes.some(c => c.code !== code && nameKey(c.name) === oldKey);
+      if (!shared) {
+        const apps = await fetchAll(() => db.from('call_users').select('user_id, name'));
+        const ids = apps.filter(u => nameKey(u.name) === oldKey).map(u => u.user_id);
+        if (ids.length) {
+          const { error: e2 } = await db.from('call_users').update({ name: row.name }).in('user_id', ids);
+          if (e2) throw new Error(e2.message);
+          renamed = ids.length;
+          clearRosterCache(db);   // the seat's name just moved on every phone at once
+        }
+      }
+    }
+    return { ok: true, code, renamed, shared };
   },
 
   /** Change a code's VALUE -- your own included: the row keeps its name, role, teams
