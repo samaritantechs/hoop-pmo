@@ -36,7 +36,10 @@ yenyewe; simu zinarekodiwa kiotomatiki (Android).
 - **Credit team (mf. Ainea):** app tu. Msimbo MMOJA wa kampuni mara moja. Tabs nne + Ripoti kwa
   kiongozi. **Orodha ni ya kampuni nzima, inagawanywa yenyewe** kwa zamu (round-robin)
   kati ya credit users wote — kila mtu anaona FUNGU LAKE tu. Ukisajili credit user
-  mpya, mgawanyo unajipanga upya wenyewe. Kipimo cha kazi (performance bar): % ya
+  mpya, mgawanyo unajipanga upya wenyewe. **Mtu mmoja = fungu moja**, hata akiingia kwa
+  simu mbili: simu zote za jina moja zinaona fungu lilelile, si mawili. / One person is
+  one share however many phones they sign in on; every phone under one name sees the
+  same share, never a second one. Kipimo cha kazi (performance bar): % ya
   **JANA** + wastani wa **wiki iliyopita** — yako mwenyewe. Kiongozi anaona wastani wa
   kampuni; ripoti za mtu mmoja mmoja zipo Call reports.
 - **Data/IT (Gilbert):** faili la Watu kila asubuhi, kama lilivyotoka Watu. Kupakia

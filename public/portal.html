@@ -11371,13 +11371,21 @@ function drawCodes(m){
              in. It opens its own small editor rather than the Hariri
              form: that form rewrites role, teams and tabs, and setting somebody's leave must
              never be able to revert their navs as a side effect. */
+          /* THE WINDOW ENDS ITSELF. "suspension should auto return the person when set end
+             date reaches not wait manual activation" -- it always did (suspendedOn: the day
+             after `to`, the gate opens and the deal counts them again, nobody presses anything),
+             but a lapsed window was still printed as "Yupo · from→to", which reads like a
+             window somebody has to clear. A window whose end has passed now reads YUPO, with
+             the date they came back in grey; only a window that is still ahead shows its dates. */
           +'<td>'+(c.suspended===null
             ? '<span class="mut" title="Endesha migration ya kusimamisha">-</span>'
             : '<button class="btn sm'+(c.suspended?' danger':' ghost')+'" data-susp="'+esc(c.code)
               +'" data-from="'+esc(c.suspendFrom||'')+'" data-to="'+esc(c.suspendTo||'')+'">'
               +(c.suspended
                 ? 'Hayupo'+(c.suspendTo?' hadi '+esc(c.suspendTo):'')
-                : (c.suspendFrom?'Yupo · '+esc(c.suspendFrom)+(c.suspendTo?'→'+esc(c.suspendTo):''):'Yupo'))
+                : (c.suspendTo&&d.today&&c.suspendTo<d.today
+                    ? 'Yupo <span class="mut">· alirudi '+esc(c.suspendTo)+'</span>'
+                    : (c.suspendFrom?'Yupo · '+esc(c.suspendFrom)+(c.suspendTo?'→'+esc(c.suspendTo):''):'Yupo')))
               +'</button>')+'</td>'
           +'<td class="r noxl"><button class="btn sm ghost" data-ed="'+esc(c.code)+'" data-name="'+esc(c.name)+'" data-role="'+esc(c.role)+'" data-teams="'+esc(c.teams&&c.teams.length?c.teams.join(','):'ALL')+'">Hariri</button> '
           +'<button class="btn sm ghost" data-del="'+esc(c.code)+'">Futa</button></td></tr>';
@@ -11437,11 +11445,21 @@ function drawCodes(m){
       +'<div class="scroll"><table><thead><tr><th>Name</th><th>Branch</th><th>Phone</th><th>Last sync</th><th>Status</th><th></th></tr></thead><tbody>'
       +((off.officers||[]).length?(off.officers||[]).map(function(o){
         return '<tr><td><b>'+esc(o.name)+'</b>'+(o.leader?' <span class="chip">leader</span>':'')
-          +(String(o.role||'').toUpperCase()==='AGENT'?' <span class="chip">agent</span>':'')+'</td>'
+          +(String(o.role||'').toUpperCase()==='AGENT'?' <span class="chip">agent</span>':'')
+          /* ONE PERSON, ONE SEAT. Two handsets signed in under one name are one slot in the
+             customer deal and see the same share -- said here, on the row, because a seat
+             is matched by name and the office is the only one who can tell two phones of one
+             officer from two officers with one name. */
+          +(o.seatHandsets>1?' <span class="chip warn" title="Simu '+o.seatHandsets+' zimeingia kwa jina hili ('+esc((o.seatMates||[]).join(', '))+'): mgawo mmoja kwa zote / '+o.seatHandsets+' handsets under this name ('+esc((o.seatMates||[]).join(', '))+'): one share, dealt once">kiti 1 · simu '+o.seatHandsets+'</span>':'')+'</td>'
           +'<td>'+esc(o.team||'')+'</td><td>'+esc(o.phone||'')+'</td>'
           +'<td class="mut">'+(o.lastSync?esc(String(o.lastSync).slice(0,16).replace('T',' ')):'—')+'</td>'
           +'<td>'+(o.active?'<span class="chip ok">ACTIVE</span>':'<span class="chip bad">OFF</span>')+'</td>'
-          +'<td class="r"><button class="btn sm ghost" data-tg="'+esc(o.userId)+'" data-on="'+(o.active?1:0)+'">'+(o.active?'Zima':'Washa')+'</button></td></tr>';
+          +'<td class="r"><button class="btn sm ghost" data-tg="'+esc(o.userId)+'" data-on="'+(o.active?1:0)+'">'+(o.active?'Zima':'Washa')+'</button> '
+          /* FUTA, beside Zima -- as HOPE has it. Zima keeps the row and its call history for
+             somebody who left; Futa is for a login that should not stay on this list at all
+             (a stale second phone, a test, a typo'd number), and it says, before the click
+             lands, that the row's call history goes with it. */
+          +'<button class="btn sm ghost" data-odel="'+esc(o.userId)+'" data-oname="'+esc(o.name)+'" style="color:var(--bad)">Futa</button></td></tr>';
       }).join(''):'<tr><td colspan="6" class="mut">No app users yet — the '+DEPT.PCO+' team registers from the app with a team code.</td></tr>')
       +'</tbody></table></div></div>'
       +'</tbody></table></div></div>'
@@ -11503,6 +11521,16 @@ function drawCodes(m){
       b.onclick=function(){
         srv('officerActive',{userId:b.getAttribute('data-tg'),active:b.getAttribute('data-on')!=='1'})
           .then(function(){drawCodes(m);}).catch(function(e){toast(String(e.message||e),true);});
+      };
+    });
+    $all('[data-odel]',m).forEach(function(b){
+      b.onclick=function(){
+        var nm=b.getAttribute('data-oname')||'';
+        if(!confirm('Futa login ya "'+nm+'" na historia yake yote ya simu kwenye mfumo mzima?\n\n'
+          +'Kwa mtu aliyeondoka, ni bora kumzima (Zima) badala yake — historia inabaki. '
+          +'/ Delete this login AND all the calls it logged? For someone who has left, Zima is usually better: it keeps the history.')) return;
+        srv('officerDelete',{userId:b.getAttribute('data-odel')})
+          .then(function(){toast('Imefutwa. / Deleted.');drawCodes(m);}).catch(function(e){toast(String(e.message||e),true);});
       };
     });
     $all('[data-rl]',m).forEach(function(b){
@@ -11608,7 +11636,14 @@ function drawCodes(m){
             return save();
           })
         : save();
-      flow.then(function(){toast('Imehifadhiwa.');drawCodes(m);}).catch(function(e){toast(String(e.message||e),true);});
+      /* SAY WHAT THE SAVE DID TO THE PHONES. A renamed code renames every handset signed in
+         under that name (one seat, one name), or none when the name is also another code's --
+         either way the clerk hears it here rather than from a puzzled officer. */
+      flow.then(function(r){
+        var extra=(r&&r.renamed)?' Simu '+r.renamed+' zimebadilishwa jina. / '+r.renamed+' handset(s) renamed.'
+          :((r&&r.shared)?' Jina la zamani lipo kwenye code nyingine pia — simu hazikuguswa; kila moja itachukua jina la code yake ikiingia tena. / The old name is on another code too — no handset was renamed; each takes its own code\'s name at its next sign-in.':'');
+        toast('Imehifadhiwa.'+extra); drawCodes(m);
+      }).catch(function(e){toast(String(e.message||e),true);});
     };
     $all('[data-del]',m).forEach(function(b){
       b.onclick=function(){

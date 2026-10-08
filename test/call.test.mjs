@@ -249,6 +249,258 @@ test('registering another credit user re-deals the pool automatically', async ()
   assert.ok(!b.rows.some(r => refsA.has(r.ref)), 'no customer is dealt twice');
 });
 
+/* ONE PERSON, ONE SEAT -- however many handsets.
+     "No matter how many logins a hoop officer attends it shouldn't affect data duplication
+      like a Portfolio and compliance officer logged in in two phones and caused two customer
+      distributions for both instead of per accesscode since it's the same"
+   A call_users row is keyed on the phone number typed at sign-in, so one officer on two
+   handsets with two numbers is two rows. The deal used to count rows and dealt that person
+   two shares. It now counts people (seatRoster): both handsets see the SAME share, the seat
+   is one slot in the round-robin, and the other officer's share is the rest of the book. */
+test('one officer on two handsets is dealt ONE share, and both handsets see the same one', async () => {
+  const d = db();
+  d._dump('access_codes').push({ code: 'PCO-7', name: 'Neema Mushi', role: 'PCO', teams: null, tabs: [] });
+  await registerOfficer(d);                                                       // Ainea, dev-1, team code
+  // Neema signs in with her ACCESS CODE on two phones, two different numbers.
+  const p1 = await callApi(d, 'api_callRegister', ['dev-n1', '', '', 'PCO-7', '0711000001', ''], NOW);
+  const p2 = await callApi(d, 'api_callRegister', ['dev-n2', '', '', 'PCO-7', '0711000002', ''], NOW);
+  assert.equal(p1.ok, true); assert.equal(p2.ok, true);
+  assert.notEqual(p1.userId, p2.userId, 'two numbers, two rows -- the identity the app keys on');
+  assert.equal(d._dump('call_users').filter(u => u.name === 'Neema Mushi').length, 2);
+
+  const a = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  const n1 = await callApi(d, 'api_callList', ['dev-n1', 'today'], NOW);
+  const n2 = await callApi(d, 'api_callList', ['dev-n2', 'today'], NOW);
+  const refs = r => r.rows.map(x => x.ref).sort();
+  assert.deepEqual(refs(n1), refs(n2), 'both of Neema\'s phones hold the SAME cards');
+  assert.equal(a.rows.length + n1.rows.length, 3, 'two PEOPLE split the book: nothing lost, nothing dealt twice');
+  assert.ok(a.rows.length >= 1 && n1.rows.length >= 1, 'both people hold work -- a 2-seat deal of 3 cards is 2+1');
+  assert.ok(!n1.rows.some(r => new Set(refs(a)).has(r.ref)), 'no customer is on two people\'s lists');
+  // Every card names its holder by the seat, whichever phone asks.
+  for (const r of n1.rows) assert.equal(r.heldBy, 'Neema Mushi');
+  for (const r of a.rows) assert.equal(r.heldBy, 'Ainea');
+
+  // Switching ONE of her phones off keeps her seat (the other phone is still in); switching
+  // both off removes it and Ainea holds the whole book again.
+  const { _FNS } = await import('../api/portal.js');
+  const ADMIN = { code: 'BOSS-1', name: 'Peter Kisoli', role: 'ADMIN', teams: null, tabs: ['codes'], readOnly: false };
+  await _FNS.officerActive(d, ADMIN, { userId: p1.userId, active: false });
+  const n2b = await callApi(d, 'api_callList', ['dev-n2', 'today'], NOW);
+  const ab = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  assert.equal(ab.rows.length + n2b.rows.length, 3, 'still two people');
+  assert.ok(n2b.rows.length >= 1, 'her remaining phone still holds her share');
+  await _FNS.officerActive(d, ADMIN, { userId: p2.userId, active: false });
+  const ac = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  assert.equal(ac.rows.length, 3, 'with both of her phones off, Ainea holds the whole book');
+
+  // The App users pane says so on each of her rows, and not on Ainea's.
+  await _FNS.officerActive(d, ADMIN, { userId: p1.userId, active: true });
+  await _FNS.officerActive(d, ADMIN, { userId: p2.userId, active: true });
+  const off = (await _FNS.officers(d, ADMIN)).officers;
+  assert.deepEqual(off.filter(o => o.name === 'Neema Mushi').map(o => o.seatHandsets), [2, 2]);
+  assert.equal(off.find(o => o.name === 'Ainea').seatHandsets, 1);
+});
+
+test('the officer tile counts the seat: calls from either handset, one share', async () => {
+  _clearSummaryCache();
+  const { seatRoster, rosterFull } = await import('../api/_lib/call-core.js');
+  // Two rows, one name: the seat is the smaller id, and both ids belong to it.
+  const seats = seatRoster([
+    { user_id: 'U1', name: 'Neema Mushi', role: 'PCO', active: true },
+    { user_id: 'U2', name: 'Ainea', role: 'PCO', active: true },
+    { user_id: 'U3', name: 'MUSHI NEEMA', role: 'PCO', active: true },   // same person, other spelling order
+    { user_id: 'U4', name: '', role: 'PCO', active: true },              // a blank name is never merged
+  ]);
+  assert.deepEqual(seats.ids, ['U1', 'U2', 'U4'], 'three seats, in the order one-handset rosters always had');
+  assert.deepEqual(seats.members.U1, ['U1', 'U3']);
+  assert.equal(seats.seatOf.U3, 'U1');
+  assert.equal(seats.names.U1, 'Neema Mushi');
+
+  const roster = ['U1', 'U2'];
+  const yHolder = dealMap([{ imei: 'X1', snapshot_date: '2026-08-13' }, { imei: 'X2', snapshot_date: '2026-08-13' }], roster, '2026-08-13').X1;
+  const neemaHoldsX1 = yHolder === 'U1';
+  const d = fakeDb({
+    settings: [{ key: 'SYSTEM_OPEN', value: 'YES' }, { key: 'DATA_VERSION', value: 'v1' }],
+    teams: [{ team: 'KINONDONI', team_code: 'AB2C3D' }],
+    followup_status: [
+      { imei: 'A', client_name: 'Leo Mmoja', contact: '255716000001', team: 'KINONDONI',
+        disbursed_date: '2026-08-01', days_offline: 9, locked4: true, locked7: false, deck_date: '2026-08-14' },
+      { imei: 'B', client_name: 'Leo Mbili', contact: '255716000002', team: 'KINONDONI',
+        disbursed_date: '2026-08-01', days_offline: 9, locked4: true, locked7: false, deck_date: '2026-08-14' },
+    ],
+    call_users: [
+      { user_id: 'U1', device_id: 'dev-1', name: 'Neema Mushi', team: 'KINONDONI', role: 'PCO', is_leader: true, active: true },
+      { user_id: 'U2', device_id: 'dev-2', name: 'Ainea', team: 'KINONDONI', role: 'CREDIT', is_leader: false, active: true },
+      { user_id: 'U3', device_id: 'dev-3', name: 'Neema Mushi', team: 'KINONDONI', role: 'PCO', is_leader: true, active: true },
+    ],
+    watu_snapshots: [
+      { imei: 'X1', client_mobile: '255716111111', snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
+      { imei: 'X2', client_mobile: '255716222222', snapshot_date: '2026-08-13', created_at: '2026-08-13T08:00:00Z' },
+    ],
+    call_logs: [
+      // Neema reached her yesterday customer from her OTHER phone (U3), and made one call today from each.
+      { id: 'L1', user_id: 'U3', phone: neemaHoldsX1 ? '255716111111' : '255716222222', duration: 95, call_date: '2026-08-13' },
+      { id: 'L2', user_id: 'U1', phone: '255716000001', duration: 40, call_date: '2026-08-14' },
+      { id: 'L3', user_id: 'U3', phone: '255716000002', duration: 40, call_date: '2026-08-14' },
+    ],
+  });
+  assert.deepEqual((await rosterFull(d, '2026-08-14')).ids, ['U1', 'U2'], 'the roster has two seats, not three rows');
+  const s1 = await callApi(d, 'api_callDailySummary', ['dev-1'], NOW);
+  _clearSummaryCache();
+  const s3 = await callApi(d, 'api_callDailySummary', ['dev-3'], NOW);
+  assert.equal(s1.list.num, 1, 'a 2-seat deal of 2 cards: one each');
+  assert.deepEqual([s3.list.num, s3.locked7.num, s3.inWindow.num], [s1.list.num, s1.locked7.num, s1.inWindow.num],
+    'her second phone shows the same share');
+  assert.equal(s1.calls.num, 2, 'today\'s calls: one from each phone, both hers');
+  assert.equal(s3.calls.num, 2);
+  assert.equal(s1.reached.pct, 1, 'reached from the other phone still counts as reached');
+  assert.equal(s3.reached.pct, 1);
+  _clearSummaryCache();
+  const s2 = await callApi(d, 'api_callDailySummary', ['dev-2'], NOW);
+  assert.equal(s2.reached.pct, 0, 'Ainea called nobody -- Neema\'s calls are not hers');
+  _clearSummaryCache();
+});
+
+/* FUTA, BESIDE ZIMA -- as HOPE has it. "just not Zima but can also delete login device
+   history to reduce unwanted list histories". Deleting a login row takes its call logs
+   with it (call_logs.user_id references call_users, so they must go first), drops the
+   handset out of its seat, and the next list() on that handset is "not registered". */
+test('a login row can be deleted outright: its calls go with it, its seat shrinks, its handset is out', async () => {
+  const d = db();
+  d._dump('access_codes').push({ code: 'PCO-7', name: 'Neema Mushi', role: 'PCO', teams: null, tabs: [] });
+  await registerOfficer(d);
+  const p1 = await callApi(d, 'api_callRegister', ['dev-n1', '', '', 'PCO-7', '0711000001', ''], NOW);
+  const p2 = await callApi(d, 'api_callRegister', ['dev-n2', '', '', 'PCO-7', '0711000002', ''], NOW);
+  d._dump('call_logs').push({ id: 'LX', user_id: p2.userId, phone: '255716548153', duration: 30, call_date: '2026-08-14' });
+  const { _FNS } = await import('../api/portal.js');
+  const ADMIN = { code: 'BOSS-1', name: 'Peter Kisoli', role: 'ADMIN', teams: null, tabs: ['codes'], readOnly: false };
+  const r = await _FNS.officerDelete(d, ADMIN, { userId: p2.userId });
+  assert.equal(r.deleted, true); assert.equal(r.name, 'Neema Mushi');
+  assert.equal(d._dump('call_users').some(u => u.user_id === p2.userId), false, 'the row is gone');
+  assert.equal(d._dump('call_logs').some(l => l.user_id === p2.userId), false, 'and its calls with it');
+  assert.equal(d._dump('call_users').some(u => u.user_id === p1.userId), true, 'her other phone is untouched');
+  const gone = await callApi(d, 'api_callList', ['dev-n2', 'today'], NOW);
+  assert.equal(gone.ok, false); assert.equal(gone.error, 'DEVICE_NOT_REGISTERED');
+  const off = (await _FNS.officers(d, ADMIN)).officers;
+  assert.deepEqual(off.filter(o => o.name === 'Neema Mushi').map(o => o.seatHandsets), [1], 'one phone, one seat, no sharing chip');
+  await assert.rejects(() => _FNS.officerDelete(d, ADMIN, { userId: p2.userId }), /haipo tena|no longer exists/);
+  // The deal still sums: two people, three cards.
+  const a = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  const n1 = await callApi(d, 'api_callList', ['dev-n1', 'today'], NOW);
+  assert.equal(a.rows.length + n1.rows.length, 3);
+});
+
+/* THE WINDOW ENDS ITSELF. "suspension should auto return the person when set end date
+   reaches not wait manual activation" -- end to end, through the pane's own call: the day
+   after `to`, the roster counts them again and the deal hands them cards, with nobody
+   pressing Washa. The roster cache is keyed by day, so the morning after cannot serve the
+   day before's roster. This always held (suspendedOn); it is pinned here as the regression
+   guard for the promise, and for the pane's contract -- `today` and `suspendTo` travel
+   together so the screen can print a lapsed window as "alirudi" rather than as a window. */
+test('a suspension window lapses on its own: the day after the end date the person is dealt again', async () => {
+  const d = db();
+  d._dump('access_codes').push({ code: 'PCO-7', name: 'Neema Mushi', role: 'PCO', teams: null, tabs: [], suspend_from: null, suspend_to: null });
+  await registerOfficer(d);                                                                  // Ainea
+  await callApi(d, 'api_callRegister', ['dev-n1', '', '', 'PCO-7', '0711000001', ''], NOW);  // Neema
+  const { _FNS } = await import('../api/portal.js');
+  const { rosterFull } = await import('../api/_lib/call-core.js');
+  const ADMIN = { code: 'BOSS-1', name: 'Peter Kisoli', role: 'ADMIN', teams: null, tabs: ['codes'], readOnly: false };
+  await _FNS.accessCodeSuspend(d, ADMIN, { code: 'PCO-7', from: '2026-08-13', to: '2026-08-14' });
+  assert.deepEqual(Object.values((await rosterFull(d, '2026-08-13')).names), ['Ainea'], 'away: off the roster');
+  assert.deepEqual(Object.values((await rosterFull(d, '2026-08-14')).names), ['Ainea'], 'the last day counts');
+  assert.deepEqual(Object.values((await rosterFull(d, '2026-08-15')).names).sort(), ['Ainea', 'Neema Mushi'],
+    'the day after the end date she is back -- nobody pressed anything');
+  // The pane agrees: the window has lapsed, she is not suspended, and the dates are still on record.
+  const pane = await _FNS.accessCodes(d, ADMIN);
+  const mine = pane.codes.find(c => c.name === 'Neema Mushi');
+  assert.equal(mine.suspended, false);
+  assert.equal(mine.suspendTo, '2026-08-14');
+  assert.match(String(pane.today), /^\d{4}-\d{2}-\d{2}$/, 'the pane compares suspendTo with today to say "alirudi"');
+  assert.ok(mine.suspendTo < pane.today, 'and this window is behind us');
+  // And the handset, on the 15th, is dealt its share of the book.
+  const later = Date.parse('2026-08-15T09:00:00+03:00');
+  const n1 = await callApi(d, 'api_callList', ['dev-n1', 'today'], later);
+  assert.ok(n1.rows.length >= 1, 'dealt again, automatically');
+});
+
+/* A RENAME FOLLOWS THE SEAT. The app copies a code's name onto a phone at sign-in and
+   never again, and the seat is that name -- so renaming the code used to split the person
+   the moment one phone re-signed and the other did not: two shares again, the chip gone, a
+   suspension catching one phone of two. The save now carries the new name onto every app
+   row spelled the same, in the same write. */
+test('renaming an access code renames every phone signed in under it, so the seat stays one', async () => {
+  const d = db();
+  d._dump('access_codes').push({ code: 'PCO-7', name: 'Neema Mushi', role: 'PCO', teams: null, tabs: [] });
+  await registerOfficer(d);
+  await callApi(d, 'api_callRegister', ['dev-n1', '', '', 'PCO-7', '0711000001', ''], NOW);
+  await callApi(d, 'api_callRegister', ['dev-n2', '', '', 'PCO-7', '0711000002', ''], NOW);
+  const { _FNS } = await import('../api/portal.js');
+  const ADMIN = { code: 'BOSS-1', name: 'Peter Kisoli', role: 'ADMIN', teams: null, tabs: ['codes'], readOnly: false };
+  const r = await _FNS.saveAccessCode(d, ADMIN, { code: 'PCO-7', name: 'Neema J Mushi', role: 'PCO', allTeams: true, tabs: [] });
+  assert.equal(r.renamed, 2, 'both of her phones carry the new name now');
+  assert.deepEqual(d._dump('call_users').filter(u => u.device_id !== 'dev-1').map(u => u.name), ['Neema J Mushi', 'Neema J Mushi']);
+  // One phone re-signs (and so copies the code's name again), the other does not: still one seat.
+  await callApi(d, 'api_callRegister', ['dev-n1', '', '', 'PCO-7', '0711000001', ''], NOW);
+  const a = await callApi(d, 'api_callList', ['dev-1', 'today'], NOW);
+  const n1 = await callApi(d, 'api_callList', ['dev-n1', 'today'], NOW);
+  const n2 = await callApi(d, 'api_callList', ['dev-n2', 'today'], NOW);
+  assert.equal(a.rows.length + n1.rows.length, 3, 'two people, three cards');
+  assert.deepEqual(n1.rows.map(x => x.ref).sort(), n2.rows.map(x => x.ref).sort(), 'both phones, one share');
+  for (const x of n1.rows) assert.equal(x.heldBy, 'Neema J Mushi');
+  const off = (await _FNS.officers(d, ADMIN)).officers;
+  assert.deepEqual(off.filter(o => o.name === 'Neema J Mushi').map(o => o.seatHandsets), [2, 2]);
+  // Saving the same name again touches nothing.
+  const again = await _FNS.saveAccessCode(d, ADMIN, { code: 'PCO-7', name: 'Neema J Mushi', role: 'PCO', allTeams: true, tabs: [] });
+  assert.equal(again.renamed, 0);
+});
+
+/* ...BUT NOT WHEN THE NAME IS SOMEBODY ELSE'S TOO. Two codes, one spelling, two people: the
+   chip shows them as one seat, and renaming one code is how the office splits them. A phone
+   carries no code, so "every phone with the old name" would drag the other person along --
+   the save leaves every phone alone instead and says so; each takes its code's name at its
+   next sign-in. */
+test('renaming one of two same-named codes touches no phone, and says so', async () => {
+  const d = db();
+  d._dump('access_codes').push({ code: 'PCO-1', name: 'Juma Ally', role: 'PCO', teams: null, tabs: [] });
+  d._dump('access_codes').push({ code: 'PCO-2', name: 'Juma Ally', role: 'PCO', teams: null, tabs: [] });
+  const j1 = await callApi(d, 'api_callRegister', ['dev-j1', '', '', 'PCO-1', '0711000001', ''], NOW);
+  const j2 = await callApi(d, 'api_callRegister', ['dev-j2', '', '', 'PCO-2', '0711000002', ''], NOW);
+  const { _FNS } = await import('../api/portal.js');
+  const ADMIN = { code: 'BOSS-1', name: 'Peter Kisoli', role: 'ADMIN', teams: null, tabs: ['codes'], readOnly: false };
+  const r = await _FNS.saveAccessCode(d, ADMIN, { code: 'PCO-1', name: 'Juma A Ally', role: 'PCO', allTeams: true, tabs: [] });
+  assert.equal(r.renamed, 0); assert.equal(r.shared, true);
+  const names = Object.fromEntries(d._dump('call_users').map(u => [u.user_id, u.name]));
+  assert.equal(names[j1.userId], 'Juma Ally', 'untouched -- it takes the new name at the next sign-in');
+  assert.equal(names[j2.userId], 'Juma Ally', 'the other person is never renamed');
+  // The first phone re-signs and takes its code's new name: now two seats, as intended.
+  await callApi(d, 'api_callRegister', ['dev-j1', '', '', 'PCO-1', '0711000001', ''], NOW);
+  const off = (await _FNS.officers(d, ADMIN)).officers;
+  assert.deepEqual(off.map(o => [o.name, o.seatHandsets]).sort(), [['Juma A Ally', 1], ['Juma Ally', 1]]);
+});
+
+/* AN ERASER IS AUDITED. Deleting a login and every call it logged is the most destructive
+   write on the App users table; Zima on the same row is logged, so this must be too, and
+   the entry must still be able to say WHOSE login it was once the row is gone. */
+test('deleting a login is audited, with the name it had', async () => {
+  const { AUDITED, audited } = await import('../api/_lib/audit.js');
+  const { _FNS } = await import('../api/portal.js');
+  assert.ok(AUDITED.has('officerDelete'), 'in the audited list, beside officerActive');
+  assert.ok(AUDITED.has('officerActive'));
+  const d = db();
+  d._dump('audit_log');   // the table exists in this fixture once asked for
+  d._dump('access_codes').push({ code: 'PCO-7', name: 'Neema Mushi', role: 'PCO', teams: null, tabs: [] });
+  const p = await callApi(d, 'api_callRegister', ['dev-n1', '', '', 'PCO-7', '0711000001', ''], NOW);
+  const ADMIN = { code: 'BOSS-1', name: 'Peter Kisoli', role: 'ADMIN', teams: null, tabs: ['codes'], readOnly: false };
+  await audited(d, ADMIN, 'officerDelete', { userId: p.userId },
+    () => _FNS.officerDelete(d, ADMIN, { userId: p.userId }), { ip: '41.222.180.4', ua: 'test' });
+  const row = d._dump('audit_log').find(r => r.action === 'officerDelete');
+  assert.ok(row, 'an audit row');
+  assert.equal(row.ok, true);
+  assert.equal(row.before.name, 'Neema Mushi', 'whose login it was, read before the row went');
+  assert.equal(row.after.name, null, 'and nothing after -- it is gone');
+  assert.equal(d._dump('call_users').some(u => u.user_id === p.userId), false);
+});
+
 test('the bar: own yesterday % and last-week average for a credit user; company for a leader', async () => {
   _clearSummaryCache();
   const NOWF = Date.parse('2026-08-14T09:00:00+03:00');          // Friday; last week = Mon 03 .. Sun 09
