@@ -2,5 +2,7 @@
   "checksum": "BSfBNRCl_XR05nEhc5UqO9benM6gpQBKJKTE4I-W2NE",
   "apkUrl": "https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk",
   "component": "com.samaritantechs.hooploanlock/.LockAdmin",
-  "builtFrom": "413c4beff"
+  "builtFrom": "413c4beff",
+  "versionCode": 31,
+  "apkSha256": "9cb86e5690fe4a8f8782280220025fbc3cd0fcd1fe393ffef9cf185c4cdd6c7f"
 }

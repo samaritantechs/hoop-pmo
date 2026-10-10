@@ -222,6 +222,18 @@ followed by that phone's token. Read it, don't assemble it.
 
 There is nothing to download first: the line begins with `curl` (built into Windows since
 10 1803) fetching the **current** `/HOOPLOAN-Lock.apk` into `%TEMP%`, and installs that.
+It fetches it **once per build**, not once per phone: the file is kept as
+`%TEMP%\HOOPLOAN-Lock-v<build>.apk` and the download is skipped when that file is already
+there, so on a hundred-phone day the first phone pays the 2 MB and every phone after it
+starts straight at `adb install`. A new build is a new file name, so a stale copy is never
+installed. The download lands as `.part` and is renamed only when it finished, and curl is
+given a connection timeout, a stall limit (under 1 KB/s for 30 s ends it) and two retries,
+so a dead or crawling connection fails out loud instead of sitting there silent. To force a
+fresh download, delete `%TEMP%\HOOPLOAN-Lock-v<build>.apk` on the bench laptop; the drawer
+names the file. The build number comes from the server on every answer that leads to
+a command, read from `public/lock-provisioning.json` — the manifest the build workflow
+commits **in the same commit as the APK** — never from `lock-version.json`, which lands a
+deploy before the binary it describes.
 
 > **Why it no longer looks in Downloads.** It used to install
 > `%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk` — a fixed name. The first download kept that

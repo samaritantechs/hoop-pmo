@@ -447,11 +447,47 @@ test('the provisioning command the portal hands out actually runs on a Windows b
      by any handset that had self-updated (v20 against v24, 2026-09-15), and the && then
      stopped set-device-owner and the enrol too. An absolute path is still required: cmd
      opens in C:\Users\<you>, not where any file is. */
-  assert.ok(body.includes("curl -fsSL -o \"%TEMP%\\\\HOOPLOAN-Lock.apk\" ' + location.origin + '/HOOPLOAN-Lock.apk'"),
-    'the current APK is fetched from this same origin into %TEMP% -- -f so an HTTP error is a failed step');
-  assert.ok(body.includes("&& adb install -r \"%TEMP%\\\\HOOPLOAN-Lock.apk\""),
-    'the install is chained behind the fetch and installs the file just fetched, absolute path');
   assert.ok(!body.includes('Downloads'), 'nothing in Downloads may ever be what gets installed');
+
+  /* ...AND FETCHED ONCE PER BUILD, NOT ONCE PER PHONE -- "It just takes a decade". Run the
+     line as the page builds it, with the lock build known and unknown. Known: the file is
+     named by the build, the download is skipped when it is already there, it lands as .part
+     and is renamed only when curl finished, and curl has a connection timeout so a dead line
+     fails out loud instead of sitting silent. Unknown: the old always-download shape, so a
+     failed version fetch costs time and never a wrong file. */
+  const helpers = ['devApkFile_', 'devApkFetch_'].map(n => {
+    const at = src.indexOf('function ' + n + '(');
+    return src.slice(at, src.indexOf('\n}', at) + 2);
+  }).join('\n');
+  const deps = 'var DEVCMP="com.samaritantechs.hooploanlock/.LockAdmin";'
+    + 'var DEVPKG="com.samaritantechs.hooploanlock";'
+    + 'var location={origin:"https://hoop-pmo.vercel.app"};' + helpers;
+  /* The .part file carries the first characters of THIS line's token, so two cmd windows
+     racing the first download of a build write two files and each renames its own. */
+  const known = lift(src, 'devOneLiner', 'var DEV={lockVer:"31"};' + deps)('abc123def456');
+  assert.ok(known.startsWith('(if not exist "%TEMP%\\HOOPLOAN-Lock-v31.apk" (curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock-v31.apk" >nul)) && adb install -r "%TEMP%\\HOOPLOAN-Lock-v31.apk" && (adb shell dpm set-device-owner '),
+    'known build: skip the download when the build\'s own file is already there, else fetch to .part and rename; then install that file:\n' + known);
+  assert.ok(!/HOOPLOAN-Lock\.apk"/.test(known), 'nothing installs an unversioned file when the build is known');
+  const unknown = lift(src, 'devOneLiner', 'var DEV={lockVer:""};' + deps)('abc123def456');
+  assert.ok(unknown.startsWith('(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock.apk" >nul) && adb install -r "%TEMP%\\HOOPLOAN-Lock.apk" && ('),
+    'unknown build: fetch every time, exactly as before -- slower, never wrong:\n' + unknown);
+  assert.ok(!/if not exist/.test(unknown), 'no file is trusted when its build is not known');
+  for (const cmd of [known, unknown]) {
+    assert.ok(/-e token abc123def456\)$/.test(cmd), 'the token rides at the end of the enrol broadcast');
+    assert.ok(!/\n/.test(cmd), 'one line');
+  }
+  /* AND THE BUILD NUMBER IS THE SERVER'S, ON EVERY ANSWER THAT LEADS TO A COMMAND -- never a
+     number the page fetched once and kept. A tab opened on build 31 and left open across a
+     lock release would otherwise go on naming -v31.apk after the file is 32: the old binary,
+     installed from the laptop's cache, refused as a downgrade by every phone that self-updated.
+     deviceList (each pane draw), deviceToken and deviceEnrol carry lockVer, and the page
+     takes it from each. */
+  for (const fnName of ['drawDevices', 'devToken']) {
+    assert.match(src.slice(src.indexOf('function ' + fnName + '('), src.indexOf('function ' + fnName + '(') + 1400),
+      /devNoteLockVer_\((d|r)\)/, fnName + ' takes the build number off the server\'s answer');
+  }
+  assert.match(src.slice(src.indexOf("srv('deviceEnrol'"), src.indexOf("srv('deviceEnrol'") + 200), /devNoteLockVer_\(r\)/);
+  assert.ok(!/api\/lock-version/.test(src), 'the page never asks /api/lock-version itself: that file lands a deploy before the binary it describes');
 
   /* THE ENROL MUST NOT BE CHAINED BEHIND THE OWNER STEP.
      ---------------------------------------------------------------------------------------
@@ -1048,17 +1084,23 @@ test('bulk enrolment gives one button per phone, each carrying that phone\'s own
      order would silently decide it, and the way back is a factory reset. */
   /* Asserted on what the function PRODUCES, not on its source: the command is built by
      concatenation, so the shape that matters only exists once it has been run. */
+  const hubHelpers = ['devApkFile_', 'devApkFetch_'].map(n => {
+    const at = src.indexOf('function ' + n + '(');
+    return src.slice(at, src.indexOf('\n}', at) + 2);
+  }).join('\n');
   const hub = lift(src, 'devHubLine',
     'var DEVCMP="com.samaritantechs.hooploanlock/.LockAdmin";'
     + 'var DEVPKG="com.samaritantechs.hooploanlock";'
-    + 'var location={origin:"https://hoop-pmo.vercel.app"};')();
+    + 'var location={origin:"https://hoop-pmo.vercel.app"};'
+    + 'var DEV={lockVer:"31"};' + hubHelpers)('BATCHBATCH');
   assert.match(hub, /adb devices/, 'the hub command works from the connected-device list');
   assert.match(hub, /install -r/, 'it installs...');
   assert.match(hub, /set-device-owner/, '...and takes ownership, both identical on every phone');
   assert.match(hub, /"%b"=="device"/,
     'a handset still unauthorized or offline must be skipped, not half-provisioned');
-  assert.match(hub, /^curl -fsSL -o "%TEMP%\\HOOPLOAN-Lock\.apk" https:\/\/hoop-pmo\.vercel\.app\/HOOPLOAN-Lock\.apk && for \/f /,
-    'the current APK is fetched ONCE before the loop, from this origin, and nothing runs on any phone if that fails');
+  assert.match(hub, /^\(if not exist "%TEMP%\\HOOPLOAN-Lock-v31\.apk" \(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" https:\/\/hoop-pmo\.vercel\.app\/HOOPLOAN-Lock\.apk && move \/y "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" "%TEMP%\\HOOPLOAN-Lock-v31\.apk" >nul\)\) && for \/f /,
+    'the current APK is fetched ONCE before the loop -- and only when this build\'s file is not already in %TEMP% -- from this origin, and nothing runs on any phone if that fails');
+  assert.match(hub, /install -r "%TEMP%\\HOOPLOAN-Lock-v31\.apk"/, 'every phone installs the file the line just fetched or found');
   assert.ok(!/Downloads/.test(hub), 'nothing in Downloads may ever be what gets installed');
   const loop = hub.slice(hub.indexOf('for /f'));
   assert.ok(!/ && /.test(loop),

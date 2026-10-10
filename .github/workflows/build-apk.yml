@@ -51,6 +51,12 @@ jobs:
           CKSUM=$(keytool -exportcert -keystore android/sideload.keystore \
                     -alias hopecalls -storepass hopecalls 2>/dev/null \
                   | openssl dgst -binary -sha256 | openssl base64 | tr '+/' '-_' | tr -d '=\n')
+          # versionCode and the binary's own hash ride in THIS file because it is committed in
+          # the same commit as the APK (the publish step below adds both). lock-version.json is
+          # not: it lands with the pull request, a deploy BEFORE the binary it describes, and
+          # the bench command's once-per-build cache must be keyed on what the file actually
+          # is, never on what it is about to become. See lockBuild() in api/portal.js.
+          APKSHA=$(sha256sum android/lock/build/outputs/apk/release/lock-release.apk | cut -c1-64)
           node -e '
             const fs = require("fs");
             const v = JSON.parse(fs.readFileSync("lock-version.json", "utf8"));
@@ -59,8 +65,10 @@ jobs:
               apkUrl: v.apkUrl,
               component: "com.samaritantechs.hooploanlock/.LockAdmin",
               builtFrom: process.argv[2],
+              versionCode: v.versionCode,
+              apkSha256: process.argv[3],
             }, null, 2) + "\n");
-          ' "$CKSUM" "${GITHUB_SHA::9}"
+          ' "$CKSUM" "${GITHUB_SHA::9}" "$APKSHA"
           echo "signing certificate checksum: $CKSUM"
 
       - name: Publish the APKs into the site
