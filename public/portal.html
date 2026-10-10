@@ -4407,7 +4407,10 @@ function devApkFile_(){
    files and each renames its own, rather than one renaming the other's half-written file. */
 function devApkFetch_(mark){
   var f=devApkFile_(), part=f+'.'+String(mark||'').replace(/[^0-9a-z]/gi,'').slice(0,8)+'.part';
-  var dl='curl -fsSL --connect-timeout 20 --retry 2 -o "'+part+'" '+location.origin+'/HOOPLOAN-Lock.apk'
+  /* --connect-timeout covers only the handshake; a transfer that starts and then stalls would
+     still sit silent. --speed-time/--speed-limit end it when under 1 KB/s for 30 s -- a line
+     that slow would take half an hour for this file, and saying so beats waiting it out. */
+  var dl='curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "'+part+'" '+location.origin+'/HOOPLOAN-Lock.apk'
     +' && move /y "'+part+'" "'+f+'" >nul';
   // Build unknown: no name to trust, so fetch every time -- exactly the old behaviour.
   return DEV.lockVer ? '(if not exist "'+f+'" ('+dl+'))' : '('+dl+')';
@@ -4712,7 +4715,8 @@ function devToken(imei){
           +'/ The command fetches the current APK itself, once for this build (v'+esc(DEV.lockVer)+') — '
           +'the next phones start straight at the install. A handset back from the field has already '
           +'self-updated, and an older file on the laptop is refused as a downgrade, which is exactly '
-          +'what used to stop this line. '
+          +'what used to stop this line. Faili: <code>%TEMP%\\HOOPLOAN-Lock-v'+esc(DEV.lockVer)+'.apk</code> '
+          +'— ifute ukitaka kupakua upya. / Delete that file to force a fresh download. '
         : 'Amri inapakua APK ya sasa yenyewe kila mara (toleo halijulikani kwa sasa). '
           +'/ The command fetches the current APK itself every time (the build is not known right now). ')
       +'Usiisambaze — ndani mna token ya simu hii. / It carries this handset\'s token; do not share it.</div>'

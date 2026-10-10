@@ -465,11 +465,11 @@ test('the provisioning command the portal hands out actually runs on a Windows b
   /* The .part file carries the first characters of THIS line's token, so two cmd windows
      racing the first download of a build write two files and each renames its own. */
   const known = lift(src, 'devOneLiner', 'var DEV={lockVer:"31"};' + deps)('abc123def456');
-  assert.ok(known.startsWith('(if not exist "%TEMP%\\HOOPLOAN-Lock-v31.apk" (curl -fsSL --connect-timeout 20 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock-v31.apk" >nul)) && adb install -r "%TEMP%\\HOOPLOAN-Lock-v31.apk" && (adb shell dpm set-device-owner '),
+  assert.ok(known.startsWith('(if not exist "%TEMP%\\HOOPLOAN-Lock-v31.apk" (curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock-v31.apk" >nul)) && adb install -r "%TEMP%\\HOOPLOAN-Lock-v31.apk" && (adb shell dpm set-device-owner '),
     'known build: skip the download when the build\'s own file is already there, else fetch to .part and rename; then install that file:\n' + known);
   assert.ok(!/HOOPLOAN-Lock\.apk"/.test(known), 'nothing installs an unversioned file when the build is known');
   const unknown = lift(src, 'devOneLiner', 'var DEV={lockVer:""};' + deps)('abc123def456');
-  assert.ok(unknown.startsWith('(curl -fsSL --connect-timeout 20 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock.apk" >nul) && adb install -r "%TEMP%\\HOOPLOAN-Lock.apk" && ('),
+  assert.ok(unknown.startsWith('(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock.apk" >nul) && adb install -r "%TEMP%\\HOOPLOAN-Lock.apk" && ('),
     'unknown build: fetch every time, exactly as before -- slower, never wrong:\n' + unknown);
   assert.ok(!/if not exist/.test(unknown), 'no file is trusted when its build is not known');
   for (const cmd of [known, unknown]) {
@@ -1098,7 +1098,7 @@ test('bulk enrolment gives one button per phone, each carrying that phone\'s own
   assert.match(hub, /set-device-owner/, '...and takes ownership, both identical on every phone');
   assert.match(hub, /"%b"=="device"/,
     'a handset still unauthorized or offline must be skipped, not half-provisioned');
-  assert.match(hub, /^\(if not exist "%TEMP%\\HOOPLOAN-Lock-v31\.apk" \(curl -fsSL --connect-timeout 20 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" https:\/\/hoop-pmo\.vercel\.app\/HOOPLOAN-Lock\.apk && move \/y "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" "%TEMP%\\HOOPLOAN-Lock-v31\.apk" >nul\)\) && for \/f /,
+  assert.match(hub, /^\(if not exist "%TEMP%\\HOOPLOAN-Lock-v31\.apk" \(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" https:\/\/hoop-pmo\.vercel\.app\/HOOPLOAN-Lock\.apk && move \/y "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" "%TEMP%\\HOOPLOAN-Lock-v31\.apk" >nul\)\) && for \/f /,
     'the current APK is fetched ONCE before the loop -- and only when this build\'s file is not already in %TEMP% -- from this origin, and nothing runs on any phone if that fails');
   assert.match(hub, /install -r "%TEMP%\\HOOPLOAN-Lock-v31\.apk"/, 'every phone installs the file the line just fetched or found');
   assert.ok(!/Downloads/.test(hub), 'nothing in Downloads may ever be what gets installed');
