@@ -94,6 +94,59 @@ export default async function handler(req, res) {
       }
     } catch (e) { deep = { error: String(e && e.message).slice(0, 200) }; }
   }
+  /* CAN THE DATABASE STILL BE WRITTEN TO, AND IS ANYTHING FULL.
+       "The token cmd is no longer running just stuck. Is something full?"
+     Every check above is a READ, and a database that has run out of room on its plan is put
+     into READ-ONLY mode: every read still answers in 170ms, this page stays green, and every
+     handset's beat (devices.update last_seen), every lock order and every enrolment fails --
+     which from the bench reads as "the command is stuck" and from the office as "locking does
+     nothing". So this page now writes ONE row -- its own probe key in settings, a table of a
+     few dozen rows -- and says whether that worked, how long it took, and the error word for
+     word when it did not. Then the tables that only ever grow are COUNTED (head-only, no rows
+     travel), and the fleet's heartbeat is summarised: how many handsets have spoken in the
+     last hour and when the newest one did. Counts only; never an IMEI, a name or a number. */
+  let write = null, tables = null, fleet = null;
+  if (db && db.reachable) {
+    try {
+      const { supabase } = await import('./_lib/supabase.js');
+      const t0 = Date.now();
+      const { error } = await supabase.from('settings')
+        .upsert({ key: 'HEALTH_WRITE_PROBE', value: new Date().toISOString() }, { onConflict: 'key' });
+      write = { ok: !error, ms: Date.now() - t0,
+        error: error ? String(error.message || error).slice(0, 240) : null };
+    } catch (e) { write = { ok: false, error: String(e && e.message).slice(0, 240) }; }
+    try {
+      const { supabase } = await import('./_lib/supabase.js');
+      const count = async (table, col) => {
+        const r = await supabase.from(table).select(col, { count: 'exact', head: true });
+        return r.error ? ('error: ' + String(r.error.message || '').slice(0, 80)) : (r.count || 0);
+      };
+      tables = {
+        devices: await count('devices', 'imei'),
+        device_events: await count('device_events', 'imei'),
+        call_logs: await count('call_logs', 'id'),
+        watu_snapshots: await count('watu_snapshots', 'imei'),
+        followup_status: await count('followup_status', 'imei'),
+        signin_attempts: await count('signin_attempts', 'at'),
+        audit_log: await count('audit_log', 'at'),
+      };
+    } catch (e) { tables = { error: String(e && e.message).slice(0, 200) }; }
+    try {
+      const { supabase } = await import('./_lib/supabase.js');
+      const hourAgo = new Date(Date.now() - 3600000).toISOString();
+      const dayAgo = new Date(Date.now() - 86400000).toISOString();
+      const beating = await supabase.from('devices').select('imei', { count: 'exact', head: true }).gte('last_seen', hourAgo);
+      const newest = await supabase.from('devices').select('last_seen').order('last_seen', { ascending: false }).limit(1);
+      const enrolled = await supabase.from('devices').select('imei', { count: 'exact', head: true }).gte('enrolled_at', dayAgo);
+      const locked = await supabase.from('devices').select('imei', { count: 'exact', head: true }).eq('state', 'locked');
+      fleet = {
+        beatingLastHour: beating.error ? null : (beating.count || 0),
+        newestBeat: newest.data && newest.data[0] ? newest.data[0].last_seen : null,
+        enrolledLast24h: enrolled.error ? null : (enrolled.count || 0),
+        locked: locked.error ? null : (locked.count || 0),
+      };
+    } catch (e) { fleet = { error: String(e && e.message).slice(0, 200) }; }
+  }
   res.status(200).json({
     ok: true,
     service: 'hoop-pmo',
@@ -102,6 +155,6 @@ export default async function handler(req, res) {
       SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
       SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
     },
-    urlValid, host, keyPastedAsUrl: looksLikeKey, db, card, deep,
+    urlValid, host, keyPastedAsUrl: looksLikeKey, db, write, tables, fleet, card, deep,
   });
 }
