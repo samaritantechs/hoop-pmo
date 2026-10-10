@@ -228,7 +228,10 @@ there, so on a hundred-phone day the first phone pays the 2 MB and every phone a
 starts straight at `adb install`. A new build is a new file name, so a stale copy is never
 installed. The download lands as `.part` and is renamed only when it finished, and curl is
 given a connection timeout and two retries, so a dead connection fails out loud instead of
-sitting there silent.
+sitting there silent. The build number comes from the server on every answer that leads to
+a command, read from `public/lock-provisioning.json` — the manifest the build workflow
+commits **in the same commit as the APK** — never from `lock-version.json`, which lands a
+deploy before the binary it describes.
 
 > **Why it no longer looks in Downloads.** It used to install
 > `%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk` — a fixed name. The first download kept that

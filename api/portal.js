@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import { supabase, fetchAll } from './_lib/supabase.js';
 import { withApi, gatedUser, isReadOnly, suspendedOn, isAdminRole, USER_TABS, EXTRA_TABS,
   clearRolesCache } from './_lib/auth.js';
@@ -386,6 +387,33 @@ const scopeQ = (user, q) => (user.teams && user.teams.length) ? q.in('team', use
    the safe direction. A missing case that defaulted to "allowed" is how a nav split quietly
    stops splitting anything. */
 const DEVICE_STATE_NAV = { locked: 'devlock', lost: 'devlock', enrolled: 'devunlock', released: 'devunlock' };
+
+/* THE LOCK BUILD THE PUBLISHED APK ACTUALLY IS -- for the bench command's file name.
+   =============================================================================================
+   The bench one-liner keeps the downloaded APK in %TEMP% under its build number and skips the
+   download when that file is already there (devApkFetch_ in portal.html). That cache is only
+   safe if the number names the binary at /HOOPLOAN-Lock.apk, and lock-version.json does NOT:
+   it is committed by the pull request that bumps it, while the APK is built and committed by
+   the workflow a minute or two later, in a second commit and a second deploy. In that window
+   /api/lock-version already says N+1 while the file still serves N -- and a command built then
+   would cache the OLD binary under the NEW name, for good. public/lock-provisioning.json is
+   written by the same workflow step that builds the APK and committed IN THE SAME COMMIT as
+   the binary, so its versionCode is the one number that cannot disagree with the file.
+
+   Read once per instance (a deploy is new instances, and the APK commit is a deploy). Empty
+   when the file has no versionCode yet -- a manifest from before this was written -- and the
+   page then builds the old always-download line: slower, never wrong. */
+let lockBuildCached = null;
+function lockBuild() {
+  if (lockBuildCached === null) {
+    try {
+      const j = JSON.parse(fs.readFileSync(new URL('../public/lock-provisioning.json', import.meta.url), 'utf8'));
+      const v = parseInt(j && j.versionCode, 10);
+      lockBuildCached = v > 0 ? String(v) : '';
+    } catch (e) { lockBuildCached = ''; }
+  }
+  return lockBuildCached;
+}
 const NAV_TABS = ['dashboard', 'customers', 'reports', 'furep', 'recovery', 'fraud', 'scorecards', 'stock', 'movement', 'transfers', 'stockreq', 'stockappr', 'stockrep', 'newstock', 'oldstock', 'targets', 'commission', 'commappr', 'lossreq', 'loss', 'topupreq', 'topups', 'devlock', 'devunlock', 'advreq', 'advappr', 'advrep', 'impreq', 'impappr', 'imprep', 'leavereq', 'leaveappr', 'leaverep', 'issuereq', 'issues', 'issuerep', 'enrol', 'security', 'itrep', 'audit', 'staff', 'codes', 'settings'];
 const LEGACY_NAVS = ['dashboard', 'customers', 'reports', 'recovery', 'staff'];
 /* ADMIN IS FULL ACCESS EVERYWHERE WE DEVELOP -- the owner's standing rule, stated once here
@@ -5033,6 +5061,9 @@ const FNS = {
     const shiftPartner = pane === 'lock' || a.shiftPartner ? ((await handoverConfig(db)).server || null) : null;
     return { ok: true, rows: out.slice(0, 500), total: out.length,
       shiftPartner, handover,
+      // The lock build the published APK IS -- refreshed on every draw, so a tab left open
+      // for days still names the file the bench command keeps correctly. See lockBuild().
+      lockVer: lockBuild(),
       // False before RUN-ME-2026-09-15-device-shift.sql: no order can be written or shown yet.
       hasShift,
       /* WHAT WAS SEARCHED FOR, back on the wire. The box shows the digits the server actually
@@ -5355,6 +5386,8 @@ const FNS = {
          right behaviour reported as nothing at all. */
       revived: revive.length,
       batch, batchReady,
+      // The lock build the published APK IS, so the bench command can name the file it keeps.
+      lockVer: lockBuild(),
       /* FOR THE PROVISIONING STATION ONLY, and in the order the operator typed the IMEIs so
          a paper list can be worked down without hunting. `fresh` says whether this is a new
          phone or one the register already knew: the command is identical either way, but an
@@ -5697,8 +5730,9 @@ const FNS = {
     requireWrite(user); requireNav(user, 'devlock');
     const imei = String((args && args.imei) || '').trim();
     if (!imei) bad('IMEI inahitajika. / An IMEI is required.');
+    const lockVer = lockBuild();
     const rows = await fetchAll(() => db.from('devices').select('imei, enrol_token').eq('imei', imei));
-    if (rows.length) return { ok: true, imei, token: rows[0].enrol_token || null, retired: false };
+    if (rows.length) return { ok: true, imei, token: rows[0].enrol_token || null, retired: false, lockVer };
     /* AND IF THE ROW IS GONE, ASK THE MEMORY. A deleted handset is the case that needs this
        MOST, not least: it is still Device Owner and still carrying its token, so it can be
        neither released nor factory reset without that string -- and docs/DEVICE-LOCKING.md
@@ -5715,7 +5749,7 @@ const FNS = {
       if (past.length && past[0].enrol_token) {
         return { ok: true, imei, token: String(past[0].enrol_token), retired: true,
           retiredAt: past[0].retired_at ? Date.parse(past[0].retired_at) : null,
-          retiredBy: past[0].retired_by || null };
+          retiredBy: past[0].retired_by || null, lockVer };
       }
     } catch (ignored) { /* migration not run: fall through to the same refusal as before */ }
     bad('Kifaa hakijasajiliwa. / That IMEI is not on the registry.');

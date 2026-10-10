@@ -484,3 +484,23 @@ test('typing narrows the list, with no button and no reload', () => {
   assert.match(fetch, /catch\(function\(e\)\{ if\(mine===DEVQ_SEQ\) toast\(safeErr\(e\), true\); \}\)/,
     'a failed keystroke toasts rather than replacing the fleet with an error page');
 });
+
+/* =========================================================================================
+   THE BUILD NUMBER THE BENCH COMMAND NAMES ITS FILE BY COMES FROM THE SERVER, and from the
+   manifest that is committed IN THE SAME COMMIT as the APK. lock-version.json is not that
+   file: it lands with the pull request, a deploy before the binary it describes, and a
+   command built in that window would cache the old APK under the new build's name for good.
+   ========================================================================================= */
+test('every answer that leads to a bench command carries the lock build the published APK is', async () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../public/lock-provisioning.json', import.meta.url), 'utf8'));
+  assert.ok(manifest.versionCode > 0, 'the manifest names its build');
+  assert.match(String(manifest.apkSha256 || ''), /^[0-9a-f]{64}$/, 'and the binary it was written beside');
+  const want = String(manifest.versionCode);
+  const db = devDb([dev({ imei: '351929937378664', state: 'enrolled' })]);
+  const list = await _FNS.deviceList(db, STORE, {});
+  assert.equal(list.lockVer, want, 'deviceList: each pane draw refreshes it');
+  const tok = await _FNS.deviceToken(db, STORE, { imei: '351929937378664' });
+  assert.equal(tok.lockVer, want, 'deviceToken: the single-phone command');
+  const enrol = await _FNS.deviceEnrol(db, STORE, { imeis: '351929937378664' });
+  assert.equal(enrol.lockVer, want, 'deviceEnrol: the provisioning drawer');
+});

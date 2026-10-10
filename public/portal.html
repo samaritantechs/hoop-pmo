@@ -3140,14 +3140,13 @@ function recoveryTrendRender(d){
    that only exists once a row is drawn. Never both at once: they are two different questions
    and answering both leaves a screen nobody can read the count off. */
 var DEV={filter:'',flag:'',q:'',lockVer:''};
-/* THE LOCK APP'S CURRENT BUILD NUMBER, fetched once per pane visit so the bench command can
-   name the file it keeps -- see devApkFetch_. Unknown (fetch failed, or not back yet) means
+/* THE LOCK BUILD THE PUBLISHED APK IS, so the bench command can name the file it keeps (see
+   devApkFetch_). It arrives on every answer that leads to a command -- deviceList (each pane
+   draw), deviceToken, deviceEnrol -- read server-side from the manifest committed in the same
+   commit as the binary (lockBuild() in api/portal.js), so a tab left open for days names the
+   build the server has NOW, not the one it had when the tab was opened. Unknown ('') means
    the command downloads every time, exactly as it did before: slower, never wrong. */
-function devLockVer_(){
-  fetch(location.origin+'/api/lock-version').then(function(r){ return r.json(); })
-    .then(function(j){ var v=parseInt(j&&j.versionCode,10); if(v>0) DEV.lockVer=String(v); })
-    .catch(function(){});
-}
+function devNoteLockVer_(r){ if(r&&r.lockVer!=null) DEV.lockVer=String(r.lockVer||''); }
 /** True when the server had more rows than it sent. `total` counts the whole register;
     `rows` is what fits the wire. Kept as one function so the notice and any future caller
     cannot end up with two different ideas of "there is more". */
@@ -3159,12 +3158,12 @@ var DEVMODE='lock';
 function drawDevices(m){
   DEVMODE = (TAB==='devunlock') ? 'unlock' : 'lock';
   m.innerHTML='<div class="card"><h2>Devices</h2><div class="sk"></div></div>';
-  if(!DEV.lockVer) devLockVer_();   // long done by the time anybody copies a command
   /* `pane` tells the server which desk is asking: the Unlocking desk gets live locked phones
      first (see deviceList), the bench keeps its problems-first order. The other office's
      address comes back with the lock pane's answer and replaces the built-in default. */
   srv('deviceList',{state:DEV.filter,q:DEV.q,pane:DEVMODE}).then(function(d){
     if(d.shiftPartner) DEV_SHIFT_PARTNER=d.shiftPartner;
+    devNoteLockVer_(d);
     devPaint_(m, d, Date.now());
   }).catch(function(e){ paneFailed(m,e); });
 }
@@ -4007,6 +4006,7 @@ function devEnrolForm(m){
     if(!v){ toast('Weka IMEI. / Paste at least one IMEI.', true); return; }
     var b=$('#dvEnrolGo'); b.disabled=true;
     srv('deviceEnrol',{imeis:v}).then(function(r){
+      devNoteLockVer_(r);
       toast('Zimesajiliwa '+money(r.enrolled)
         +(r.alreadyOn?' · '+money(r.alreadyOn)+' zilikuwepo (token ile ile)':'')
         /* A phone that had been released comes back as enrolled, so Funga works on it without
@@ -4399,16 +4399,21 @@ var DEVPKG='com.samaritantechs.hooploanlock';
    under the good name, so it lands as .part and is renamed only when curl finished. And curl
    is given a connection timeout and two retries: a half-open connection used to sit there
    with no output at all, which is what "stuck" looked like. */
-function devApkFile_(){ return '%TEMP%\\HOOPLOAN-Lock'+(DEV.lockVer?'-v'+DEV.lockVer:'')+'.apk'; }
-function devApkFetch_(){
-  var f=devApkFile_();
-  var dl='curl -fsSL --connect-timeout 20 --retry 2 -o "'+f+'.part" '+location.origin+'/HOOPLOAN-Lock.apk'
-    +' && move /y "'+f+'.part" "'+f+'" >nul';
+function devApkFile_(){
+  return '%TEMP%\\HOOPLOAN-Lock'+(DEV.lockVer?'-v'+DEV.lockVer:'')+'.apk';
+}
+/* `mark` tells two cmd windows apart: the .part file carries the first characters of this
+   line's own token (or batch), so two windows racing the first download of a build write two
+   files and each renames its own, rather than one renaming the other's half-written file. */
+function devApkFetch_(mark){
+  var f=devApkFile_(), part=f+'.'+String(mark||'').replace(/[^0-9a-z]/gi,'').slice(0,8)+'.part';
+  var dl='curl -fsSL --connect-timeout 20 --retry 2 -o "'+part+'" '+location.origin+'/HOOPLOAN-Lock.apk'
+    +' && move /y "'+part+'" "'+f+'" >nul';
   // Build unknown: no name to trust, so fetch every time -- exactly the old behaviour.
   return DEV.lockVer ? '(if not exist "'+f+'" ('+dl+'))' : '('+dl+')';
 }
 function devOneLiner(token){
-  return devApkFetch_()
+  return devApkFetch_(token)
     + ' && adb install -r "' + devApkFile_() + '"'
     + ' && (adb shell dpm set-device-owner ' + DEVCMP
     + ' & adb shell am broadcast --include-stopped-packages'
@@ -4443,7 +4448,7 @@ function devOneLiner(token){
      - The APK is fetched ONCE, before the loop, and with && -- see devOneLiner for why it is
        fetched at all. If the download fails nothing runs on any phone. */
 function devHubLine(batch){
-  return devApkFetch_()
+  return devApkFetch_(batch)
     + ' && for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
     + 'adb -s %a install -r "' + devApkFile_() + '"'
     + ' & adb -s %a shell dpm set-device-owner ' + DEVCMP
@@ -4665,6 +4670,7 @@ function devProvision(m, r){
 }
 function devToken(imei){
   srv('deviceToken',{imei:imei}).then(function(r){
+    devNoteLockVer_(r);
     if(!r.token){
       drawer('<h3>Token · '+esc(imei)+'</h3>'
         +'<div class="mut">Simu hii haina token — ilisajiliwa kabla ya sehemu ya simu kujengwa. '
@@ -4699,13 +4705,17 @@ function devToken(imei){
          before the enrol broadcast ever ran, which read at the bench as "re-enrolling is
          broken". Telling the operator to "download it fresh" did not survive a Downloads
          folder that keeps the old name for the old file. */
-      +'Amri inapakua APK ya sasa yenyewe, mara moja tu kwa kila toleo — simu zinazofuata '
-      +'zinaanza moja kwa moja na install (simu za shambani zimeshajiupdate; faili la zamani '
-      +'lingekataliwa). Usiisambaze — ndani mna token ya simu hii. '
-      +'/ The command fetches the current APK itself, once per build — the next phones start '
-      +'straight at the install. A handset back from the field has already self-updated, and '
-      +'an older file on the laptop is refused as a downgrade, which is exactly what used to '
-      +'stop this line. It carries this handset\'s token; do not share it.</div>'
+      +(DEV.lockVer
+        ? 'Amri inapakua APK ya sasa yenyewe, mara moja tu kwa toleo hili (v'+esc(DEV.lockVer)+') — simu '
+          +'zinazofuata zinaanza moja kwa moja na install (simu za shambani zimeshajiupdate; faili la '
+          +'zamani lingekataliwa). '
+          +'/ The command fetches the current APK itself, once for this build (v'+esc(DEV.lockVer)+') — '
+          +'the next phones start straight at the install. A handset back from the field has already '
+          +'self-updated, and an older file on the laptop is refused as a downgrade, which is exactly '
+          +'what used to stop this line. '
+        : 'Amri inapakua APK ya sasa yenyewe kila mara (toleo halijulikani kwa sasa). '
+          +'/ The command fetches the current APK itself every time (the build is not known right now). ')
+      +'Usiisambaze — ndani mna token ya simu hii. / It carries this handset\'s token; do not share it.</div>'
       /* WHY THERE IS NO "NEW TOKEN" BUTTON, said where somebody would look for one.
          ---------------------------------------------------------------------------------
            "so the tokens should be autoupdated"
