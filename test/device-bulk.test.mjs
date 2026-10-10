@@ -195,22 +195,34 @@ test('the bulk bar is partitioned by the same one word', () => {
 test('the last button takes the list, and never the ticks', () => {
   const bar = src('devPaint_');
   assert.match(bar, /BOOT\.readOnly \? ''/, 'a view-only code is offered nothing');
-  /* BOTH DESKS WORK FROM LISTS, so both get one -- and each gets only its own order. A store
-     bench that could paste its way to a release would be the nav split undone by a textarea. */
-  assert.match(bar, /data-dvbulk="'\+\(canLock\?'locked':'released'\)\+'"/);
-  assert.match(bar, /canLock\?'Funga kwa wingi[^']*':'Achia kwa wingi/);
-  /* Pushed away from the others, because it does not act on the selection they act on -- and
-     the search now sits between the spacer and it, which is where the ask put it:
-     "add a search at unlocking BEFORE the Achia kwa wingi button". */
+  /* BOTH DESKS WORK FROM LISTS, so both get one -- and each gets only its own orders. A store
+     bench that could paste its way to a release would be the nav split undone by a textarea.
+     "I need Fungua bulk not just release bulk in unlocking": the unlocking desk now pastes to
+     OPEN as well as to release, Fungua first (the everyday order), Achia second (the one-way
+     one); the locking bench keeps its one. Read as a partition on the same colon as the
+     tick buttons: the locking branch names only `locked`, the unlocking branch names
+     `enrolled` then `released`, and neither side names the other's order. */
   const at = t => { const i = bar.indexOf(t); assert.ok(i > 0, 'missing: ' + t); return i; };
+  assert.ok(at("BOOT.readOnly ? ''") < at('id="dvShift"'), 'the paste buttons come before Shift, which closes the slice');
+  const bulk = bar.slice(at("BOOT.readOnly ? ''"), at('id="dvShift"'));
+  assert.match(bulk, /canLock\s*\?[^:]*data-dvbulk="locked"[^:]*Funga kwa wingi[^:]*:[^:]*data-dvbulk="enrolled"[^:]*Fungua kwa wingi[\s\S]*data-dvbulk="released"[^:]*Achia kwa wingi/,
+    'Funga kwa wingi on the locking side; Fungua kwa wingi then Achia kwa wingi on the unlocking side');
+  const lockSide = bulk.slice(bulk.indexOf('canLock'), bulk.indexOf('data-dvbulk="enrolled"'));
+  const unlockSide = bulk.slice(bulk.indexOf('data-dvbulk="enrolled"'));
+  assert.ok(!/data-dvbulk="(enrolled|released)"/.test(lockSide), 'the locking bench is not offered Fungua or Achia');
+  assert.ok(!/data-dvbulk="locked"/.test(unlockSide), 'the unlocking desk is not offered Funga');
+  /* Pushed away from the others, because they do not act on the selection those act on -- and
+     the search sits between the spacer and them, which is where the ask put it:
+     "add a search at unlocking BEFORE the Achia kwa wingi button". */
   assert.ok(at('<span style="flex:1"></span>') < at('id="dvQ"'));
-  assert.ok(at('id="dvQ"') < at('id="dvBulk"'), 'the search comes before the bulk button');
+  assert.ok(at('id="dvQ"') < at('id="dvBulk"'), 'the search comes before the bulk buttons');
+  assert.ok(at('data-dvbulk="enrolled"') < at('data-dvbulk="released"'), 'Fungua before Achia');
   /* AND THE MAGNIFIER IS GONE WITH IT: the box narrows the list as the digits go in, so a
      button beside it would be a control with nothing left to do -- and one somebody presses
      anyway, wondering what they missed. */
   assert.ok(!/dvFind/.test(bar), 'no search button: the typing is the search');
-  assert.match(bar, /rb\.onclick[^;]*devBulkForm\(m, rb\.getAttribute\('data-dvbulk'\)\)/,
-    'and the order comes off the button rather than out of DEVMODE a second time');
+  assert.match(bar, /\$all\('\[data-dvbulk\]',m\)\.forEach\(function\(rb\)\{ rb\.onclick=function\(\)\{ devBulkForm\(m, rb\.getAttribute\('data-dvbulk'\)\)/,
+    'one handler for every bulk button, and the order comes off the button rather than out of DEVMODE a second time');
 
   const form = src('devBulkForm');
   /* THE INPUT IS THE TEXTAREA. Reading devPicked() here as well would make one button answer
@@ -227,7 +239,7 @@ test('the last button takes the list, and never the ticks', () => {
   assert.match(form, /ya kwanza/, 'it shows the first IMEI back, so a mis-parse is visible as itself');
 });
 
-test('one form, two orders, and the warning is not written once for both', () => {
+test('one form, three orders, and the warning is not written once for all', () => {
   /* Everything that makes a bulk order safe is the same work for either desk, so there is one
      form. What is NOT the same is what the order costs, and a warning copied across would be
      false on one of the two screens. */
@@ -239,7 +251,17 @@ test('one form, two orders, and the warning is not written once for both', () =>
   assert.ok(dept.length > 10 && dept.length < 900, 'DEPT is one block at the top of the script');
   const t = new Function(dept + '\n' + HTML.slice(HTML.indexOf('var DEVBULK={'),
     HTML.indexOf('\n};', HTML.indexOf('var DEVBULK={')) + 3) + '\nreturn DEVBULK;')();
-  assert.deepEqual(Object.keys(t).sort(), ['locked', 'released']);
+  assert.deepEqual(Object.keys(t).sort(), ['enrolled', 'locked', 'released']);
+
+  /* FUNGUA IN BULK lands on the same choice every single-phone unlock gets -- Fungua tu or
+     Fungua na Achia -- so its warning says that is what comes next, and it does not borrow the
+     one-way sentence: that rides on the release choice, where it always has. */
+  assert.match(t.enrolled.h, /Fungua kwa wingi/);
+  assert.match(t.enrolled.warn, /Fungua tu[\s\S]*Fungua na Achia/);
+  assert.match(t.enrolled.warn, /Unlock only[\s\S]*Unlock \+ release/);
+  assert.ok(!/njia moja|one-way|kebo|cable/i.test(t.enrolled.warn), 'the one-way warning belongs to the release choice');
+  assert.equal(t.enrolled.cls, 'btn w', 'not a red button: opening is the everyday order');
+  assert.ok(!t.released.cls && !t.locked.cls, 'the other two keep the red button the form draws by default');
 
   // Achia cannot be undone from the office: the way back is a cable, per phone.
   assert.match(t.released.warn, /mlango wa njia moja[\s\S]*one-way/);
@@ -256,6 +278,53 @@ test('one form, two orders, and the warning is not written once for both', () =>
   assert.ok(!/general duty/i.test(t.locked.warn), 'under the name that desk now has');
   // No reason is demanded any more -- the warning must not promise one it will not ask for.
   assert.ok(!/sababu|reason/i.test(t.locked.warn));
+});
+
+/* A CANCELLED RELEASE KEEPS THE LIST IN HAND. A pasted Fungua lands on the Fungua-tu-or-Achia
+   choice with its textarea already gone (that drawer replaced it), so the choice drawer is the
+   only place the list still lives. It used to close itself BEFORE asking "Achia simu 80?", so
+   a Cancel -- the operator re-checking one number -- landed on an empty screen with eighty
+   IMEIs to paste again. Now the drawer closes only when the order actually went. */
+test('cancelling the count confirm after a pasted Fungua na Achia keeps the choice drawer up', () => {
+  const body = src('devUnlockChoose_');
+  const harness = (answer) => new Function(`
+    var OUT={html:'', acted:[], closed:false, sent:[]};
+    var EL={}; function $(s){ return EL[s]||(EL[s]={}); }
+    function drawer(h){ OUT.html=h; }
+    function closeDrawer(){ OUT.closed=true; }
+    function esc(s){ return String(s==null?'':s); } function money(n){ return String(n); }
+    function toast(m,bad){ OUT.toast=[m,!!bad]; }
+    function devAct_(m,imeis,state){ OUT.acted.push([imeis,state]); return ${answer}; }
+    function devSend_(m,imeis,state){ OUT.sent.push([imeis,state]); }
+    ${body}
+    return { fn: devUnlockChoose_, out: OUT, el: EL };`)();
+  // Many phones, the confirm answered NO: nothing sent, nothing closed, the list still here.
+  const no = harness(false);
+  no.fn(null, ['351000000000001', '351000000000002', '351000000000003']);
+  assert.match(no.out.html, /ya kwanza[\s\S]*351000000000001/, 'the first IMEI is read back where the decision is made');
+  no.el['#dvOpenAchia'].onclick();
+  assert.deepEqual(no.out.acted, [[['351000000000001', '351000000000002', '351000000000003'], 'released']], 'the count confirm is asked through devAct_');
+  assert.equal(no.out.closed, false, 'a Cancel leaves the choice drawer -- and the list -- on screen');
+  assert.deepEqual(no.out.sent, [], 'and sends nothing');
+  // Answered YES: the order went and the drawer closes.
+  const yes = harness(true);
+  yes.fn(null, ['A', 'B']);
+  yes.el['#dvOpenAchia'].onclick();
+  assert.equal(yes.out.closed, true);
+  // One phone: the choice itself was the deliberate yes -- no second confirm, straight out.
+  const one = harness(false);
+  one.fn(null, ['A']);
+  assert.match(one.out.html, /IMEI: <b>A<\/b>/);
+  one.el['#dvOpenAchia'].onclick();
+  assert.deepEqual(one.out.acted, [], 'no count confirm for a single handset');
+  assert.deepEqual(one.out.sent, [[['A'], 'released']]);
+  assert.equal(one.out.closed, true);
+  // Fungua tu closes and sends, for any count.
+  const open = harness(false);
+  open.fn(null, ['A', 'B']);
+  open.el['#dvJustOpen'].onclick();
+  assert.deepEqual(open.out.sent, [[['A', 'B'], 'enrolled']]);
+  assert.equal(open.out.closed, true);
 });
 
 test('the IMEIs the register never heard of are named on screen, not counted', () => {

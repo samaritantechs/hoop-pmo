@@ -115,22 +115,31 @@ batch. **Both desks get one**, because both work from lists: the store bench alr
 enrol a consignment, and pasting to *lock* that same consignment was the one step still asking for
 four hundred clicks.
 
-Which order the button gives is the desk's own, read from the same `DEVMODE` that decides every
+Which orders the buttons give is the desk's own, read from the same `DEVMODE` that decides every
 other control on the pane — so a store bench cannot paste its way to a release, and a server test
-holds that from the other side too. It sits apart from the rest, pushed right, because the
-selection has nothing to do with it: two controls that look like a set and read different inputs is
+holds that from the other side too. They sit apart from the rest, pushed right, because the
+selection has nothing to do with them: two controls that look like a set and read different inputs is
 how somebody ticks three rows, presses this one, and expects those three.
 
-### One form, two orders — but not one warning
+> *"I need Fungua bulk not just release bulk in unlocking."*
+
+The unlocking desk gets **two** paste buttons: **Fungua kwa wingi** first, because a day's paid-up
+applications come out of the same list the releases do and opening them one tick at a time was the
+same four-hundred-click job; **Achia kwa wingi** second. A pasted Fungua lands on the same choice
+every single-phone unlock gets — *Fungua tu* or *Fungua na Achia* — for the whole list at once, and
+the one-way warning rides on that choice, where it always has. The locking bench keeps its one.
+
+### One form, three orders — but not one warning
 
 Everything that makes a bulk order safe is the same work for either desk, so there is one form. What
 is **not** the same is what the order costs, and a warning copied across would be false on one of
-the two screens:
+the screens:
 
 | | what the screen says |
 |---|---|
 | **Achia** | one-way — the handset drops Device Owner, stops reporting, and the way back is a cable, per phone |
-| **Funga** | every phone on the list goes dark to whoever holds it until **general duty** opens it; you will be asked for one reason, recorded against all of them |
+| **Fungua** | every phone on the list opens; the next step asks *Fungua tu* (stays under our lock, can be re-locked) or *Fungua na Achia* — the one-way sentence belongs to that second choice |
+| **Funga** | every phone on the list goes dark to whoever holds it until **general duty** opens it; no reason is asked any more — the lock screen already names the company and a number |
 
 Calling a lock irreversible would be a lie that makes the real warning next door mean less. A test
 asserts the locking sheet never borrows the one-way sentence.
