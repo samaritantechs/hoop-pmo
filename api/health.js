@@ -136,7 +136,10 @@ export default async function handler(req, res) {
       const hourAgo = new Date(Date.now() - 3600000).toISOString();
       const dayAgo = new Date(Date.now() - 86400000).toISOString();
       const beating = await supabase.from('devices').select('imei', { count: 'exact', head: true }).gte('last_seen', hourAgo);
-      const newest = await supabase.from('devices').select('last_seen').order('last_seen', { ascending: false }).limit(1);
+      // nullsFirst: false, or Postgres sorts the never-spoken rows (null) to the top of a
+      // descending order and the "newest beat" reads null on a fleet that is beating fine.
+      const newest = await supabase.from('devices').select('last_seen')
+        .not('last_seen', 'is', null).order('last_seen', { ascending: false, nullsFirst: false }).limit(1);
       const enrolled = await supabase.from('devices').select('imei', { count: 'exact', head: true }).gte('enrolled_at', dayAgo);
       const locked = await supabase.from('devices').select('imei', { count: 'exact', head: true }).eq('state', 'locked');
       fleet = {
