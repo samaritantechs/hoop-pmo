@@ -327,8 +327,8 @@ test('Fungua opens a choice, and it reaches both unlock and release through the 
   assert.ok(act.indexOf("state==='enrolled'") < act.indexOf("state==='released' && !confirm("),
     'the enrolled intercept precedes the release confirmation');
 
-  const choose = html.slice(html.indexOf('function devUnlockChoose_('),
-    html.indexOf('function devUnlockChoose_(') + 1600);
+  const chooseAt = html.indexOf('function devUnlockChoose_(');
+  const choose = html.slice(chooseAt, html.indexOf('\n}', chooseAt) + 2);
   // Two roads, both through devSend_/devAct_ -- the same proven write path, not a new one.
   assert.match(choose, /Fungua tu \/ Unlock only/);
   assert.match(choose, /Fungua na Achia \/ Unlock \+ release/);
@@ -338,8 +338,11 @@ test('Fungua opens a choice, and it reaches both unlock and release through the 
      rather than behind a second dialog -- which is the whole "reduce the double work". */
   assert.match(choose, /Drops Device Owner and stops reporting/);
   assert.match(choose, /lets Gmail sign-in work/i);
-  /* A BULK RELEASE STILL CONFIRMS THE COUNT; a single POS phone does not. */
-  assert.match(choose, /if\(n>1\) devAct_\(m, imeis, 'released'\);/);
+  /* A BULK RELEASE STILL CONFIRMS THE COUNT; a single POS phone does not. And the drawer
+     closes only once that confirm is answered yes: a pasted list (Fungua kwa wingi) lives
+     nowhere else by this point, so a Cancel must land back here, not on an empty screen. */
+  assert.match(choose, /if\(n>1\)\{ if\(!devAct_\(m, imeis, 'released'\)\) return; closeDrawer\(\); \}/);
+  assert.match(choose, /else \{ closeDrawer\(\); devSend_\(m, imeis, 'released', '', false\); \}/);
 });
 
 test('lock and the standalone achia are left exactly as they were', () => {

@@ -3372,13 +3372,13 @@ function devPaint_(m, d, at){
        clicks. Which order the button gives is the desk's own -- the same DEVMODE that decides
        every other control here -- so neither desk is offered the other's.
 
-       It sits apart from the rest, pushed right, because it is not another way to act on the
-       selection: the selection has nothing to do with it. Two controls that look like a set and
-       read different inputs is how somebody ticks three rows and presses this one expecting
-       those three. */
+       They sit apart from the rest, pushed right, because they are not another way to act on
+       the selection: the selection has nothing to do with them. Two controls that look like a
+       set and read different inputs is how somebody ticks three rows and presses one of these
+       expecting those three. */
     /* THE SEARCH SITS WITH THE ORDERS, not up with the chips, because it is part of the same
        motion: a customer puts a handset on the counter, you find it and you open it. Pushed
-       right, immediately before the bulk button, which is where the ask put it. */
+       right, immediately before the bulk buttons, which is where the ask put it. */
     +'<span style="flex:1"></span>'
     /* NO BUTTON. The box narrows the list as the digits go in, so a magnifier beside it would
        be a control with nothing left to do -- and one somebody presses anyway, wondering what
@@ -3386,10 +3386,18 @@ function devPaint_(m, d, at){
        what the operator typed and it must not jump back a keystroke when a reply lands. */
     +'<input id="dvQ" inputmode="numeric" placeholder="Tafuta IMEI / find an IMEI" '
       +'value="'+esc(qLive)+'" style="width:170px;font-family:ui-monospace,monospace;font-size:12px">'
+    /* THE UNLOCKING DESK GETS TWO -- "I need Fungua bulk not just release bulk in unlocking."
+       Fungua first, because it is the everyday order (a paid-up application) and Achia the
+       one-way one; each carries its own order in data-dvbulk, and one handler reads it. The
+       locking bench keeps its one. */
     +(BOOT.readOnly ? ''
-      : '<button class="btn sm ghost" id="dvBulk" data-dvbulk="'+(canLock?'locked':'released')+'" '
-        +'title="Bandika orodha ya IMEI / paste a list of IMEIs">'
-        +(canLock?'Funga kwa wingi / Lock bulk':'Achia kwa wingi / Release bulk')+'</button>')
+      : (canLock
+        ? '<button class="btn sm ghost" id="dvBulk" data-dvbulk="locked" '
+          +'title="Bandika orodha ya IMEI / paste a list of IMEIs">Funga kwa wingi / Lock bulk</button>'
+        : '<button class="btn sm ghost" id="dvBulk" data-dvbulk="enrolled" '
+          +'title="Bandika orodha ya IMEI za kufungua / paste a list of IMEIs to unlock">Fungua kwa wingi / Unlock bulk</button>'
+          +'<button class="btn sm ghost" id="dvBulkRel" data-dvbulk="released" '
+          +'title="Bandika orodha ya IMEI za kuachia / paste a list of IMEIs to release">Achia kwa wingi / Release bulk</button>'))
     /* SHIFT IS THE LOCKING BENCH'S OWN, like Sajili simu -- moving a phone off this
        register is the same job as putting it on. The server agrees: requireNav(user,
        'devlock') on deviceShift refuses the release desk regardless of what this button
@@ -3627,7 +3635,7 @@ function devPaint_(m, d, at){
   var en=$('#dvEnrol'); if(en) en.onclick=function(){ devEnrolForm(m); };
   /* The order comes off the button rather than out of DEVMODE a second time: one place decides
      which desk this is, and everything else reads that decision instead of re-making it. */
-  var rb=$('#dvBulk'); if(rb) rb.onclick=function(){ devBulkForm(m, rb.getAttribute('data-dvbulk')); };
+  $all('[data-dvbulk]',m).forEach(function(rb){ rb.onclick=function(){ devBulkForm(m, rb.getAttribute('data-dvbulk')); }; });
   var sh=$('#dvShift'); if(sh) sh.onclick=function(){ devShiftForm(m); };
   $all('[data-dvs]').forEach(function(b){ b.onclick=function(){ devSetState(m, b.getAttribute('data-dvs')); }; });
   /* The POS desk's one-row order. It ticks the row and reuses the same bulk path, so the
@@ -3784,6 +3792,11 @@ function devUnlockChoose_(m, imeis){
   var n=imeis.length;
   if(!n){ toast('Chagua simu kwanza. / Pick some phones first.', true); return; }
   drawer('<h3>Fungua / Unlock · '+money(n)+'</h3>'
+    /* THE READ-BACK STAYS ON SCREEN FOR THE DECISION. A pasted list arrives here with its
+       textarea already gone (this drawer replaced it), so the first IMEI -- the one check that
+       catches a header row or a mis-parse -- is printed again, where the one-way choice is made. */
+    +'<div class="mut" style="font-size:11.5px;margin-bottom:6px">'
+      +(n>1?'ya kwanza / first: <b>'+esc(imeis[0])+'</b>':'IMEI: <b>'+esc(imeis[0])+'</b>')+'</div>'
     +'<div class="mut" style="font-size:12px;margin-bottom:10px">Chagua moja / choose one:</div>'
     +'<button class="btn w" id="dvJustOpen">Fungua tu / Unlock only</button>'
     +'<div class="mut" style="font-size:11px;margin:4px 0 14px">Simu inabaki chini ya udhibiti wetu; '
@@ -3795,11 +3808,13 @@ function devUnlockChoose_(m, imeis){
     +'This is what lets Gmail sign-in work.</div>');
   $('#dvJustOpen').onclick=function(){ closeDrawer(); devSend_(m, imeis, 'enrolled', '', false); };
   $('#dvOpenAchia').onclick=function(){
-    closeDrawer();
     /* One phone: the choice above was the deliberate yes -- go. Many phones: keep the count
-       confirmation, via the standalone achia path (which is not intercepted). */
-    if(n>1) devAct_(m, imeis, 'released');
-    else devSend_(m, imeis, 'released', '', false);
+       confirmation, via the standalone achia path (which is not intercepted) -- and keep THIS
+       drawer open until it is answered yes. A Cancel on "Achia simu 40?" used to land on an
+       empty screen with the forty pasted IMEIs gone; now it lands back here, where "Fungua tu"
+       is still one press away and the list is still in hand. */
+    if(n>1){ if(!devAct_(m, imeis, 'released')) return; closeDrawer(); }
+    else { closeDrawer(); devSend_(m, imeis, 'released', '', false); }
   };
 }
 
@@ -4035,17 +4050,38 @@ function devParseImeis_(t){
    and a consignment arriving from Watu is a list exactly like the other two, on the desk that
    has the least reason to be clicking through four hundred rows.
 
-   ONE FORM, TWO ORDERS, because the only honest difference between them is the sentence at
+   ONE FORM, THREE ORDERS, because the only honest difference between them is the sentence at
    the top. Everything that makes a bulk order safe -- the parse, the live count, the
    confirmation, the refusal path, the naming of what did not match -- is the same work, and a
    second copy of it is a second copy that will one day disagree with the first.
 
-   WHAT DIFFERS IS THE WARNING, and it differs because the two orders differ. Achia cannot be
+   WHAT DIFFERS IS THE WARNING, and it differs because the orders differ. Achia cannot be
    undone from the office: the handset drops Device Owner and stops calling home, and the way
    back is a cable. Funga can be undone -- by general duty, on their own pane, in a second --
-   but while it stands the phone is dark to whoever is holding it. Neither sentence would be
-   true of the other order, so neither is written once for both. */
+   but while it stands the phone is dark to whoever is holding it. Fungua opens, and then asks
+   which kind of opening it is. No sentence would be true of another order, so none is written
+   once for all. */
 var DEVBULK={
+  /* FUNGUA, IN BULK, ON THE UNLOCKING DESK -- "I need Fungua bulk not just release bulk in
+     unlocking." A day's paid-up applications come out of the same list the releases do, and
+     opening them one tick at a time was the four-hundred-click job this form exists to end.
+     The paste goes through devAct_ like every Fungua, so the press lands on the same choice
+     every single-phone unlock gets -- Fungua tu, or Fungua na Achia -- for the whole list at
+     once; the one-way warning rides on that choice, where it always has. */
+  enrolled:{
+    h:'Fungua kwa wingi / Unlock in bulk',
+    sub:'Bandika IMEI za simu za kufungua — moja kwa mstari, au kwa comma. '
+      +'/ Paste the IMEIs to unlock, one per line or comma-separated.',
+    warn:'Kila simu kwenye orodha itafunguliwa. Baada ya kubonyeza utachagua: <b>Fungua tu</b> '
+      +'(inabaki chini ya udhibiti, inaweza kufungwa tena) au <b>Fungua na Achia</b>. '
+      +'/ Every handset on the list opens. The next step asks which: <b>Unlock only</b> (stays '
+      +'under our lock, can be re-locked) or <b>Unlock + release</b>.',
+    go:'Fungua / Unlock',
+    // Not red, in the box or on the button: opening is the everyday order here, and the red
+    // belongs to the choice that can follow it.
+    cls:'btn w',
+    noteCls:'note',
+  },
   released:{
     h:'Achia kwa wingi / Release in bulk',
     sub:'Bandika IMEI za mauzo yaliyothibitishwa — moja kwa mstari, au kwa comma. '
@@ -4083,8 +4119,8 @@ var DEVBULK={
    instead is put the number in front of the operator and name every IMEI the register did not
    recognise afterwards.
 
-   The order itself goes through devAct_ like every other -- the same reason prompt, the same
-   one-way-door confirmation, the same released-and-not-listening refusal. */
+   The order itself goes through devAct_ like every other -- the same Fungua-tu-or-Achia choice,
+   the same one-way-door confirmation, the same released-and-not-listening refusal. */
 function devBulkForm(m, state){
   var t=DEVBULK[state];
   if(!t) return;
@@ -4092,11 +4128,11 @@ function devBulkForm(m, state){
     +'<div class="sub">'+t.sub+' Hazihitaji kuwa kwenye jedwali; zinasomwa kutoka kwenye '
     +'register nzima. / They do not have to be on the table behind this — the whole register '
     +'is searched.</div>'
-    +'<div class="note bad" style="font-size:11.5px;margin-bottom:8px">'+t.warn+'</div>'
+    +'<div class="'+(t.noteCls||'note bad')+'" style="font-size:11.5px;margin-bottom:8px">'+t.warn+'</div>'
     +'<div class="fld"><label>IMEI</label>'
     +'<textarea id="dvBulkImeis" rows="10" style="width:100%;font-family:ui-monospace,monospace;font-size:12px"></textarea></div>'
     +'<div id="dvBulkCount" class="mut" style="font-size:11.5px;margin:-4px 0 8px"></div>'
-    +'<button class="btn w danger" id="dvBulkGo">'+t.go+'</button>');
+    +'<button class="'+(t.cls||'btn w danger')+'" id="dvBulkGo">'+t.go+'</button>');
   var ta=$('#dvBulkImeis'), out=$('#dvBulkCount');
   var recount=function(){
     var p=devParseImeis_(ta.value);
