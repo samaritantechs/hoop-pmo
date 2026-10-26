@@ -53,6 +53,10 @@ public class MainActivity extends Activity {
        not fix, and saying so beats silence. */
     private static final long LOAD_TIMEOUT_MS = 20000;
 
+    /** How long an onCreateWindow probe may wait for the address it was opened for before it
+        is torn down unheard. See the end of onCreateWindow. */
+    private static final long PROBE_TTL_MS = 10000;
+
     private WebView web;
     private SharedPreferences prefs;
     private ValueCallback<Uri[]> pendingFileCallback;
@@ -139,9 +143,26 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(bridge, "HopeCalls");
 
         web.setWebViewClient(new WebViewClient() {
+            /* BOTH OVERLOADS, HERE TOO. minSdk is 23 and the WebResourceRequest overload
+               arrived in 24, so on an Android 6 handset the framework calls only the String
+               one -- and until now this client did not have it. The probe in onCreateWindow
+               has carried both from the start, for exactly this reason; the main client did
+               not, so on such a phone every tel:, whatsapp: and map link loaded INTO the
+               WebView instead of going out to the phone. The page now routes every pin as a
+               top-level navigation (openOut_ in portal.html), which lands here and nowhere
+               else, so this side has to answer on every handset the app installs on. One
+               rule, one method, two doors into it. */
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
-                Uri u = req.getUrl();
+                return route(req.getUrl());
+            }
+            @Override
+            @SuppressWarnings("deprecation")
+            public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                return route(url == null ? null : Uri.parse(url));
+            }
+            private boolean route(Uri u) {
+                if (u == null) return false;
                 String scheme = u.getScheme() == null ? "" : u.getScheme();
                 if ("tel".equals(scheme)) {
                     // ACTION_DIAL opens the dialer with the number filled in -- no CALL_PHONE
@@ -244,9 +265,15 @@ public class MainActivity extends Activity {
                 /* DESTROYED AFTER THE CALLBACK RETURNS, never inside it. Tearing a WebView
                    down while it is still delivering one of its own callbacks crashes on some
                    builds, and a crash here would be strictly worse than the dead link this
-                   whole path exists to fix. */
+                   whole path exists to fix. Idempotent, because it is queued twice: once when
+                   the probe speaks, and once on the clock below in case it never does. */
+                final boolean[] dropped = { false };
                 final Runnable drop = new Runnable() {
-                    @Override public void run() { probe.destroy(); }
+                    @Override public void run() {
+                        if (dropped[0]) return;
+                        dropped[0] = true;
+                        probe.destroy();
+                    }
                 };
                 probe.setWebViewClient(new WebViewClient() {
                     private void spoke(WebView v, Uri u) {
@@ -294,6 +321,13 @@ public class MainActivity extends Activity {
                         (android.webkit.WebView.WebViewTransport) resultMsg.obj;
                 t.setWebView(probe);
                 resultMsg.sendToTarget();
+                /* A POPUP THAT NEVER SPEAKS still cost a WebView. window.open() with no
+                   address, or a javascript: target, creates the window and then never
+                   navigates it, so none of the three callbacks above ever runs and the probe
+                   would live as long as the Activity. Nothing in the portal does that today;
+                   the clock is so the first page that does leaks nothing. A real navigation
+                   arrives within a frame, so the margin here is generous by three orders. */
+                web.postDelayed(drop, PROBE_TTL_MS);
                 return true;
             }
 

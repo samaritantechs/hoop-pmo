@@ -1020,7 +1020,9 @@ test('the devices pane still works before the location migration is run', () => 
    ========================================================================================= */
 test('the wrapper hands an off-site link to the browser instead of eating it', () => {
   const main = javaCode('app/src/main/java/com/samaritantechs/hoopcalls/MainActivity.java');
-  const fn = main.slice(main.indexOf('shouldOverrideUrlLoading'));
+  /* The rule lives in route(); both shouldOverrideUrlLoading overloads are one-line doors into
+     it (see 'the top-level route answers on every handset the app installs on'). */
+  const fn = main.slice(main.indexOf('private boolean route(Uri u)'));
   const body = fn.slice(0, fn.indexOf('\n            }'));
 
   assert.match(body, /"https"\.equals\(scheme\)/,
@@ -1158,6 +1160,32 @@ test('a blank-target click reaches the wrapper at all', () => {
     'the teardown is queued on the WebView that is on screen; a post() on the never-attached '
     + 'probe waits for an attachment that never comes, and the probe leaked once per tap');
   assert.ok(!/\bv\.post\(drop\)/.test(probe));
+  // A popup that never navigates (window.open() with no address) must not keep its probe forever.
+  assert.match(probe, /web\.postDelayed\(drop, PROBE_TTL_MS\)/, 'an unheard probe is torn down on the clock');
+  assert.match(probe, /if \(dropped\[0\]\) return;\s*dropped\[0\] = true;\s*probe\.destroy\(\);/,
+    'queued twice, destroyed once');
+});
+
+test('the top-level route answers on every handset the app installs on', () => {
+  /* THE DEFECT THE REVIEW CAUGHT. Routing the New Stock pin through openOut_ moves it from the
+     popup path to a top-level navigation, and the main client only answered the overload that
+     arrived in API 24. minSdk is 23: on an Android 6 phone the framework calls the String
+     overload alone, the main client returned the default false, and the pin -- with every tel:
+     and whatsapp: link -- loaded INTO the WebView. The probe had both overloads from the start;
+     the main client now does too, through one shared rule. */
+  const main = javaCode('app/src/main/java/com/samaritantechs/hoopcalls/MainActivity.java');
+  const client = main.slice(main.indexOf('web.setWebViewClient('), main.indexOf('web.setWebChromeClient('));
+  assert.match(client, /public boolean shouldOverrideUrlLoading\(WebView v, WebResourceRequest req\) \{\s*return route\(req\.getUrl\(\)\);/);
+  assert.match(client, /@SuppressWarnings\("deprecation"\)\s*public boolean shouldOverrideUrlLoading\(WebView v, String url\) \{\s*return route\(url == null \? null : Uri\.parse\(url\)\);/,
+    'the API 23 overload, delegating to the same rule rather than a second copy of it');
+  assert.equal((client.match(/private boolean route\(Uri u\)/g) || []).length, 1, 'one rule');
+  assert.match(client, /private boolean route\(Uri u\) \{\s*if \(u == null\) return false;/);
+  // The rule itself is unchanged: tel: dials, the message schemes go out, off-host http(s) goes out.
+  assert.match(client, /"tel"\.equals\(scheme\)/);
+  assert.match(client, /"geo"\.equals\(scheme\)/);
+  assert.match(client, /!host\.equalsIgnoreCase\(mine\)/);
+  const gradle = androidFile('app/build.gradle');
+  assert.match(gradle, /minSdk(?:Version)?\s+23\b/, 'the reason both overloads are needed is still true');
 });
 
 test('every map pin on the page takes the top-level road inside the app', () => {
