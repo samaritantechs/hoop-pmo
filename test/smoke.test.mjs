@@ -1133,8 +1133,52 @@ test('a blank-target click reaches the wrapper at all', () => {
     'a window opened by a click is a person asking; one opened by a script is not');
 
   const win = main.slice(main.indexOf('onCreateWindow'));
-  assert.match(win.slice(0, win.indexOf('onShowFileChooser')), /openOutside\(req\.getUrl\(\)\)/,
+  const probe = win.slice(0, win.indexOf('onShowFileChooser'));
+  assert.match(probe, /spoke\(v, req\.getUrl\(\)\)/,
     'the asked-for window is never opened here -- its address is handed to the phone');
+  assert.match(probe, /if \(!openOutside\(u\)\) noApp\(\)/, 'and a dead tap says so, never nothing');
+
+  /* THE SAFETY NET. "Taping location link in new stock by application interface on phone
+     doesn't redirect to open maps app" -- both shouldOverrideUrlLoading overloads were in place
+     and the pin still went nowhere, because a popup's FIRST navigation is the one that callback
+     is not promised for. onPageStarted is the first anyone hears of it then, and it must act
+     on the address once and ignore the empty window itself. */
+  assert.match(probe, /public void onPageStarted\(WebView v, String url, Bitmap favicon\)/,
+    'a popup whose first load skips shouldOverrideUrlLoading is still caught');
+  assert.match(main, /^import android\.graphics\.Bitmap;/m, 'and the signature compiles');
+  assert.match(probe, /"about:blank"\.equals\(url\)\) return;/,
+    'the blank window a popup starts life as is not an address anybody tapped');
+  assert.match(probe, /final boolean\[\] handled = \{ false \};/);
+  assert.match(probe, /if \(handled\[0\]\) return;\s*handled\[0\] = true;/,
+    'whichever callback learns the address first speaks for the click; the probe is never '
+    + 'destroyed twice and a place is never opened twice');
+  assert.equal((probe.match(/spoke\(v, /g) || []).length, 3,
+    'all three ways the probe can learn the address funnel into the one guarded handler');
+  assert.match(probe, /web\.post\(drop\)/,
+    'the teardown is queued on the WebView that is on screen; a post() on the never-attached '
+    + 'probe waits for an attachment that never comes, and the probe leaked once per tap');
+  assert.ok(!/\bv\.post\(drop\)/.test(probe));
+});
+
+test('every map pin on the page takes the top-level road inside the app', () => {
+  /* The pin under "Simu inasema" was fixed and the one on New Stock was not, because they were
+     written separately and only one of them was looked at. This sweep is so the next pin is not
+     a third report: a Google Maps anchor written anywhere in portal.html routes through openOut_
+     or the test says which one does not. */
+  const html = fs.readFileSync(new URL('../public/portal.html', import.meta.url), 'utf8');
+  const anchors = html.match(/<a href="https:\/\/www\.google\.com\/maps[^>]*>/g) || [];
+  assert.ok(anchors.length >= 1, 'the New Stock pin is written as a literal anchor');
+  for (const a of anchors) {
+    assert.match(a, /onclick="openOut_\(this\.href\);return false;"/,
+      'a map anchor still asking for a new window: ' + a);
+  }
+  for (const fn of ['nsWhere', 'devWhere']) {
+    const at = html.indexOf('function ' + fn + '(');
+    assert.ok(at >= 0, fn + ' is still the one place its pin is written');
+    const src = html.slice(at, html.indexOf('\n}\n', at));
+    assert.match(src, /google\.com\/maps\?q=/);
+    assert.match(src, /openOut_\(this\.href\)/, fn + ' routes its pin through openOut_');
+  }
 });
 
 test('the page stops asking for a window when it is inside the app', () => {

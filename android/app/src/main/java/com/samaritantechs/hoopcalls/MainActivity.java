@@ -7,6 +7,7 @@ import android.app.DownloadManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
@@ -235,6 +236,11 @@ public class MainActivity extends Activity {
             public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture,
                                           android.os.Message resultMsg) {
                 final WebView probe = new WebView(MainActivity.this);
+                /* ONE ANSWER PER CLICK. Three callbacks below can each be the first to learn
+                   the address, and whichever it is speaks for the click; the others then stay
+                   quiet, so a place is never opened twice and the probe is never torn down
+                   twice. */
+                final boolean[] handled = { false };
                 /* DESTROYED AFTER THE CALLBACK RETURNS, never inside it. Tearing a WebView
                    down while it is still delivering one of its own callbacks crashes on some
                    builds, and a crash here would be strictly worse than the dead link this
@@ -243,10 +249,20 @@ public class MainActivity extends Activity {
                     @Override public void run() { probe.destroy(); }
                 };
                 probe.setWebViewClient(new WebViewClient() {
+                    private void spoke(WebView v, Uri u) {
+                        if (handled[0]) return;
+                        handled[0] = true;
+                        if (!openOutside(u)) noApp();   // a dead tap says so, never nothing
+                        /* POSTED THROUGH THE REAL WEBVIEW, not the probe. The probe is never
+                           attached to a window, and since API 24 a post() on an unattached
+                           view waits for an attachment that never comes -- so the probe was
+                           never destroyed, one leaked WebView per tap. `web` is on screen,
+                           so its queue runs on the next frame. */
+                        web.post(drop);
+                    }
                     @Override
                     public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
-                        openOutside(req.getUrl());
-                        v.post(drop);
+                        spoke(v, req.getUrl());
                         return true;
                     }
                     /* BOTH OVERLOADS, because minSdk is 23 and the WebResourceRequest one
@@ -256,9 +272,22 @@ public class MainActivity extends Activity {
                     @Override
                     @SuppressWarnings("deprecation")
                     public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                        openOutside(Uri.parse(url));
-                        v.post(drop);
+                        spoke(v, Uri.parse(url));
                         return true;
+                    }
+                    /* THE SAFETY NET. "Taping location link in new stock by application
+                       interface on phone doesn't redirect to open maps app" -- the New Stock
+                       pin was a plain target="_blank" anchor, and on the handset it went
+                       nowhere even with both overloads above in place. A popup's FIRST
+                       navigation is the one shouldOverrideUrlLoading is not promised for:
+                       the framework may start loading the address it was created with
+                       straight away, and then onPageStarted is the first anyone hears of it.
+                       HOPE's wrapper has carried this net for the same reason. about:blank is
+                       the empty window itself, not an address anybody tapped. */
+                    @Override
+                    public void onPageStarted(WebView v, String url, Bitmap favicon) {
+                        if (url == null || "about:blank".equals(url)) return;
+                        spoke(v, Uri.parse(url));
                     }
                 });
                 android.webkit.WebView.WebViewTransport t =
