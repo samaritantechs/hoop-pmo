@@ -7,6 +7,7 @@ import android.app.DownloadManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
@@ -51,6 +52,17 @@ public class MainActivity extends Activity {
        far more than a slow 3G handset needs. Past that, something is wrong that waiting will
        not fix, and saying so beats silence. */
     private static final long LOAD_TIMEOUT_MS = 20000;
+
+    /* HOW LONG AN onCreateWindow PROBE MAY WAIT for the address it was opened for before it is
+       torn down unheard. A LEAK GUARD, SIZED AS ONE -- not a tap timeout. The probe hears a
+       popup's address only when that navigation COMMITS: after DNS, the TLS handshake, the
+       response headers and every redirect Google puts in front of Maps, over whatever link the
+       handset has. The first cut of this was ten seconds, on the belief that a navigation
+       reports within a frame; on a slow 3G phone that would have torn the probe down with the
+       address still in flight and the tap would have died, silently, on exactly the phones
+       that are slowest to begin with. The page above budgets LOAD_TIMEOUT_MS for ONE file off
+       a CDN; this must be comfortably longer than that, and nothing is waiting on it. */
+    private static final long PROBE_TTL_MS = 120000;
 
     private WebView web;
     private SharedPreferences prefs;
@@ -138,9 +150,26 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(bridge, "HopeCalls");
 
         web.setWebViewClient(new WebViewClient() {
+            /* BOTH OVERLOADS, HERE TOO. minSdk is 23 and the WebResourceRequest overload
+               arrived in 24, so on an Android 6 handset the framework calls only the String
+               one -- and until now this client did not have it. The probe in onCreateWindow
+               has carried both from the start, for exactly this reason; the main client did
+               not, so on such a phone every tel:, whatsapp: and map link loaded INTO the
+               WebView instead of going out to the phone. The page now routes every pin as a
+               top-level navigation (openOut_ in portal.html), which lands here and nowhere
+               else, so this side has to answer on every handset the app installs on. One
+               rule, one method, two doors into it. */
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
-                Uri u = req.getUrl();
+                return route(req.getUrl());
+            }
+            @Override
+            @SuppressWarnings("deprecation")
+            public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                return route(url == null ? null : Uri.parse(url));
+            }
+            private boolean route(Uri u) {
+                if (u == null) return false;
                 String scheme = u.getScheme() == null ? "" : u.getScheme();
                 if ("tel".equals(scheme)) {
                     // ACTION_DIAL opens the dialer with the number filled in -- no CALL_PHONE
@@ -235,18 +264,46 @@ public class MainActivity extends Activity {
             public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture,
                                           android.os.Message resultMsg) {
                 final WebView probe = new WebView(MainActivity.this);
+                /* ONE ANSWER PER CLICK. Three callbacks below can each be the first to learn
+                   the address, and whichever it is speaks for the click; the others then stay
+                   quiet, so a place is never opened twice and the probe is never torn down
+                   twice. */
+                final boolean[] handled = { false };
                 /* DESTROYED AFTER THE CALLBACK RETURNS, never inside it. Tearing a WebView
                    down while it is still delivering one of its own callbacks crashes on some
                    builds, and a crash here would be strictly worse than the dead link this
-                   whole path exists to fix. */
+                   whole path exists to fix. Idempotent, because it is queued twice: once when
+                   the probe speaks, and once on the clock below in case it never does. */
+                final boolean[] dropped = { false };
                 final Runnable drop = new Runnable() {
-                    @Override public void run() { probe.destroy(); }
+                    @Override public void run() {
+                        if (dropped[0]) return;
+                        dropped[0] = true;
+                        /* Torn down UNHEARD -- the clock won, not a callback. The tap is
+                           lost, and a lost tap is said, never swallowed. */
+                        if (!handled[0]) {
+                            Toast.makeText(MainActivity.this,
+                                    "Kiungo hakikufunguka. Jaribu tena. / The link did not open. Try again.",
+                                    Toast.LENGTH_LONG).show();
+                        }
+                        probe.destroy();
+                    }
                 };
                 probe.setWebViewClient(new WebViewClient() {
+                    private void spoke(WebView v, Uri u) {
+                        if (handled[0]) return;
+                        handled[0] = true;
+                        if (!openOutside(u)) noApp();   // a dead tap says so, never nothing
+                        /* POSTED THROUGH THE REAL WEBVIEW, not the probe. The probe is never
+                           attached to a window, and since API 24 a post() on an unattached
+                           view waits for an attachment that never comes -- so the probe was
+                           never destroyed, one leaked WebView per tap. `web` is on screen,
+                           so its queue runs on the next frame. */
+                        web.post(drop);
+                    }
                     @Override
                     public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
-                        openOutside(req.getUrl());
-                        v.post(drop);
+                        spoke(v, req.getUrl());
                         return true;
                     }
                     /* BOTH OVERLOADS, because minSdk is 23 and the WebResourceRequest one
@@ -256,15 +313,47 @@ public class MainActivity extends Activity {
                     @Override
                     @SuppressWarnings("deprecation")
                     public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                        openOutside(Uri.parse(url));
-                        v.post(drop);
+                        spoke(v, Uri.parse(url));
                         return true;
+                    }
+                    /* THE SAFETY NET. "Taping location link in new stock by application
+                       interface on phone doesn't redirect to open maps app" -- the New Stock
+                       pin was a plain target="_blank" anchor, and on the handset it went
+                       nowhere even with both overloads above in place. A popup's FIRST
+                       navigation is the one shouldOverrideUrlLoading is not promised for:
+                       the framework may start loading the address it was created with
+                       straight away, and then onPageStarted is the first anyone hears of it.
+                       HOPE's wrapper has carried this net for the same reason. about:blank is
+                       the empty window itself, not an address anybody tapped. */
+                    @Override
+                    public void onPageStarted(WebView v, String url, Bitmap favicon) {
+                        if (url == null || "about:blank".equals(url)) return;
+                        spoke(v, Uri.parse(url));
+                    }
+                    /* A LOAD THAT FAILS STILL KNOWS WHERE IT WAS GOING. The probe's own fetch
+                       of google.com is only ever a way of learning the address; if that fetch
+                       fails -- no signal, a DNS miss, a wall -- the address is in the error,
+                       and Maps can open a point with no network at all. So a failed popup
+                       load is handed out exactly like one that started, rather than waiting
+                       for the clock. Main frame only: a failed favicon is not the tap. */
+                    @Override
+                    public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
+                        if (req != null && req.isForMainFrame()) spoke(v, req.getUrl());
                     }
                 });
                 android.webkit.WebView.WebViewTransport t =
                         (android.webkit.WebView.WebViewTransport) resultMsg.obj;
                 t.setWebView(probe);
                 resultMsg.sendToTarget();
+                /* A POPUP THAT NEVER SPEAKS still cost a WebView. window.open() with no
+                   address, or a javascript: target, creates the window and then never
+                   navigates it, so none of the callbacks above ever runs and the probe would
+                   live as long as the Activity. Nothing in the portal does that today; the
+                   clock is so the first page that does leaks nothing. It is deliberately
+                   long -- see PROBE_TTL_MS for why a real navigation can take a while to be
+                   heard -- because the cost of a probe outliving its tap by a minute is a
+                   little memory, and the cost of cutting one off early is the tap itself. */
+                web.postDelayed(drop, PROBE_TTL_MS);
                 return true;
             }
 

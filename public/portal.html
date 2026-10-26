@@ -7600,8 +7600,14 @@ function nsWhere(r){
   var q=r.lat+','+r.lng;
   var age=agoMins(r.locAt?Math.round((Date.now()-r.locAt)/60000):null);
   var vague=r.locAcc!=null&&r.locAcc>500;
+  /* THROUGH openOut_, LIKE EVERY OTHER PIN. "Taping location link in new stock by application
+     interface on phone doesn't redirect to open maps app" -- this anchor was the one map link
+     still asking the wrapper for a new window, and a popup's first navigation is exactly the
+     one the wrapper is not guaranteed to see (see openOut_). Routed at the top level instead,
+     the tap reaches the app's link handler and Maps opens, on every APK already in the field. */
   return '<div style="font-size:9.5px;margin-top:2px">'
-    +'<a href="https://www.google.com/maps?q='+encodeURIComponent(q)+'" target="_blank" rel="noopener">📍 '
+    +'<a href="https://www.google.com/maps?q='+encodeURIComponent(q)+'" target="_blank" rel="noopener" '
+    +'onclick="openOut_(this.href);return false;">📍 '
     +esc(Number(r.lat).toFixed(5))+', '+esc(Number(r.lng).toFixed(5))+'</a>'
     +(r.locAcc!=null?' <span class="'+(vague?'chip warn':'mut')+'">±'+money(r.locAcc)+'m</span>':'')
     +(age?'<div class="mut">'+esc(age)+'</div>':'')

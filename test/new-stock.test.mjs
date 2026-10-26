@@ -493,6 +493,13 @@ test('the coordinate is a link, with its accuracy and never a bare pin', () => {
   assert.match(fn, /google\.com\/maps\?q=/);
   assert.match(fn, /encodeURIComponent/, 'a coordinate is put in a URL, so it is encoded for one');
   assert.match(fn, /target="_blank" rel="noopener"/);
+  /* "Taping location link in new stock by application interface on phone doesn't redirect to
+     open maps app." A bare target="_blank" asks the app's wrapper for a new window, and the
+     first navigation of that window is the one it is not guaranteed to see. Routed through
+     openOut_ the tap is a top-level navigation the wrapper always sees -- and in a browser the
+     href is still real, so the status bar, a long-press and a middle-click all still work. */
+  assert.match(fn, /onclick="openOut_\(this\.href\);return false;"/,
+    'the New Stock pin takes the same road to Maps as every other pin on the phone');
   /* A 2,000m fix is a suburb, not an address. Drawing it as a pin with no radius is how
      somebody drives to the wrong building, so a vague one is marked as vague. */
   assert.match(fn, /r\.locAcc>500/);
