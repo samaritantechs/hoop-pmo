@@ -1154,16 +1154,32 @@ test('a blank-target click reaches the wrapper at all', () => {
   assert.match(probe, /if \(handled\[0\]\) return;\s*handled\[0\] = true;/,
     'whichever callback learns the address first speaks for the click; the probe is never '
     + 'destroyed twice and a place is never opened twice');
-  assert.equal((probe.match(/spoke\(v, /g) || []).length, 3,
-    'all three ways the probe can learn the address funnel into the one guarded handler');
   assert.match(probe, /web\.post\(drop\)/,
     'the teardown is queued on the WebView that is on screen; a post() on the never-attached '
     + 'probe waits for an attachment that never comes, and the probe leaked once per tap');
   assert.ok(!/\bv\.post\(drop\)/.test(probe));
   // A popup that never navigates (window.open() with no address) must not keep its probe forever.
   assert.match(probe, /web\.postDelayed\(drop, PROBE_TTL_MS\)/, 'an unheard probe is torn down on the clock');
-  assert.match(probe, /if \(dropped\[0\]\) return;\s*dropped\[0\] = true;\s*probe\.destroy\(\);/,
+  assert.match(probe, /if \(dropped\[0\]\) return;\s*dropped\[0\] = true;[\s\S]{0,400}?probe\.destroy\(\);/,
     'queued twice, destroyed once');
+  assert.match(probe, /if \(!handled\[0\]\) \{\s*Toast\.makeText\(/,
+    'a probe torn down unheard says the tap was lost; silence reads as success');
+
+  /* THE CLOCK IS A LEAK GUARD, NOT A TAP TIMEOUT. The probe hears a popup's address only when
+     the navigation COMMITS -- after DNS, TLS, the headers and Google's redirect chain, over a
+     3G link. Ten seconds was the first cut and would have cut the slowest phones off with the
+     address still in flight, which is the original bug back as an intermittent. */
+  const ttl = Number((main.match(/PROBE_TTL_MS = (\d+);/) || [])[1]);
+  const load = Number((main.match(/LOAD_TIMEOUT_MS = (\d+);/) || [])[1]);
+  assert.ok(ttl >= 60000, 'a minute at the very least; it costs a little memory, a short one costs the tap');
+  assert.ok(ttl > load * 2, 'and comfortably longer than the budget for one CDN file');
+
+  /* A popup load that FAILS still carries the address it was going to, and Maps opens a point
+     with no network at all -- so an error is handed out like a start, not left to the clock. */
+  assert.match(probe, /public void onReceivedError\(WebView v, WebResourceRequest req, WebResourceError err\) \{\s*if \(req != null && req\.isForMainFrame\(\)\) spoke\(v, req\.getUrl\(\)\);/,
+    'a failed popup load hands its address out instead of waiting for the clock');
+  assert.equal((probe.match(/spoke\(v, /g) || []).length, 4,
+    'all four ways the probe can learn the address funnel into the one guarded handler');
 });
 
 test('the top-level route answers on every handset the app installs on', () => {
@@ -1176,8 +1192,10 @@ test('the top-level route answers on every handset the app installs on', () => {
   const main = javaCode('app/src/main/java/com/samaritantechs/hoopcalls/MainActivity.java');
   const client = main.slice(main.indexOf('web.setWebViewClient('), main.indexOf('web.setWebChromeClient('));
   assert.match(client, /public boolean shouldOverrideUrlLoading\(WebView v, WebResourceRequest req\) \{\s*return route\(req\.getUrl\(\)\);/);
-  assert.match(client, /@SuppressWarnings\("deprecation"\)\s*public boolean shouldOverrideUrlLoading\(WebView v, String url\) \{\s*return route\(url == null \? null : Uri\.parse\(url\)\);/,
+  assert.match(client, /public boolean shouldOverrideUrlLoading\(WebView v, String url\) \{\s*return route\(url == null \? null : Uri\.parse\(url\)\);/,
     'the API 23 overload, delegating to the same rule rather than a second copy of it');
+  const strOverload = client.slice(0, client.indexOf('public boolean shouldOverrideUrlLoading(WebView v, String url)'));
+  assert.match(strOverload.slice(-120), /@SuppressWarnings\("deprecation"\)/, 'and it is marked as the deprecated one');
   assert.equal((client.match(/private boolean route\(Uri u\)/g) || []).length, 1, 'one rule');
   assert.match(client, /private boolean route\(Uri u\) \{\s*if \(u == null\) return false;/);
   // The rule itself is unchanged: tel: dials, the message schemes go out, off-host http(s) goes out.

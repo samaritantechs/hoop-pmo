@@ -53,9 +53,16 @@ public class MainActivity extends Activity {
        not fix, and saying so beats silence. */
     private static final long LOAD_TIMEOUT_MS = 20000;
 
-    /** How long an onCreateWindow probe may wait for the address it was opened for before it
-        is torn down unheard. See the end of onCreateWindow. */
-    private static final long PROBE_TTL_MS = 10000;
+    /* HOW LONG AN onCreateWindow PROBE MAY WAIT for the address it was opened for before it is
+       torn down unheard. A LEAK GUARD, SIZED AS ONE -- not a tap timeout. The probe hears a
+       popup's address only when that navigation COMMITS: after DNS, the TLS handshake, the
+       response headers and every redirect Google puts in front of Maps, over whatever link the
+       handset has. The first cut of this was ten seconds, on the belief that a navigation
+       reports within a frame; on a slow 3G phone that would have torn the probe down with the
+       address still in flight and the tap would have died, silently, on exactly the phones
+       that are slowest to begin with. The page above budgets LOAD_TIMEOUT_MS for ONE file off
+       a CDN; this must be comfortably longer than that, and nothing is waiting on it. */
+    private static final long PROBE_TTL_MS = 120000;
 
     private WebView web;
     private SharedPreferences prefs;
@@ -272,6 +279,13 @@ public class MainActivity extends Activity {
                     @Override public void run() {
                         if (dropped[0]) return;
                         dropped[0] = true;
+                        /* Torn down UNHEARD -- the clock won, not a callback. The tap is
+                           lost, and a lost tap is said, never swallowed. */
+                        if (!handled[0]) {
+                            Toast.makeText(MainActivity.this,
+                                    "Kiungo hakikufunguka. Jaribu tena. / The link did not open. Try again.",
+                                    Toast.LENGTH_LONG).show();
+                        }
                         probe.destroy();
                     }
                 };
@@ -316,6 +330,16 @@ public class MainActivity extends Activity {
                         if (url == null || "about:blank".equals(url)) return;
                         spoke(v, Uri.parse(url));
                     }
+                    /* A LOAD THAT FAILS STILL KNOWS WHERE IT WAS GOING. The probe's own fetch
+                       of google.com is only ever a way of learning the address; if that fetch
+                       fails -- no signal, a DNS miss, a wall -- the address is in the error,
+                       and Maps can open a point with no network at all. So a failed popup
+                       load is handed out exactly like one that started, rather than waiting
+                       for the clock. Main frame only: a failed favicon is not the tap. */
+                    @Override
+                    public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
+                        if (req != null && req.isForMainFrame()) spoke(v, req.getUrl());
+                    }
                 });
                 android.webkit.WebView.WebViewTransport t =
                         (android.webkit.WebView.WebViewTransport) resultMsg.obj;
@@ -323,10 +347,12 @@ public class MainActivity extends Activity {
                 resultMsg.sendToTarget();
                 /* A POPUP THAT NEVER SPEAKS still cost a WebView. window.open() with no
                    address, or a javascript: target, creates the window and then never
-                   navigates it, so none of the three callbacks above ever runs and the probe
-                   would live as long as the Activity. Nothing in the portal does that today;
-                   the clock is so the first page that does leaks nothing. A real navigation
-                   arrives within a frame, so the margin here is generous by three orders. */
+                   navigates it, so none of the callbacks above ever runs and the probe would
+                   live as long as the Activity. Nothing in the portal does that today; the
+                   clock is so the first page that does leaks nothing. It is deliberately
+                   long -- see PROBE_TTL_MS for why a real navigation can take a while to be
+                   heard -- because the cost of a probe outliving its tap by a minute is a
+                   little memory, and the cost of cutting one off early is the tap itself. */
                 web.postDelayed(drop, PROBE_TTL_MS);
                 return true;
             }
