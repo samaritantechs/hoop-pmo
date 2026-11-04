@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions DisableDelayedExpansion
 
 REM =============================================================================================
 REM THE HUB COMMAND, RUNNING ITSELF UNTIL IT STOPS NEEDING TO.
@@ -24,7 +24,15 @@ REM   result=2  TOKEN MISMATCH     -> STOPS. A blind retry cannot fix this -- th
 REM             already holds a DIFFERENT token and needs -e current, one phone at a time.
 REM             See docs/DEVICE-LOCKING.md, "When the register and the handset hold different
 REM             tokens".
-REM   neither 2, 3 nor 5 anywhere  -> every result line is result=1. Done.
+REM   result=0  anywhere          -> STOPS. `am broadcast` prints it when the enrol receiver never
+REM             ran -- the app is missing after a failed install, or Android stopped it first.
+REM             It looks like success and is not, so it is never allowed to reach the green exit.
+REM   no result=1 at all           -> STOPS. Absence of a failure line is not evidence of success:
+REM             an install that failed, a cable that dropped, or a phone that never answered
+REM             all leave no result=2, 3 or 5 behind.
+REM   a phone skipped as not ready -> the others are still done, but the exit is 1: that phone
+REM             is not enrolled and the screen names it.
+REM   at least one result=1, none of the above -> every result line is result=1. Done, exit 0.
 REM
 REM RE-RUNNING THE WHOLE HUB ON PHONES THAT ALREADY SUCCEEDED IS SAFE, not wasted risk:
 REM `adb install -r` on the same version is a no-op, `set-device-owner` on an owned phone just
@@ -127,6 +135,18 @@ if errorlevel 1 (
   set "RC=2"
   goto finish
 )
+REM A PHONE THAT IS NOT READY IS NAMED, NEVER SKIPPED IN SILENCE. The walk below keeps only the
+REM rows adb calls `device`, so a handset whose "Allow USB debugging" prompt was never tapped
+REM would otherwise be left out of a run that still ended "every result line is result=1" --
+REM true of the lines that exist, and the tenth phone never mentioned.
+set "SKIPPED=0"
+findstr /i /c:"unauthorized" /c:"offline" /c:"no permissions" "%DEVS%"
+if not errorlevel 1 (
+  set "SKIPPED=1"
+  echo.
+  echo The phones listed just above are not ready and are skipped this round. Accept Allow USB
+  echo debugging on their screens, or replug them, and run this again for those.
+)
 del "%DEVS%" >nul 2>&1
 
 echo.
@@ -213,11 +233,40 @@ if not errorlevel 1 (
   goto round
 )
 
+REM POSITIVE PROOF BEFORE GREEN. Everything above only recognises named failures; nothing yet
+REM proves a success. result=0 is the receiver never having run, and it matches none of the
+REM patterns above because they all end in a comma.
+findstr /c:"result=0" "%OUT%" >nul
+if not errorlevel 1 (
+  echo.
+  echo At least one phone answered result=0 with no message. The enrol did not run there: the
+  echo app is missing after a failed install, or Android stopped it before it finished. This
+  echo line looks like success and is not. Read the install line above that phone, fix it, and
+  echo run this again.
+  set "RC=1"
+  goto finish
+)
+
+findstr /c:"result=1," "%OUT%" >nul
+if errorlevel 1 (
+  echo.
+  echo No phone answered result=1 ENROLLED, so nothing was confirmed. Read the lines above: an
+  echo install that failed, a cable that dropped, or a phone that never answered all end here.
+  set "RC=1"
+  goto finish
+)
+
 echo.
 echo No phone answered result=2, 3 or 5 -- every result line above should read result=1
 echo ENROLLED. Confirm each phone on Devices before boxing it; that is the confirmation that
 echo counts, not this terminal.
-del "%OUT%" >nul 2>&1
+if "%SKIPPED%"=="1" (
+  echo.
+  echo But at least one phone was not ready and was skipped -- it is listed above and it is NOT
+  echo enrolled. Fix it and run this again for that phone.
+  set "RC=1"
+  goto finish
+)
 set "RC=0"
 goto finish
 

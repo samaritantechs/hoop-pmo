@@ -248,8 +248,27 @@ so two windows running it at once never share one, and it removes them when the 
 window that is closed or interrupted mid-run leaves its files behind, about 2 MB; they are
 `HOOPLOAN-Lock-run…` and `hoop-hub-run…` in `%TEMP%` and are safe to delete once that window is
 gone. It also switches Play Protect's USB-install check off on each phone before the install,
-exactly as the pasted hub line does, and a round in which no phone was ready ends with a
-message and a non-zero exit instead of the "every result line should read result=1" ending.
+exactly as the pasted hub line does.
+
+**It only ends green on evidence.** Exit `0` needs at least one `result=1` line, no bare
+`result=0` anywhere, and no phone skipped as not ready. Each of these used to fall through to
+"every result line above should read result=1", because the script only recognised *named*
+failures (`result=2`, `3`, `5`):
+
+- A phone whose install failed has no app, so `set-device-owner` throws and `am broadcast`
+  prints a bare **`result=0`** — the receiver never ran. It looks like success. The script
+  now stops with exit `1` and says so.
+- A cable that drops after the walk starts leaves no result line at all. No `result=1` anywhere
+  also exits `1`.
+- A phone showing `unauthorized`, `offline` or `no permissions` is listed on the screen each
+  round and skipped. The others still finish, but the exit is `1`, because that phone is not
+  enrolled.
+- A round in which no phone was walked (the last one dropped between the readiness check and
+  the walk) says "nothing was enrolled" and exits `2`.
+
+Exit codes: `0` every walked phone answered `result=1` and none was skipped; `1` stopped, read the
+screen (mismatch, still not owner, rounds used up, a `result=0`, no `result=1`, or a skipped
+phone); `2` nothing was done to any phone (no batch given, the download failed, no phone ready).
 
 `result=3` → it clears the accounts that usually cause it (Meet/Duo, Outlook, OneDrive) on
 every phone still on the cable, then runs the whole hub again. `result=5` → nothing local to

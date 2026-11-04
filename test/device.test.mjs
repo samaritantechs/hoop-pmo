@@ -1845,6 +1845,49 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   assert.ok(rounds.length > 1, 'the round label exists');
   assert.match(rounds[1], /findstr \/e \/c:"device"/,
     'the device check runs inside the loop body, not only before it');
+
+  /* POSITIVE PROOF BEFORE GREEN, AND EVERY EXIT CODE PINNED BY VALUE.
+     =========================================================================================
+     The script only ever recognised NAMED failures (result=2, 3, 5); anything else fell through
+     to "every result line above should read result=1" and exit 0. A phone whose install failed
+     leaves no app behind, set-device-owner throws, and `am broadcast` prints a bare `result=0`
+     -- the receiver never ran -- which matches none of the comma-terminated patterns. A cable
+     that drops after the walk starts leaves no result line at all. Both read as success. The
+     tail now demands evidence: no result=0 anywhere, at least one result=1, and no phone
+     skipped as not ready. And the review's mutants survived because only two exit codes were
+     pinned by value; each branch is pinned here, so RC=1 flipped to RC=0 anywhere fails. */
+  const rcAfter = (src, marker, rc, why) => {
+    const at = src.indexOf(marker);
+    assert.ok(at >= 0, 'missing: ' + marker);
+    const block = src.slice(at, at + 900);
+    assert.match(block, new RegExp('set "RC=' + rc + '"\\s*\\r?\\n\\s*goto finish'), why);
+  };
+  const body = bat.slice(bat.indexOf(':round'));
+  rcAfter(body, 'if %ROUND% GTR %MAXROUNDS% (', 1, 'running out of rounds exits 1');
+  rcAfter(body, 'echo No phones ready.', 2, 'no phone ready at the start of a round exits 2');
+  rcAfter(body, 'Still NOT DEVICE OWNER', 1, 'still not Device Owner after clearing exits 1');
+  rcAfter(body, 'At least one phone answered result=0', 1, 'a bare result=0 exits 1');
+  rcAfter(body, 'No phone answered result=1 ENROLLED', 1, 'no result=1 at all exits 1');
+  rcAfter(body, 'But at least one phone was not ready', 1, 'a skipped phone exits 1');
+
+  // result=0 and the missing result=1 are checked AFTER the retry branches and BEFORE green.
+  const at0 = body.indexOf('findstr /c:"result=0"');
+  const at1 = body.indexOf('findstr /c:"result=1,"');
+  const atSkip = body.indexOf('if "%SKIPPED%"=="1" (');
+  const atGreen = body.indexOf('set "RC=0"');
+  assert.ok(body.indexOf('findstr /c:"result=5,"') < at0 && at0 < at1 && at1 < atSkip && atSkip < atGreen,
+    'result=0, then result=1, then the skipped check, and only then a green exit');
+  assert.equal((body.match(/set "RC=0"/g) || []).length, 1, 'there is exactly one way to exit 0');
+
+  // A phone that is not ready is named, and the flag it sets is reset every round.
+  assert.match(body, /set "SKIPPED=0"\s*\r?\nfindstr \/i \/c:"unauthorized" \/c:"offline" \/c:"no permissions" "%DEVS%"\s*\r?\nif not errorlevel 1 \(\s*\r?\n\s*set "SKIPPED=1"/,
+    'phones that are unauthorized, offline or without permissions are printed, not skipped in silence');
+  assert.ok(body.indexOf('findstr /i /c:"unauthorized"') < body.indexOf('del "%DEVS%"'),
+    'the list is printed before the device list is deleted');
+
+  // Extensions on and delayed expansion off, whatever the caller\'s cmd was started with: a ! in
+  // a Windows user name would otherwise be eaten out of %TEMP% and every path below would break.
+  assert.match(bat, /^setlocal EnableExtensions DisableDelayedExpansion\r?$/m);
 });
 
 /* SHIFTING A HANDSET TO THE OTHER COMPANY, WITHOUT A FACTORY RESET.
