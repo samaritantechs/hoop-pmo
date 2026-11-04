@@ -58,7 +58,14 @@ REM this script does the same, every run, into %TEMP% -- always writable, never 
 REM as .part and is renamed only when curl finished, so a download that stopped halfway can never
 REM be installed under the good name. The build number is not known here, so there is no
 REM once-per-build cache: slower by one 2 MB download per run, never wrong.
-set "APK=%TEMP%\HOOPLOAN-Lock.apk"
+REM
+REM A NAME OF THIS RUN'S OWN. Two windows running this script at once -- the hour-long waits
+REM taught the bench to open a second one -- must never share a file: adb holds the APK open
+REM only while an install is running, so between one window's installs the other window's
+REM delete or rename would pull the file out from under it, and its next install would fail
+REM with "failed to stat". Each run downloads under its own name and removes it on the way
+REM out, at :finish, whichever way it leaves.
+set "APK=%TEMP%\HOOPLOAN-Lock-run%RANDOM%%RANDOM%.apk"
 set "BATCH=%~1"
 set "MAXROUNDS=5"
 set "CLEARED=0"
@@ -69,37 +76,28 @@ if "%BATCH%"=="" (
   echo   BATCH is the batch id from the hub command in Portal -^> Devices -^> Sajili simu.
   exit /b 2
 )
-REM THE OLD FILE GOES FIRST, so the guard below means what it says. A leftover from the last
-REM run would satisfy "if not exist" even when the rename had failed, and the walk would then
-REM install LAST run's build with the one just fetched sitting unused in .part -- the stale
-REM install this fetch exists to stop. `del` sets no ERRORLEVEL, so existence is the test: a
-REM file that survives it is open in another cmd window, an adb install still running there.
-del "%APK%" >nul 2>&1
-if exist "%APK%" (
-  echo %APK% is still in use -- another cmd window is installing from it. Let that one
-  echo finish, or close it, then run again. Nothing was done to any phone.
-  exit /b 2
-)
 echo Fetching the current lock app from %SERVER% ...
 curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%APK%.part" "%SERVER%/HOOPLOAN-Lock.apk"
 if errorlevel 1 (
-  del "%APK%.part" >nul 2>&1
+  del /f "%APK%.part" >nul 2>&1
   echo Could not fetch %SERVER%/HOOPLOAN-Lock.apk -- check this laptop's internet, then run again.
   echo Nothing was done to any phone.
   exit /b 2
 )
 REM THE RENAME IS CHECKED ON ITS OWN RESULT. cmd's move can refuse -- the fresh .part held for a
 REM moment by an antivirus scan, say -- and prints its reason to stderr, which the >nul above
-REM does not cover. Unchecked, the script would carry on to a name that no longer exists.
+REM does not cover. Unchecked, the script would carry on to a name that no longer exists. The
+REM path is quoted wherever it is echoed inside a block: a ) or an & in the Windows user name,
+REM which %TEMP% carries, would otherwise end the block early.
 move /y "%APK%.part" "%APK%" >nul
 if errorlevel 1 (
-  del "%APK%.part" >nul 2>&1
-  echo The download could not be put in place as %APK% -- run again.
+  del /f "%APK%.part" >nul 2>&1
+  echo The download could not be put in place as "%APK%" -- run again.
   echo Nothing was done to any phone.
   exit /b 2
 )
 if not exist "%APK%" (
-  echo The download did not land as %APK% -- run again.
+  echo The download did not land as "%APK%" -- run again.
   exit /b 2
 )
 
@@ -109,7 +107,8 @@ if %ROUND% GTR %MAXROUNDS% (
   echo.
   echo Stopped after %MAXROUNDS% rounds. Read the output above for whichever phone is still
   echo not on result=1 and act on it by hand -- see docs/DEVICE-LOCKING.md.
-  exit /b 1
+  set "RC=1"
+  goto finish
 )
 
 adb devices > "%TEMP%\hoop-devices.txt"
@@ -117,7 +116,8 @@ findstr /e /c:"device" "%TEMP%\hoop-devices.txt" >nul
 if errorlevel 1 (
   echo No phones ready. Check the cable and "Allow USB debugging" on each screen.
   del "%TEMP%\hoop-devices.txt" >nul 2>&1
-  exit /b 2
+  set "RC=2"
+  goto finish
 )
 del "%TEMP%\hoop-devices.txt" >nul 2>&1
 
@@ -155,7 +155,8 @@ if not errorlevel 1 (
   echo already holds a DIFFERENT token. Enrol it on its own with -e current -- see
   echo docs/DEVICE-LOCKING.md, "When the register and the handset hold different tokens".
   del "%OUT%" >nul 2>&1
-  exit /b 1
+  set "RC=1"
+  goto finish
 )
 
 findstr /c:"result=3," "%OUT%" >nul
@@ -167,7 +168,8 @@ if not errorlevel 1 (
     echo with the sign-in skipped -- no adb command does either. Unplug it, deal with the
     echo rest, then run this again for that one on its own.
     del "%OUT%" >nul 2>&1
-    exit /b 1
+    set "RC=1"
+    goto finish
   )
   echo.
   echo Clearing the accounts that usually block set-device-owner, on every phone still here...
@@ -197,4 +199,11 @@ echo No phone answered result=2, 3 or 5 -- every result line above should read r
 echo ENROLLED. Confirm each phone on Devices before boxing it; that is the confirmation that
 echo counts, not this terminal.
 del "%OUT%" >nul 2>&1
-exit /b 0
+set "RC=0"
+goto finish
+
+REM EVERY WAY OUT AFTER THE FETCH COMES THROUGH HERE, so this run's download never outlives the
+REM run -- a bench laptop would otherwise collect 2 MB per run in %TEMP% for good.
+:finish
+del /f "%APK%" >nul 2>&1
+exit /b %RC%

@@ -1742,27 +1742,36 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
      touching any phone if the fetch failed. */
   const batCode = bat.split('\n').filter(l => !/^\s*REM\b/i.test(l)).join('\n');   // the comments may name the mistake
   assert.ok(!/Downloads/.test(batCode), 'nothing in Downloads may ever be what gets installed');
-  assert.match(bat, /set "APK=%TEMP%\\HOOPLOAN-Lock\.apk"/, 'the file lives in %TEMP%, always writable');
+  /* A NAME OF THIS RUN'S OWN, REMOVED ON THE WAY OUT. The first cut used one fixed %TEMP% name
+     and the review found two holes in a row: a leftover from the last run satisfied "if not
+     exist" even when the rename had failed (so LAST run's build was installed), and once that
+     was fixed by deleting first, a second window running the script would delete the file out
+     from under the first between its installs. A per-run name has neither problem; :finish
+     removes it however the run ends, so %TEMP% does not collect 2 MB per run. */
+  assert.match(bat, /set "APK=%TEMP%\\HOOPLOAN-Lock-run%RANDOM%%RANDOM%\.apk"/,
+    'the file lives in %TEMP% under a name no other run shares');
   assert.match(bat, /curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%APK%\.part" "%SERVER%\/HOOPLOAN-Lock\.apk"/,
     'fetched from the server with the same bounded curl as the pasted line');
-  assert.match(bat, /if errorlevel 1 \(\s*\n\s*del "%APK%\.part" >nul 2>&1\s*\n[\s\S]{0,300}?exit \/b 2/,
+  const fetchBlock = bat.slice(bat.indexOf('echo Fetching the current lock app'), bat.indexOf(':round'));
+  assert.ok(!/del \/?f? ?"%APK%"/.test(fetchBlock), 'nothing deletes an APK before the fetch: no name is shared, so there is nothing to clear');
+  assert.match(fetchBlock, /if errorlevel 1 \(\s*\r?\n\s*del \/f "%APK%\.part" >nul 2>&1\s*\r?\n[\s\S]{0,300}?exit \/b 2/,
     'a failed fetch deletes the half file and stops before any phone is touched');
-  assert.match(bat, /move \/y "%APK%\.part" "%APK%" >nul/, 'renamed only once curl finished');
-  assert.ok(bat.indexOf('curl -fsSL') < bat.indexOf(':round'), 'fetched once, before the first round');
-  /* THE OLD FILE GOES FIRST AND THE RENAME IS CHECKED. The review of the first cut found that a
-     leftover from the last run satisfied "if not exist" even when the move had failed, so the
-     walk would install LAST run's build with the fresh one sitting unused in .part -- exactly
-     the stale install the fetch exists to stop. del sets no ERRORLEVEL, so existence is the
-     test for "still open in another window"; the move is gated on its own result. */
-  const fetchBlock = bat.slice(bat.indexOf('del "%APK%" >nul 2>&1'), bat.indexOf(':round'));
-  assert.ok(fetchBlock.indexOf('del "%APK%" >nul 2>&1') === 0 && fetchBlock.indexOf('curl -fsSL') > 0,
-    'the previous run\'s file is deleted before the fetch');
-  assert.match(fetchBlock, /^if exist "%APK%" \(\s*\n[\s\S]{0,400}?exit \/b 2\s*\n\)/m,
-    'a file that survives the delete is in use elsewhere: stop before any phone is touched');
-  assert.match(fetchBlock, /move \/y "%APK%\.part" "%APK%" >nul\s*\nif errorlevel 1 \(\s*\n\s*del "%APK%\.part" >nul 2>&1\s*\n[\s\S]{0,300}?exit \/b 2\s*\n\)/,
-    'a failed rename deletes the half file and stops; nothing falls through to an old name');
+  assert.match(fetchBlock, /move \/y "%APK%\.part" "%APK%" >nul\s*\r?\nif errorlevel 1 \(\s*\r?\n\s*del \/f "%APK%\.part" >nul 2>&1\s*\r?\n[\s\S]{0,300}?exit \/b 2\s*\r?\n\)/,
+    'a failed rename deletes the half file and stops; nothing falls through to a name that does not exist');
   assert.ok(fetchBlock.indexOf('if errorlevel 1') < fetchBlock.indexOf('if not exist "%APK%"'),
-    'the rename check comes before the existence check, so the latter can only ever see this run\'s file');
+    'the rename check comes before the existence check');
+  assert.ok(bat.indexOf('curl -fsSL') < bat.indexOf(':round'), 'fetched once, before the first round');
+  // The path is quoted wherever it is echoed: a ) or & in the Windows user name, which %TEMP%
+  // carries, would otherwise end the enclosing block early.
+  assert.ok(!/echo [^\r\n"]*[^"\r\n]%APK%/.test(batCode), 'every echo of the path quotes it');
+  // Every way out after the fetch runs through :finish, which removes this run's file.
+  const afterFetch = bat.slice(bat.indexOf(':round'));
+  assert.match(afterFetch, /:finish\s*\r?\ndel \/f "%APK%" >nul 2>&1\s*\r?\nexit \/b %RC%/,
+    'the download is removed however the run ends');
+  assert.equal((afterFetch.match(/exit \/b/g) || []).length, 1,
+    'after the fetch, the only exit is the one at :finish');
+  assert.ok((afterFetch.match(/set "RC=\d"\s*\r?\n\s*goto finish/g) || []).length >= 5,
+    'each outcome sets its code and goes to :finish');
   // Play Protect's USB-install check is switched off on each phone first, as the pasted line does.
   assert.match(bat, /adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%OUT%" 2>&1\s*\n\s*adb -s %%a install -r "%APK%"/);
 
@@ -1786,7 +1795,7 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   const five = bat.slice(bat.indexOf('findstr /c:"result=5,"'));
 
   // result=2: stops. A retry cannot turn a wrong token into the right one.
-  assert.match(two, /exit \/b 1/, 'a mismatch must stop the script');
+  assert.match(two, /set "RC=1"\s*\r?\n\s*goto finish/, 'a mismatch must stop the script (through :finish, which removes the download)');
   assert.ok(!/goto round/.test(two), 'and never loop back on its own');
 
   // result=3: clears the same three packages the portal and the manual now agree on, once,
