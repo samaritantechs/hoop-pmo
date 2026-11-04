@@ -488,9 +488,10 @@ test('the provisioning command the portal hands out actually runs on a Windows b
       'a pasted line expands %time% ONCE, at parse: every stamp would read the same. time /t is read when it runs');
     /* THE HOUR ITSELF: PLAY PROTECT. With "Verify apps over USB" on -- the default -- the
        first adb install puts a consent dialog on the handset and extends the verification
-       timeout to the platform maximum of sixty minutes while it waits for a tap nobody at a
-       bench gives; at the hour it allows the install and prints Success as if nothing
-       happened. So the line switches that check off on the handset, for USB installs only,
+       timeout -- capped by the platform at sixty minutes -- while it waits for a tap nobody at
+       a bench gives; at the hour the answer it registered applies (allow, on these phones)
+       and Success prints as if nothing happened. So the line switches that check off on the
+       handset, for USB installs only,
        BEFORE the install, joined by & so a build that refuses the write cannot stop the line.
        The install still gates the rest: it is the last command of the group, so its result is
        the group's, and && follows it. */

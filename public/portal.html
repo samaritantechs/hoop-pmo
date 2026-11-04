@@ -4434,20 +4434,25 @@ function devApkFetch_(mark){
    -----------------------------------------------------------------------------------------
    On a phone with Google services and "Verify apps over USB" on -- the default -- the first
    `adb install` hands the package to Play Protect, which puts a consent dialog on the
-   handset's screen and extends the verification timeout to the platform maximum of SIXTY
-   MINUTES while it waits for a tap. On a bench the screen is off and nobody is looking, so
-   nobody taps; at the hour the default answer (allow) applies and the install prints
-   `Success` as if nothing happened. That is "stucks for even an hour + to complete", to the
-   minute, and it is the only hour-scale wait in the whole line -- and the same dialog that
-   "asked b/se app is dangerous continue anyway" the first time it was ever seen.
+   handset's screen and asks the platform to extend the verification timeout -- capped by the
+   platform at SIXTY MINUTES -- while it waits for a tap. On a bench the screen is off and
+   nobody is looking, so nobody taps; at the hour the answer Play Protect registered applies
+   -- for this app, on these phones, allow -- and the install prints `Success` as if nothing
+   happened. That fits "stucks for even an hour + to complete" to the minute, it is the only
+   hour-scale wait anywhere in the line, and it is the same dialog that "asked b/se app is
+   dangerous continue anyway" the first time it was ever seen. The stamps will confirm it.
 
    So the line switches Play Protect's check of ADB installs off on the handset before it
    installs: one global setting, writable from adb shell on every Android this fleet runs,
    reaching nothing else Play Protect does (Play Store installs are scanned exactly as
-   before). It is set, not restored: the lock app is the only thing ever sideloaded onto
-   these phones, the handset is about to become ours, and the check never blocked an install
-   anyway -- it only ever delayed one. A build that refuses the write prints one line and the
-   install proceeds exactly as it did; `&` so that refusal cannot stop the line. */
+   before; the check could also have refused the install, and that goes with the hour). It is
+   set, not restored, and a released phone keeps it: nothing inside the app can write it back
+   (a Device Owner's setGlobalSetting allowlist excludes it -- see LockAdmin), it only ever
+   applied to a future USB sideload, and the lock app is the only thing ever sideloaded onto
+   these phones. A phone under an "ensure verify apps" policy (an OEM or MDM restriction this
+   fleet does not set) refuses the write SILENTLY and verifies anyway: a window still sitting
+   in 1/3 install after this is that policy, and the cure is the dialog on its screen. `&` so
+   nothing about the write can stop the line. */
 var DEV_NO_ADB_VERIFY='adb shell settings put global verifier_verify_adb_installs 0';
 function devOneLiner(token){
   return devApkFetch_(token)
@@ -4505,13 +4510,13 @@ function devStuckHint_(){
   return 'Kila hatua inachapisha jina lake na saa kabla haijaanza; dirisha likikaa kimya, '
     +'hatua ya mwisho iliyochapishwa ndiyo inayosubiri. Ikikaa kwenye <b>1/3 install</b>, angalia '
     +'skrini ya simu: Play Protect ikiuliza, gusa — bila kuguswa inashikilia install kwa saa nzima. '
-    +'Amri hii inazima ukaguzi huo kwa install za USB kwanza, hivyo haipaswi kuuliza tena. '
+    +'Amri hii inazima ukaguzi huo kwa install za USB kwanza, hivyo haipaswi kuuliza; ikiuliza bado, gusa. '
     +'Kichwa cha dirisha kikianza na <b>Select</b>: bonyeza <b>Esc</b> — dirisha limejisimamisha '
     +'kwa sababu maandishi yalichaguliwa ndani yake; hakuna kilichokwama. '
     +'/ Each step prints its name and the clock before it runs, so a window that sits is '
     +'sitting in the last step printed. Sitting in <b>1/3 install</b>: look at the phone\'s screen '
     +'— a Play Protect dialog left untapped holds the install for a full hour. This command turns '
-    +'that check off for USB installs first, so it should not ask again. If the window title '
+    +'that check off for USB installs first, so it should not ask; if it still does, tap it. If the window title '
     +'starts with <b>Select</b>, press <b>Esc</b>: the window paused itself because text was '
     +'selected in it; nothing is stuck. ';
 }
