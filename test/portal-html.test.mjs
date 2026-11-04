@@ -1121,16 +1121,18 @@ test('bulk enrolment gives one button per phone, each carrying that phone\'s own
   assert.match(hub, /set-device-owner/, '...and takes ownership, both identical on every phone');
   assert.match(hub, /"%b"=="device"/,
     'a handset still unauthorized or offline must be skipped, not half-provisioned');
-  assert.match(hub, /^\(if not exist "%TEMP%\\HOOPLOAN-Lock-v31\.apk" \(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" https:\/\/hoop-pmo\.vercel\.app\/HOOPLOAN-Lock\.apk && move \/y "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" "%TEMP%\\HOOPLOAN-Lock-v31\.apk" >nul\)\) && \(adb devices & \(for \/f /,
+  assert.match(hub, /^\(if not exist "%TEMP%\\HOOPLOAN-Lock-v31\.apk" \(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" https:\/\/hoop-pmo\.vercel\.app\/HOOPLOAN-Lock\.apk && move \/y "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" "%TEMP%\\HOOPLOAN-Lock-v31\.apk" >nul\)\) && \(\(for \/f /,
     'the current APK is fetched ONCE before the loop -- and only when this build\'s file is not already in %TEMP% -- from this origin, and nothing runs on any phone if that fails; the walk itself is one group behind that &&');
-  /* THE LIST FIRST AND "DONE" LAST. After `adb kill-server` the first `adb devices` can be empty
-     for a second or two, and a loop over nothing says nothing -- which reads as "the command is
-     broken". The line prints the list it walks and says done when the walk is over, so an empty
-     list followed at once by done means exactly that. The for sits in its own group so the done
-     follows the whole walk, not each phone. */
-  assert.match(hub, /\(adb devices & \(for \/f "skip=1 tokens=1,2" %a in \('adb devices'\) do @if "%b"=="device" \(/);
-  assert.match(hub, /-e batch BATCHBATCH\)\) & echo \[hub\] tayari \/ done[^()]*\)$/,
-    'done is printed once, after the for group closes, and nothing follows it');
+  /* EVERY ROW SEEN IS PRINTED, AND "DONE" LAST. Right after a replug adb lists the phones as
+     Windows finds them, and a row that is unauthorized or offline is skipped on purpose; a loop
+     that skips in silence and ends in silence reads as "the command is broken". So every row is
+     either walked (the stamped steps) or printed as skipped with its state, from ONE enumeration
+     (a printed list and a walked list from two `adb devices` calls can differ), and done closes
+     the walk once, after the for group. */
+  assert.match(hub, /&& \(\(for \/f "skip=1 tokens=1,2" %a in \('adb devices'\) do @if "%b"=="device" \(echo \[%a\] 1\/3 install/);
+  assert.equal((hub.match(/adb devices/g) || []).length, 1, 'one enumeration: the rows printed are the rows walked');
+  assert.match(hub, /-e batch BATCHBATCH\) else echo \[%a\] %b - imerukwa \/ skipped\) & echo \[hub\] tayari \/ done\)$/,
+    'a row that is not `device` says so with its state; done is printed once after the for group closes, claims nothing, and nothing follows it');
   {
     let depth = 0;
     for (const ch of hub) { if (ch === '(') depth++; else if (ch === ')') depth--; assert.ok(depth >= 0, 'a ) before its ('); }

@@ -205,17 +205,21 @@ A window that sits is sitting in the **last step printed**. What each step can a
   PC suite) restarting the server under it: `adb kill-server`, replug the hub, then run
   `adb devices` on its own **until every phone shows `device`**, and only then paste again.
   Phones that already finished are re-armed, not re-identified, so re-running is safe.
-- **The prompt came straight back, with only `List of devices attached` and `done`** — the
-  hub walked an empty list. For a second or two after the adb server (re)starts, `adb devices`
-  answers before the phones have re-enumerated, and a loop over nothing does nothing. The
-  command prints the list it is about to walk and says `done` when the walk is over precisely
-  so this case reads as what it is. Run `adb devices` until every phone is `device`, then paste
-  again.
+- **The prompt came straight back, with only `[hub] tayari / done`** — adb listed no phone,
+  so the walk had nothing to do. The command says what it did with every row `adb devices`
+  gave it: a phone that is `device` gets its three stamped steps; one that is `unauthorized`
+  or `offline` prints `[serial] unauthorized - imerukwa / skipped` and nothing else; and
+  `done` closes the walk. So a bare `done` means an empty list. That happens right after a
+  replug: Windows is still enumerating the phones one by one and adb lists them as they
+  arrive (the adb server itself waits for its first USB scan before it answers anyone, so a
+  fresh server does not lie — a half-plugged hub does). Run `adb devices` on its own until
+  every phone shows `device`, then paste again.
 - **`cannot connect to daemon at tcp:5037 ... actively refused it. (10061)`** — printed by
-  `adb kill-server` itself when there is no server left to kill (typed twice, say). It is not
-  an error; the next adb command starts the server again. Seen on `adb devices` instead, the
-  server failed to start: something else holds port 5037 or an antivirus is holding adb.exe —
-  close other phone tools (Smart Switch, a vendor PC suite) and try again.
+  `adb kill-server`, and only by it, when there is no server left to kill (typed twice, say).
+  Not an error: 10061 means nothing is listening on that port, and the next adb command
+  starts a server itself. A server that genuinely fails to start says `* failed to start
+  daemon` instead — then another phone tool's adb (Smart Switch, a vendor PC suite) or an
+  antivirus holding adb.exe is in the way; close it and try again.
 - **The classic black cmd window only** (Win+R → `cmd`, or Windows 10; not a `cmd` typed into
   a Windows Terminal tab): if its title starts with **`Select`**, press **Esc**. Clicking or
   dragging in that window selects text, and a window with a selection in it stops every
