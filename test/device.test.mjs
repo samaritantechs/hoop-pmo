@@ -1735,6 +1735,23 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
 
   const bat = fs.readFileSync(new URL('../scripts/lock-hub-auto.bat', import.meta.url), 'utf8');
 
+  /* THE APK IS FETCHED BY THE SCRIPT, NEVER TAKEN FROM DOWNLOADS. The pasted hub line left that
+     path for a reason the guide spells out -- a fixed Downloads name goes on installing the
+     oldest build on the laptop -- and this script was still reading it. Same shape as the
+     portal line: curl to .part, rename only when curl finished, and the script stops before
+     touching any phone if the fetch failed. */
+  const batCode = bat.split('\n').filter(l => !/^\s*REM\b/i.test(l)).join('\n');   // the comments may name the mistake
+  assert.ok(!/Downloads/.test(batCode), 'nothing in Downloads may ever be what gets installed');
+  assert.match(bat, /set "APK=%TEMP%\\HOOPLOAN-Lock\.apk"/, 'the file lives in %TEMP%, always writable');
+  assert.match(bat, /curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%APK%\.part" "%SERVER%\/HOOPLOAN-Lock\.apk"/,
+    'fetched from the server with the same bounded curl as the pasted line');
+  assert.match(bat, /if errorlevel 1 \(\s*\n\s*del "%APK%\.part" >nul 2>&1\s*\n[\s\S]{0,300}?exit \/b 2/,
+    'a failed fetch deletes the half file and stops before any phone is touched');
+  assert.match(bat, /move \/y "%APK%\.part" "%APK%" >nul/, 'renamed only once curl finished');
+  assert.ok(bat.indexOf('curl -fsSL') < bat.indexOf(':round'), 'fetched once, before the first round');
+  // Play Protect's USB-install check is switched off on each phone first, as the pasted line does.
+  assert.match(bat, /adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%OUT%" 2>&1\s*\n\s*adb -s %%a install -r "%APK%"/);
+
   // The three commands are the real ones, targeted at THAT phone -- never the bare command,
   // which on a hub full of phones would hit whichever one adb picks.
   assert.match(bat, /adb -s %%a install -r "%APK%"/);

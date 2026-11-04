@@ -49,7 +49,16 @@ REM ============================================================================
 set "PKG=com.samaritantechs.hooploanlock"
 set "ADMIN=%PKG%/.LockAdmin"
 set "SERVER=https://hoop-pmo.vercel.app"
-set "APK=%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk"
+REM THE CURRENT BUILD, FETCHED BY THE SCRIPT ITSELF -- never a file from Downloads. A browser
+REM keeps the first download's name for the OLD file and saves every later one as "(1)", "(2)",
+REM so a fixed Downloads name goes on installing the oldest build on the laptop: refused as a
+REM downgrade by any phone that has self-updated, and a stale build on a fresh one. The portal's
+REM own hub line fetches from the server for exactly this reason (devApkFetch_ in portal.html);
+REM this script does the same, every run, into %TEMP% -- always writable, never stale. It lands
+REM as .part and is renamed only when curl finished, so a download that stopped halfway can never
+REM be installed under the good name. The build number is not known here, so there is no
+REM once-per-build cache: slower by one 2 MB download per run, never wrong.
+set "APK=%TEMP%\HOOPLOAN-Lock.apk"
 set "BATCH=%~1"
 set "MAXROUNDS=5"
 set "CLEARED=0"
@@ -60,9 +69,17 @@ if "%BATCH%"=="" (
   echo   BATCH is the batch id from the hub command in Portal -^> Devices -^> Sajili simu.
   exit /b 2
 )
+echo Fetching the current lock app from %SERVER% ...
+curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%APK%.part" "%SERVER%/HOOPLOAN-Lock.apk"
+if errorlevel 1 (
+  del "%APK%.part" >nul 2>&1
+  echo Could not fetch %SERVER%/HOOPLOAN-Lock.apk -- check this laptop's internet, then run again.
+  echo Nothing was done to any phone.
+  exit /b 2
+)
+move /y "%APK%.part" "%APK%" >nul
 if not exist "%APK%" (
-  echo APK not found: %APK%
-  echo Download it from %SERVER%/HOOPLOAN-Lock.apk first.
+  echo The download did not land as %APK% -- run again.
   exit /b 2
 )
 
@@ -105,9 +122,10 @@ type "%OUT%"
 findstr /c:"VERSION_DOWNGRADE" "%OUT%" >nul
 if not errorlevel 1 (
   echo.
-  echo Note: at least one phone already has a NEWER app than the file in Downloads. That
-  echo phone keeps its newer app and this still works -- but update your Downloads copy from
-  echo %SERVER%/HOOPLOAN-Lock.apk so fresh phones get it too.
+  echo Note: at least one phone already has a NEWER app than the build the server is serving
+  echo right now. That phone keeps its newer app and this still works. It means a lock release
+  echo is mid-way -- the version file has landed and the APK build has not -- and the next run
+  echo in a few minutes will fetch the newer one.
 )
 
 findstr /c:"result=2," "%OUT%" >nul

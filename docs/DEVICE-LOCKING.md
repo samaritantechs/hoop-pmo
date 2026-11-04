@@ -240,6 +240,12 @@ instead of a person reading it:
 scripts\lock-hub-auto.bat <the batch id from the hub command>
 ```
 
+It fetches the current lock app from the server itself at the start of every run, into
+`%TEMP%` — nothing to download first, and never a file from Downloads (see *Why it no longer
+looks in Downloads* below: a fixed Downloads name goes on installing the oldest build on the
+laptop). It also switches Play Protect's USB-install check off on each phone before the
+install, exactly as the pasted hub line does.
+
 `result=3` → it clears the accounts that usually cause it (Meet/Duo, Outlook, OneDrive) on
 every phone still on the cable, then runs the whole hub again. `result=5` → nothing local to
 fix, so it waits a moment and runs the whole hub again. Re-running phones that already
