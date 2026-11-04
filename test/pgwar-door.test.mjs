@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeDb } from './fake-db.mjs';
+import { todayKey } from '../api/_lib/time.js';
 
 /* =========================================================================================
    THE POSTGRES-WAR AUDIT, BATCH "DOOR" -- verified fixes to the sign-in path, the roles read,
@@ -77,7 +78,13 @@ test('door: a suspended code still refuses, and ADMIN is still never suspended (
   /* Regression only -- the real coverage for this rule is test/portal.test.mjs's "a suspended
      code cannot sign in" and test/signin-watch.test.mjs; this just proves skipping the
      unconditional ilike() retry changed nothing about who gets refused. */
-  const day = new Date().toISOString().slice(0, 10);
+  /* TODAY ON THE DAR ES SALAAM CLOCK, THE WAY THE DOOR COUNTS IT -- not the server's UTC day.
+     auth.js compares a suspension against todayKey() (EAT, three hours ahead of UTC). This test
+     used `new Date().toISOString().slice(0, 10)`, so from 21:00 to midnight UTC it built a
+     window ending on the UTC day while the door was already a day later: the suspension had
+     correctly lapsed and the test failed, every evening, for every push made in those three
+     hours. Same helper as the product, so the two can never disagree about which day it is. */
+  const day = todayKey();
   const d = fakeDb({ access_codes: [
     { code: 'AWAY', name: 'Ally', role: 'CREDIT', teams: null, tabs: [], suspend_from: day, suspend_to: day },
     { code: 'BOSS', name: 'Peter', role: 'ADMIN', teams: null, tabs: [], suspend_from: day, suspend_to: day },
