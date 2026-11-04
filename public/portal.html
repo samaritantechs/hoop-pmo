@@ -4491,15 +4491,25 @@ function devOneLiner(token){
        fetched at all. If the download fails nothing runs on any phone. */
 function devHubLine(batch){
   /* The label carries the serial as well, because on a hub every phone's lines interleave and
-     "the line above" is whatever scrolled last. See devOneLiner for why the stamps exist. */
+     "the line above" is whatever scrolled last. See devOneLiner for why the stamps exist.
+
+     THE LIST FIRST, AND "DONE" LAST. After `adb kill-server` -- which the help desk hands out
+     -- the first `adb devices` can come back EMPTY for a second or two while the phones
+     re-enumerate, and a loop over an empty list does nothing and says nothing: the operator
+     pastes, presses enter, and gets the prompt back, which reads as "the command is broken".
+     So the line prints the list it is about to walk, and prints `done` when the walk is over.
+     An empty list followed at once by `done` now says exactly what happened: no phone was
+     eligible -- wait for `adb devices` to show every phone as `device`, then paste again. The
+     for is in its own group so `done` follows the whole walk, not each phone. */
   return devApkFetch_(batch)
-    + ' && for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
+    + ' && (adb devices & (for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
     + 'echo [%a] 1/3 install & time /t & ' + DEV_NO_ADB_VERIFY.replace('adb shell', 'adb -s %a shell')
     + ' & adb -s %a install -r "' + devApkFile_() + '"'
     + ' & echo [%a] 2/3 owner & time /t & adb -s %a shell dpm set-device-owner ' + DEVCMP
     + ' & echo [%a] 3/3 enrol & time /t & adb -s %a shell am broadcast --include-stopped-packages'
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
-    + ' -e server ' + location.origin + ' -e batch ' + batch + ')';
+    + ' -e server ' + location.origin + ' -e batch ' + batch + '))'
+    + ' & echo [hub] tayari / done - simu zilizo hapo juu tu / only the phones listed above)';
 }
 /* THE WINDOW THAT SITS. Said next to both commands, because the commonest reason a cmd window
    goes quiet for an hour is not the phone: clicking or dragging in the window selects text, and
@@ -4591,7 +4601,14 @@ function devProvision(m, r){
       +'orodha uliyobandika <b>haitapewa token yoyote</b> na itaonekana haipo kwenye register. '
       +'/ A handset showing <b>unauthorized</b> is skipped — accept on its screen and run it '
       +'again. One whose IMEI is not in the list you pasted gets <b>no token at all</b> and '
-      +'shows as missing on the register: it can never be handed another phone\'s identity.</div>'
+      +'shows as missing on the register: it can never be handed another phone\'s identity. '
+      +'Amri inaanza kwa kuchapisha orodha ya simu itakazopitia na kuishia na <b>done</b>; '
+      +'orodha tupu ikifuatiwa mara moja na done ina maana hakuna simu iliyokuwa tayari — baada '
+      +'ya <code>adb kill-server</code> endesha <code>adb devices</code> peke yake hadi kila simu '
+      +'ionekane <b>device</b>, ndipo ubandike. / The command prints the list it is about to walk '
+      +'and ends with <b>done</b>; an empty list followed at once by done means no phone was ready '
+      +'— after <code>adb kill-server</code>, run <code>adb devices</code> on its own until every '
+      +'phone shows <b>device</b>, then paste.</div>'
       +'</div>'
       +'<div class="sub" style="margin:10px 0">Au moja moja, kwa simu iliyokosa hapo juu. '
       +'/ Or one at a time, for any handset the batch missed.</div>')

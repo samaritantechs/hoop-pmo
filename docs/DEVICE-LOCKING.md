@@ -202,8 +202,20 @@ A window that sits is sitting in the **last step printed**. What each step can a
 - **No step printed, or the window dead to everything** — adb or Windows, not the phone.
   Open a second `cmd` and run `adb devices`. If *that* also sits, the adb server is wedged —
   usually another copy of adb on the laptop (Samsung Smart Switch, Android Studio, a vendor
-  PC suite) restarting the server under it: `adb kill-server`, replug the hub, paste again.
+  PC suite) restarting the server under it: `adb kill-server`, replug the hub, then run
+  `adb devices` on its own **until every phone shows `device`**, and only then paste again.
   Phones that already finished are re-armed, not re-identified, so re-running is safe.
+- **The prompt came straight back, with only `List of devices attached` and `done`** — the
+  hub walked an empty list. For a second or two after the adb server (re)starts, `adb devices`
+  answers before the phones have re-enumerated, and a loop over nothing does nothing. The
+  command prints the list it is about to walk and says `done` when the walk is over precisely
+  so this case reads as what it is. Run `adb devices` until every phone is `device`, then paste
+  again.
+- **`cannot connect to daemon at tcp:5037 ... actively refused it. (10061)`** — printed by
+  `adb kill-server` itself when there is no server left to kill (typed twice, say). It is not
+  an error; the next adb command starts the server again. Seen on `adb devices` instead, the
+  server failed to start: something else holds port 5037 or an antivirus is holding adb.exe —
+  close other phone tools (Smart Switch, a vendor PC suite) and try again.
 - **The classic black cmd window only** (Win+R → `cmd`, or Windows 10; not a `cmd` typed into
   a Windows Terminal tab): if its title starts with **`Select`**, press **Esc**. Clicking or
   dragging in that window selects text, and a window with a selection in it stops every
