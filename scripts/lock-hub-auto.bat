@@ -69,6 +69,17 @@ if "%BATCH%"=="" (
   echo   BATCH is the batch id from the hub command in Portal -^> Devices -^> Sajili simu.
   exit /b 2
 )
+REM THE OLD FILE GOES FIRST, so the guard below means what it says. A leftover from the last
+REM run would satisfy "if not exist" even when the rename had failed, and the walk would then
+REM install LAST run's build with the one just fetched sitting unused in .part -- the stale
+REM install this fetch exists to stop. `del` sets no ERRORLEVEL, so existence is the test: a
+REM file that survives it is open in another cmd window, an adb install still running there.
+del "%APK%" >nul 2>&1
+if exist "%APK%" (
+  echo %APK% is still in use -- another cmd window is installing from it. Let that one
+  echo finish, or close it, then run again. Nothing was done to any phone.
+  exit /b 2
+)
 echo Fetching the current lock app from %SERVER% ...
 curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%APK%.part" "%SERVER%/HOOPLOAN-Lock.apk"
 if errorlevel 1 (
@@ -77,7 +88,16 @@ if errorlevel 1 (
   echo Nothing was done to any phone.
   exit /b 2
 )
+REM THE RENAME IS CHECKED ON ITS OWN RESULT. cmd's move can refuse -- the fresh .part held for a
+REM moment by an antivirus scan, say -- and prints its reason to stderr, which the >nul above
+REM does not cover. Unchecked, the script would carry on to a name that no longer exists.
 move /y "%APK%.part" "%APK%" >nul
+if errorlevel 1 (
+  del "%APK%.part" >nul 2>&1
+  echo The download could not be put in place as %APK% -- run again.
+  echo Nothing was done to any phone.
+  exit /b 2
+)
 if not exist "%APK%" (
   echo The download did not land as %APK% -- run again.
   exit /b 2

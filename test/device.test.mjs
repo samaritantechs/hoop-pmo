@@ -1749,6 +1749,20 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
     'a failed fetch deletes the half file and stops before any phone is touched');
   assert.match(bat, /move \/y "%APK%\.part" "%APK%" >nul/, 'renamed only once curl finished');
   assert.ok(bat.indexOf('curl -fsSL') < bat.indexOf(':round'), 'fetched once, before the first round');
+  /* THE OLD FILE GOES FIRST AND THE RENAME IS CHECKED. The review of the first cut found that a
+     leftover from the last run satisfied "if not exist" even when the move had failed, so the
+     walk would install LAST run's build with the fresh one sitting unused in .part -- exactly
+     the stale install the fetch exists to stop. del sets no ERRORLEVEL, so existence is the
+     test for "still open in another window"; the move is gated on its own result. */
+  const fetchBlock = bat.slice(bat.indexOf('del "%APK%" >nul 2>&1'), bat.indexOf(':round'));
+  assert.ok(fetchBlock.indexOf('del "%APK%" >nul 2>&1') === 0 && fetchBlock.indexOf('curl -fsSL') > 0,
+    'the previous run\'s file is deleted before the fetch');
+  assert.match(fetchBlock, /^if exist "%APK%" \(\s*\n[\s\S]{0,400}?exit \/b 2\s*\n\)/m,
+    'a file that survives the delete is in use elsewhere: stop before any phone is touched');
+  assert.match(fetchBlock, /move \/y "%APK%\.part" "%APK%" >nul\s*\nif errorlevel 1 \(\s*\n\s*del "%APK%\.part" >nul 2>&1\s*\n[\s\S]{0,300}?exit \/b 2\s*\n\)/,
+    'a failed rename deletes the half file and stops; nothing falls through to an old name');
+  assert.ok(fetchBlock.indexOf('if errorlevel 1') < fetchBlock.indexOf('if not exist "%APK%"'),
+    'the rename check comes before the existence check, so the latter can only ever see this run\'s file');
   // Play Protect's USB-install check is switched off on each phone first, as the pasted line does.
   assert.match(bat, /adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%OUT%" 2>&1\s*\n\s*adb -s %%a install -r "%APK%"/);
 
