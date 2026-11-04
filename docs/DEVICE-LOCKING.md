@@ -286,8 +286,8 @@ broadcasts history` (when the enrol broadcast was queued, delivered and finished
   study's own challenge pass refused it as a paste-in change. A phone that needs a tap (the
   rare one under an "ensure verify apps" policy) stops being visible, because the window that
   would have sat on it no longer exists; `start /b` hands the prompt back while the children are
-  still running, which is a new success-shaped failure; and several adb clients make the
-  server-restart episode worse. If it is wanted, it has to be a script that waits for its
+  still running, which is a new success-shaped failure; and many adb clients at once all
+  contend for the one adb server. If it is wanted, it has to be a script that waits for its
   children and prints one line per phone, tried on a real laptop with a hub first.
 - **Shrink the lock app (R8).** Cuts the dexopt cost, an estimated 1–5 s per phone. Not done
   because the lock app reaches every locked phone by self-update: it needs a bench test on each
