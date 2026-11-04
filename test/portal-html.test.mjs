@@ -465,16 +465,28 @@ test('the provisioning command the portal hands out actually runs on a Windows b
   /* The .part file carries the first characters of THIS line's token, so two cmd windows
      racing the first download of a build write two files and each renames its own. */
   const known = lift(src, 'devOneLiner', 'var DEV={lockVer:"31"};' + deps)('abc123def456');
-  assert.ok(known.startsWith('(if not exist "%TEMP%\\HOOPLOAN-Lock-v31.apk" (curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock-v31.apk" >nul)) && adb install -r "%TEMP%\\HOOPLOAN-Lock-v31.apk" && (adb shell dpm set-device-owner '),
+  assert.ok(known.startsWith('(if not exist "%TEMP%\\HOOPLOAN-Lock-v31.apk" (curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock-v31.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock-v31.apk" >nul)) && (echo 1/3 install & time /t & adb install -r "%TEMP%\\HOOPLOAN-Lock-v31.apk") && (echo 2/3 owner & time /t & adb shell dpm set-device-owner '),
     'known build: skip the download when the build\'s own file is already there, else fetch to .part and rename; then install that file:\n' + known);
   assert.ok(!/HOOPLOAN-Lock\.apk"/.test(known), 'nothing installs an unversioned file when the build is known');
   const unknown = lift(src, 'devOneLiner', 'var DEV={lockVer:""};' + deps)('abc123def456');
-  assert.ok(unknown.startsWith('(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock.apk" >nul) && adb install -r "%TEMP%\\HOOPLOAN-Lock.apk" && ('),
+  assert.ok(unknown.startsWith('(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" https://hoop-pmo.vercel.app/HOOPLOAN-Lock.apk && move /y "%TEMP%\\HOOPLOAN-Lock.apk.abc123de.part" "%TEMP%\\HOOPLOAN-Lock.apk" >nul) && (echo 1/3 install & time /t & adb install -r "%TEMP%\\HOOPLOAN-Lock.apk") && ('),
     'unknown build: fetch every time, exactly as before -- slower, never wrong:\n' + unknown);
   assert.ok(!/if not exist/.test(unknown), 'no file is trusted when its build is not known');
   for (const cmd of [known, unknown]) {
     assert.ok(/-e token abc123def456\)$/.test(cmd), 'the token rides at the end of the enrol broadcast');
     assert.ok(!/\n/.test(cmd), 'one line');
+    /* EVERY STEP SAYS ITS NAME AND THE TIME FIRST. "the cmd stucks for even an hour + to
+       complete : stucking on ... Performing Streamed Install / Success" -- three adb steps ran
+       back to back and only the install announced itself, so a window that sat said nothing
+       about which step or since when. Nothing on the phone's side can hold it past a minute. */
+    const stamps = [...cmd.matchAll(/echo (\S+ \S+) & time \/t & adb /g)].map(m => m[1]);
+    assert.deepEqual(stamps, ['1/3 install', '2/3 owner', '3/3 enrol'],
+      'each adb step is preceded by its label and the clock, in order');
+    assert.ok(!/%time%/i.test(cmd),
+      'a pasted line expands %time% ONCE, at parse: every stamp would read the same. time /t is read when it runs');
+    // The install still gates the rest: the labelled group ends with adb install, whose
+    // result is the group's, and && follows it.
+    assert.match(cmd, /\(echo 1\/3 install & time \/t & adb install -r "[^"]+"\) && \(echo 2\/3 owner/);
   }
   /* AND THE BUILD NUMBER IS THE SERVER'S, ON EVERY ANSWER THAT LEADS TO A COMMAND -- never a
      number the page fetched once and kept. A tab opened on build 31 and left open across a
@@ -1103,6 +1115,13 @@ test('bulk enrolment gives one button per phone, each carrying that phone\'s own
   assert.match(hub, /install -r "%TEMP%\\HOOPLOAN-Lock-v31\.apk"/, 'every phone installs the file the line just fetched or found');
   assert.ok(!/Downloads/.test(hub), 'nothing in Downloads may ever be what gets installed');
   const loop = hub.slice(hub.indexOf('for /f'));
+  /* STAMPED PER STEP, AND THE LABEL CARRIES THE SERIAL: on a hub every phone's lines interleave
+     and "the line above" is whatever scrolled last. See the one-liner test for why the stamps
+     exist at all. */
+  assert.deepEqual([...loop.matchAll(/echo (\[%a\] \S+ \S+) & time \/t & adb -s %a /g)].map(m => m[1]),
+    ['[%a] 1/3 install', '[%a] 2/3 owner', '[%a] 3/3 enrol'],
+    'each adb step on each phone is preceded by its serial, its label and the clock');
+  assert.ok(!/%time%/i.test(hub), 'time /t, never %time% -- a pasted line expands that once, at parse');
   assert.ok(!/ && /.test(loop),
     'inside the loop the steps join with a single & -- "already set" is the normal answer for a '
     + 'handset being redone, and && would treat that as a reason to stop');

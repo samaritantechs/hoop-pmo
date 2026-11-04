@@ -139,6 +139,51 @@ time. The only ways to spend less are to run phones in parallel on a powered USB
 bench script is built for exactly that — or to buy through a Knox-participating reseller, the
 one route where a handset provisions itself at first boot with nobody touching it.
 
+#### The window that sits after `Success`
+
+> "the cmd stucks for even an hour + to complete : stucking on ... Performing Streamed
+> Install / Success"
+
+Start from what the phone's side **cannot** do: nothing in the app can hold that line for an
+hour. The claim waits at most 30 s for the network plus one 24 s attempt, and Android kills
+any receiver that is still running at 60 s. So a window that sits for an hour is spending it
+**outside** the app — in adb, in Windows, or on a dialog on the handset's screen — and the
+command now says where. Each step prints its name and the clock before it runs:
+
+```
+[R58M123ABC] 1/3 install
+10:32 AM
+Performing Streamed Install
+Success
+[R58M123ABC] 2/3 owner
+10:33 AM
+Success: Device owner set to package com.samaritantechs.hooploanlock/.LockAdmin
+[R58M123ABC] 3/3 enrol
+10:33 AM
+Broadcast completed: result=1, data="ENROLLED - reporting in now; ..."
+```
+
+A window that sits is sitting in the **last step printed**, since the time next to it. Read
+that first, then check these in order — the first one is the commonest by a long way:
+
+1. **Look at the window's title bar.** If it starts with **`Select`**, press **Esc**. Clicking
+   or dragging in a cmd window selects text, and a window with a selection in it stops every
+   program that writes to it until the selection is cleared. Nothing was stuck; it was waiting
+   for you. (This is also what happens when someone selects the text to copy it for a message.)
+2. **Look at the phone's screen.** A dialog waiting for a tap — Play Protect on a first
+   install, a Knox prompt, *Allow USB debugging* again after a reconnect — holds the step that
+   needs it. Tap it; the line carries on.
+3. **Ask adb in a second window.** Open another `cmd` and run `adb devices`. If *that* also
+   sits, the adb server itself is wedged — usually another copy of adb on the laptop (Samsung
+   Smart Switch, Android Studio, a vendor PC suite) restarting the server under it. Run
+   `adb kill-server`, unplug and replug the hub, and paste the command again. Phones that
+   already finished are re-armed, not re-identified, so re-running is safe.
+4. **A phone with no Wi-Fi** sits in `3/3 enrol` for about 30 s and then answers
+   `result=5 CANNOT REACH THE OFFICE`. That is the wait working as designed, and it is the
+   only wait the app itself has.
+
+If none of those is it, the stamped lines are the report: which step, and since when.
+
 #### When the hub command needs re-running, and you'd rather it ran itself
 
 The hub command answers three ways that all just mean "run it again": accounts blocking
