@@ -59,13 +59,20 @@ REM as .part and is renamed only when curl finished, so a download that stopped 
 REM be installed under the good name. The build number is not known here, so there is no
 REM once-per-build cache: slower by one 2 MB download per run, never wrong.
 REM
-REM A NAME OF THIS RUN'S OWN. Two windows running this script at once -- the hour-long waits
-REM taught the bench to open a second one -- must never share a file: adb holds the APK open
-REM only while an install is running, so between one window's installs the other window's
-REM delete or rename would pull the file out from under it, and its next install would fail
-REM with "failed to stat". Each run downloads under its own name and removes it on the way
-REM out, at :finish, whichever way it leaves.
-set "APK=%TEMP%\HOOPLOAN-Lock-run%RANDOM%%RANDOM%.apk"
+REM EVERY FILE THIS RUN WRITES CARRIES A NAME OF ITS OWN. Two windows running this script at
+REM once -- the hour-long waits taught the bench to open a second one -- must never share a
+REM file. adb holds the APK open only while an install is running, so between one window's
+REM installs the other window's delete or rename would pull it out from under it and the next
+REM install would fail with "failed to stat". The device list and each round's output file
+REM were fixed names too: one window's delete made the other's `type` and findstr read nothing,
+REM and every findstr failing reads, further down, as "no phone answered 2, 3 or 5" -- a green
+REM exit on a run that had no result lines at all. One token, three names, all removed at
+REM :finish when the run ends by any route the script controls. A window closed or Ctrl+C'd
+REM mid-run never reaches :finish and leaves its files behind (about 2 MB); they are safe to
+REM delete from %TEMP% once that window is gone.
+set "RUN=%RANDOM%%RANDOM%%RANDOM%"
+set "APK=%TEMP%\HOOPLOAN-Lock-run%RUN%.apk"
+set "DEVS=%TEMP%\hoop-hub-run%RUN%-devices.txt"
 set "BATCH=%~1"
 set "MAXROUNDS=5"
 set "CLEARED=0"
@@ -97,7 +104,9 @@ if errorlevel 1 (
   exit /b 2
 )
 if not exist "%APK%" (
+  del /f "%APK%.part" >nul 2>&1
   echo The download did not land as "%APK%" -- run again.
+  echo Nothing was done to any phone.
   exit /b 2
 )
 
@@ -111,19 +120,18 @@ if %ROUND% GTR %MAXROUNDS% (
   goto finish
 )
 
-adb devices > "%TEMP%\hoop-devices.txt"
-findstr /e /c:"device" "%TEMP%\hoop-devices.txt" >nul
+adb devices > "%DEVS%"
+findstr /e /c:"device" "%DEVS%" >nul
 if errorlevel 1 (
   echo No phones ready. Check the cable and "Allow USB debugging" on each screen.
-  del "%TEMP%\hoop-devices.txt" >nul 2>&1
   set "RC=2"
   goto finish
 )
-del "%TEMP%\hoop-devices.txt" >nul 2>&1
+del "%DEVS%" >nul 2>&1
 
 echo.
 echo === round %ROUND% of %MAXROUNDS% ===
-set "OUT=%TEMP%\hoop-hub-round%ROUND%.txt"
+set "OUT=%TEMP%\hoop-hub-run%RUN%-round%ROUND%.txt"
 if exist "%OUT%" del "%OUT%"
 
 for /f "skip=1 tokens=1,2" %%a in ('adb devices') do @if "%%b"=="device" (
@@ -136,6 +144,17 @@ for /f "skip=1 tokens=1,2" %%a in ('adb devices') do @if "%%b"=="device" (
   adb -s %%a install -r "%APK%" >> "%OUT%" 2>&1
   adb -s %%a shell dpm set-device-owner %ADMIN% >> "%OUT%" 2>&1
   adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> "%OUT%" 2>&1
+)
+REM NO FILE MEANS NO PHONE WAS WALKED. The check above and the loop are two separate `adb
+REM devices` calls, so the last phone can drop, or adb restart, between them; the loop body
+REM never runs, the round's file is never written, and every findstr below then fails -- which
+REM would fall through to the "every result line above should read result=1" ending and exit
+REM 0 on a run in which nothing was attempted.
+if not exist "%OUT%" (
+  echo No phone was ready when the walk started -- nothing was enrolled. Check the cable and
+  echo "Allow USB debugging" on each screen, then run this again.
+  set "RC=2"
+  goto finish
 )
 type "%OUT%"
 
@@ -202,8 +221,9 @@ del "%OUT%" >nul 2>&1
 set "RC=0"
 goto finish
 
-REM EVERY WAY OUT AFTER THE FETCH COMES THROUGH HERE, so this run's download never outlives the
-REM run -- a bench laptop would otherwise collect 2 MB per run in %TEMP% for good.
+REM EVERY WAY OUT OF THE ROUNDS COMES THROUGH HERE, so this run's files never outlive the run --
+REM a bench laptop would otherwise collect 2 MB per run in %TEMP% for good.
 :finish
-del /f "%APK%" >nul 2>&1
+del /f "%APK%" "%APK%.part" "%DEVS%" >nul 2>&1
+if defined OUT del /f "%OUT%" >nul 2>&1
 exit /b %RC%

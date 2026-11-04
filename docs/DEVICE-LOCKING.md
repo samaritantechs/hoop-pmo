@@ -240,12 +240,16 @@ instead of a person reading it:
 scripts\lock-hub-auto.bat <the batch id from the hub command>
 ```
 
-It fetches the current lock app from the server itself at the start of every run, into
-`%TEMP%` under a name of that run's own, and removes it when the run ends — nothing to
+It fetches the current lock app from the server itself at the start of every run — nothing to
 download first, never a file from Downloads (see *Why it no longer looks in Downloads* below:
-a fixed Downloads name goes on installing the oldest build on the laptop), and two windows
-running it at once never share a file. It also switches Play Protect's USB-install check off
-on each phone before the install, exactly as the pasted hub line does.
+a fixed Downloads name goes on installing the oldest build on the laptop). Every file it writes
+to `%TEMP%` (the app, the device list, each round's output) carries a name of that run's own,
+so two windows running it at once never share one, and it removes them when the run ends. A
+window that is closed or interrupted mid-run leaves its files behind, about 2 MB; they are
+`HOOPLOAN-Lock-run…` and `hoop-hub-run…` in `%TEMP%` and are safe to delete once that window is
+gone. It also switches Play Protect's USB-install check off on each phone before the install,
+exactly as the pasted hub line does, and a round in which no phone was ready ends with a
+message and a non-zero exit instead of the "every result line should read result=1" ending.
 
 `result=3` → it clears the accounts that usually cause it (Meet/Duo, Outlook, OneDrive) on
 every phone still on the cable, then runs the whole hub again. `result=5` → nothing local to

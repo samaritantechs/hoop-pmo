@@ -1742,14 +1742,23 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
      touching any phone if the fetch failed. */
   const batCode = bat.split('\n').filter(l => !/^\s*REM\b/i.test(l)).join('\n');   // the comments may name the mistake
   assert.ok(!/Downloads/.test(batCode), 'nothing in Downloads may ever be what gets installed');
-  /* A NAME OF THIS RUN'S OWN, REMOVED ON THE WAY OUT. The first cut used one fixed %TEMP% name
-     and the review found two holes in a row: a leftover from the last run satisfied "if not
-     exist" even when the rename had failed (so LAST run's build was installed), and once that
-     was fixed by deleting first, a second window running the script would delete the file out
-     from under the first between its installs. A per-run name has neither problem; :finish
-     removes it however the run ends, so %TEMP% does not collect 2 MB per run. */
-  assert.match(bat, /set "APK=%TEMP%\\HOOPLOAN-Lock-run%RANDOM%%RANDOM%\.apk"/,
-    'the file lives in %TEMP% under a name no other run shares');
+  /* EVERY FILE THIS RUN WRITES CARRIES A NAME OF ITS OWN, REMOVED ON THE WAY OUT. The first cut
+     used one fixed %TEMP% name and the review found holes in a row: a leftover from the last run
+     satisfied "if not exist" even when the rename had failed (so LAST run's build was
+     installed); then, with a delete-first guard, a second window deleted the file out from
+     under the first between its installs; then the device list and each round's output were
+     found to be fixed names too, so one window's delete made the other's findstr read nothing,
+     and every findstr failing falls through to a green "no phone answered 2, 3 or 5" exit on a
+     run with no result lines at all. One token, all the names derived from it. */
+  assert.match(bat, /set "RUN=%RANDOM%%RANDOM%%RANDOM%"/, 'one token per run');
+  assert.match(bat, /set "APK=%TEMP%\\HOOPLOAN-Lock-run%RUN%\.apk"/,
+    'the download lives in %TEMP% under a name no other run shares');
+  assert.match(bat, /set "DEVS=%TEMP%\\hoop-hub-run%RUN%-devices\.txt"/, 'and so does the device list');
+  assert.match(bat, /set "OUT=%TEMP%\\hoop-hub-run%RUN%-round%ROUND%\.txt"/, 'and each round\'s output');
+  assert.ok(!/hoop-devices\.txt|hoop-hub-round/.test(batCode),
+    'no fixed temp name is left anywhere in the code');
+  // The token is set before any of the names that use it, or they would all be empty.
+  assert.ok(bat.indexOf('set "RUN=') < bat.indexOf('set "APK=') && bat.indexOf('set "RUN=') < bat.indexOf('set "DEVS='));
   assert.match(bat, /curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%APK%\.part" "%SERVER%\/HOOPLOAN-Lock\.apk"/,
     'fetched from the server with the same bounded curl as the pasted line');
   const fetchBlock = bat.slice(bat.indexOf('echo Fetching the current lock app'), bat.indexOf(':round'));
@@ -1764,14 +1773,28 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   // The path is quoted wherever it is echoed: a ) or & in the Windows user name, which %TEMP%
   // carries, would otherwise end the enclosing block early.
   assert.ok(!/echo [^\r\n"]*[^"\r\n]%APK%/.test(batCode), 'every echo of the path quotes it');
-  // Every way out after the fetch runs through :finish, which removes this run's file.
+  // Every way out of the rounds runs through :finish, which removes this run's files.
   const afterFetch = bat.slice(bat.indexOf(':round'));
-  assert.match(afterFetch, /:finish\s*\r?\ndel \/f "%APK%" >nul 2>&1\s*\r?\nexit \/b %RC%/,
-    'the download is removed however the run ends');
+  assert.match(afterFetch, /:finish\s*\r?\ndel \/f "%APK%" "%APK%\.part" "%DEVS%" >nul 2>&1\s*\r?\nif defined OUT del \/f "%OUT%" >nul 2>&1\s*\r?\nexit \/b %RC%/,
+    'the download, its half file, the device list and the round file are removed when the run ends');
   assert.equal((afterFetch.match(/exit \/b/g) || []).length, 1,
     'after the fetch, the only exit is the one at :finish');
-  assert.ok((afterFetch.match(/set "RC=\d"\s*\r?\n\s*goto finish/g) || []).length >= 5,
+  assert.ok((afterFetch.match(/set "RC=\d"\s*\r?\n\s*goto finish/g) || []).length >= 6,
     'each outcome sets its code and goes to :finish');
+  // The fetch block's last exit also cleans up after itself and says nothing was done.
+  assert.match(fetchBlock, /if not exist "%APK%" \(\s*\r?\n\s*del \/f "%APK%\.part" >nul 2>&1\s*\r?\n[\s\S]{0,200}?Nothing was done to any phone\.[\s\S]{0,60}?exit \/b 2/,
+    'even the unreachable exit leaves nothing behind and says nothing was done');
+
+  /* NO FILE MEANS NO PHONE WAS WALKED. The check above the loop and the loop are two separate
+     `adb devices` calls, so the last phone can drop between them; the loop body never runs, the
+     round's file is never written, every findstr below fails, and the run used to fall through
+     to "every result line above should read result=1" and exit 0 having attempted nothing. */
+  const walk = afterFetch.slice(afterFetch.indexOf('for /f'), afterFetch.indexOf('type "%OUT%"'));
+  assert.match(walk, /if not exist "%OUT%" \(\s*\r?\n[\s\S]{0,300}?nothing was enrolled[\s\S]{0,200}?set "RC=2"\s*\r?\n\s*goto finish\s*\r?\n\)/,
+    'a round in which no phone was walked is reported as such and exits non-zero');
+
+  // The file is committed with the CRLF endings cmd expects, like lock-bench.bat.
+  assert.ok(!/(^|[^\r])\n/.test(bat), 'every line of lock-hub-auto.bat ends CRLF');
   // Play Protect's USB-install check is switched off on each phone first, as the pasted line does.
   assert.match(bat, /adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%OUT%" 2>&1\s*\n\s*adb -s %%a install -r "%APK%"/);
 
