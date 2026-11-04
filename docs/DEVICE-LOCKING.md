@@ -139,6 +139,78 @@ time. The only ways to spend less are to run phones in parallel on a powered USB
 bench script is built for exactly that — or to buy through a Knox-participating reseller, the
 one route where a handset provisions itself at first boot with nobody touching it.
 
+#### The window that sits for an hour
+
+> "the cmd stucks for even an hour + to complete : stucking on ... Performing Streamed
+> Install / Success"
+
+**The one hour-scale wait anywhere in the line is Play Protect's, and it fits the report to
+the minute.** On a phone with Google services and *Verify apps over USB* on — the default —
+the first `adb install` hands the package to Play Protect, which puts a consent dialog on the
+handset's screen and asks the platform to extend the install's verification timeout — capped
+by the platform at **sixty minutes** — while it waits for a tap. On a bench the screen is off
+and nobody is looking, so nobody taps; at the hour the answer Play Protect registered for that
+case applies — for this app, on these phones, allow — and the install prints `Success` as if
+nothing had happened. Eight phones on a hub, one after the other, is a working day. It is the
+same dialog that "asked b/se app is dangerous continue anyway" the first time anyone saw it.
+The stamps below will confirm it on the next run: an hour under `1/3 install` with no
+`Success` under it.
+
+**The command now switches that check off before it installs**, on the handset, for USB
+installs only (`settings put global verifier_verify_adb_installs 0`). Play Store installs are
+scanned exactly as before. The check could also have refused the install outright
+(`INSTALL_FAILED_VERIFICATION_FAILURE` is its other answer); switching it off removes both
+the hour and that. It is set and not restored, and a released phone keeps it off: nothing
+inside the app can write it back, and it only ever applied to a future USB sideload — the lock
+app is the only thing ever sideloaded onto these phones, and the handset is about to become
+Device Owner. A phone under an "ensure verify apps" policy (an OEM or MDM restriction this
+fleet does not set) refuses the write **silently** and verifies anyway: a window still sitting
+in `1/3 install` after this change means that policy, and the cure is the old one — look at
+the phone's screen and tap the dialog. The same cure applies to a command copied **before**
+this change.
+
+**Each step now prints its name and the clock before it runs**, so a window that sits says
+which step and since when:
+
+```
+[R58M123ABC] 1/3 install
+10:32 AM
+Performing Streamed Install
+Success
+[R58M123ABC] 2/3 owner
+10:33 AM
+Success: Device owner set to package com.samaritantechs.hooploanlock/.LockAdmin
+[R58M123ABC] 3/3 enrol
+10:33 AM
+Broadcast completed: result=1, data="ENROLLED - reporting in now; ..."
+```
+
+A window that sits is sitting in the **last step printed**. What each step can and cannot do:
+
+- **`1/3 install` with no `Success` under it** — the phone's screen: Play Protect, as above.
+  Nothing else holds an install. A phone that is `unauthorized` or `offline` fails the step
+  at once with an error line rather than waiting, and Samsung's Auto Blocker (One UI 6 and
+  later) refuses an install instantly rather than holding it.
+- **`2/3 owner`** — `set-device-owner` answers at once, success or refusal. It never waits.
+- **`3/3 enrol`** — the only wait the app itself has. The claim stops starting attempts at
+  30 s and one attempt is capped at 24 s, so it answers within about a minute and always with
+  a message: a phone with no Wi-Fi says `result=5 CANNOT REACH THE OFFICE` and how long it
+  waited. Android's own 60 s broadcast limit is not reached by design (a test holds the sum
+  under 60); if a handset ever did reach it, Android kills the receiver's process, nothing is
+  written, and the window prints `Broadcast completed: result=0` with no `data=` — the same
+  line a command missing `--include-stopped-packages` prints. Re-running is safe either way.
+- **No step printed, or the window dead to everything** — adb or Windows, not the phone.
+  Open a second `cmd` and run `adb devices`. If *that* also sits, the adb server is wedged —
+  usually another copy of adb on the laptop (Samsung Smart Switch, Android Studio, a vendor
+  PC suite) restarting the server under it: `adb kill-server`, replug the hub, paste again.
+  Phones that already finished are re-armed, not re-identified, so re-running is safe.
+- **The classic black cmd window only** (Win+R → `cmd`, or Windows 10; not a `cmd` typed into
+  a Windows Terminal tab): if its title starts with **`Select`**, press **Esc**. Clicking or
+  dragging in that window selects text, and a window with a selection in it stops every
+  program that writes to it until the selection is cleared — including when someone selects
+  the text to copy it for a message. Ctrl+S and the Pause key do the same with nothing in the
+  title; any key resumes. Windows Terminal never pauses a program this way.
+
 #### When the hub command needs re-running, and you'd rather it ran itself
 
 The hub command answers three ways that all just mean "run it again": accounts blocking

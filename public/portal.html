@@ -4415,11 +4415,50 @@ function devApkFetch_(mark){
   // Build unknown: no name to trust, so fetch every time -- exactly the old behaviour.
   return DEV.lockVer ? '(if not exist "'+f+'" ('+dl+'))' : '('+dl+')';
 }
+/* EVERY STEP SAYS ITS NAME AND THE TIME BEFORE IT RUNS.
+   -----------------------------------------------------------------------------------------
+     "the cmd stucks for even an hour + to complete : stucking on ... Performing Streamed
+      Install / Success"
+
+   Three adb steps run back to back and only the install announces itself, so a window that
+   sits after `Success` says nothing about WHICH step it is sitting in or SINCE WHEN -- and
+   the app itself cannot hold it that long: the claim stops retrying at about 30 s and Android
+   ends the broadcast at 60 s whatever the app is doing. An hour is being spent outside the
+   app, in adb, in Windows, or on a dialog on the handset's screen (see below: it was the
+   dialog), and the next report has to be able to say which. So each
+   step prints a label and `time /t` first. `time /t` rather than %time%, which a pasted line
+   expands ONCE at parse -- every stamp would read the same. Labels only; the token stays the
+   last thing on the line, where the test that pins it looks.
+
+   AND THE HOUR ITSELF, FOUND BY THE REVIEW OF THE STAMPS: PLAY PROTECT HOLDS THE INSTALL.
+   -----------------------------------------------------------------------------------------
+   On a phone with Google services and "Verify apps over USB" on -- the default -- the first
+   `adb install` hands the package to Play Protect, which puts a consent dialog on the
+   handset's screen and asks the platform to extend the verification timeout -- capped by the
+   platform at SIXTY MINUTES -- while it waits for a tap. On a bench the screen is off and
+   nobody is looking, so nobody taps; at the hour the answer Play Protect registered applies
+   -- for this app, on these phones, allow -- and the install prints `Success` as if nothing
+   happened. That fits "stucks for even an hour + to complete" to the minute, it is the only
+   hour-scale wait anywhere in the line, and it is the same dialog that "asked b/se app is
+   dangerous continue anyway" the first time it was ever seen. The stamps will confirm it.
+
+   So the line switches Play Protect's check of ADB installs off on the handset before it
+   installs: one global setting, writable from adb shell on every Android this fleet runs,
+   reaching nothing else Play Protect does (Play Store installs are scanned exactly as
+   before; the check could also have refused the install, and that goes with the hour). It is
+   set, not restored, and a released phone keeps it: nothing inside the app can write it back
+   (a Device Owner's setGlobalSetting allowlist excludes it -- see LockAdmin), it only ever
+   applied to a future USB sideload, and the lock app is the only thing ever sideloaded onto
+   these phones. A phone under an "ensure verify apps" policy (an OEM or MDM restriction this
+   fleet does not set) refuses the write SILENTLY and verifies anyway: a window still sitting
+   in 1/3 install after this is that policy, and the cure is the dialog on its screen. `&` so
+   nothing about the write can stop the line. */
+var DEV_NO_ADB_VERIFY='adb shell settings put global verifier_verify_adb_installs 0';
 function devOneLiner(token){
   return devApkFetch_(token)
-    + ' && adb install -r "' + devApkFile_() + '"'
-    + ' && (adb shell dpm set-device-owner ' + DEVCMP
-    + ' & adb shell am broadcast --include-stopped-packages'
+    + ' && (echo 1/3 install & time /t & ' + DEV_NO_ADB_VERIFY + ' & adb install -r "' + devApkFile_() + '")'
+    + ' && (echo 2/3 owner & time /t & adb shell dpm set-device-owner ' + DEVCMP
+    + ' & echo 3/3 enrol & time /t & adb shell am broadcast --include-stopped-packages'
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
     + ' -e server ' + location.origin + ' -e token ' + token + ')';
 }
@@ -4451,13 +4490,35 @@ function devOneLiner(token){
      - The APK is fetched ONCE, before the loop, and with && -- see devOneLiner for why it is
        fetched at all. If the download fails nothing runs on any phone. */
 function devHubLine(batch){
+  /* The label carries the serial as well, because on a hub every phone's lines interleave and
+     "the line above" is whatever scrolled last. See devOneLiner for why the stamps exist. */
   return devApkFetch_(batch)
     + ' && for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
-    + 'adb -s %a install -r "' + devApkFile_() + '"'
-    + ' & adb -s %a shell dpm set-device-owner ' + DEVCMP
-    + ' & adb -s %a shell am broadcast --include-stopped-packages'
+    + 'echo [%a] 1/3 install & time /t & ' + DEV_NO_ADB_VERIFY.replace('adb shell', 'adb -s %a shell')
+    + ' & adb -s %a install -r "' + devApkFile_() + '"'
+    + ' & echo [%a] 2/3 owner & time /t & adb -s %a shell dpm set-device-owner ' + DEVCMP
+    + ' & echo [%a] 3/3 enrol & time /t & adb -s %a shell am broadcast --include-stopped-packages'
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
     + ' -e server ' + location.origin + ' -e batch ' + batch + ')';
+}
+/* THE WINDOW THAT SITS. Said next to both commands, because the commonest reason a cmd window
+   goes quiet for an hour is not the phone: clicking or dragging in the window selects text, and
+   a cmd window with a selection in it STOPS EVERY PROGRAM THAT WRITES TO IT until the selection
+   is cleared -- the title bar reads "Select ..." and nothing else changes. The steps are stamped
+   (see devOneLiner) so the other cases name themselves. */
+function devStuckHint_(){
+  return 'Kila hatua inachapisha jina lake na saa kabla haijaanza; dirisha likikaa kimya, '
+    +'hatua ya mwisho iliyochapishwa ndiyo inayosubiri. Ikikaa kwenye <b>1/3 install</b>, angalia '
+    +'skrini ya simu: Play Protect ikiuliza, gusa — bila kuguswa inashikilia install kwa saa nzima. '
+    +'Amri hii inazima ukaguzi huo kwa install za USB kwanza, hivyo haipaswi kuuliza; ikiuliza bado, gusa. '
+    +'Kichwa cha dirisha kikianza na <b>Select</b>: bonyeza <b>Esc</b> — dirisha limejisimamisha '
+    +'kwa sababu maandishi yalichaguliwa ndani yake; hakuna kilichokwama. '
+    +'/ Each step prints its name and the clock before it runs, so a window that sits is '
+    +'sitting in the last step printed. Sitting in <b>1/3 install</b>: look at the phone\'s screen '
+    +'— a Play Protect dialog left untapped holds the install for a full hour. This command turns '
+    +'that check off for USB installs first, so it should not ask; if it still does, tap it. If the window title '
+    +'starts with <b>Select</b>, press <b>Esc</b>: the window paused itself because text was '
+    +'selected in it; nothing is stuck. ';
 }
 function devCopyBox(id){
   var t=$('#'+id); if(!t) return; t.select();
@@ -4495,6 +4556,7 @@ function devProvision(m, r){
   drawer('<h3>'+(one?'Simu · '+esc(p[0].imei):'Simu '+money(p.length))+'</h3>'
     +'<div class="sub"><b>Bandika kwenye cmd, bonyeza enter.</b> '
     +'/ Paste into the black cmd window, press enter. '
+    +devStuckHint_()
     +(one?'':'Amri moja kwa kila simu — nakili mstari mmoja kwa simu moja. '
       +'/ One command per phone: copy ONE line for ONE handset. ')
     +'Amri inapakua APK ya sasa yenyewe — hakuna cha kupakua kwanza. '
@@ -4702,6 +4764,7 @@ function devToken(imei){
         : '')
       +'<div class="sub"><b>Bandika kwenye cmd, bonyeza enter. Ndiyo yote.</b> '
       +'/ Paste into the black cmd window, press enter. That is all. '
+      +devStuckHint_()
       /* ALWAYS THE FRESH FILE -- and the line fetches it itself now (see devOneLiner). A
          handset that has been in the field has SELF-UPDATED, so an older APK on the laptop
          was refused with INSTALL_FAILED_VERSION_DOWNGRADE and the && stopped the whole line

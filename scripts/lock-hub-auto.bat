@@ -91,6 +91,11 @@ if exist "%OUT%" del "%OUT%"
 
 for /f "skip=1 tokens=1,2" %%a in ('adb devices') do @if "%%b"=="device" (
   echo --- %%a --- >> "%OUT%"
+  REM Play Protect's "Verify apps over USB" holds the FIRST adb install for up to an hour while
+  REM a consent dialog nobody at a bench taps waits on the handset -- then applies the answer
+  REM it registered, allow on these phones. Switched off for USB installs on each phone first,
+  REM exactly as the portal's own hub line does.
+  adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%OUT%" 2>&1
   adb -s %%a install -r "%APK%" >> "%OUT%" 2>&1
   adb -s %%a shell dpm set-device-owner %ADMIN% >> "%OUT%" 2>&1
   adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> "%OUT%" 2>&1
