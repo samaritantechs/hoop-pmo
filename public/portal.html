@@ -4491,15 +4491,29 @@ function devOneLiner(token){
        fetched at all. If the download fails nothing runs on any phone. */
 function devHubLine(batch){
   /* The label carries the serial as well, because on a hub every phone's lines interleave and
-     "the line above" is whatever scrolled last. See devOneLiner for why the stamps exist. */
+     "the line above" is whatever scrolled last. See devOneLiner for why the stamps exist.
+
+     EVERY ROW THE WALK SEES IS PRINTED, AND "DONE" LAST. Right after the hub is replugged --
+     which follows the `adb kill-server` the help desk hands out -- Windows is still
+     enumerating the phones and adb lists them as they arrive, so the list the loop walks can
+     be short or empty; and a row that is `unauthorized` or `offline` is skipped on purpose. A
+     loop that skips in silence and ends in silence reads as "the command is broken": paste,
+     enter, prompt back. So the loop now says what it did with EVERY row -- walked (the
+     stamped steps) or skipped, with the state adb gave -- and prints `done` when the walk is
+     over. `done` with nothing above it means adb listed no phone: run `adb devices` on its
+     own until every phone shows `device`, then paste again. One enumeration, not two: the
+     rows printed are exactly the rows walked. The for is in its own group so `done` follows
+     the whole walk, not each phone. */
   return devApkFetch_(batch)
-    + ' && for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
+    + ' && ((for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
     + 'echo [%a] 1/3 install & time /t & ' + DEV_NO_ADB_VERIFY.replace('adb shell', 'adb -s %a shell')
     + ' & adb -s %a install -r "' + devApkFile_() + '"'
     + ' & echo [%a] 2/3 owner & time /t & adb -s %a shell dpm set-device-owner ' + DEVCMP
     + ' & echo [%a] 3/3 enrol & time /t & adb -s %a shell am broadcast --include-stopped-packages'
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
-    + ' -e server ' + location.origin + ' -e batch ' + batch + ')';
+    + ' -e server ' + location.origin + ' -e batch ' + batch + ')'
+    + ' else echo [%a] %b - imerukwa / skipped)'
+    + ' & echo [hub] tayari / done)';
 }
 /* THE WINDOW THAT SITS. Said next to both commands, because the commonest reason a cmd window
    goes quiet for an hour is not the phone: clicking or dragging in the window selects text, and
@@ -4591,7 +4605,15 @@ function devProvision(m, r){
       +'orodha uliyobandika <b>haitapewa token yoyote</b> na itaonekana haipo kwenye register. '
       +'/ A handset showing <b>unauthorized</b> is skipped — accept on its screen and run it '
       +'again. One whose IMEI is not in the list you pasted gets <b>no token at all</b> and '
-      +'shows as missing on the register: it can never be handed another phone\'s identity.</div>'
+      +'shows as missing on the register: it can never be handed another phone\'s identity. '
+      +'Amri inasema ilichofanya na kila simu — hatua zake, au <b>skipped</b> na hali yake — na '
+      +'kuishia na <b>done</b>. <b>done</b> peke yake, bila simu juu yake, ina maana adb haikuona '
+      +'simu yoyote: baada ya kuchomeka hub upya Windows bado inazitambua moja moja, hivyo endesha '
+      +'<code>adb devices</code> peke yake hadi kila simu ionekane <b>device</b>, ndipo ubandike. '
+      +'/ The command says what it did with every phone — its steps, or <b>skipped</b> with the '
+      +'state adb gave — and ends with <b>done</b>. A bare <b>done</b> with no phone above it means '
+      +'adb listed no phone: right after a replug Windows is still finding them one by one, so run '
+      +'<code>adb devices</code> on its own until every phone shows <b>device</b>, then paste.</div>'
       +'</div>'
       +'<div class="sub" style="margin:10px 0">Au moja moja, kwa simu iliyokosa hapo juu. '
       +'/ Or one at a time, for any handset the batch missed.</div>')

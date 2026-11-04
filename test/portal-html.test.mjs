@@ -1081,7 +1081,7 @@ test('the sign-in screen can change a code, and cannot leave it authenticated as
 test('bulk enrolment gives one button per phone, each carrying that phone\'s own token', () => {
   const src = read('portal.html');
   const fn = src.slice(src.indexOf('function devProvision('),
-                       src.indexOf('function devProvision(') + 9000);
+                       src.indexOf('\nfunction ', src.indexOf('function devProvision(') + 1));
 
   assert.match(fn, /data-dvcopy="'\+i\+'"/, 'every phone needs its own copy button');
   assert.match(fn, /esc\(x\.imei\)/, 'and the row must name the handset it belongs to');
@@ -1121,8 +1121,23 @@ test('bulk enrolment gives one button per phone, each carrying that phone\'s own
   assert.match(hub, /set-device-owner/, '...and takes ownership, both identical on every phone');
   assert.match(hub, /"%b"=="device"/,
     'a handset still unauthorized or offline must be skipped, not half-provisioned');
-  assert.match(hub, /^\(if not exist "%TEMP%\\HOOPLOAN-Lock-v31\.apk" \(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" https:\/\/hoop-pmo\.vercel\.app\/HOOPLOAN-Lock\.apk && move \/y "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" "%TEMP%\\HOOPLOAN-Lock-v31\.apk" >nul\)\) && for \/f /,
-    'the current APK is fetched ONCE before the loop -- and only when this build\'s file is not already in %TEMP% -- from this origin, and nothing runs on any phone if that fails');
+  assert.match(hub, /^\(if not exist "%TEMP%\\HOOPLOAN-Lock-v31\.apk" \(curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" https:\/\/hoop-pmo\.vercel\.app\/HOOPLOAN-Lock\.apk && move \/y "%TEMP%\\HOOPLOAN-Lock-v31\.apk\.BATCHBAT\.part" "%TEMP%\\HOOPLOAN-Lock-v31\.apk" >nul\)\) && \(\(for \/f /,
+    'the current APK is fetched ONCE before the loop -- and only when this build\'s file is not already in %TEMP% -- from this origin, and nothing runs on any phone if that fails; the walk itself is one group behind that &&');
+  /* EVERY ROW SEEN IS PRINTED, AND "DONE" LAST. Right after a replug adb lists the phones as
+     Windows finds them, and a row that is unauthorized or offline is skipped on purpose; a loop
+     that skips in silence and ends in silence reads as "the command is broken". So every row is
+     either walked (the stamped steps) or printed as skipped with its state, from ONE enumeration
+     (a printed list and a walked list from two `adb devices` calls can differ), and done closes
+     the walk once, after the for group. */
+  assert.match(hub, /&& \(\(for \/f "skip=1 tokens=1,2" %a in \('adb devices'\) do @if "%b"=="device" \(echo \[%a\] 1\/3 install/);
+  assert.equal((hub.match(/adb devices/g) || []).length, 1, 'one enumeration: the rows printed are the rows walked');
+  assert.match(hub, /-e batch BATCHBATCH\) else echo \[%a\] %b - imerukwa \/ skipped\) & echo \[hub\] tayari \/ done\)$/,
+    'a row that is not `device` says so with its state; done is printed once after the for group closes, claims nothing, and nothing follows it');
+  {
+    let depth = 0;
+    for (const ch of hub) { if (ch === '(') depth++; else if (ch === ')') depth--; assert.ok(depth >= 0, 'a ) before its ('); }
+    assert.equal(depth, 0, 'every ( on the hub line is closed');
+  }
   assert.match(hub, /install -r "%TEMP%\\HOOPLOAN-Lock-v31\.apk"/, 'every phone installs the file the line just fetched or found');
   assert.ok(!/Downloads/.test(hub), 'nothing in Downloads may ever be what gets installed');
   const loop = hub.slice(hub.indexOf('for /f'));
@@ -1219,7 +1234,7 @@ test('the silent tile and the list it opens are the same arithmetic', () => {
 test('no button ever offers every phone\'s token as one pasteable block', () => {
   const src = read('portal.html');
   const fn = src.slice(src.indexOf('function devProvision('),
-                       src.indexOf('function devProvision(') + 9000);
+                       src.indexOf('\nfunction ', src.indexOf('function devProvision(') + 1));
 
   // The shared box and its button exist for ONE phone only, where one line is the whole job.
   assert.match(fn, /\+\(one\s*\n?\s*\? '<textarea id="dvAdb"/,

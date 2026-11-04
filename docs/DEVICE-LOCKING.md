@@ -202,8 +202,26 @@ A window that sits is sitting in the **last step printed**. What each step can a
 - **No step printed, or the window dead to everything** — adb or Windows, not the phone.
   Open a second `cmd` and run `adb devices`. If *that* also sits, the adb server is wedged —
   usually another copy of adb on the laptop (Samsung Smart Switch, Android Studio, a vendor
-  PC suite) restarting the server under it: `adb kill-server`, replug the hub, paste again.
+  PC suite) restarting the server under it: `adb kill-server`, replug the hub, then run
+  `adb devices` on its own **until every phone shows `device`**, and only then paste again.
   Phones that already finished are re-armed, not re-identified, so re-running is safe.
+- **The prompt came straight back, with only `[hub] tayari / done`** — adb listed no phone,
+  so the walk had nothing to do. The command says what it did with every row `adb devices`
+  gave it: a phone that is `device` gets its three stamped steps; one that is `unauthorized`
+  or `offline` prints `[serial] unauthorized - imerukwa / skipped` and nothing else; and
+  `done` closes the walk. So a bare `done` means an empty list. That happens right after a
+  replug: Windows is still enumerating the phones one by one and adb lists them as they
+  arrive (a freshly started adb server waits, up to three seconds, for its first USB scan
+  before it acknowledges the command that started it, so a fresh server does not lie — a
+  half-plugged hub does). Run `adb devices` on its own until every phone shows `device`, then
+  paste again.
+- **`cannot connect to daemon at tcp:5037 ... actively refused it. (10061)`** — printed by
+  `adb kill-server` when there is no server left to kill (typed twice, say). Not an error:
+  10061 means nothing is listening on that port, and the next adb command starts a server
+  itself. A server that genuinely fails to start says `* failed to start daemon` instead —
+  usually an antivirus holding adb.exe; close it and try again. A second adb of another
+  version on the laptop (Smart Switch, a vendor PC suite) shows up differently: as the server
+  being killed and restarted under you on every command.
 - **The classic black cmd window only** (Win+R → `cmd`, or Windows 10; not a `cmd` typed into
   a Windows Terminal tab): if its title starts with **`Select`**, press **Esc**. Clicking or
   dragging in that window selects text, and a window with a selection in it stops every
