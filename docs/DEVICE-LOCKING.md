@@ -255,6 +255,63 @@ it after one round of clearing — that needs Settings on the handset, or a fact
 skipping sign-in, and no `adb` command does either. Both print the same guidance you'd get
 doing this by hand, and the script never hides the raw output above it.
 
+#### Where the time goes at the bench, and what is deliberately not done about it
+
+> "the time is now at least but still not instant"
+
+Once Play Protect's hour was gone, the stamped output from the bench showed two phones' whole
+install → owner → enrol chains inside the same clock minute. So it is seconds per phone now, and
+what is left is mostly the phone doing real work. A study of the whole path (Windows and adb,
+Android, the lock app's claim, the server) produced the table below. **These are estimates
+read from the code and from Android's source, not stopwatch numbers**; the stamps are
+minute-grained (`time /t`) and cannot resolve seconds.
+
+| Step | Typical | Slow | Notes |
+|---|---|---|---|
+| Fetch the APK (first phone of a build only) | 2–8 s | 30–55 s | 2 MB over the laptop's link; cached under the build number after that |
+| First adb command of the session | 0.3–1 s | 3 s | the server waits up to three seconds for its first USB scan |
+| `1/3 install` | 2–5 s | 7–12 s | **the largest on-phone cost is install-time dexopt of a 5 MB unshrunk dex**; the install itself is under two seconds |
+| `2/3 owner` | 1–2 s | 3–4 s | answers at once; on Android 10/11 `dpm` starts a fresh VM per call |
+| `3/3 enrol` | 2–4 s | 30–60 s | the claim's round trip to the office, plus the app hardening the phone; the slow end is a phone with no network yet |
+| **Per phone** | **5–10 s** | **20–40 s** | |
+| **Hub of 8, in sequence** | **1.5–2 min** | **5–6 min** | the walk is strictly one phone after another |
+
+**To measure instead of guess**, on one phone straight after a run: `adb shell logcat -d -s
+dex2oat` (prints `dex2oat took N.NNs`, the dexopt cost) and `adb shell dumpsys activity
+broadcasts history` (when the enrol broadcast was queued, delivered and finished).
+
+**What would make it faster, and why each is not done yet:**
+
+- **Run the phones of a hub in parallel.** The biggest wall-clock win for N phones, and the
+  study's own challenge pass refused it as a paste-in change. A phone that needs a tap (the
+  rare one under an "ensure verify apps" policy) stops being visible, because the window that
+  would have sat on it no longer exists; `start /b` hands the prompt back while the children are
+  still running, which is a new success-shaped failure; and many adb clients at once all
+  contend for the one adb server. If it is wanted, it has to be a script that waits for its
+  children and prints one line per phone, tried on a real laptop with a hub first.
+- **Shrink the lock app (R8).** Cuts the dexopt cost, an estimated 1–5 s per phone. Not done
+  because the lock app reaches every locked phone by self-update: it needs a bench test on each
+  Android version before it is served, not a change made without a phone in hand.
+- **Put the office's function next to its database.** About a tenth of a second per database
+  trip. It moves every function, including uploading and the call app, so the database's region
+  has to be confirmed first and it ships in the evening, never during the morning collection round.
+- **Skip the app's third hardening of the phone, and read the claim's settings in parallel.**
+  A fraction of a second each; the second is off the operator's clock entirely.
+
+**Known and not fixed (they need an app release, so they are written down rather than rushed):**
+
+- *The claim's last attempt can start late.* The retry loop checks its 30-second limit after an
+  attempt and then sleeps 2.5 s, so the last attempt can begin at about 32 s, and name
+  resolution is not bounded by the connect timeout. On a Wi-Fi whose DNS never answers, an
+  enrolment can run into Android's 60-second broadcast limit and print `Broadcast completed:
+  result=0` with no data. Nothing is written; running the command again is safe. (Read from the
+  code; the test that holds "30 s + 12 s + 12 s under 60" does not count the sleep or the lookup.)
+- *A server error reads as a refusal.* Any non-200 answer from the office, including a 502, 504
+  or 429, is shown as "THE OFFICE REFUSED THIS PHONE … paste the IMEIs again", and is not retried.
+  Only a 403 is a real refusal. (Read from the code.)
+- *A hand-edited batch id* that is not valid input for the database shows as "refused (HTTP
+  500)". Not reachable from the portal's own command, which always writes a valid one.
+
 ### 1. Enrol (portal, before you touch the phones)
 
 Devices → **+ Sajili simu**, paste the IMEIs from Sipho's report. Model and holder fill in
