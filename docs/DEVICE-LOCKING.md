@@ -139,16 +139,30 @@ time. The only ways to spend less are to run phones in parallel on a powered USB
 bench script is built for exactly that — or to buy through a Knox-participating reseller, the
 one route where a handset provisions itself at first boot with nobody touching it.
 
-#### The window that sits after `Success`
+#### The window that sits for an hour
 
 > "the cmd stucks for even an hour + to complete : stucking on ... Performing Streamed
 > Install / Success"
 
-Start from what the phone's side **cannot** do: nothing in the app can hold that line for an
-hour. The claim waits at most 30 s for the network plus one 24 s attempt, and Android kills
-any receiver that is still running at 60 s. So a window that sits for an hour is spending it
-**outside** the app — in adb, in Windows, or on a dialog on the handset's screen — and the
-command now says where. Each step prints its name and the clock before it runs:
+**It was Play Protect, and the hour is its number.** On a phone with Google services and
+*Verify apps over USB* on — the default — the first `adb install` hands the package to Play
+Protect, which puts a consent dialog on the handset's screen and extends the install's
+verification timeout to the platform maximum, **sixty minutes**, while it waits for a tap. On
+a bench the screen is off and nobody is looking, so nobody taps; at the hour the default
+answer (allow) applies and the install prints `Success` as if nothing had happened. Eight
+phones on a hub, one after the other, is a working day. It is the same dialog that "asked
+b/se app is dangerous continue anyway" the first time anyone saw it.
+
+**The command now switches that check off before it installs**, on the handset, for USB
+installs only (`settings put global verifier_verify_adb_installs 0`). Play Store installs are
+scanned exactly as before, and the check never blocked an install anyway — it only ever
+delayed one. It is set and not restored: the lock app is the only thing ever sideloaded onto
+these phones, and the handset is about to become ours. On a command copied **before** this
+change, the cure is to look at the phone's screen when the window sits in the install and tap
+the dialog.
+
+**Each step now prints its name and the clock before it runs**, so a window that sits says
+which step and since when:
 
 ```
 [R58M123ABC] 1/3 install
@@ -163,26 +177,31 @@ Success: Device owner set to package com.samaritantechs.hooploanlock/.LockAdmin
 Broadcast completed: result=1, data="ENROLLED - reporting in now; ..."
 ```
 
-A window that sits is sitting in the **last step printed**, since the time next to it. Read
-that first, then check these in order — the first one is the commonest by a long way:
+A window that sits is sitting in the **last step printed**. What each step can and cannot do:
 
-1. **Look at the window's title bar.** If it starts with **`Select`**, press **Esc**. Clicking
-   or dragging in a cmd window selects text, and a window with a selection in it stops every
-   program that writes to it until the selection is cleared. Nothing was stuck; it was waiting
-   for you. (This is also what happens when someone selects the text to copy it for a message.)
-2. **Look at the phone's screen.** A dialog waiting for a tap — Play Protect on a first
-   install, a Knox prompt, *Allow USB debugging* again after a reconnect — holds the step that
-   needs it. Tap it; the line carries on.
-3. **Ask adb in a second window.** Open another `cmd` and run `adb devices`. If *that* also
-   sits, the adb server itself is wedged — usually another copy of adb on the laptop (Samsung
-   Smart Switch, Android Studio, a vendor PC suite) restarting the server under it. Run
-   `adb kill-server`, unplug and replug the hub, and paste the command again. Phones that
-   already finished are re-armed, not re-identified, so re-running is safe.
-4. **A phone with no Wi-Fi** sits in `3/3 enrol` for about 30 s and then answers
-   `result=5 CANNOT REACH THE OFFICE`. That is the wait working as designed, and it is the
-   only wait the app itself has.
-
-If none of those is it, the stamped lines are the report: which step, and since when.
+- **`1/3 install` with no `Success` under it** — the phone's screen: Play Protect, as above.
+  Nothing else holds an install. A phone that is `unauthorized` or `offline` fails the step
+  at once with an error line rather than waiting, and Samsung's Auto Blocker (One UI 6 and
+  later) refuses an install instantly rather than holding it.
+- **`2/3 owner`** — `set-device-owner` answers at once, success or refusal. It never waits.
+- **`3/3 enrol`** — the only wait the app itself has. The claim retries for about 30 s while
+  the phone's network comes up, and Android ends the broadcast at about a minute whatever the
+  app is doing. A phone with no Wi-Fi answers `result=5 CANNOT REACH THE OFFICE` after ~30 s.
+  A phone whose Wi-Fi is up but whose DNS is dead can run into the minute and print
+  `Broadcast completed: result=0` with no `data=`, which reads like the receiver never ran;
+  the claim thread can still finish after the window gave up, so check the register before
+  running it again.
+- **No step printed, or the window dead to everything** — adb or Windows, not the phone.
+  Open a second `cmd` and run `adb devices`. If *that* also sits, the adb server is wedged —
+  usually another copy of adb on the laptop (Samsung Smart Switch, Android Studio, a vendor
+  PC suite) restarting the server under it: `adb kill-server`, replug the hub, paste again.
+  Phones that already finished are re-armed, not re-identified, so re-running is safe.
+- **The classic black cmd window only** (Win+R → `cmd`, or Windows 10; not a `cmd` typed into
+  a Windows Terminal tab): if its title starts with **`Select`**, press **Esc**. Clicking or
+  dragging in that window selects text, and a window with a selection in it stops every
+  program that writes to it until the selection is cleared — including when someone selects
+  the text to copy it for a message. Ctrl+S and the Pause key do the same with nothing in the
+  title; any key resumes. Windows Terminal never pauses a program this way.
 
 #### When the hub command needs re-running, and you'd rather it ran itself
 

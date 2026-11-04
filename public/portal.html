@@ -4422,15 +4422,36 @@ function devApkFetch_(mark){
 
    Three adb steps run back to back and only the install announces itself, so a window that
    sits after `Success` says nothing about WHICH step it is sitting in or SINCE WHEN -- and
-   nothing on the phone's side can hold it that long: the claim gives up at 54 s and Android
-   kills the receiver at 60. An hour is being spent outside the app, in adb, in Windows, or on
-   a dialog on the handset's screen, and the next report has to be able to say which. So each
+   the app itself cannot hold it that long: the claim stops retrying at about 30 s and Android
+   ends the broadcast at 60 s whatever the app is doing. An hour is being spent outside the
+   app, in adb, in Windows, or on a dialog on the handset's screen (see below: it was the
+   dialog), and the next report has to be able to say which. So each
    step prints a label and `time /t` first. `time /t` rather than %time%, which a pasted line
    expands ONCE at parse -- every stamp would read the same. Labels only; the token stays the
-   last thing on the line, where the test that pins it looks. */
+   last thing on the line, where the test that pins it looks.
+
+   AND THE HOUR ITSELF, FOUND BY THE REVIEW OF THE STAMPS: PLAY PROTECT HOLDS THE INSTALL.
+   -----------------------------------------------------------------------------------------
+   On a phone with Google services and "Verify apps over USB" on -- the default -- the first
+   `adb install` hands the package to Play Protect, which puts a consent dialog on the
+   handset's screen and extends the verification timeout to the platform maximum of SIXTY
+   MINUTES while it waits for a tap. On a bench the screen is off and nobody is looking, so
+   nobody taps; at the hour the default answer (allow) applies and the install prints
+   `Success` as if nothing happened. That is "stucks for even an hour + to complete", to the
+   minute, and it is the only hour-scale wait in the whole line -- and the same dialog that
+   "asked b/se app is dangerous continue anyway" the first time it was ever seen.
+
+   So the line switches Play Protect's check of ADB installs off on the handset before it
+   installs: one global setting, writable from adb shell on every Android this fleet runs,
+   reaching nothing else Play Protect does (Play Store installs are scanned exactly as
+   before). It is set, not restored: the lock app is the only thing ever sideloaded onto
+   these phones, the handset is about to become ours, and the check never blocked an install
+   anyway -- it only ever delayed one. A build that refuses the write prints one line and the
+   install proceeds exactly as it did; `&` so that refusal cannot stop the line. */
+var DEV_NO_ADB_VERIFY='adb shell settings put global verifier_verify_adb_installs 0';
 function devOneLiner(token){
   return devApkFetch_(token)
-    + ' && (echo 1/3 install & time /t & adb install -r "' + devApkFile_() + '")'
+    + ' && (echo 1/3 install & time /t & ' + DEV_NO_ADB_VERIFY + ' & adb install -r "' + devApkFile_() + '")'
     + ' && (echo 2/3 owner & time /t & adb shell dpm set-device-owner ' + DEVCMP
     + ' & echo 3/3 enrol & time /t & adb shell am broadcast --include-stopped-packages'
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
@@ -4468,7 +4489,8 @@ function devHubLine(batch){
      "the line above" is whatever scrolled last. See devOneLiner for why the stamps exist. */
   return devApkFetch_(batch)
     + ' && for /f "skip=1 tokens=1,2" %a in (\'adb devices\') do @if "%b"=="device" ('
-    + 'echo [%a] 1/3 install & time /t & adb -s %a install -r "' + devApkFile_() + '"'
+    + 'echo [%a] 1/3 install & time /t & ' + DEV_NO_ADB_VERIFY.replace('adb shell', 'adb -s %a shell')
+    + ' & adb -s %a install -r "' + devApkFile_() + '"'
     + ' & echo [%a] 2/3 owner & time /t & adb -s %a shell dpm set-device-owner ' + DEVCMP
     + ' & echo [%a] 3/3 enrol & time /t & adb -s %a shell am broadcast --include-stopped-packages'
     + ' -a ' + DEVPKG + '.ENROL -n ' + DEVPKG + '/.EnrolReceiver'
@@ -4481,12 +4503,17 @@ function devHubLine(batch){
    (see devOneLiner) so the other cases name themselves. */
 function devStuckHint_(){
   return 'Kila hatua inachapisha jina lake na saa kabla haijaanza; dirisha likikaa kimya, '
-    +'hatua ya mwisho iliyochapishwa ndiyo inayosubiri. Kichwa cha dirisha kikianza na '
-    +'<b>Select</b>: bonyeza <b>Esc</b> — dirisha limejisimamisha kwa sababu maandishi '
-    +'yalichaguliwa ndani yake; hakuna kilichokwama. '
+    +'hatua ya mwisho iliyochapishwa ndiyo inayosubiri. Ikikaa kwenye <b>1/3 install</b>, angalia '
+    +'skrini ya simu: Play Protect ikiuliza, gusa — bila kuguswa inashikilia install kwa saa nzima. '
+    +'Amri hii inazima ukaguzi huo kwa install za USB kwanza, hivyo haipaswi kuuliza tena. '
+    +'Kichwa cha dirisha kikianza na <b>Select</b>: bonyeza <b>Esc</b> — dirisha limejisimamisha '
+    +'kwa sababu maandishi yalichaguliwa ndani yake; hakuna kilichokwama. '
     +'/ Each step prints its name and the clock before it runs, so a window that sits is '
-    +'sitting in the last step printed. If the window title starts with <b>Select</b>, press '
-    +'<b>Esc</b>: the window paused itself because text was selected in it; nothing is stuck. ';
+    +'sitting in the last step printed. Sitting in <b>1/3 install</b>: look at the phone\'s screen '
+    +'— a Play Protect dialog left untapped holds the install for a full hour. This command turns '
+    +'that check off for USB installs first, so it should not ask again. If the window title '
+    +'starts with <b>Select</b>, press <b>Esc</b>: the window paused itself because text was '
+    +'selected in it; nothing is stuck. ';
 }
 function devCopyBox(id){
   var t=$('#'+id); if(!t) return; t.select();
