@@ -1785,18 +1785,17 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   assert.match(fetchBlock, /if not exist "%APK%" \(\s*\r?\n\s*del \/f "%APK%\.part" >nul 2>&1\s*\r?\n[\s\S]{0,200}?Nothing was done to any phone\.[\s\S]{0,60}?exit \/b 2/,
     'even the unreachable exit leaves nothing behind and says nothing was done');
 
-  /* NO FILE MEANS NO PHONE WAS WALKED. The check above the loop and the loop are two separate
-     `adb devices` calls, so the last phone can drop between them; the loop body never runs, the
-     round's file is never written, every findstr below fails, and the run used to fall through
-     to "every result line above should read result=1" and exit 0 having attempted nothing. */
+  /* NOTHING WALKED. The readiness check passed, but by the time the walk read the snapshot no row
+     was `device`, or none survived. Nothing was attempted; it used to fall through to "every
+     result line above should read result=1" and exit 0. */
   const walk = afterFetch.slice(afterFetch.indexOf('for /f'), afterFetch.indexOf('type "%OUT%"'));
-  assert.match(walk, /if not exist "%OUT%" \(\s*\r?\n[\s\S]{0,300}?nothing was enrolled[\s\S]{0,200}?set "RC=2"\s*\r?\n\s*goto finish\s*\r?\n\)/,
+  assert.match(walk, /if %WALKED% EQU 0 \(\s*\r?\n[\s\S]{0,300}?nothing was enrolled[\s\S]{0,200}?set "RC=2"\s*\r?\n\s*goto finish\s*\r?\n\)/,
     'a round in which no phone was walked is reported as such and exits non-zero');
 
   // The file is committed with the CRLF endings cmd expects, like lock-bench.bat.
   assert.ok(!/(^|[^\r])\n/.test(bat), 'every line of lock-hub-auto.bat ends CRLF');
   // Play Protect's USB-install check is switched off on each phone first, as the pasted line does.
-  assert.match(bat, /adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%OUT%" 2>&1\s*\n\s*adb -s %%a install -r "%APK%"/);
+  assert.match(bat, /adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%TEMP%\\hoop-hub-run%RUN%-%%a\.txt" 2>&1\s*\r?\n\s*adb -s %%a install -r "%APK%"/);
 
   // The three commands are the real ones, targeted at THAT phone -- never the bare command,
   // which on a hub full of phones would hit whichever one adb picks.
@@ -1846,16 +1845,16 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   assert.match(rounds[1], /findstr \/e \/c:"device"/,
     'the device check runs inside the loop body, not only before it');
 
-  /* POSITIVE PROOF BEFORE GREEN, AND EVERY EXIT CODE PINNED BY VALUE.
+  /* SUCCESS IS PROVEN PHONE BY PHONE, AND EVERY EXIT CODE IS PINNED BY VALUE.
      =========================================================================================
      The script only ever recognised NAMED failures (result=2, 3, 5); anything else fell through
-     to "every result line above should read result=1" and exit 0. A phone whose install failed
-     leaves no app behind, set-device-owner throws, and `am broadcast` prints a bare `result=0`
-     -- the receiver never ran -- which matches none of the comma-terminated patterns. A cable
-     that drops after the walk starts leaves no result line at all. Both read as success. The
-     tail now demands evidence: no result=0 anywhere, at least one result=1, and no phone
-     skipped as not ready. And the review's mutants survived because only two exit codes were
-     pinned by value; each branch is pinned here, so RC=1 flipped to RC=0 anywhere fails. */
+     to "every result line above should read result=1" and exit 0. A first fix made the gates
+     global ("some result=1 exists", "no result=0 anywhere") and a fresh review showed one
+     answering phone then vouched for every other: A ok plus B dropped mid-walk, B in a state the
+     list did not name, or B gone by the next round all still exited green. So the walk now
+     reads the SAME snapshot it lists from, writes each phone to a file of its own and judges it
+     on that file alone, and counts every row it saw. A decision-table model of this logic was
+     run over each of those scenarios before the script was changed. */
   const rcAfter = (src, marker, rc, why) => {
     const at = src.indexOf(marker);
     assert.ok(at >= 0, 'missing: ' + marker);
@@ -1863,27 +1862,52 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
     assert.match(block, new RegExp('set "RC=' + rc + '"\\s*\\r?\\n\\s*goto finish'), why);
   };
   const body = bat.slice(bat.indexOf(':round'));
+  const loop = body.slice(body.indexOf('for /f "usebackq'), body.indexOf('type "%OUT%"'));
+
+  // One enumeration per round, and the walk reads that same snapshot rather than asking again.
+  assert.equal((body.match(/adb devices > "%DEVS%"/g) || []).length, 1, 'one snapshot per round');
+  assert.match(loop, /^for \/f "usebackq tokens=1,\*" %%a in \("%DEVS%"\) do \(/,
+    'the walk reads the snapshot the readiness check read; a second adb devices could disagree');
+  assert.ok(!/skip=1/.test(loop), 'no row is skipped by position: the header and any stdout daemon lines are recognised by name');
+  assert.ok(body.indexOf('del "%DEVS%"') < 0, 'the snapshot is not deleted before the walk has read it');
+
+  // Each phone is judged on its own output, never on a pattern anywhere in the round.
+  assert.match(loop, /findstr \/c:"result=1," "%TEMP%\\hoop-hub-run%RUN%-%%a\.txt" >nul\s*\r?\n\s*if errorlevel 1 \(set \/a FAILED\+=1\) else \(set \/a ENROLLED\+=1\)/,
+    'a phone is enrolled only if ITS OWN broadcast printed result=1');
+  assert.match(loop, /type "%TEMP%\\hoop-hub-run%RUN%-%%a\.txt" >> "%OUT%"/, 'its output still reaches the round file the retry branches read');
+  assert.ok(!/findstr \/c:"result=0"|SKIPPED/.test(batCode), 'no global result scan stands in for a per-phone check');
+
+  // Every row that is not a walked phone is counted and printed, whatever state adb gave it.
+  assert.match(loop, /\) else if not "%%a"=="\*" if not "%%a"=="List" \(\s*\r?\n\s*set \/a NOTREADY\+=1\s*\r?\n\s*echo NOT READY, skipped: %%a %%b/,
+    'unauthorized, offline, authorizing, recovery -- anything but device -- is named, never forgotten');
+
+  // Counters are reset every round; the high-water mark is not.
+  assert.match(body, /set "WALKED=0"\s*\r?\nset "ENROLLED=0"\s*\r?\nset "FAILED=0"\s*\r?\nset "NOTREADY=0"/);
+  assert.ok(bat.indexOf('set "PEAK=0"') > 0 && bat.indexOf('set "PEAK=0"') < bat.indexOf(':round'),
+    'PEAK is initialised once, before the first round');
+  assert.ok(!/set "PEAK=0"/.test(body), 'and never reset inside a round');
+  assert.match(body, /set \/a SEEN=WALKED\+NOTREADY\s*\r?\nif %SEEN% GTR %PEAK% set "PEAK=%SEEN%"/,
+    'a phone seen in any round raises the mark');
+
+  // Exit codes, by value.
   rcAfter(body, 'if %ROUND% GTR %MAXROUNDS% (', 1, 'running out of rounds exits 1');
   rcAfter(body, 'echo No phones ready.', 2, 'no phone ready at the start of a round exits 2');
+  rcAfter(body, 'if %WALKED% EQU 0 (', 2, 'nothing walked exits 2');
   rcAfter(body, 'Still NOT DEVICE OWNER', 1, 'still not Device Owner after clearing exits 1');
-  rcAfter(body, 'At least one phone answered result=0', 1, 'a bare result=0 exits 1');
-  rcAfter(body, 'No phone answered result=1 ENROLLED', 1, 'no result=1 at all exits 1');
-  rcAfter(body, 'But at least one phone was not ready', 1, 'a skipped phone exits 1');
+  rcAfter(body, 'if "%BAD%"=="1" (', 1, 'any reason for red exits 1');
 
-  // result=0 and the missing result=1 are checked AFTER the retry branches and BEFORE green.
-  const at0 = body.indexOf('findstr /c:"result=0"');
-  const at1 = body.indexOf('findstr /c:"result=1,"');
-  const atSkip = body.indexOf('if "%SKIPPED%"=="1" (');
-  const atGreen = body.indexOf('set "RC=0"');
-  assert.ok(body.indexOf('findstr /c:"result=5,"') < at0 && at0 < at1 && at1 < atSkip && atSkip < atGreen,
-    'result=0, then result=1, then the skipped check, and only then a green exit');
+  // The tail: every reason is evaluated and printed, THEN the gate, THEN the one green path.
+  const iFailed = body.indexOf('if %FAILED% GTR 0 (');
+  const iNotReady = body.indexOf('if %NOTREADY% GTR 0 (');
+  const iGone = body.indexOf('if %SEEN% LSS %PEAK% (');
+  const iGate = body.indexOf('if "%BAD%"=="1" (');
+  const iGreenText = body.indexOf('answered result=1 ENROLLED. Confirm each phone');
+  const iGreen = body.indexOf('set "RC=0"');
+  assert.ok(body.indexOf('findstr /c:"result=5,"') < iFailed && iFailed < iNotReady && iNotReady < iGone && iGone < iGate,
+    'after the retry branches: failed, not ready, gone -- each prints its reason -- and then the gate');
+  assert.ok(iGate < iGreenText && iGreenText < iGreen, 'the green text is printed only after the gate, on the one green path');
   assert.equal((body.match(/set "RC=0"/g) || []).length, 1, 'there is exactly one way to exit 0');
-
-  // A phone that is not ready is named, and the flag it sets is reset every round.
-  assert.match(body, /set "SKIPPED=0"\s*\r?\nfindstr \/i \/c:"unauthorized" \/c:"offline" \/c:"no permissions" "%DEVS%"\s*\r?\nif not errorlevel 1 \(\s*\r?\n\s*set "SKIPPED=1"/,
-    'phones that are unauthorized, offline or without permissions are printed, not skipped in silence');
-  assert.ok(body.indexOf('findstr /i /c:"unauthorized"') < body.indexOf('del "%DEVS%"'),
-    'the list is printed before the device list is deleted');
+  assert.equal((body.match(/set "BAD=1"/g) || []).length, 3, 'three independent reasons feed the gate');
 
   // Extensions on and delayed expansion off, whatever the caller\'s cmd was started with: a ! in
   // a Windows user name would otherwise be eaten out of %TEMP% and every path below would break.

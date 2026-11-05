@@ -24,15 +24,18 @@ REM   result=2  TOKEN MISMATCH     -> STOPS. A blind retry cannot fix this -- th
 REM             already holds a DIFFERENT token and needs -e current, one phone at a time.
 REM             See docs/DEVICE-LOCKING.md, "When the register and the handset hold different
 REM             tokens".
-REM   result=0  anywhere          -> STOPS. `am broadcast` prints it when the enrol receiver never
-REM             ran -- the app is missing after a failed install, or Android stopped it first.
-REM             It looks like success and is not, so it is never allowed to reach the green exit.
-REM   no result=1 at all           -> STOPS. Absence of a failure line is not evidence of success:
-REM             an install that failed, a cable that dropped, or a phone that never answered
-REM             all leave no result=2, 3 or 5 behind.
-REM   a phone skipped as not ready -> the others are still done, but the exit is 1: that phone
-REM             is not enrolled and the screen names it.
-REM   at least one result=1, none of the above -> every result line is result=1. Done, exit 0.
+REM SUCCESS IS PROVEN PHONE BY PHONE, never inferred from the absence of a named failure. The
+REM walk judges each phone on its OWN output: it counts as enrolled only if its own broadcast
+REM printed result=1. Everything else counts against the run, and the exit is then 1:
+REM   result=0 on a phone          -> `am broadcast` prints it when the enrol receiver never ran:
+REM             the app is missing after a failed install, or Android stopped it first. It
+REM             looks like success and is not.
+REM   no result line from a phone  -> a cable that dropped, an adb error, a phone that never
+REM             answered. None of these leave a result=2, 3 or 5 behind either.
+REM   a row that is not `device`   -> unauthorized, offline, authorizing, recovery, whatever else
+REM             adb may list: named on the screen, never walked, never silently forgotten.
+REM   a phone seen in an earlier round and gone now -> it did not finish.
+REM Exit 0 only when every phone seen was walked and answered result=1.
 REM
 REM RE-RUNNING THE WHOLE HUB ON PHONES THAT ALREADY SUCCEEDED IS SAFE, not wasted risk:
 REM `adb install -r` on the same version is a no-op, `set-device-owner` on an owned phone just
@@ -84,6 +87,7 @@ set "DEVS=%TEMP%\hoop-hub-run%RUN%-devices.txt"
 set "BATCH=%~1"
 set "MAXROUNDS=5"
 set "CLEARED=0"
+set "PEAK=0"
 set /a ROUND=0
 
 if "%BATCH%"=="" (
@@ -135,42 +139,53 @@ if errorlevel 1 (
   set "RC=2"
   goto finish
 )
-REM A PHONE THAT IS NOT READY IS NAMED, NEVER SKIPPED IN SILENCE. The walk below keeps only the
-REM rows adb calls `device`, so a handset whose "Allow USB debugging" prompt was never tapped
-REM would otherwise be left out of a run that still ended "every result line is result=1" --
-REM true of the lines that exist, and the tenth phone never mentioned.
-set "SKIPPED=0"
-findstr /i /c:"unauthorized" /c:"offline" /c:"no permissions" "%DEVS%"
-if not errorlevel 1 (
-  set "SKIPPED=1"
-  echo.
-  echo The phones listed just above are not ready and are skipped this round. Accept Allow USB
-  echo debugging on their screens, or replug them, and run this again for those.
-)
-del "%DEVS%" >nul 2>&1
 
 echo.
 echo === round %ROUND% of %MAXROUNDS% ===
 set "OUT=%TEMP%\hoop-hub-run%RUN%-round%ROUND%.txt"
 if exist "%OUT%" del "%OUT%"
+set "WALKED=0"
+set "ENROLLED=0"
+set "FAILED=0"
+set "NOTREADY=0"
 
-for /f "skip=1 tokens=1,2" %%a in ('adb devices') do @if "%%b"=="device" (
-  echo --- %%a --- >> "%OUT%"
-  REM Play Protect's "Verify apps over USB" holds the FIRST adb install for up to an hour while
-  REM a consent dialog nobody at a bench taps waits on the handset -- then applies the answer
-  REM it registered, allow on these phones. Switched off for USB installs on each phone first,
-  REM exactly as the portal's own hub line does.
-  adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%OUT%" 2>&1
-  adb -s %%a install -r "%APK%" >> "%OUT%" 2>&1
-  adb -s %%a shell dpm set-device-owner %ADMIN% >> "%OUT%" 2>&1
-  adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> "%OUT%" 2>&1
+REM ONE LIST, WALKED AND JUDGED PHONE BY PHONE. The loop reads the SAME snapshot of `adb
+REM devices` that the readiness check just read -- a second call could disagree with the first,
+REM and a phone that fell between the two would be neither walked nor named. Every row is
+REM accounted for: `device` is walked, anything else except adb's own `*` daemon lines and the
+REM `List of devices attached` header is counted as not ready and printed with the state adb
+REM gave it. No row is skipped by POSITION (skip=1): an older adb prints its "* daemon started"
+REM lines to stdout, ahead of the header, and a positional skip would then let the header itself
+REM through as a phantom not-ready phone. Each walked phone writes to a file of
+REM its own and is judged on that file alone, so one phone answering result=1 can never vouch for
+REM another that did not. The counters use `set /a`, which needs no delayed expansion, and
+REM `if errorlevel`, which is read when it runs.
+REM Play Protect's "Verify apps over USB" holds the FIRST adb install for up to an hour while a
+REM consent dialog nobody at a bench taps waits on the handset -- then applies the answer it
+REM registered, allow on these phones. Switched off for USB installs on each phone first,
+REM exactly as the portal's own hub line does.
+for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do (
+  if "%%b"=="device" (
+    set /a WALKED+=1
+    echo --- %%a --- > "%TEMP%\hoop-hub-run%RUN%-%%a.txt"
+    adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%TEMP%\hoop-hub-run%RUN%-%%a.txt" 2>&1
+    adb -s %%a install -r "%APK%" >> "%TEMP%\hoop-hub-run%RUN%-%%a.txt" 2>&1
+    adb -s %%a shell dpm set-device-owner %ADMIN% >> "%TEMP%\hoop-hub-run%RUN%-%%a.txt" 2>&1
+    adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> "%TEMP%\hoop-hub-run%RUN%-%%a.txt" 2>&1
+    type "%TEMP%\hoop-hub-run%RUN%-%%a.txt" >> "%OUT%"
+    findstr /c:"result=1," "%TEMP%\hoop-hub-run%RUN%-%%a.txt" >nul
+    if errorlevel 1 (set /a FAILED+=1) else (set /a ENROLLED+=1)
+    del /f "%TEMP%\hoop-hub-run%RUN%-%%a.txt" >nul 2>&1
+  ) else if not "%%a"=="*" if not "%%a"=="List" (
+    set /a NOTREADY+=1
+    echo NOT READY, skipped: %%a %%b
+  )
 )
-REM NO FILE MEANS NO PHONE WAS WALKED. The check above and the loop are two separate `adb
-REM devices` calls, so the last phone can drop, or adb restart, between them; the loop body
-REM never runs, the round's file is never written, and every findstr below then fails -- which
-REM would fall through to the "every result line above should read result=1" ending and exit
-REM 0 on a run in which nothing was attempted.
-if not exist "%OUT%" (
+set /a SEEN=WALKED+NOTREADY
+if %SEEN% GTR %PEAK% set "PEAK=%SEEN%"
+REM NOTHING WALKED. The readiness check passed, but by the time the walk read the snapshot no row
+REM was `device` -- or none that survived. Nothing was attempted, and it must not read as success.
+if %WALKED% EQU 0 (
   echo No phone was ready when the walk started -- nothing was enrolled. Check the cable and
   echo "Allow USB debugging" on each screen, then run this again.
   set "RC=2"
@@ -233,40 +248,40 @@ if not errorlevel 1 (
   goto round
 )
 
-REM POSITIVE PROOF BEFORE GREEN. Everything above only recognises named failures; nothing yet
-REM proves a success. result=0 is the receiver never having run, and it matches none of the
-REM patterns above because they all end in a comma.
-findstr /c:"result=0" "%OUT%" >nul
-if not errorlevel 1 (
+REM POSITIVE PROOF BEFORE GREEN, PHONE BY PHONE. Everything above only recognises NAMED
+REM failures; none of it proves a success. The walk counted, for each phone on its own output,
+REM whether it answered result=1. A phone that did not, a row that was not ready, and a phone
+REM seen in an earlier round and gone now each make the run red, and every applicable reason is
+REM printed before the exit so none is hidden behind another. The green text is printed only on
+REM the one path that exits 0.
+set "BAD=0"
+if %FAILED% GTR 0 (
   echo.
-  echo At least one phone answered result=0 with no message. The enrol did not run there: the
-  echo app is missing after a failed install, or Android stopped it before it finished. This
-  echo line looks like success and is not. Read the install line above that phone, fix it, and
-  echo run this again.
-  set "RC=1"
-  goto finish
+  echo %FAILED% of %WALKED% phones did not answer result=1 ENROLLED. Read the lines above for
+  echo each of them: an install that failed, a bare result=0 which means the enrol never ran, a
+  echo cable that dropped, or a phone that never answered all end here.
+  set "BAD=1"
 )
-
-findstr /c:"result=1," "%OUT%" >nul
-if errorlevel 1 (
+if %NOTREADY% GTR 0 (
   echo.
-  echo No phone answered result=1 ENROLLED, so nothing was confirmed. Read the lines above: an
-  echo install that failed, a cable that dropped, or a phone that never answered all end here.
+  echo Phones not ready and skipped: %NOTREADY%, listed above as NOT READY. They are NOT enrolled.
+  echo Accept Allow USB debugging on their screens, or replug them, and run this again.
+  set "BAD=1"
+)
+if %SEEN% LSS %PEAK% (
+  echo.
+  echo A phone that was on the hub in an earlier round is not here now, so it did not finish.
+  echo Plug it back in and run this again.
+  set "BAD=1"
+)
+if "%BAD%"=="1" (
   set "RC=1"
   goto finish
 )
 
 echo.
-echo No phone answered result=2, 3 or 5 -- every result line above should read result=1
-echo ENROLLED. Confirm each phone on Devices before boxing it; that is the confirmation that
-echo counts, not this terminal.
-if "%SKIPPED%"=="1" (
-  echo.
-  echo But at least one phone was not ready and was skipped -- it is listed above and it is NOT
-  echo enrolled. Fix it and run this again for that phone.
-  set "RC=1"
-  goto finish
-)
+echo All %WALKED% phones answered result=1 ENROLLED. Confirm each phone on Devices before boxing
+echo it; that is the confirmation that counts, not this terminal.
 set "RC=0"
 goto finish
 

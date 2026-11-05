@@ -250,25 +250,40 @@ window that is closed or interrupted mid-run leaves its files behind, about 2 MB
 gone. It also switches Play Protect's USB-install check off on each phone before the install,
 exactly as the pasted hub line does.
 
-**It only ends green on evidence.** Exit `0` needs at least one `result=1` line, no bare
-`result=0` anywhere, and no phone skipped as not ready. Each of these used to fall through to
-"every result line above should read result=1", because the script only recognised *named*
-failures (`result=2`, `3`, `5`):
+**It only ends green on evidence, phone by phone.** Each phone on the cable is walked on its own
+and judged on its own output: it counts as enrolled only if *its* `am broadcast` printed
+`result=1`. One phone answering `result=1` never vouches for another. Exit `0` needs every phone
+that was walked to have answered `result=1`, no row skipped as not ready, and no phone missing
+that an earlier round had. Each of these used to fall through to "every result line above should
+read result=1", because the script only recognised *named* failures (`result=2`, `3`, `5`):
 
 - A phone whose install failed has no app, so `set-device-owner` throws and `am broadcast`
-  prints a bare **`result=0`** — the receiver never ran. It looks like success. The script
-  now stops with exit `1` and says so.
-- A cable that drops after the walk starts leaves no result line at all. No `result=1` anywhere
-  also exits `1`.
-- A phone showing `unauthorized`, `offline` or `no permissions` is listed on the screen each
-  round and skipped. The others still finish, but the exit is `1`, because that phone is not
-  enrolled.
+  prints a bare **`result=0`** — the receiver never ran. It looks like success. That phone has no
+  `result=1`, is counted as failed, and the run exits `1` and says so.
+- A cable that drops after the walk starts leaves that phone with no result line at all. It is
+  counted as failed the same way, even if the phone next to it answered `result=1`.
+- A row that is not `device` — `unauthorized`, `offline`, `authorizing`, `recovery`, `no
+  permissions`, anything adb lists — is printed as `NOT READY, skipped` with the state adb gave
+  it each round. The others still finish, but the exit is `1`, because that phone is not
+  enrolled. No row is skipped by position: the `List of devices attached` header and adb's own
+  `* daemon` lines are recognised by name.
+- A phone that was on the hub in an earlier round and is gone by the next one did not finish; the
+  run exits `1` and says to plug it back in.
 - A round in which no phone was walked (the last one dropped between the readiness check and
   the walk) says "nothing was enrolled" and exits `2`.
 
-Exit codes: `0` every walked phone answered `result=1` and none was skipped; `1` stopped, read the
-screen (mismatch, still not owner, rounds used up, a `result=0`, no `result=1`, or a skipped
-phone); `2` nothing was done to any phone (no batch given, the download failed, no phone ready).
+Every reason that applies is printed before the exit, so none is hidden behind another. The green
+text is printed only on the one path that exits `0`.
+
+Exit codes: `0` every walked phone answered `result=1`, none was skipped, none went missing; `1`
+stopped, read the screen (mismatch, still not owner, rounds used up, a phone without `result=1`,
+a skipped phone, or one that went missing); `2` nothing was done to any phone (no batch given,
+the download failed, no phone ready).
+
+One thing it cannot see: a phone that already holds an older build, whose `adb install` failed,
+still has a receiver, and that old receiver can answer `result=1`. The install output for that
+phone is in the lines above (`Success` is missing). Confirm the app version on Devices before
+boxing it, as the green text says to.
 
 `result=3` → it clears the accounts that usually cause it (Meet/Duo, Outlook, OneDrive) on
 every phone still on the cable, then runs the whole hub again. `result=5` → nothing local to
