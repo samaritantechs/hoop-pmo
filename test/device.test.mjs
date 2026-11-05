@@ -1810,7 +1810,10 @@ const LOCK_HUB_AUTO_CODE = [
   "      set /a FAILED+=1",
   "    ) else (",
   "      findstr /c:\"INSTALL_\" /c:\"failed to install\" \"%PF%\" >nul",
-  "      if errorlevel 1 (",
+  "      if errorlevel 2 (",
+  "        set /a FAILED+=1",
+  "        echo %%a: its own output could not be read, so its install cannot be vouched for. NOT counted as enrolled.",
+  "      ) else if errorlevel 1 (",
   "        set /a ENROLLED+=1",
   "        >>\"%OKF%\" echo %%a",
   "      ) else (",
@@ -2172,8 +2175,8 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   // (the apk gone from %TEMP% -- "failed to stat" -- or a cable that flaps for one command).
   assert.match(loop, /install -r "%APK%" >> "%PF%" 2>&1\s*\r?\n\s*if errorlevel 1 >>"%PF%" echo failed to install: adb install exited non-zero\s*\r?\n\s*if not errorlevel 0 >>"%PF%" echo failed to install: adb install exited non-zero\s*\r?\n\s*adb -s %%a shell dpm set-device-owner/,
     'the install\'s exit code is read straight after it, before anything else can change it, and written where the text check looks; `if errorlevel 1` cannot see a negative code, adb\'s push-install path exits -1, so the negative codes have a line of their own');
-  assert.match(loop, /findstr \/c:"INSTALL_" \/c:"failed to install" "%PF%" >nul\s*\r?\n\s*if errorlevel 1 \(\s*\r?\n\s*set \/a ENROLLED\+=1\s*\r?\n\s*>>"%OKF%" echo %%a\s*\r?\n\s*\) else \(/,
-    'a clean install plus result=1 is the only ordinary way into the ok file');
+  assert.match(loop, /findstr \/c:"INSTALL_" \/c:"failed to install" "%PF%" >nul\s*\r?\n\s*if errorlevel 2 \(\s*\r?\n\s*set \/a FAILED\+=1\s*\r?\n[^\n]*NOT counted as enrolled\.\r?\n\s*\) else if errorlevel 1 \(\s*\r?\n\s*set \/a ENROLLED\+=1\s*\r?\n\s*>>"%OKF%" echo %%a\s*\r?\n\s*\) else \(/,
+    'a clean install plus result=1 is the only ordinary way into the ok file, and a findstr that could not read the file (errorlevel 2) is not a clean install');
   assert.match(loop, /findstr \/c:"INSTALL_FAILED_VERSION_DOWNGRADE" "%PF%" >nul\s*\r?\n\s*if errorlevel 1 \(\s*\r?\n\s*set \/a FAILED\+=1\s*\r?\n[^\n]*OLDER one[^\n]*\r?\n\s*\) else \(\s*\r?\n\s*set \/a ENROLLED\+=1\s*\r?\n\s*>>"%OKF%" echo %%a/,
     'a failed install is red, except a NEWER app already on the phone (a downgrade refused), which is fine');
   assert.equal((loop.match(/>>"%OKF%" echo %%a/g) || []).length, 2, 'exactly two ways into the ok file, both of them result=1 on an acceptable install');

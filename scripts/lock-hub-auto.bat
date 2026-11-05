@@ -42,7 +42,10 @@ REM             as a line of text, and from adb's text; neither alone is enough,
 REM             failures (the apk gone from %TEMP%, a cable that flaps for one command) print
 REM             neither INSTALL_ nor "failed to install". `if errorlevel 1` is true only for 1 and
 REM             up, and adb's push-install path (an Android 6 handset, or a failed feature query)
-REM             exits -1, so the negative codes have a test of their own.
+REM             exits -1, so the negative codes have a test of their own. And
+REM             findstr's own answer is read three ways, not two: 0 failure text found, 1 none
+REM             found, 2 the file could not be read, which is red; a plain "if errorlevel 1"
+REM             would read 2 as "none found" and call the install clean.
 REM   a phone seen in an earlier round that never answered result=1 -> it did not finish. This is
 REM             tracked by SERIAL, not by count: a failed phone swapped for a new one leaves the
 REM             count where it was, and a count would call that green.
@@ -225,7 +228,10 @@ for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do (
       set /a FAILED+=1
     ) else (
       findstr /c:"INSTALL_" /c:"failed to install" "%PF%" >nul
-      if errorlevel 1 (
+      if errorlevel 2 (
+        set /a FAILED+=1
+        echo %%a: its own output could not be read, so its install cannot be vouched for. NOT counted as enrolled.
+      ) else if errorlevel 1 (
         set /a ENROLLED+=1
         >>"%OKF%" echo %%a
       ) else (
