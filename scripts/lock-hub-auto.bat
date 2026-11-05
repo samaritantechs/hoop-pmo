@@ -40,7 +40,9 @@ REM             (A newer app already on the phone, INSTALL_FAILED_VERSION_DOWNGR
 REM             A failed install is read from adb's own exit code, written into the phone's file
 REM             as a line of text, and from adb's text; neither alone is enough, because some
 REM             failures (the apk gone from %TEMP%, a cable that flaps for one command) print
-REM             neither INSTALL_ nor "failed to install".
+REM             neither INSTALL_ nor "failed to install". `if errorlevel 1` is true only for 1 and
+REM             up, and adb's push-install path (an Android 6 handset, or a failed feature query)
+REM             exits -1, so the negative codes have a test of their own.
 REM   a phone seen in an earlier round that never answered result=1 -> it did not finish. This is
 REM             tracked by SERIAL, not by count: a failed phone swapped for a new one leaves the
 REM             count where it was, and a count would call that green.
@@ -104,6 +106,7 @@ REM red so a route into :finish that forgot to set it can never exit 0.
 set "OUT="
 set "NEWCLR="
 set "MISSING="
+set "SAWSEEN="
 set "TOUCHED=0"
 set "RC=1"
 REM THE FILES THAT TRACK WHO IS WHO, by serial. A count cannot tell a swapped phone from a
@@ -213,6 +216,7 @@ for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do (
     adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%PF%" 2>&1
     adb -s %%a install -r "%APK%" >> "%PF%" 2>&1
     if errorlevel 1 >>"%PF%" echo failed to install: adb install exited non-zero
+    if not errorlevel 0 >>"%PF%" echo failed to install: adb install exited non-zero
     adb -s %%a shell dpm set-device-owner %ADMIN% >> "%PF%" 2>&1
     adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> "%PF%" 2>&1
     type "%PF%" >> "%OUT%"
@@ -299,7 +303,7 @@ if not errorlevel 1 (
   echo.
   echo Clearing the accounts that usually block set-device-owner, on every phone still here...
   for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do if "%%b"=="device" (
-    adb -s %%a get-state >nul 2>&1
+    adb -s %%a get-state 2>nul | findstr /b /c:"device" >nul
     if not errorlevel 1 (
       adb -s %%a shell pm uninstall --user 0 com.google.android.apps.tachyon >nul 2>&1
       adb -s %%a shell pm uninstall --user 0 com.microsoft.office.outlook >nul 2>&1
@@ -332,7 +336,9 @@ REM   - a serial seen in ANY round that never answered result=1, named one per l
 REM     pulled out and replaced, one that went missing, one that was not ready earlier and is
 REM     not here now. It is tested serial by serial with the plain single-string findstr form
 REM     used everywhere else here, not a set-difference trick, and a findstr that cannot run
-REM     counts as missing: no answer is never an all-clear.
+REM     counts as missing. The seen file always holds at least its first line, so a loop that
+REM     read nothing means the file could not be read, and that is red as well: a loop over an
+REM     unreadable file runs zero times and says nothing, and silence is not an all-clear.
 REM The green text is printed only on the one path that exits 0.
 set "BAD=0"
 if %FAILED% GTR 0 (
@@ -349,7 +355,9 @@ if %NOTREADY% GTR 0 (
   set "BAD=1"
 )
 set "MISSING="
+set "SAWSEEN="
 for /f "usebackq delims=" %%s in ("%SEENF%") do (
+  set "SAWSEEN=1"
   findstr /x /l /c:"%%s" "%OKF%" >nul 2>&1
   if errorlevel 1 (
     if not defined MISSING (
@@ -360,6 +368,11 @@ for /f "usebackq delims=" %%s in ("%SEENF%") do (
     set "MISSING=1"
     echo   %%s
   )
+)
+if not defined SAWSEEN (
+  echo.
+  echo Could not read which phones were seen -- treating the run as not finished.
+  set "MISSING=1"
 )
 if defined MISSING set "BAD=1"
 if "%BAD%"=="1" (

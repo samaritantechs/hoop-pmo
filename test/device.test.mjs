@@ -1730,6 +1730,7 @@ const LOCK_HUB_AUTO_CODE = [
   "set \"OUT=\"",
   "set \"NEWCLR=\"",
   "set \"MISSING=\"",
+  "set \"SAWSEEN=\"",
   "set \"TOUCHED=0\"",
   "set \"RC=1\"",
   "set \"SEENF=%TEMP%\\hoop-hub-run%RUN%-seen.txt\"",
@@ -1800,6 +1801,7 @@ const LOCK_HUB_AUTO_CODE = [
   "    adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> \"%PF%\" 2>&1",
   "    adb -s %%a install -r \"%APK%\" >> \"%PF%\" 2>&1",
   "    if errorlevel 1 >>\"%PF%\" echo failed to install: adb install exited non-zero",
+  "    if not errorlevel 0 >>\"%PF%\" echo failed to install: adb install exited non-zero",
   "    adb -s %%a shell dpm set-device-owner %ADMIN% >> \"%PF%\" 2>&1",
   "    adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> \"%PF%\" 2>&1",
   "    type \"%PF%\" >> \"%OUT%\"",
@@ -1874,7 +1876,7 @@ const LOCK_HUB_AUTO_CODE = [
   "  echo.",
   "  echo Clearing the accounts that usually block set-device-owner, on every phone still here...",
   "  for /f \"usebackq tokens=1,*\" %%a in (\"%DEVS%\") do if \"%%b\"==\"device\" (",
-  "    adb -s %%a get-state >nul 2>&1",
+  "    adb -s %%a get-state 2>nul | findstr /b /c:\"device\" >nul",
   "    if not errorlevel 1 (",
   "      adb -s %%a shell pm uninstall --user 0 com.google.android.apps.tachyon >nul 2>&1",
   "      adb -s %%a shell pm uninstall --user 0 com.microsoft.office.outlook >nul 2>&1",
@@ -1910,7 +1912,9 @@ const LOCK_HUB_AUTO_CODE = [
   "  set \"BAD=1\"",
   ")",
   "set \"MISSING=\"",
+  "set \"SAWSEEN=\"",
   "for /f \"usebackq delims=\" %%s in (\"%SEENF%\") do (",
+  "  set \"SAWSEEN=1\"",
   "  findstr /x /l /c:\"%%s\" \"%OKF%\" >nul 2>&1",
   "  if errorlevel 1 (",
   "    if not defined MISSING (",
@@ -1921,6 +1925,11 @@ const LOCK_HUB_AUTO_CODE = [
   "    set \"MISSING=1\"",
   "    echo   %%s",
   "  )",
+  ")",
+  "if not defined SAWSEEN (",
+  "  echo.",
+  "  echo Could not read which phones were seen -- treating the run as not finished.",
+  "  set \"MISSING=1\"",
   ")",
   "if defined MISSING set \"BAD=1\"",
   "if \"%BAD%\"==\"1\" (",
@@ -2072,8 +2081,8 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   assert.match(three, /if not defined NEWCLR \(\s*\r?\n[\s\S]{0,700}?Still NOT DEVICE OWNER/,
     'the stop is taken only when every phone here has already been cleared');
   assert.ok(!/%NEWCLR%/.test(three.split('\n').filter(l => !/^\s*REM\b/i.test(l)).join('\n')), 'NEWCLR is tested with `if defined`: a %NEWCLR% inside this block is read before the loop that sets it');
-  assert.match(three, /adb -s %%a get-state >nul 2>&1\s*\r?\n\s*if not errorlevel 1 \(\s*\r?\n(\s*adb -s %%a shell pm uninstall [^\n]*\n){3}\s*>>"%CLRF%" echo %%a\s*\r?\n\s*\)/,
-    'a phone is recorded as cleared only if it answered at the moment of clearing: a dropped phone is cleared on the next round, not blamed for "still not owner"');
+  assert.match(three, /adb -s %%a get-state 2>nul \| findstr \/b \/c:"device" >nul\s*\r?\n\s*if not errorlevel 1 \(\s*\r?\n(\s*adb -s %%a shell pm uninstall [^\n]*\n){3}\s*>>"%CLRF%" echo %%a\s*\r?\n\s*\)/,
+    'a phone is recorded as cleared only if get-state PRINTED device at the moment of clearing (it exits 0 for an offline phone, so the text is what counts): a dropped phone is cleared on the next round, not blamed for "still not owner"');
   assert.ok(!/^\s*REM\b/im.test(three), 'no comment sits inside the result=3 block: cmd reads a block whole before running any of it, and a bracket in a comment there is a trap');
   assert.ok(!/CLEARED/.test(batCode), 'no global "cleared once" flag is left to blame a phone that was never cleared');
   assert.match(three, /goto round/, 'and it does retry after clearing');
@@ -2161,8 +2170,8 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   // ... on a clean install. A failed install can leave an OLDER app whose receiver says result=1.
   // adb's own exit code is evidence too: some failures print neither INSTALL_ nor "failed to install"
   // (the apk gone from %TEMP% -- "failed to stat" -- or a cable that flaps for one command).
-  assert.match(loop, /install -r "%APK%" >> "%PF%" 2>&1\s*\r?\n\s*if errorlevel 1 >>"%PF%" echo failed to install: adb install exited non-zero\s*\r?\n\s*adb -s %%a shell dpm set-device-owner/,
-    'the install\'s exit code is read straight after it, before anything else can change it, and written where the text check looks');
+  assert.match(loop, /install -r "%APK%" >> "%PF%" 2>&1\s*\r?\n\s*if errorlevel 1 >>"%PF%" echo failed to install: adb install exited non-zero\s*\r?\n\s*if not errorlevel 0 >>"%PF%" echo failed to install: adb install exited non-zero\s*\r?\n\s*adb -s %%a shell dpm set-device-owner/,
+    'the install\'s exit code is read straight after it, before anything else can change it, and written where the text check looks; `if errorlevel 1` cannot see a negative code, adb\'s push-install path exits -1, so the negative codes have a line of their own');
   assert.match(loop, /findstr \/c:"INSTALL_" \/c:"failed to install" "%PF%" >nul\s*\r?\n\s*if errorlevel 1 \(\s*\r?\n\s*set \/a ENROLLED\+=1\s*\r?\n\s*>>"%OKF%" echo %%a\s*\r?\n\s*\) else \(/,
     'a clean install plus result=1 is the only ordinary way into the ok file');
   assert.match(loop, /findstr \/c:"INSTALL_FAILED_VERSION_DOWNGRADE" "%PF%" >nul\s*\r?\n\s*if errorlevel 1 \(\s*\r?\n\s*set \/a FAILED\+=1\s*\r?\n[^\n]*OLDER one[^\n]*\r?\n\s*\) else \(\s*\r?\n\s*set \/a ENROLLED\+=1\s*\r?\n\s*>>"%OKF%" echo %%a/,
@@ -2191,8 +2200,8 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   assert.ok(body.indexOf('findstr /c:"result=5,"') < iFailed && iFailed < iNotReady && iNotReady < iMissing && iMissing < iGate,
     'after the retry branches: failed, not ready, missing -- each prints its reason -- and then the gate');
   assert.match(body.slice(iMissing, iGate),
-    /^set "MISSING="\r?\nfor \/f "usebackq delims=" %%s in \("%SEENF%"\) do \(\s*\r?\n\s*findstr \/x \/l \/c:"%%s" "%OKF%" >nul 2>&1\s*\r?\n\s*if errorlevel 1 \([\s\S]*?set "MISSING=1"\s*\r?\n\s*echo   %%s\s*\r?\n\s*\)\s*\r?\n\)\s*\r?\nif defined MISSING set "BAD=1"\s*\r?\n/,
-    'every serial seen is tested one at a time against the ok file and named when absent; any findstr failure (errorlevel 2 is not 0) counts as absent, so no answer is never an all-clear');
+    /^set "MISSING="\r?\nset "SAWSEEN="\r?\nfor \/f "usebackq delims=" %%s in \("%SEENF%"\) do \(\s*\r?\n\s*set "SAWSEEN=1"\s*\r?\n\s*findstr \/x \/l \/c:"%%s" "%OKF%" >nul 2>&1\s*\r?\n\s*if errorlevel 1 \([\s\S]*?set "MISSING=1"\s*\r?\n\s*echo   %%s\s*\r?\n\s*\)\s*\r?\n\)\s*\r?\nif not defined SAWSEEN \([\s\S]*?set "MISSING=1"\s*\r?\n\)\s*\r?\nif defined MISSING set "BAD=1"\s*\r?\n/,
+    'every serial seen is tested one at a time against the ok file and named when absent; any findstr failure (errorlevel 2 is not 0) counts as absent; and a loop that read nothing (the seen file always has its first line) is red too, so no answer is never an all-clear');
   assert.ok(!/\/g:/.test(batCode), 'no findstr /g set-difference anywhere: its multi-string quirks cannot be tested without Windows');
   assert.ok(iGate < iGreenText && iGreenText < iGreen, 'the green text is printed only after the gate, on the one green path');
   assert.equal((body.match(/set "RC=0"/g) || []).length, 1, 'there is exactly one way to exit 0');
