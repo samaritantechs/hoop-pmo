@@ -264,9 +264,12 @@ through to "every result line above should read result=1", because the script on
   `result=1`, is counted as failed, and the run exits `1` and says so.
 - A phone whose install failed but which already held an **older** lock app can still answer
   `result=1`, because the old receiver runs. That is not the build this run meant to put on it,
-  so it counts as failed and the screen says why. The one install failure that is fine is a
-  newer app already on the phone (`INSTALL_FAILED_VERSION_DOWNGRADE`, the note the script prints
-  when a lock release is mid-way).
+  so it counts as failed and the screen says why. A failed install is read from adb's own exit
+  code and from its text, because neither alone is enough: some failures (the download gone
+  from `%TEMP%`, a cable that flaps for one command) print neither `INSTALL_…` nor "failed to
+  install". The one install failure that is fine is a newer app already on the phone
+  (`INSTALL_FAILED_VERSION_DOWNGRADE`, the note the script prints when a lock release is
+  mid-way).
 - A cable that drops after the walk starts leaves that phone with no result line at all. It is
   counted as failed the same way, even if the phone next to it answered `result=1`.
 - A row that is not `device` — `unauthorized`, `offline`, `authorizing`, `recovery`, `no
@@ -293,8 +296,9 @@ a skipped phone, one that went missing, or no phone left after an earlier round 
 first look).
 
 `result=3` clears are tracked **per phone**: a phone that was waiting on its USB-debugging dialog
-during the clearing pass, or was plugged in after it, is cleared on the next round rather than
-blamed for "still not owner after clearing".
+during the clearing pass, or was plugged in after it, or dropped off the cable just before it, is
+cleared on the next round rather than blamed for "still not owner after clearing". A phone is
+recorded as cleared only if it answered at the moment of clearing.
 
 `result=3` → it clears the accounts that usually cause it (Meet/Duo, Outlook, OneDrive) on
 every phone still on the cable, then runs the whole hub again. `result=5` → nothing local to

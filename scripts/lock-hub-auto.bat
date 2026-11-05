@@ -37,6 +37,10 @@ REM             adb may list: named on the screen, never walked, never silently 
 REM   an install that failed       -> the phone may still hold an OLDER app whose receiver answers
 REM             result=1 all the same; that is not the build this run was meant to put on it.
 REM             (A newer app already on the phone, INSTALL_FAILED_VERSION_DOWNGRADE, is fine.)
+REM             A failed install is read from adb's own exit code, written into the phone's file
+REM             as a line of text, and from adb's text; neither alone is enough, because some
+REM             failures (the apk gone from %TEMP%, a cable that flaps for one command) print
+REM             neither INSTALL_ nor "failed to install".
 REM   a phone seen in an earlier round that never answered result=1 -> it did not finish. This is
 REM             tracked by SERIAL, not by count: a failed phone swapped for a new one leaves the
 REM             count where it was, and a count would call that green.
@@ -84,7 +88,7 @@ REM install would fail with "failed to stat". The device list and each round's o
 REM were fixed names too: one window's delete made the other's `type` and findstr read nothing,
 REM and every findstr failing reads, further down, as "no phone answered 2, 3 or 5" -- a green
 REM exit on a run that had no result lines at all. One token names every file the run writes (the
-REM download, the device list, each round's output, and the five that track phones by serial
+REM download, the device list, each round's output, and the four that track phones by serial
 REM below), all removed at :finish when the run ends by any route the script controls. A window closed or Ctrl+C'd
 REM mid-run never reaches :finish and leaves its files behind (about 2 MB); they are safe to
 REM delete from %TEMP% once that window is gone.
@@ -99,19 +103,19 @@ REM an OUT from some build setup would otherwise be handed to del at :finish, an
 REM red so a route into :finish that forgot to set it can never exit 0.
 set "OUT="
 set "NEWCLR="
+set "MISSING="
 set "TOUCHED=0"
 set "RC=1"
 REM THE FILES THAT TRACK WHO IS WHO, by serial. A count cannot tell a swapped phone from a
 REM steady one. SEENF holds every serial any round listed (walked or not ready); OKF every serial
 REM whose own broadcast answered result=1 on a clean install; CLRF every serial the account
-REM clearing pass was run on. OKF and CLRF start with a line no serial can be, because findstr
-REM reads an empty search file unpredictably. PF is the one phone being walked right now: the
+REM clearing pass was run on. All three start with a line no serial can be, so each file exists
+REM before findstr first reads it. PF is the one phone being walked right now: the
 REM walk is serial, so one file is enough, and no serial ever becomes part of a file NAME (a
 REM wifi-adb serial is ip:port, and a colon in a name makes an NTFS stream).
 set "SEENF=%TEMP%\hoop-hub-run%RUN%-seen.txt"
 set "OKF=%TEMP%\hoop-hub-run%RUN%-ok.txt"
 set "CLRF=%TEMP%\hoop-hub-run%RUN%-cleared.txt"
-set "MISSF=%TEMP%\hoop-hub-run%RUN%-missing.txt"
 set "PF=%TEMP%\hoop-hub-run%RUN%-phone.txt"
 
 if "%BATCH%"=="" (
@@ -208,6 +212,7 @@ for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do (
     echo --- %%a --- > "%PF%"
     adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%PF%" 2>&1
     adb -s %%a install -r "%APK%" >> "%PF%" 2>&1
+    if errorlevel 1 >>"%PF%" echo failed to install: adb install exited non-zero
     adb -s %%a shell dpm set-device-owner %ADMIN% >> "%PF%" 2>&1
     adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> "%PF%" 2>&1
     type "%PF%" >> "%OUT%"
@@ -294,10 +299,13 @@ if not errorlevel 1 (
   echo.
   echo Clearing the accounts that usually block set-device-owner, on every phone still here...
   for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do if "%%b"=="device" (
-    adb -s %%a shell pm uninstall --user 0 com.google.android.apps.tachyon >nul 2>&1
-    adb -s %%a shell pm uninstall --user 0 com.microsoft.office.outlook >nul 2>&1
-    adb -s %%a shell pm uninstall --user 0 com.microsoft.skydrive >nul 2>&1
-    >>"%CLRF%" echo %%a
+    adb -s %%a get-state >nul 2>&1
+    if not errorlevel 1 (
+      adb -s %%a shell pm uninstall --user 0 com.google.android.apps.tachyon >nul 2>&1
+      adb -s %%a shell pm uninstall --user 0 com.microsoft.office.outlook >nul 2>&1
+      adb -s %%a shell pm uninstall --user 0 com.microsoft.skydrive >nul 2>&1
+      >>"%CLRF%" echo %%a
+    )
   )
   del "%OUT%" >nul 2>&1
   goto round
@@ -320,9 +328,11 @@ REM things turn the run red, and every one that applies is printed before the ex
 REM hidden behind another:
 REM   - a phone of THIS round that did not answer result=1 on a clean install (FAILED)
 REM   - a row of this round that was not ready (NOTREADY)
-REM   - a serial seen in ANY round that never answered result=1 (the missing file) -- a phone
+REM   - a serial seen in ANY round that never answered result=1, named one per line -- a phone
 REM     pulled out and replaced, one that went missing, one that was not ready earlier and is
-REM     not here now. findstr's own errors count as red: no answer is never an all-clear.
+REM     not here now. It is tested serial by serial with the plain single-string findstr form
+REM     used everywhere else here, not a set-difference trick, and a findstr that cannot run
+REM     counts as missing: no answer is never an all-clear.
 REM The green text is printed only on the one path that exits 0.
 set "BAD=0"
 if %FAILED% GTR 0 (
@@ -338,18 +348,20 @@ if %NOTREADY% GTR 0 (
   echo Accept Allow USB debugging on their screens, or replug them, and run this again.
   set "BAD=1"
 )
-findstr /x /l /v /g:"%OKF%" "%SEENF%" > "%MISSF%" 2>nul
-if errorlevel 2 (
-  echo.
-  echo Could not check which phones finished -- treating the run as not finished.
-  set "BAD=1"
-) else if not errorlevel 1 (
-  echo.
-  echo These phones were on the hub during this run and never answered result=1 ENROLLED, so
-  echo they did not finish -- plug each back in, or enrol it on its own, and run this again:
-  type "%MISSF%"
-  set "BAD=1"
+set "MISSING="
+for /f "usebackq delims=" %%s in ("%SEENF%") do (
+  findstr /x /l /c:"%%s" "%OKF%" >nul 2>&1
+  if errorlevel 1 (
+    if not defined MISSING (
+      echo.
+      echo These phones were on the hub during this run and never answered result=1 ENROLLED, so
+      echo they did not finish -- plug each back in, or enrol it on its own, and run this again:
+    )
+    set "MISSING=1"
+    echo   %%s
+  )
 )
+if defined MISSING set "BAD=1"
 if "%BAD%"=="1" (
   set "RC=1"
   goto finish
@@ -364,7 +376,7 @@ goto finish
 REM EVERY WAY OUT OF THE ROUNDS COMES THROUGH HERE, so this run's files never outlive the run --
 REM a bench laptop would otherwise collect 2 MB per run in %TEMP% for good.
 :finish
-del /f "%APK%" "%APK%.part" "%DEVS%" "%SEENF%" "%OKF%" "%CLRF%" "%MISSF%" "%PF%" >nul 2>&1
+del /f "%APK%" "%APK%.part" "%DEVS%" "%SEENF%" "%OKF%" "%CLRF%" "%PF%" >nul 2>&1
 if defined OUT del /f "%OUT%" >nul 2>&1
 exit /b %RC%
 
