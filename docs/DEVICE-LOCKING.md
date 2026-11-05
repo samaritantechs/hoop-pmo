@@ -240,13 +240,73 @@ instead of a person reading it:
 scripts\lock-hub-auto.bat <the batch id from the hub command>
 ```
 
+It fetches the current lock app from the server itself at the start of every run — nothing to
+download first, never a file from Downloads (see *Why it no longer looks in Downloads* below:
+a fixed Downloads name goes on installing the oldest build on the laptop). Every file it writes
+to `%TEMP%` (the app, the device list, each round's output) carries a name of that run's own,
+so two windows running it at once never share one, and it removes them when the run ends. A
+window that is closed or interrupted mid-run leaves its files behind, about 2 MB; they are
+`HOOPLOAN-Lock-run…` and `hoop-hub-run…` in `%TEMP%` and are safe to delete once that window is
+gone. It also switches Play Protect's USB-install check off on each phone before the install,
+exactly as the pasted hub line does.
+
+**It only ends green on evidence, phone by phone.** Each phone on the cable is walked on its own
+and judged on its own output: it counts as enrolled only if *its* `am broadcast` printed
+`result=1` after an install that did not fail. One phone answering `result=1` never vouches for
+another. The run also remembers *who* it has seen, by serial number — not how many — so exit `0`
+needs every serial listed in any round to have answered `result=1`, no row skipped as not ready
+in the last round, and no phone of the last round without an answer. Each of these used to fall
+through to "every result line above should read result=1", because the script only recognised
+*named* failures (`result=2`, `3`, `5`):
+
+- A phone whose install failed has no app, so `set-device-owner` throws and `am broadcast`
+  prints a bare **`result=0`** — the receiver never ran. It looks like success. That phone has no
+  `result=1`, is counted as failed, and the run exits `1` and says so.
+- A phone whose install failed but which already held an **older** lock app can still answer
+  `result=1`, because the old receiver runs. That is not the build this run meant to put on it,
+  so it counts as failed and the screen says why. A failed install is read from adb's own exit
+  code and from its text, because neither alone is enough: some failures (the download gone
+  from `%TEMP%`, a cable that flaps for one command) print neither `INSTALL_…` nor "failed to
+  install". The one install failure that is fine is a newer app already on the phone
+  (`INSTALL_FAILED_VERSION_DOWNGRADE`, the note the script prints when a lock release is
+  mid-way).
+- A cable that drops after the walk starts leaves that phone with no result line at all. It is
+  counted as failed the same way, even if the phone next to it answered `result=1`.
+- A row that is not `device` — `unauthorized`, `offline`, `authorizing`, `recovery`, `no
+  permissions`, anything adb lists — is printed as `NOT READY, skipped` with the state adb gave
+  it each round. The others still finish, but the exit is `1`, because that phone is not
+  enrolled. No row is skipped by position: the `List of devices attached` header and adb's own
+  `* daemon` and `adb server …` lines are recognised by name, and the server is started once
+  before the first look so that its start-up chatter is spent first.
+- A phone that was on the hub in an earlier round and never answered `result=1` is named by
+  serial at the end and the run exits `1`. That includes a failed phone pulled out and replaced
+  by a new one: the count of phones does not change, the serial does. A phone that *did* finish
+  and was then unplugged to be boxed is fine.
+- A round in which no phone was walked (the last one dropped between the readiness check and
+  the walk) says "nothing was enrolled" and exits `2` — or exits `1` with a reminder to confirm
+  on Devices if an earlier round of the same run had already reached phones.
+
+Every reason that applies is printed before the exit, so none is hidden behind another. The green
+text is printed only on the one path that exits `0`.
+
+Exit codes: `0` every phone seen answered `result=1`, none was skipped, none went missing; `1`
+stopped, read the screen (mismatch, still not owner, rounds used up, a phone without `result=1`,
+a skipped phone, one that went missing, or no phone left after an earlier round reached some);
+`2` nothing was done to any phone (no batch given, the download failed, no phone ready at the
+first look).
+
+`result=3` clears are tracked **per phone**: a phone that was waiting on its USB-debugging dialog
+during the clearing pass, or was plugged in after it, or dropped off the cable just before it, is
+cleared on the next round rather than blamed for "still not owner after clearing". A phone is
+recorded as cleared only if it answered at the moment of clearing.
+
 `result=3` → it clears the accounts that usually cause it (Meet/Duo, Outlook, OneDrive) on
 every phone still on the cable, then runs the whole hub again. `result=5` → nothing local to
 fix, so it waits a moment and runs the whole hub again. Re-running phones that already
 succeeded is safe, not wasted effort: a batch hands an already-enrolled phone back its own
 token, which `EnrolReceiver` treats as re-arming, not a new identity — that is what lets the
-script retry everything on the cable each round rather than tracking which phone still needs
-what.
+script retry everything on the cable each round rather than choosing which phones to re-run.
+(It tracks who has finished only to judge the end of the run, never to decide whom to walk.)
 
 **Two things it will not do, on purpose**, because retrying cannot fix either: a `result=2`
 **token mismatch** stops the script outright — that phone already holds a *different* token and

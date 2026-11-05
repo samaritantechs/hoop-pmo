@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions DisableDelayedExpansion
 
 REM =============================================================================================
 REM THE HUB COMMAND, RUNNING ITSELF UNTIL IT STOPS NEEDING TO.
@@ -24,7 +24,33 @@ REM   result=2  TOKEN MISMATCH     -> STOPS. A blind retry cannot fix this -- th
 REM             already holds a DIFFERENT token and needs -e current, one phone at a time.
 REM             See docs/DEVICE-LOCKING.md, "When the register and the handset hold different
 REM             tokens".
-REM   neither 2, 3 nor 5 anywhere  -> every result line is result=1. Done.
+REM SUCCESS IS PROVEN PHONE BY PHONE, never inferred from the absence of a named failure. The
+REM walk judges each phone on its OWN output: it counts as enrolled only if its own broadcast
+REM printed result=1. Everything else counts against the run, and the exit is then 1:
+REM   result=0 on a phone          -> `am broadcast` prints it when the enrol receiver never ran:
+REM             the app is missing after a failed install, or Android stopped it first. It
+REM             looks like success and is not.
+REM   no result line from a phone  -> a cable that dropped, an adb error, a phone that never
+REM             answered. None of these leave a result=2, 3 or 5 behind either.
+REM   a row that is not `device`   -> unauthorized, offline, authorizing, recovery, whatever else
+REM             adb may list: named on the screen, never walked, never silently forgotten.
+REM   an install that failed       -> the phone may still hold an OLDER app whose receiver answers
+REM             result=1 all the same; that is not the build this run was meant to put on it.
+REM             (A newer app already on the phone, INSTALL_FAILED_VERSION_DOWNGRADE, is fine.)
+REM             A failed install is read from adb's own exit code, written into the phone's file
+REM             as a line of text, and from adb's text; neither alone is enough, because some
+REM             failures (the apk gone from %TEMP%, a cable that flaps for one command) print
+REM             neither INSTALL_ nor "failed to install". `if errorlevel 1` is true only for 1 and
+REM             up, and adb's push-install path (an Android 6 handset, or a failed feature query)
+REM             exits -1, so the negative codes have a test of their own. And
+REM             findstr's own answer is read three ways, not two: 0 failure text found, 1 none
+REM             found, 2 the file could not be read, which is red; a plain "if errorlevel 1"
+REM             would read 2 as "none found" and call the install clean.
+REM   a phone seen in an earlier round that never answered result=1 -> it did not finish. This is
+REM             tracked by SERIAL, not by count: a failed phone swapped for a new one leaves the
+REM             count where it was, and a count would call that green.
+REM Exit 0 only when every serial seen in any round has answered result=1, and the last round
+REM walked every phone it listed.
 REM
 REM RE-RUNNING THE WHOLE HUB ON PHONES THAT ALREADY SUCCEEDED IS SAFE, not wasted risk:
 REM `adb install -r` on the same version is a no-op, `set-device-owner` on an owned phone just
@@ -49,22 +75,96 @@ REM ============================================================================
 set "PKG=com.samaritantechs.hooploanlock"
 set "ADMIN=%PKG%/.LockAdmin"
 set "SERVER=https://hoop-pmo.vercel.app"
-set "APK=%USERPROFILE%\Downloads\HOOPLOAN-Lock.apk"
+REM THE CURRENT BUILD, FETCHED BY THE SCRIPT ITSELF -- never a file from Downloads. A browser
+REM keeps the first download's name for the OLD file and saves every later one as "(1)", "(2)",
+REM so a fixed Downloads name goes on installing the oldest build on the laptop: refused as a
+REM downgrade by any phone that has self-updated, and a stale build on a fresh one. The portal's
+REM own hub line fetches from the server for exactly this reason (devApkFetch_ in portal.html);
+REM this script does the same, every run, into %TEMP% -- always writable, never stale. It lands
+REM as .part and is renamed only when curl finished, so a download that stopped halfway can never
+REM be installed under the good name. The build number is not known here, so there is no
+REM once-per-build cache: slower by one 2 MB download per run, never wrong.
+REM
+REM EVERY FILE THIS RUN WRITES CARRIES A NAME OF ITS OWN. Two windows running this script at
+REM once -- the hour-long waits taught the bench to open a second one -- must never share a
+REM file. adb holds the APK open only while an install is running, so between one window's
+REM installs the other window's delete or rename would pull it out from under it and the next
+REM install would fail with "failed to stat". The device list and each round's output file
+REM were fixed names too: one window's delete made the other's `type` and findstr read nothing,
+REM and every findstr failing reads, further down, as "no phone answered 2, 3 or 5" -- a green
+REM exit on a run that had no result lines at all. One token names every file the run writes (the
+REM download, the device list, each round's output, and the four that track phones by serial
+REM below), all removed at :finish when the run ends by any route the script controls. A window closed or Ctrl+C'd
+REM mid-run never reaches :finish and leaves its files behind (about 2 MB); they are safe to
+REM delete from %TEMP% once that window is gone.
+set "RUN=%RANDOM%%RANDOM%%RANDOM%"
+set "APK=%TEMP%\HOOPLOAN-Lock-run%RUN%.apk"
+set "DEVS=%TEMP%\hoop-hub-run%RUN%-devices.txt"
 set "BATCH=%~1"
 set "MAXROUNDS=5"
-set "CLEARED=0"
 set /a ROUND=0
+REM Nothing in the environment this window inherited may stand in for a value of the run's own:
+REM an OUT from some build setup would otherwise be handed to del at :finish, and RC defaults to
+REM red so a route into :finish that forgot to set it can never exit 0.
+set "OUT="
+set "NEWCLR="
+set "MISSING="
+set "SAWSEEN="
+set "TOUCHED=0"
+set "RC=1"
+REM THE FILES THAT TRACK WHO IS WHO, by serial. A count cannot tell a swapped phone from a
+REM steady one. SEENF holds every serial any round listed (walked or not ready); OKF every serial
+REM whose own broadcast answered result=1 on a clean install; CLRF every serial the account
+REM clearing pass was run on. All three start with a line no serial can be, so each file exists
+REM before findstr first reads it. PF is the one phone being walked right now: the
+REM walk is serial, so one file is enough, and no serial ever becomes part of a file NAME (a
+REM wifi-adb serial is ip:port, and a colon in a name makes an NTFS stream).
+set "SEENF=%TEMP%\hoop-hub-run%RUN%-seen.txt"
+set "OKF=%TEMP%\hoop-hub-run%RUN%-ok.txt"
+set "CLRF=%TEMP%\hoop-hub-run%RUN%-cleared.txt"
+set "PF=%TEMP%\hoop-hub-run%RUN%-phone.txt"
 
 if "%BATCH%"=="" (
   echo usage: lock-hub-auto BATCH
   echo   BATCH is the batch id from the hub command in Portal -^> Devices -^> Sajili simu.
   exit /b 2
 )
-if not exist "%APK%" (
-  echo APK not found: %APK%
-  echo Download it from %SERVER%/HOOPLOAN-Lock.apk first.
+echo Fetching the current lock app from %SERVER% ...
+curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%APK%.part" "%SERVER%/HOOPLOAN-Lock.apk"
+if errorlevel 1 (
+  del /f "%APK%.part" >nul 2>&1
+  echo Could not fetch %SERVER%/HOOPLOAN-Lock.apk -- check this laptop's internet, then run again.
+  echo Nothing was done to any phone.
   exit /b 2
 )
+REM THE RENAME IS CHECKED ON ITS OWN RESULT. cmd's move can refuse -- the fresh .part held for a
+REM moment by an antivirus scan, say -- and prints its reason to stderr, which the >nul above
+REM does not cover. Unchecked, the script would carry on to a name that no longer exists. The
+REM path is quoted wherever it is echoed inside a block: a ) or an & in the Windows user name,
+REM which %TEMP% carries, would otherwise end the block early.
+move /y "%APK%.part" "%APK%" >nul
+if errorlevel 1 (
+  del /f "%APK%.part" >nul 2>&1
+  echo The download could not be put in place as "%APK%" -- run again.
+  echo Nothing was done to any phone.
+  exit /b 2
+)
+if not exist "%APK%" (
+  del /f "%APK%.part" >nul 2>&1
+  echo The download did not land as "%APK%" -- run again.
+  echo Nothing was done to any phone.
+  exit /b 2
+)
+
+REM The three files that are read before they are written start with one line, and only now:
+REM the usage and fetch exits above leave nothing behind, so they need no cleanup.
+>"%SEENF%" echo -
+>"%OKF%" echo -
+>"%CLRF%" echo -
+
+REM Start the adb server once, here, so that its start-up chatter and a version-mismatch restart
+REM (a phone-maker's PC suite running its own adb) are spent before the first snapshot is read.
+adb start-server >nul
 
 :round
 set /a ROUND+=1
@@ -72,42 +172,104 @@ if %ROUND% GTR %MAXROUNDS% (
   echo.
   echo Stopped after %MAXROUNDS% rounds. Read the output above for whichever phone is still
   echo not on result=1 and act on it by hand -- see docs/DEVICE-LOCKING.md.
-  exit /b 1
+  set "RC=1"
+  goto finish
 )
 
-adb devices > "%TEMP%\hoop-devices.txt"
-findstr /e /c:"device" "%TEMP%\hoop-devices.txt" >nul
+adb devices > "%DEVS%"
+findstr /e /c:"device" "%DEVS%" >nul
 if errorlevel 1 (
   echo No phones ready. Check the cable and "Allow USB debugging" on each screen.
-  del "%TEMP%\hoop-devices.txt" >nul 2>&1
-  exit /b 2
+  set "RC=2"
+  if "%TOUCHED%"=="1" call :earlier
+  goto finish
 )
-del "%TEMP%\hoop-devices.txt" >nul 2>&1
 
 echo.
 echo === round %ROUND% of %MAXROUNDS% ===
-set "OUT=%TEMP%\hoop-hub-round%ROUND%.txt"
+set "OUT=%TEMP%\hoop-hub-run%RUN%-round%ROUND%.txt"
 if exist "%OUT%" del "%OUT%"
+set "WALKED=0"
+set "ENROLLED=0"
+set "FAILED=0"
+set "NOTREADY=0"
 
-for /f "skip=1 tokens=1,2" %%a in ('adb devices') do @if "%%b"=="device" (
-  echo --- %%a --- >> "%OUT%"
-  REM Play Protect's "Verify apps over USB" holds the FIRST adb install for up to an hour while
-  REM a consent dialog nobody at a bench taps waits on the handset -- then applies the answer
-  REM it registered, allow on these phones. Switched off for USB installs on each phone first,
-  REM exactly as the portal's own hub line does.
-  adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%OUT%" 2>&1
-  adb -s %%a install -r "%APK%" >> "%OUT%" 2>&1
-  adb -s %%a shell dpm set-device-owner %ADMIN% >> "%OUT%" 2>&1
-  adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> "%OUT%" 2>&1
+REM ONE LIST, WALKED AND JUDGED PHONE BY PHONE. The loop reads the SAME snapshot of `adb
+REM devices` that the readiness check just read -- a second call could disagree with the first,
+REM and a phone that fell between the two would be neither walked nor named. Every row is
+REM accounted for: `device` is walked, anything else except adb's own `*` daemon lines and the
+REM `List of devices attached` header is counted as not ready and printed with the state adb
+REM gave it. No row is skipped by POSITION (skip=1): an older adb prints its "* daemon started"
+REM lines to stdout, ahead of the header, and a positional skip would then let the header itself
+REM through as a phantom not-ready phone, and a stray line adb prints in front of the table is
+REM named by its first word, not counted as a phone. Each walked phone's output is written to PF,
+REM which the walk empties for every phone, and the phone is judged on that file alone, so one
+REM phone answering result=1 can never vouch for another that did not. The counters use `set /a`, which needs no delayed expansion, and
+REM `if errorlevel`, which is read when it runs.
+REM Play Protect's "Verify apps over USB" holds the FIRST adb install for up to an hour while a
+REM consent dialog nobody at a bench taps waits on the handset -- then applies the answer it
+REM registered, allow on these phones. Switched off for USB installs on each phone first,
+REM exactly as the portal's own hub line does.
+for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do (
+  if "%%b"=="device" (
+    set /a WALKED+=1
+    set "TOUCHED=1"
+    >>"%SEENF%" echo %%a
+    echo --- %%a --- > "%PF%"
+    adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%PF%" 2>&1
+    adb -s %%a install -r "%APK%" >> "%PF%" 2>&1
+    if errorlevel 1 >>"%PF%" echo failed to install: adb install exited non-zero
+    if not errorlevel 0 >>"%PF%" echo failed to install: adb install exited non-zero
+    adb -s %%a shell dpm set-device-owner %ADMIN% >> "%PF%" 2>&1
+    adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> "%PF%" 2>&1
+    type "%PF%" >> "%OUT%"
+    findstr /c:"result=1," "%PF%" >nul
+    if errorlevel 1 (
+      set /a FAILED+=1
+    ) else (
+      findstr /c:"INSTALL_" /c:"failed to install" "%PF%" >nul
+      if errorlevel 2 (
+        set /a FAILED+=1
+        echo %%a: its own output could not be read, so its install cannot be vouched for. NOT counted as enrolled.
+      ) else if errorlevel 1 (
+        set /a ENROLLED+=1
+        >>"%OKF%" echo %%a
+      ) else (
+        findstr /c:"INSTALL_FAILED_VERSION_DOWNGRADE" "%PF%" >nul
+        if errorlevel 1 (
+          set /a FAILED+=1
+          echo %%a: the install failed, so the app that answered result=1 is an OLDER one. NOT counted as enrolled.
+        ) else (
+          set /a ENROLLED+=1
+          >>"%OKF%" echo %%a
+        )
+      )
+    )
+  ) else if not "%%a"=="*" if not "%%a"=="List" if not "%%a"=="adb" (
+    set /a NOTREADY+=1
+    >>"%SEENF%" echo %%a
+    echo NOT READY, skipped: %%a %%b
+  )
+)
+REM NOTHING WALKED. The readiness check passed, but by the time the walk read the snapshot no row
+REM was `device` -- or none that survived. Nothing was attempted this round, and it must not read
+REM as success.
+if %WALKED% EQU 0 (
+  echo No phone was ready when the walk started -- nothing was enrolled this round. Check the
+  echo cable and "Allow USB debugging" on each screen, then run this again.
+  set "RC=2"
+  if "%TOUCHED%"=="1" call :earlier
+  goto finish
 )
 type "%OUT%"
 
 findstr /c:"VERSION_DOWNGRADE" "%OUT%" >nul
 if not errorlevel 1 (
   echo.
-  echo Note: at least one phone already has a NEWER app than the file in Downloads. That
-  echo phone keeps its newer app and this still works -- but update your Downloads copy from
-  echo %SERVER%/HOOPLOAN-Lock.apk so fresh phones get it too.
+  echo Note: at least one phone already has a NEWER app than the build the server is serving
+  echo right now. That phone keeps its newer app and this still works. It means a lock release
+  echo is mid-way -- the version file has landed and the APK build has not -- and the next run
+  echo in a few minutes will fetch the newer one.
 )
 
 findstr /c:"result=2," "%OUT%" >nul
@@ -117,28 +279,44 @@ if not errorlevel 1 (
   echo already holds a DIFFERENT token. Enrol it on its own with -e current -- see
   echo docs/DEVICE-LOCKING.md, "When the register and the handset hold different tokens".
   del "%OUT%" >nul 2>&1
-  exit /b 1
+  set "RC=1"
+  goto finish
 )
 
+REM CLEARING IS TRACKED PER PHONE. A phone that was not `device` during an earlier clearing pass
+REM (still waiting on its Allow USB debugging dialog) or plugged in after it has not been
+REM cleared yet, so its result=3 is a reason to clear, not a reason to stop. The test below is
+REM `if defined`, which is read when it runs: the other form of it, a percent-sign test inside
+REM this block, would be read before the loop that sets NEWCLR had run. Comments stay out of the
+REM block itself, and free of brackets, because cmd reads a block before it runs any of it.
 findstr /c:"result=3," "%OUT%" >nul
 if not errorlevel 1 (
-  if "%CLEARED%"=="1" (
+  set "NEWCLR="
+  for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do if "%%b"=="device" (
+    findstr /x /l /c:"%%a" "%CLRF%" >nul 2>&1
+    if errorlevel 1 set "NEWCLR=1"
+  )
+  if not defined NEWCLR (
     echo.
-    echo Still NOT DEVICE OWNER on at least one phone after clearing the usual accounts once.
-    echo A real signed-in Google account needs Settings on that handset, or a factory reset
-    echo with the sign-in skipped -- no adb command does either. Unplug it, deal with the
-    echo rest, then run this again for that one on its own.
+    echo Still NOT DEVICE OWNER on at least one phone after clearing the usual accounts on every
+    echo phone that is here. A real signed-in Google account needs Settings on that handset, or a
+    echo factory reset with the sign-in skipped -- no adb command does either. Unplug it, deal
+    echo with the rest, then run this again for that one on its own.
     del "%OUT%" >nul 2>&1
-    exit /b 1
+    set "RC=1"
+    goto finish
   )
   echo.
   echo Clearing the accounts that usually block set-device-owner, on every phone still here...
-  for /f "skip=1 tokens=1,2" %%a in ('adb devices') do @if "%%b"=="device" (
-    adb -s %%a shell pm uninstall --user 0 com.google.android.apps.tachyon >nul 2>&1
-    adb -s %%a shell pm uninstall --user 0 com.microsoft.office.outlook >nul 2>&1
-    adb -s %%a shell pm uninstall --user 0 com.microsoft.skydrive >nul 2>&1
+  for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do if "%%b"=="device" (
+    adb -s %%a get-state 2>nul | findstr /b /c:"device" >nul
+    if not errorlevel 1 (
+      adb -s %%a shell pm uninstall --user 0 com.google.android.apps.tachyon >nul 2>&1
+      adb -s %%a shell pm uninstall --user 0 com.microsoft.office.outlook >nul 2>&1
+      adb -s %%a shell pm uninstall --user 0 com.microsoft.skydrive >nul 2>&1
+      >>"%CLRF%" echo %%a
+    )
   )
-  set "CLEARED=1"
   del "%OUT%" >nul 2>&1
   goto round
 )
@@ -154,9 +332,80 @@ if not errorlevel 1 (
   goto round
 )
 
+REM POSITIVE PROOF BEFORE GREEN, PHONE BY PHONE. Everything above only recognises NAMED
+REM failures; none of it proves a success. The walk judged each phone on its own output. Three
+REM things turn the run red, and every one that applies is printed before the exit so none is
+REM hidden behind another:
+REM   - a phone of THIS round that did not answer result=1 on a clean install (FAILED)
+REM   - a row of this round that was not ready (NOTREADY)
+REM   - a serial seen in ANY round that never answered result=1, named one per line -- a phone
+REM     pulled out and replaced, one that went missing, one that was not ready earlier and is
+REM     not here now. It is tested serial by serial with the plain single-string findstr form
+REM     used everywhere else here, not a set-difference trick, and a findstr that cannot run
+REM     counts as missing. The seen file always holds at least its first line, so a loop that
+REM     read nothing means the file could not be read, and that is red as well: a loop over an
+REM     unreadable file runs zero times and says nothing, and silence is not an all-clear.
+REM The green text is printed only on the one path that exits 0.
+set "BAD=0"
+if %FAILED% GTR 0 (
+  echo.
+  echo %FAILED% of %WALKED% phones did not answer result=1 ENROLLED. Read the lines above for
+  echo each of them: an install that failed, a bare result=0 which means the enrol never ran, a
+  echo cable that dropped, or a phone that never answered all end here.
+  set "BAD=1"
+)
+if %NOTREADY% GTR 0 (
+  echo.
+  echo Phones not ready and skipped: %NOTREADY%, listed above as NOT READY. They are NOT enrolled.
+  echo Accept Allow USB debugging on their screens, or replug them, and run this again.
+  set "BAD=1"
+)
+set "MISSING="
+set "SAWSEEN="
+for /f "usebackq delims=" %%s in ("%SEENF%") do (
+  set "SAWSEEN=1"
+  findstr /x /l /c:"%%s" "%OKF%" >nul 2>&1
+  if errorlevel 1 (
+    if not defined MISSING (
+      echo.
+      echo These phones were on the hub during this run and never answered result=1 ENROLLED, so
+      echo they did not finish -- plug each back in, or enrol it on its own, and run this again:
+    )
+    set "MISSING=1"
+    echo   %%s
+  )
+)
+if not defined SAWSEEN (
+  echo.
+  echo Could not read which phones were seen -- treating the run as not finished.
+  set "MISSING=1"
+)
+if defined MISSING set "BAD=1"
+if "%BAD%"=="1" (
+  set "RC=1"
+  goto finish
+)
+
 echo.
-echo No phone answered result=2, 3 or 5 -- every result line above should read result=1
-echo ENROLLED. Confirm each phone on Devices before boxing it; that is the confirmation that
-echo counts, not this terminal.
-del "%OUT%" >nul 2>&1
+echo All %WALKED% phones answered result=1 ENROLLED. Confirm each phone on Devices before boxing
+echo it; that is the confirmation that counts, not this terminal.
+set "RC=0"
+goto finish
+
+REM EVERY WAY OUT OF THE ROUNDS COMES THROUGH HERE, so this run's files never outlive the run --
+REM a bench laptop would otherwise collect 2 MB per run in %TEMP% for good.
+:finish
+del /f "%APK%" "%APK%.part" "%DEVS%" "%SEENF%" "%OKF%" "%CLRF%" "%PF%" >nul 2>&1
+if defined OUT del /f "%OUT%" >nul 2>&1
+exit /b %RC%
+
+REM THE ONE PLACE THAT SAYS A RUN DID REACH PHONES BEFORE IT STOPPED. Exit 2 means nothing was
+REM done to any phone; once an earlier round has walked one that is false, and the answer is red
+REM with the reason, not "nothing done". Called, not jumped to, so the caller still sets the
+REM code and goes to :finish itself.
+:earlier
+echo.
+echo Earlier rounds of THIS run did reach phones, so some may already be enrolled. Confirm each
+echo on Devices before boxing it.
+set "RC=1"
 exit /b 0

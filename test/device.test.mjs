@@ -1705,6 +1705,257 @@ test('the alarm is not shown when every locked phone has spoken', async () => {
   assert.equal(r.counts.lockedNeverSpoke, 0);
 });
 
+/* THE HUB SCRIPT'S CODE, LINE FOR LINE (comments and blank lines left out).
+   ---------------------------------------------------------------------------------------------
+   Every pin below says WHY a piece of lock-hub-auto.bat is the way it is, and each review pass
+   found mutations of the script that the regexes let through: a gate `REM`'d out, a trailing
+   space after `echo %%a` (which makes every serial fail an exact-line match), a redirect typed
+   `>` for `>>`, an `exit /b 2` turned into `exit /b 0` that a lazy pattern borrowed from the
+   next block. The script decides whether phones were enrolled and is the one place a
+   success-shaped failure is cheapest, so its code is also pinned whole: ANY edit to a code line
+   fails here until this list is changed on purpose, in the same diff, with the reason. The
+   pins below remain the explanation; this list is the net under them. */
+const LOCK_HUB_AUTO_CODE = [
+  "@echo off",
+  "setlocal EnableExtensions DisableDelayedExpansion",
+  "set \"PKG=com.samaritantechs.hooploanlock\"",
+  "set \"ADMIN=%PKG%/.LockAdmin\"",
+  "set \"SERVER=https://hoop-pmo.vercel.app\"",
+  "set \"RUN=%RANDOM%%RANDOM%%RANDOM%\"",
+  "set \"APK=%TEMP%\\HOOPLOAN-Lock-run%RUN%.apk\"",
+  "set \"DEVS=%TEMP%\\hoop-hub-run%RUN%-devices.txt\"",
+  "set \"BATCH=%~1\"",
+  "set \"MAXROUNDS=5\"",
+  "set /a ROUND=0",
+  "set \"OUT=\"",
+  "set \"NEWCLR=\"",
+  "set \"MISSING=\"",
+  "set \"SAWSEEN=\"",
+  "set \"TOUCHED=0\"",
+  "set \"RC=1\"",
+  "set \"SEENF=%TEMP%\\hoop-hub-run%RUN%-seen.txt\"",
+  "set \"OKF=%TEMP%\\hoop-hub-run%RUN%-ok.txt\"",
+  "set \"CLRF=%TEMP%\\hoop-hub-run%RUN%-cleared.txt\"",
+  "set \"PF=%TEMP%\\hoop-hub-run%RUN%-phone.txt\"",
+  "if \"%BATCH%\"==\"\" (",
+  "  echo usage: lock-hub-auto BATCH",
+  "  echo   BATCH is the batch id from the hub command in Portal -^> Devices -^> Sajili simu.",
+  "  exit /b 2",
+  ")",
+  "echo Fetching the current lock app from %SERVER% ...",
+  "curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o \"%APK%.part\" \"%SERVER%/HOOPLOAN-Lock.apk\"",
+  "if errorlevel 1 (",
+  "  del /f \"%APK%.part\" >nul 2>&1",
+  "  echo Could not fetch %SERVER%/HOOPLOAN-Lock.apk -- check this laptop's internet, then run again.",
+  "  echo Nothing was done to any phone.",
+  "  exit /b 2",
+  ")",
+  "move /y \"%APK%.part\" \"%APK%\" >nul",
+  "if errorlevel 1 (",
+  "  del /f \"%APK%.part\" >nul 2>&1",
+  "  echo The download could not be put in place as \"%APK%\" -- run again.",
+  "  echo Nothing was done to any phone.",
+  "  exit /b 2",
+  ")",
+  "if not exist \"%APK%\" (",
+  "  del /f \"%APK%.part\" >nul 2>&1",
+  "  echo The download did not land as \"%APK%\" -- run again.",
+  "  echo Nothing was done to any phone.",
+  "  exit /b 2",
+  ")",
+  ">\"%SEENF%\" echo -",
+  ">\"%OKF%\" echo -",
+  ">\"%CLRF%\" echo -",
+  "adb start-server >nul",
+  ":round",
+  "set /a ROUND+=1",
+  "if %ROUND% GTR %MAXROUNDS% (",
+  "  echo.",
+  "  echo Stopped after %MAXROUNDS% rounds. Read the output above for whichever phone is still",
+  "  echo not on result=1 and act on it by hand -- see docs/DEVICE-LOCKING.md.",
+  "  set \"RC=1\"",
+  "  goto finish",
+  ")",
+  "adb devices > \"%DEVS%\"",
+  "findstr /e /c:\"device\" \"%DEVS%\" >nul",
+  "if errorlevel 1 (",
+  "  echo No phones ready. Check the cable and \"Allow USB debugging\" on each screen.",
+  "  set \"RC=2\"",
+  "  if \"%TOUCHED%\"==\"1\" call :earlier",
+  "  goto finish",
+  ")",
+  "echo.",
+  "echo === round %ROUND% of %MAXROUNDS% ===",
+  "set \"OUT=%TEMP%\\hoop-hub-run%RUN%-round%ROUND%.txt\"",
+  "if exist \"%OUT%\" del \"%OUT%\"",
+  "set \"WALKED=0\"",
+  "set \"ENROLLED=0\"",
+  "set \"FAILED=0\"",
+  "set \"NOTREADY=0\"",
+  "for /f \"usebackq tokens=1,*\" %%a in (\"%DEVS%\") do (",
+  "  if \"%%b\"==\"device\" (",
+  "    set /a WALKED+=1",
+  "    set \"TOUCHED=1\"",
+  "    >>\"%SEENF%\" echo %%a",
+  "    echo --- %%a --- > \"%PF%\"",
+  "    adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> \"%PF%\" 2>&1",
+  "    adb -s %%a install -r \"%APK%\" >> \"%PF%\" 2>&1",
+  "    if errorlevel 1 >>\"%PF%\" echo failed to install: adb install exited non-zero",
+  "    if not errorlevel 0 >>\"%PF%\" echo failed to install: adb install exited non-zero",
+  "    adb -s %%a shell dpm set-device-owner %ADMIN% >> \"%PF%\" 2>&1",
+  "    adb -s %%a shell am broadcast --include-stopped-packages -a %PKG%.ENROL -n %PKG%/.EnrolReceiver -e server %SERVER% -e batch %BATCH% >> \"%PF%\" 2>&1",
+  "    type \"%PF%\" >> \"%OUT%\"",
+  "    findstr /c:\"result=1,\" \"%PF%\" >nul",
+  "    if errorlevel 1 (",
+  "      set /a FAILED+=1",
+  "    ) else (",
+  "      findstr /c:\"INSTALL_\" /c:\"failed to install\" \"%PF%\" >nul",
+  "      if errorlevel 2 (",
+  "        set /a FAILED+=1",
+  "        echo %%a: its own output could not be read, so its install cannot be vouched for. NOT counted as enrolled.",
+  "      ) else if errorlevel 1 (",
+  "        set /a ENROLLED+=1",
+  "        >>\"%OKF%\" echo %%a",
+  "      ) else (",
+  "        findstr /c:\"INSTALL_FAILED_VERSION_DOWNGRADE\" \"%PF%\" >nul",
+  "        if errorlevel 1 (",
+  "          set /a FAILED+=1",
+  "          echo %%a: the install failed, so the app that answered result=1 is an OLDER one. NOT counted as enrolled.",
+  "        ) else (",
+  "          set /a ENROLLED+=1",
+  "          >>\"%OKF%\" echo %%a",
+  "        )",
+  "      )",
+  "    )",
+  "  ) else if not \"%%a\"==\"*\" if not \"%%a\"==\"List\" if not \"%%a\"==\"adb\" (",
+  "    set /a NOTREADY+=1",
+  "    >>\"%SEENF%\" echo %%a",
+  "    echo NOT READY, skipped: %%a %%b",
+  "  )",
+  ")",
+  "if %WALKED% EQU 0 (",
+  "  echo No phone was ready when the walk started -- nothing was enrolled this round. Check the",
+  "  echo cable and \"Allow USB debugging\" on each screen, then run this again.",
+  "  set \"RC=2\"",
+  "  if \"%TOUCHED%\"==\"1\" call :earlier",
+  "  goto finish",
+  ")",
+  "type \"%OUT%\"",
+  "findstr /c:\"VERSION_DOWNGRADE\" \"%OUT%\" >nul",
+  "if not errorlevel 1 (",
+  "  echo.",
+  "  echo Note: at least one phone already has a NEWER app than the build the server is serving",
+  "  echo right now. That phone keeps its newer app and this still works. It means a lock release",
+  "  echo is mid-way -- the version file has landed and the APK build has not -- and the next run",
+  "  echo in a few minutes will fetch the newer one.",
+  ")",
+  "findstr /c:\"result=2,\" \"%OUT%\" >nul",
+  "if not errorlevel 1 (",
+  "  echo.",
+  "  echo At least one phone answered TOKEN MISMATCH. Retrying will not fix this: that handset",
+  "  echo already holds a DIFFERENT token. Enrol it on its own with -e current -- see",
+  "  echo docs/DEVICE-LOCKING.md, \"When the register and the handset hold different tokens\".",
+  "  del \"%OUT%\" >nul 2>&1",
+  "  set \"RC=1\"",
+  "  goto finish",
+  ")",
+  "findstr /c:\"result=3,\" \"%OUT%\" >nul",
+  "if not errorlevel 1 (",
+  "  set \"NEWCLR=\"",
+  "  for /f \"usebackq tokens=1,*\" %%a in (\"%DEVS%\") do if \"%%b\"==\"device\" (",
+  "    findstr /x /l /c:\"%%a\" \"%CLRF%\" >nul 2>&1",
+  "    if errorlevel 1 set \"NEWCLR=1\"",
+  "  )",
+  "  if not defined NEWCLR (",
+  "    echo.",
+  "    echo Still NOT DEVICE OWNER on at least one phone after clearing the usual accounts on every",
+  "    echo phone that is here. A real signed-in Google account needs Settings on that handset, or a",
+  "    echo factory reset with the sign-in skipped -- no adb command does either. Unplug it, deal",
+  "    echo with the rest, then run this again for that one on its own.",
+  "    del \"%OUT%\" >nul 2>&1",
+  "    set \"RC=1\"",
+  "    goto finish",
+  "  )",
+  "  echo.",
+  "  echo Clearing the accounts that usually block set-device-owner, on every phone still here...",
+  "  for /f \"usebackq tokens=1,*\" %%a in (\"%DEVS%\") do if \"%%b\"==\"device\" (",
+  "    adb -s %%a get-state 2>nul | findstr /b /c:\"device\" >nul",
+  "    if not errorlevel 1 (",
+  "      adb -s %%a shell pm uninstall --user 0 com.google.android.apps.tachyon >nul 2>&1",
+  "      adb -s %%a shell pm uninstall --user 0 com.microsoft.office.outlook >nul 2>&1",
+  "      adb -s %%a shell pm uninstall --user 0 com.microsoft.skydrive >nul 2>&1",
+  "      >>\"%CLRF%\" echo %%a",
+  "    )",
+  "  )",
+  "  del \"%OUT%\" >nul 2>&1",
+  "  goto round",
+  ")",
+  "findstr /c:\"result=5,\" \"%OUT%\" >nul",
+  "if not errorlevel 1 (",
+  "  echo.",
+  "  echo At least one phone could not enrol yet -- no wifi, a stale batch, or it could not read",
+  "  echo its own IMEI; the line above names which. Waiting a moment, then trying the whole hub",
+  "  echo again...",
+  "  del \"%OUT%\" >nul 2>&1",
+  "  ping -n 6 127.0.0.1 >nul",
+  "  goto round",
+  ")",
+  "set \"BAD=0\"",
+  "if %FAILED% GTR 0 (",
+  "  echo.",
+  "  echo %FAILED% of %WALKED% phones did not answer result=1 ENROLLED. Read the lines above for",
+  "  echo each of them: an install that failed, a bare result=0 which means the enrol never ran, a",
+  "  echo cable that dropped, or a phone that never answered all end here.",
+  "  set \"BAD=1\"",
+  ")",
+  "if %NOTREADY% GTR 0 (",
+  "  echo.",
+  "  echo Phones not ready and skipped: %NOTREADY%, listed above as NOT READY. They are NOT enrolled.",
+  "  echo Accept Allow USB debugging on their screens, or replug them, and run this again.",
+  "  set \"BAD=1\"",
+  ")",
+  "set \"MISSING=\"",
+  "set \"SAWSEEN=\"",
+  "for /f \"usebackq delims=\" %%s in (\"%SEENF%\") do (",
+  "  set \"SAWSEEN=1\"",
+  "  findstr /x /l /c:\"%%s\" \"%OKF%\" >nul 2>&1",
+  "  if errorlevel 1 (",
+  "    if not defined MISSING (",
+  "      echo.",
+  "      echo These phones were on the hub during this run and never answered result=1 ENROLLED, so",
+  "      echo they did not finish -- plug each back in, or enrol it on its own, and run this again:",
+  "    )",
+  "    set \"MISSING=1\"",
+  "    echo   %%s",
+  "  )",
+  ")",
+  "if not defined SAWSEEN (",
+  "  echo.",
+  "  echo Could not read which phones were seen -- treating the run as not finished.",
+  "  set \"MISSING=1\"",
+  ")",
+  "if defined MISSING set \"BAD=1\"",
+  "if \"%BAD%\"==\"1\" (",
+  "  set \"RC=1\"",
+  "  goto finish",
+  ")",
+  "echo.",
+  "echo All %WALKED% phones answered result=1 ENROLLED. Confirm each phone on Devices before boxing",
+  "echo it; that is the confirmation that counts, not this terminal.",
+  "set \"RC=0\"",
+  "goto finish",
+  ":finish",
+  "del /f \"%APK%\" \"%APK%.part\" \"%DEVS%\" \"%SEENF%\" \"%OKF%\" \"%CLRF%\" \"%PF%\" >nul 2>&1",
+  "if defined OUT del /f \"%OUT%\" >nul 2>&1",
+  "exit /b %RC%",
+  ":earlier",
+  "echo.",
+  "echo Earlier rounds of THIS run did reach phones, so some may already be enrolled. Confirm each",
+  "echo on Devices before boxing it.",
+  "set \"RC=1\"",
+  "exit /b 0",
+];
+
 test('lock-hub-auto.bat only handles the result codes the batch path can actually produce', () => {
   /* THE OPERATOR ASKED FOR THIS EXACT LOOP.
      =========================================================================================
@@ -1735,6 +1986,70 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
 
   const bat = fs.readFileSync(new URL('../scripts/lock-hub-auto.bat', import.meta.url), 'utf8');
 
+  /* THE APK IS FETCHED BY THE SCRIPT, NEVER TAKEN FROM DOWNLOADS. The pasted hub line left that
+     path for a reason the guide spells out -- a fixed Downloads name goes on installing the
+     oldest build on the laptop -- and this script was still reading it. Same shape as the
+     portal line: curl to .part, rename only when curl finished, and the script stops before
+     touching any phone if the fetch failed. */
+  const batCode = bat.split('\n').filter(l => !/^\s*REM\b/i.test(l)).join('\n');   // the comments may name the mistake
+  assert.ok(!/Downloads/.test(batCode), 'nothing in Downloads may ever be what gets installed');
+  /* EVERY FILE THIS RUN WRITES CARRIES A NAME OF ITS OWN, REMOVED ON THE WAY OUT. The first cut
+     used one fixed %TEMP% name and the review found holes in a row: a leftover from the last run
+     satisfied "if not exist" even when the rename had failed (so LAST run's build was
+     installed); then, with a delete-first guard, a second window deleted the file out from
+     under the first between its installs; then the device list and each round's output were
+     found to be fixed names too, so one window's delete made the other's findstr read nothing,
+     and every findstr failing falls through to a green "no phone answered 2, 3 or 5" exit on a
+     run with no result lines at all. One token, all the names derived from it. */
+  assert.match(bat, /set "RUN=%RANDOM%%RANDOM%%RANDOM%"/, 'one token per run');
+  assert.match(bat, /set "APK=%TEMP%\\HOOPLOAN-Lock-run%RUN%\.apk"/,
+    'the download lives in %TEMP% under a name no other run shares');
+  assert.match(bat, /set "DEVS=%TEMP%\\hoop-hub-run%RUN%-devices\.txt"/, 'and so does the device list');
+  assert.match(bat, /set "OUT=%TEMP%\\hoop-hub-run%RUN%-round%ROUND%\.txt"/, 'and each round\'s output');
+  assert.ok(!/hoop-devices\.txt|hoop-hub-round/.test(batCode),
+    'no fixed temp name is left anywhere in the code');
+  // The token is set before any of the names that use it, or they would all be empty.
+  assert.ok(bat.indexOf('set "RUN=') < bat.indexOf('set "APK=') && bat.indexOf('set "RUN=') < bat.indexOf('set "DEVS='));
+  assert.match(bat, /curl -fsSL --connect-timeout 20 --speed-time 30 --speed-limit 1000 --retry 2 -o "%APK%\.part" "%SERVER%\/HOOPLOAN-Lock\.apk"/,
+    'fetched from the server with the same bounded curl as the pasted line');
+  const fetchBlock = bat.slice(bat.indexOf('echo Fetching the current lock app'), bat.indexOf(':round'));
+  assert.ok(!/del \/?f? ?"%APK%"/.test(fetchBlock), 'nothing deletes an APK before the fetch: no name is shared, so there is nothing to clear');
+  assert.match(fetchBlock, /if errorlevel 1 \(\s*\r?\n\s*del \/f "%APK%\.part" >nul 2>&1\s*\r?\n[\s\S]{0,300}?exit \/b 2/,
+    'a failed fetch deletes the half file and stops before any phone is touched');
+  assert.match(fetchBlock, /move \/y "%APK%\.part" "%APK%" >nul\s*\r?\nif errorlevel 1 \(\s*\r?\n\s*del \/f "%APK%\.part" >nul 2>&1\s*\r?\n[\s\S]{0,300}?exit \/b 2\s*\r?\n\)/,
+    'a failed rename deletes the half file and stops; nothing falls through to a name that does not exist');
+  assert.ok(fetchBlock.indexOf('if errorlevel 1') < fetchBlock.indexOf('if not exist "%APK%"'),
+    'the rename check comes before the existence check');
+  assert.ok(bat.indexOf('curl -fsSL') < bat.indexOf(':round'), 'fetched once, before the first round');
+  // The path is quoted wherever it is echoed: a ) or & in the Windows user name, which %TEMP%
+  // carries, would otherwise end the enclosing block early.
+  assert.ok(!/echo [^\r\n"]*[^"\r\n]%APK%/.test(batCode), 'every echo of the path quotes it');
+  // Every way out of the rounds runs through :finish, which removes this run's files.
+  const afterFetch = bat.slice(bat.indexOf(':round'));
+  assert.match(afterFetch, /:finish\s*\r?\ndel \/f "%APK%" "%APK%\.part" "%DEVS%" "%SEENF%" "%OKF%" "%CLRF%" "%PF%" >nul 2>&1\s*\r?\nif defined OUT del \/f "%OUT%" >nul 2>&1\s*\r?\nexit \/b %RC%/,
+    'the download, its half file, the device list, the four tracking files and the round file are removed when the run ends');
+  assert.equal((afterFetch.match(/exit \/b/g) || []).length, 2,
+    'after the fetch there are two: the one at :finish, and the return of the :earlier subroutine');
+  assert.match(afterFetch, /:earlier\s*\r?\n[\s\S]*?set "RC=1"\s*\r?\nexit \/b 0\s*$/,
+    ':earlier is the last thing in the file, says earlier rounds reached phones, and returns red');
+  assert.ok((afterFetch.match(/set "RC=\d"\s*\r?\n\s*goto finish/g) || []).length >= 4,
+    'each outcome sets its code and goes to :finish');
+  // The fetch block's last exit also cleans up after itself and says nothing was done.
+  assert.match(fetchBlock, /if not exist "%APK%" \(\s*\r?\n\s*del \/f "%APK%\.part" >nul 2>&1\s*\r?\n[\s\S]{0,200}?Nothing was done to any phone\.[\s\S]{0,60}?exit \/b 2/,
+    'even the unreachable exit leaves nothing behind and says nothing was done');
+
+  /* NOTHING WALKED. The readiness check passed, but by the time the walk read the snapshot no row
+     was `device`, or none survived. Nothing was attempted; it used to fall through to "every
+     result line above should read result=1" and exit 0. */
+  const walk = afterFetch.slice(afterFetch.indexOf('for /f'), afterFetch.indexOf('type "%OUT%"'));
+  assert.match(walk, /if %WALKED% EQU 0 \(\s*\r?\n[\s\S]{0,300}?nothing was enrolled[\s\S]{0,200}?set "RC=2"\s*\r?\n\s*if "%TOUCHED%"=="1" call :earlier\s*\r?\n\s*goto finish\s*\r?\n\)/,
+    'a round in which no phone was walked is reported as such and exits non-zero; red, not "nothing done", once an earlier round reached a phone');
+
+  // The file is committed with the CRLF endings cmd expects, like lock-bench.bat.
+  assert.ok(!/(^|[^\r])\n/.test(bat), 'every line of lock-hub-auto.bat ends CRLF');
+  // Play Protect's USB-install check is switched off on each phone first, as the pasted line does.
+  assert.match(bat, /adb -s %%a shell settings put global verifier_verify_adb_installs 0 >> "%PF%" 2>&1\s*\r?\n\s*adb -s %%a install -r "%APK%"/);
+
   // The three commands are the real ones, targeted at THAT phone -- never the bare command,
   // which on a hub full of phones would hit whichever one adb picks.
   assert.match(bat, /adb -s %%a install -r "%APK%"/);
@@ -1755,7 +2070,7 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   const five = bat.slice(bat.indexOf('findstr /c:"result=5,"'));
 
   // result=2: stops. A retry cannot turn a wrong token into the right one.
-  assert.match(two, /exit \/b 1/, 'a mismatch must stop the script');
+  assert.match(two, /set "RC=1"\s*\r?\n\s*goto finish/, 'a mismatch must stop the script (through :finish, which removes the download)');
   assert.ok(!/goto round/.test(two), 'and never loop back on its own');
 
   // result=3: clears the same three packages the portal and the manual now agree on, once,
@@ -1764,7 +2079,15 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   assert.match(three, /pm uninstall --user 0 com\.google\.android\.apps\.tachyon/);
   assert.match(three, /pm uninstall --user 0 com\.microsoft\.office\.outlook/);
   assert.match(three, /pm uninstall --user 0 com\.microsoft\.skydrive/);
-  assert.match(three, /if "%CLEARED%"=="1"/, 'clearing only happens once, not every round');
+  assert.match(three, /findstr \/x \/l \/c:"%%a" "%CLRF%" >nul 2>&1\s*\r?\n\s*if errorlevel 1 set "NEWCLR=1"/,
+    'a phone is cleared once, tracked by SERIAL: one never cleared (still waiting on its USB dialog, or plugged in later) is cleared, not blamed');
+  assert.match(three, /if not defined NEWCLR \(\s*\r?\n[\s\S]{0,700}?Still NOT DEVICE OWNER/,
+    'the stop is taken only when every phone here has already been cleared');
+  assert.ok(!/%NEWCLR%/.test(three.split('\n').filter(l => !/^\s*REM\b/i.test(l)).join('\n')), 'NEWCLR is tested with `if defined`: a %NEWCLR% inside this block is read before the loop that sets it');
+  assert.match(three, /adb -s %%a get-state 2>nul \| findstr \/b \/c:"device" >nul\s*\r?\n\s*if not errorlevel 1 \(\s*\r?\n(\s*adb -s %%a shell pm uninstall [^\n]*\n){3}\s*>>"%CLRF%" echo %%a\s*\r?\n\s*\)/,
+    'a phone is recorded as cleared only if get-state PRINTED device at the moment of clearing (it exits 0 for an offline phone, so the text is what counts): a dropped phone is cleared on the next round, not blamed for "still not owner"');
+  assert.ok(!/^\s*REM\b/im.test(three), 'no comment sits inside the result=3 block: cmd reads a block whole before running any of it, and a bracket in a comment there is a trap');
+  assert.ok(!/CLEARED/.test(batCode), 'no global "cleared once" flag is left to blame a phone that was never cleared');
   assert.match(three, /goto round/, 'and it does retry after clearing');
 
   // result=5: nothing local to fix, so it only waits and retries -- no uninstall, no exit.
@@ -1782,6 +2105,119 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   assert.ok(rounds.length > 1, 'the round label exists');
   assert.match(rounds[1], /findstr \/e \/c:"device"/,
     'the device check runs inside the loop body, not only before it');
+
+  /* SUCCESS IS PROVEN PHONE BY PHONE, AND EVERY EXIT CODE IS PINNED BY VALUE.
+     =========================================================================================
+     The script only ever recognised NAMED failures (result=2, 3, 5); anything else fell through
+     to "every result line above should read result=1" and exit 0. A first fix made the gates
+     global ("some result=1 exists", "no result=0 anywhere") and a review showed one answering
+     phone then vouched for every other. The per-phone cut kept a COUNT of phones seen, and two
+     reviewers found the same hole in it independently: a failed phone pulled out and replaced
+     by a new one leaves the count where it was, and the run went green with the failed phone
+     never named. So the run now tracks WHO: every serial any round listed, and every serial that
+     answered result=1 on a clean install, and the gate is the difference between the two. A
+     decision-table model of this logic (27 scenarios, each of those holes among them) was run
+     before the script was changed. */
+  const rcAfter = (src, marker, rc, why) => {
+    const at = src.indexOf(marker);
+    assert.ok(at >= 0, 'missing: ' + marker);
+    const block = src.slice(at, at + 900);
+    assert.match(block, new RegExp('set "RC=' + rc + '"\\s*\\r?\\n\\s*goto finish'), why);
+  };
+  const rcAfterTouched = (src, marker, why) => {
+    const at = src.indexOf(marker);
+    assert.ok(at >= 0, 'missing: ' + marker);
+    assert.match(src.slice(at, at + 900),
+      /set "RC=2"\s*\r?\n\s*if "%TOUCHED%"=="1" call :earlier\s*\r?\n\s*goto finish/, why);
+  };
+  const body = bat.slice(bat.indexOf(':round'));
+  const loop = body.slice(body.indexOf('for /f "usebackq'), body.indexOf('type "%OUT%"'));
+
+  // The run's tracking files: four names from the one token, never from a serial.
+  for (const [v, n] of [['SEENF', 'seen'], ['OKF', 'ok'], ['CLRF', 'cleared'], ['PF', 'phone']]) {
+    assert.match(bat, new RegExp('set "' + v + '=%TEMP%\\\\hoop-hub-run%RUN%-' + n + '\\.txt"'), v + ' carries the run token');
+  }
+  assert.ok(!/hoop-hub-run%RUN%-%%/.test(batCode),
+    'no serial becomes part of a file name: a wifi-adb serial is ip:port and a colon in a name makes an NTFS stream');
+  assert.match(bat, />"%SEENF%" echo -\s*\r?\n>"%OKF%" echo -\s*\r?\n>"%CLRF%" echo -/, 'each tracking file exists, with a line no serial can be, before findstr first reads it');
+  assert.ok(bat.indexOf('>"%OKF%" echo -') > bat.indexOf('if not exist "%APK%"'),
+    'they are created only after every exit that comes before the rounds, so none of those leaves a file behind');
+  // Nothing inherited may stand in for the run's own values; RC defaults to red.
+  const head = bat.slice(0, bat.indexOf(':round'));
+  assert.match(head, /set "OUT="\s*\r?\n/, 'an OUT inherited from the environment is never handed to del at :finish');
+  assert.match(head, /set "RC=1"\s*\r?\n/, 'a route into :finish that forgot to set a code is red, not green');
+  assert.match(head, /set "TOUCHED=0"/);
+  // adb's start-up chatter is spent before the first snapshot is read.
+  assert.match(head, /adb start-server >nul\s*\r?\n\s*$/, 'the server is started once, right before the first round');
+  assert.ok(head.indexOf('adb start-server') > head.indexOf('curl -fsSL'), 'and only after the fetch decided the run is going ahead');
+
+  // One enumeration per round, and the walk reads that same snapshot rather than asking again.
+  assert.equal((body.match(/adb devices > "%DEVS%"/g) || []).length, 1, 'one snapshot per round');
+  assert.match(loop, /^for \/f "usebackq tokens=1,\*" %%a in \("%DEVS%"\) do \(/,
+    'the walk reads the snapshot the readiness check read; a second adb devices could disagree');
+  assert.ok(!/skip=1/.test(loop), 'no row is skipped by position: the header and any stdout daemon lines are recognised by name');
+  assert.ok(body.indexOf('del "%DEVS%"') < 0, 'the snapshot is not deleted before the walk has read it');
+
+  // Every row is accounted for BY SERIAL: walked and not-ready rows both enter the seen file.
+  assert.equal((loop.match(/>>"%SEENF%" echo %%a/g) || []).length, 2, 'a walked row and a not-ready row each enter the seen file');
+  assert.ok(!/echo %%a>>?/.test(batCode), 'a serial is never put directly before a > : a numeric one would be read as a handle number');
+  assert.match(loop, /\) else if not "%%a"=="\*" if not "%%a"=="List" if not "%%a"=="adb" \(\s*\r?\n\s*set \/a NOTREADY\+=1\s*\r?\n\s*>>"%SEENF%" echo %%a\s*\r?\n\s*echo NOT READY, skipped: %%a %%b/,
+    'unauthorized, offline, authorizing, recovery -- anything but device -- is named and remembered; adb\'s own chatter lines are not phones');
+
+  // Each phone is judged on its own output.
+  assert.match(loop, /echo --- %%a --- > "%PF%"/, 'the phone file is emptied for every phone');
+  assert.match(loop, /type "%PF%" >> "%OUT%"/, 'its output still reaches the round file the retry branches read');
+  assert.match(loop, /findstr \/c:"result=1," "%PF%" >nul\s*\r?\n\s*if errorlevel 1 \(\s*\r?\n\s*set \/a FAILED\+=1\s*\r?\n\s*\) else \(/,
+    'a phone is enrolled only if ITS OWN broadcast printed result=1');
+  assert.ok(!/findstr \/c:"result=0"|SKIPPED/.test(batCode), 'no global result scan stands in for a per-phone check');
+  // ... on a clean install. A failed install can leave an OLDER app whose receiver says result=1.
+  // adb's own exit code is evidence too: some failures print neither INSTALL_ nor "failed to install"
+  // (the apk gone from %TEMP% -- "failed to stat" -- or a cable that flaps for one command).
+  assert.match(loop, /install -r "%APK%" >> "%PF%" 2>&1\s*\r?\n\s*if errorlevel 1 >>"%PF%" echo failed to install: adb install exited non-zero\s*\r?\n\s*if not errorlevel 0 >>"%PF%" echo failed to install: adb install exited non-zero\s*\r?\n\s*adb -s %%a shell dpm set-device-owner/,
+    'the install\'s exit code is read straight after it, before anything else can change it, and written where the text check looks; `if errorlevel 1` cannot see a negative code, adb\'s push-install path exits -1, so the negative codes have a line of their own');
+  assert.match(loop, /findstr \/c:"INSTALL_" \/c:"failed to install" "%PF%" >nul\s*\r?\n\s*if errorlevel 2 \(\s*\r?\n\s*set \/a FAILED\+=1\s*\r?\n[^\n]*NOT counted as enrolled\.\r?\n\s*\) else if errorlevel 1 \(\s*\r?\n\s*set \/a ENROLLED\+=1\s*\r?\n\s*>>"%OKF%" echo %%a\s*\r?\n\s*\) else \(/,
+    'a clean install plus result=1 is the only ordinary way into the ok file, and a findstr that could not read the file (errorlevel 2) is not a clean install');
+  assert.match(loop, /findstr \/c:"INSTALL_FAILED_VERSION_DOWNGRADE" "%PF%" >nul\s*\r?\n\s*if errorlevel 1 \(\s*\r?\n\s*set \/a FAILED\+=1\s*\r?\n[^\n]*OLDER one[^\n]*\r?\n\s*\) else \(\s*\r?\n\s*set \/a ENROLLED\+=1\s*\r?\n\s*>>"%OKF%" echo %%a/,
+    'a failed install is red, except a NEWER app already on the phone (a downgrade refused), which is fine');
+  assert.equal((loop.match(/>>"%OKF%" echo %%a/g) || []).length, 2, 'exactly two ways into the ok file, both of them result=1 on an acceptable install');
+
+  // Counters are reset every round; the seen/ok/cleared files are not.
+  assert.match(body, /set "WALKED=0"\s*\r?\nset "ENROLLED=0"\s*\r?\nset "FAILED=0"\s*\r?\nset "NOTREADY=0"/);
+  assert.ok(!/PEAK|set \/a SEEN=/.test(batCode), 'the count-based gone-phone check is gone: a count cannot tell a swapped phone from a steady one');
+  assert.ok(!/(^|[^>])>"%(SEENF|OKF|CLRF)%"/m.test(body), 'the tracking files are created once, before the first round, and only appended to after');
+
+  // Exit codes, by value.
+  rcAfter(body, 'if %ROUND% GTR %MAXROUNDS% (', 1, 'running out of rounds exits 1');
+  rcAfterTouched(body, 'echo No phones ready.', 'no phone ready at the start of a round exits 2 -- or 1 once an earlier round reached one');
+  rcAfterTouched(body, 'if %WALKED% EQU 0 (', 'nothing walked exits 2 -- or 1 once an earlier round reached a phone');
+  rcAfter(body, 'Still NOT DEVICE OWNER', 1, 'still not Device Owner after clearing exits 1');
+  rcAfter(body, 'if "%BAD%"=="1" (', 1, 'any reason for red exits 1');
+
+  // The tail: every reason is evaluated and printed, THEN the gate, THEN the one green path.
+  const iFailed = body.indexOf('if %FAILED% GTR 0 (');
+  const iNotReady = body.indexOf('if %NOTREADY% GTR 0 (');
+  const iMissing = body.indexOf('set "MISSING="');
+  const iGate = body.indexOf('if "%BAD%"=="1" (');
+  const iGreenText = body.indexOf('answered result=1 ENROLLED. Confirm each phone');
+  const iGreen = body.indexOf('set "RC=0"');
+  assert.ok(body.indexOf('findstr /c:"result=5,"') < iFailed && iFailed < iNotReady && iNotReady < iMissing && iMissing < iGate,
+    'after the retry branches: failed, not ready, missing -- each prints its reason -- and then the gate');
+  assert.match(body.slice(iMissing, iGate),
+    /^set "MISSING="\r?\nset "SAWSEEN="\r?\nfor \/f "usebackq delims=" %%s in \("%SEENF%"\) do \(\s*\r?\n\s*set "SAWSEEN=1"\s*\r?\n\s*findstr \/x \/l \/c:"%%s" "%OKF%" >nul 2>&1\s*\r?\n\s*if errorlevel 1 \([\s\S]*?set "MISSING=1"\s*\r?\n\s*echo   %%s\s*\r?\n\s*\)\s*\r?\n\)\s*\r?\nif not defined SAWSEEN \([\s\S]*?set "MISSING=1"\s*\r?\n\)\s*\r?\nif defined MISSING set "BAD=1"\s*\r?\n/,
+    'every serial seen is tested one at a time against the ok file and named when absent; any findstr failure (errorlevel 2 is not 0) counts as absent; and a loop that read nothing (the seen file always has its first line) is red too, so no answer is never an all-clear');
+  assert.ok(!/\/g:/.test(batCode), 'no findstr /g set-difference anywhere: its multi-string quirks cannot be tested without Windows');
+  assert.ok(iGate < iGreenText && iGreenText < iGreen, 'the green text is printed only after the gate, on the one green path');
+  assert.equal((body.match(/set "RC=0"/g) || []).length, 1, 'there is exactly one way to exit 0');
+  assert.equal((body.match(/set "BAD=1"/g) || []).length, 3, 'three independent reasons feed the gate');
+
+  // The whole code, line for line. Trailing whitespace is kept: it is part of what cmd runs.
+  const codeNow = bat.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '' && !/^\s*REM\b/i.test(l));
+  assert.deepEqual(codeNow, LOCK_HUB_AUTO_CODE,
+    'a code line of lock-hub-auto.bat changed: update LOCK_HUB_AUTO_CODE in the same diff, and say why the change is safe');
+
+  // Extensions on and delayed expansion off, whatever the caller\'s cmd was started with: a ! in
+  // a Windows user name would otherwise be eaten out of %TEMP% and every path below would break.
+  assert.match(bat, /^setlocal EnableExtensions DisableDelayedExpansion\r?$/m);
 });
 
 /* SHIFTING A HANDSET TO THE OTHER COMPANY, WITHOUT A FACTORY RESET.
