@@ -113,9 +113,6 @@ set "OKF=%TEMP%\hoop-hub-run%RUN%-ok.txt"
 set "CLRF=%TEMP%\hoop-hub-run%RUN%-cleared.txt"
 set "MISSF=%TEMP%\hoop-hub-run%RUN%-missing.txt"
 set "PF=%TEMP%\hoop-hub-run%RUN%-phone.txt"
->"%SEENF%" echo -
->"%OKF%" echo -
->"%CLRF%" echo -
 
 if "%BATCH%"=="" (
   echo usage: lock-hub-auto BATCH
@@ -148,6 +145,12 @@ if not exist "%APK%" (
   echo Nothing was done to any phone.
   exit /b 2
 )
+
+REM The three files that are read before they are written start with one line, and only now:
+REM the usage and fetch exits above leave nothing behind, so they need no cleanup.
+>"%SEENF%" echo -
+>"%OKF%" echo -
+>"%CLRF%" echo -
 
 REM Start the adb server once, here, so that its start-up chatter and a version-mismatch restart
 REM (a phone-maker's PC suite running its own adb) are spent before the first snapshot is read.
@@ -265,13 +268,14 @@ if not errorlevel 1 (
   goto finish
 )
 
+REM CLEARING IS TRACKED PER PHONE. A phone that was not `device` during an earlier clearing pass
+REM (still waiting on its Allow USB debugging dialog) or plugged in after it has not been
+REM cleared yet, so its result=3 is a reason to clear, not a reason to stop. The test below is
+REM `if defined`, which is read when it runs: the other form of it, a percent-sign test inside
+REM this block, would be read before the loop that sets NEWCLR had run. Comments stay out of the
+REM block itself, and free of brackets, because cmd reads a block before it runs any of it.
 findstr /c:"result=3," "%OUT%" >nul
 if not errorlevel 1 (
-  REM CLEARING IS TRACKED PER PHONE. A phone that was not `device` during an earlier clearing pass
-  REM (still waiting on its Allow USB debugging dialog) or plugged in after it has not been
-  REM cleared yet, so its result=3 is a reason to clear, not a reason to stop. The test is
-  REM `if defined`, which is read when it runs; a %NEWCLR% in this block would be read before the
-  REM loop below had set it.
   set "NEWCLR="
   for /f "usebackq tokens=1,*" %%a in ("%DEVS%") do if "%%b"=="device" (
     findstr /x /l /c:"%%a" "%CLRF%" >nul 2>&1

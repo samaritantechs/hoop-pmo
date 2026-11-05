@@ -1834,6 +1834,7 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
     'the stop is taken only when every phone here has already been cleared');
   assert.ok(!/%NEWCLR%/.test(three.split('\n').filter(l => !/^\s*REM\b/i.test(l)).join('\n')), 'NEWCLR is tested with `if defined`: a %NEWCLR% inside this block is read before the loop that sets it');
   assert.match(three, />>"%CLRF%" echo %%a/, 'the clearing pass records the serials it touched');
+  assert.ok(!/^\s*REM\b/im.test(three), 'no comment sits inside the result=3 block: cmd reads a block whole before running any of it, and a bracket in a comment there is a trap');
   assert.ok(!/CLEARED/.test(batCode), 'no global "cleared once" flag is left to blame a phone that was never cleared');
   assert.match(three, /goto round/, 'and it does retry after clearing');
 
@@ -1886,7 +1887,9 @@ test('lock-hub-auto.bat only handles the result codes the batch path can actuall
   }
   assert.ok(!/hoop-hub-run%RUN%-%%/.test(batCode),
     'no serial becomes part of a file name: a wifi-adb serial is ip:port and a colon in a name makes an NTFS stream');
-  assert.match(bat, />"%OKF%" echo -\s*\r?\n>"%CLRF%" echo -/, 'the search files are never empty: findstr reads an empty /g file unpredictably');
+  assert.match(bat, />"%SEENF%" echo -\s*\r?\n>"%OKF%" echo -\s*\r?\n>"%CLRF%" echo -/, 'the search files are never empty: findstr reads an empty /g file unpredictably');
+  assert.ok(bat.indexOf('>"%OKF%" echo -') > bat.indexOf('if not exist "%APK%"'),
+    'they are created only after every exit that comes before the rounds, so none of those leaves a file behind');
   // Nothing inherited may stand in for the run's own values; RC defaults to red.
   const head = bat.slice(0, bat.indexOf(':round'));
   assert.match(head, /set "OUT="\s*\r?\n/, 'an OUT inherited from the environment is never handed to del at :finish');
